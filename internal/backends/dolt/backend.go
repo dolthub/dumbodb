@@ -1686,6 +1686,13 @@ func dumboDBBranchDelete(ctx context.Context, db *dbState, params *backends.Bran
 
 	db.clearBranchWS(params.Name)
 
+	// Drop the branch's stored config (config.pull / config.push) so a branch
+	// later recreated under the same name does not inherit stale tracking -- a
+	// bare push must not silently follow the deleted branch's push target.
+	if err := db.backend.writeBranchConfig(ctx, db.name, params.Name, branchConfig{}); err != nil {
+		return nil, fmt.Errorf("DumboDBBranch: clearing config for deleted branch %q: %w", params.Name, err)
+	}
+
 	return &backends.BranchResult{Branch: params.Name}, nil
 }
 

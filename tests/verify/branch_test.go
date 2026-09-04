@@ -658,6 +658,56 @@ func TestBranchVerify(t *testing.T) {
 		// NOTE: rebase + ff together is *allowed* (git-parity: rebase wins on
 		// pull, ff is inert) -- see the valid set at the top of this scenario.
 	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 14: Deleting a branch clears its config (no stale tracking)
+	// -------------------------------------------------------------------------
+	t.Run("Scenario14_DeleteClearsConfig", func(t *testing.T) {
+		delDB := fmt.Sprintf("delcfg%d", rand.Int64N(1_000_000))
+		conn := env.Client.Database(delDB)
+		require.NoError(t, conn.Drop(ctx))
+		_, err := conn.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, delDB, "c1", "alice <alice@acme.com>")
+		require.NoError(t, conn.RunCommand(ctx, bson.D{
+			{Key: "dumboRemote", Value: int32(1)}, {Key: "action", Value: "add"},
+			{Key: "name", Value: "origin"}, {Key: "url", Value: "file://" + t.TempDir()},
+		}).Err())
+		require.NoError(t, conn.RunCommand(ctx, bson.D{
+			{Key: "dumboRemote", Value: int32(1)}, {Key: "action", Value: "add"},
+			{Key: "name", Value: "origin2"}, {Key: "url", Value: "file://" + t.TempDir()},
+		}).Err())
+
+		// Create release with a pull upstream and a triangular push target.
+		require.NoError(t, env.Client.Database(delDB+"@main").RunCommand(ctx, bson.D{
+			{Key: "dumboBranch", Value: int32(1)}, {Key: "branch", Value: "release"},
+		}).Err())
+		require.NoError(t, env.Client.Database(delDB+"@release").RunCommand(ctx, bson.D{
+			{Key: "dumboBranch", Value: int32(1)}, {Key: "branch", Value: "release"},
+			{Key: "setConfig", Value: bson.D{
+				{Key: "pull", Value: bson.D{{Key: "remote", Value: "origin"}, {Key: "branch", Value: "main"}}},
+				{Key: "push", Value: bson.D{{Key: "remote", Value: "origin2"}, {Key: "branch", Value: "release"}}},
+			}},
+		}).Err())
+
+		// Force-delete release, then recreate it from main.
+		require.NoError(t, env.Client.Database(delDB+"@main").RunCommand(ctx, bson.D{
+			{Key: "dumboBranch", Value: int32(1)}, {Key: "branch", Value: "release"}, {Key: "forceDelete", Value: true},
+		}).Err())
+		require.NoError(t, env.Client.Database(delDB+"@main").RunCommand(ctx, bson.D{
+			{Key: "dumboBranch", Value: int32(1)}, {Key: "branch", Value: "release"},
+		}).Err())
+
+		// The recreated branch carries no config.
+		_, hasConfig := branchEntry(t, env, delDB, "release")["config"]
+		assert.False(t, hasConfig, "a recreated branch must not inherit the deleted branch's config")
+
+		// A bare push from release must error -- not silently follow the deleted
+		// branch's origin2/release push target.
+		var res bson.M
+		err = env.Client.Database(delDB+"@release").RunCommand(ctx, bson.D{{Key: "dumboPush", Value: int32(1)}}).Decode(&res)
+		assert.Error(t, err, "a bare push on the recreated branch must error (no config)")
+	})
 }
 
 // branchListEntry is one entry of a doltBranch listing response.

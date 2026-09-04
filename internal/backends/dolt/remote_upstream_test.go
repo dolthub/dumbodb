@@ -218,6 +218,64 @@ func TestDumboDBConfig_BarePushErrors(t *testing.T) {
 	}
 }
 
+// TestDumboDBConfig_DeleteClearsConfig verifies that deleting a branch drops its
+// stored config, so a branch later recreated under the same name does not
+// inherit stale config.pull / config.push (a recreated branch's bare push must
+// not silently follow the deleted branch's push target).
+func TestDumboDBConfig_DeleteClearsConfig(t *testing.T) {
+	ctx := context.Background()
+	b := newTestBackend(t)
+	const dbName = "mydb"
+
+	insertDoc(t, b, dbName, "col", mustDoc(t, "_id", int64(1)))
+	commitDB(t, b, dbName, "c1")
+	for _, r := range []struct{ name, url string }{
+		{"origin", "file://" + t.TempDir()},
+		{"origin2", "file://" + t.TempDir()},
+	} {
+		if _, err := b.DumboDBRemote(ctx, &backends.RemoteParams{DBName: dbName, Action: "add", Name: r.name, URL: r.url}); err != nil {
+			t.Fatalf("add remote %s: %v", r.name, err)
+		}
+	}
+
+	branch := func(p *backends.BranchParams) {
+		t.Helper()
+		if _, err := b.DumboDBBranch(ctx, p); err != nil {
+			t.Fatalf("DumboDBBranch %+v: %v", p, err)
+		}
+	}
+
+	// Create release, and give it both a pull upstream and a triangular push target.
+	branch(&backends.BranchParams{DBName: dbName, From: "main", Name: "release"})
+	if _, err := b.applyBranchConfig(ctx, dbName, "release", &backends.BranchConfigUpdate{
+		PullRemote: strp("origin"), PullBranch: strp("main"),
+		PushRemote: strp("origin2"), PushBranch: strp("release"),
+	}); err != nil {
+		t.Fatalf("set config: %v", err)
+	}
+	if _, ok, err := b.readBranchConfig(ctx, dbName, "release"); err != nil || !ok {
+		t.Fatalf("config must be present before delete (ok=%v, err=%v)", ok, err)
+	}
+
+	// Force-delete release; its config document must be gone.
+	branch(&backends.BranchParams{DBName: dbName, From: "main", Name: "release", Delete: true, Force: true})
+	if _, ok, err := b.readBranchConfig(ctx, dbName, "release"); err != nil || ok {
+		t.Fatalf("config must be cleared after delete (ok=%v, err=%v)", ok, err)
+	}
+
+	// Recreate release from main -- it starts with no config.
+	branch(&backends.BranchParams{DBName: dbName, From: "main", Name: "release"})
+	if _, ok, err := b.readBranchConfig(ctx, dbName, "release"); err != nil || ok {
+		t.Fatalf("recreated branch must have no config (ok=%v, err=%v)", ok, err)
+	}
+
+	// A bare push from the recreated release must error -- not silently follow
+	// the deleted branch's origin2/release push target.
+	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: dbName, ConnBranch: "release"}); err == nil {
+		t.Error("bare push on a recreated branch with no config: want error, got nil")
+	}
+}
+
 // TestDumboDBConfig_Scoping verifies config docs are keyed per database.
 func TestDumboDBConfig_Scoping(t *testing.T) {
 	ctx := context.Background()

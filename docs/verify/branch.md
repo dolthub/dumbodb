@@ -475,6 +475,46 @@ Key checks:
 
 ---
 
+## Scenario 14: Deleting a branch clears its config
+
+A branch's `config` is part of the branch: deleting the branch drops it, so a
+branch later recreated under the same name starts clean and a bare push does not
+silently follow the deleted branch's push target. Use a database with two
+remotes at `/tmp/dumbo-del-1` and `/tmp/dumbo-del-2` (remove them first).
+
+```js
+var d = db.getSiblingDB("delcfgdb")
+d.items.insertOne({ _id: 1 })
+d.runCommand({ doltCommit: 1, message: "c1" })
+d.runCommand({ doltRemote: 1, action: "add", name: "origin", url: "file:///tmp/dumbo-del-1" })
+d.runCommand({ doltRemote: 1, action: "add", name: "origin2", url: "file:///tmp/dumbo-del-2" })
+
+// release with a pull upstream (origin/main) and a triangular push (origin2/release).
+db.getSiblingDB("delcfgdb@main").runCommand({ doltBranch: 1, branch: "release" })
+db.getSiblingDB("delcfgdb@release").runCommand({ doltBranch: 1, branch: "release", setConfig: {
+  pull: { remote: "origin", branch: "main" },
+  push: { remote: "origin2", branch: "release" }
+} })
+
+// Force-delete release, then recreate it from main.
+db.getSiblingDB("delcfgdb@main").runCommand({ doltBranch: 1, branch: "release", forceDelete: true })
+db.getSiblingDB("delcfgdb@main").runCommand({ doltBranch: 1, branch: "release" })
+
+// The recreated release carries NO config.
+db.getSiblingDB("delcfgdb@main").runCommand({ doltBranch: 1 })
+// Expected: the "release" entry has no "config" field.
+
+// A bare push from release errors -- it does not follow origin2/release anymore.
+db.getSiblingDB("delcfgdb@release").runCommand({ dumboPush: 1 })
+// Expected: ok: 0 -- release has no push or pull config.
+```
+
+Key checks:
+- A deleted branch's `config` document is removed; a recreated branch does not inherit it
+- A bare push on the recreated branch errors instead of silently reusing the old push target
+
+---
+
 ## Quick Reference
 
 | Command | Connection | Result |
