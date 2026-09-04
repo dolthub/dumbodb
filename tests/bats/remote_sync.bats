@@ -117,17 +117,17 @@ seed_and_push() {
     local db_uri="mongodb://127.0.0.1:${DUMBODB_PORT}/test"
 
     # A named push alone leaves main with no config (git push origin main).
-    run mongo_json "$db_uri" "db.getSiblingDB('test@main').runCommand({dumboBranch:1}).branches"
+    run mongo_json "$db_uri" "db.getSiblingDB('test@main').runCommand({dumboBranch:1,action:'list'}).branches"
     [ "$status" -eq 0 ]
     echo "$output" | jq -e 'map(select(.name == "main"))[0] | has("config") | not'
 
     # setConfig records the config.pull upstream (there is no push -u).
-    run mongo_json "$db_uri" "db.getSiblingDB('test@main').runCommand({dumboBranch:1,branch:'main',setConfig:{pull:{remote:'origin',branch:'main'}}})"
+    run mongo_json "$db_uri" "db.getSiblingDB('test@main').runCommand({dumboBranch:1,action:'update',branch:'main',setConfig:{pull:{remote:'origin',branch:'main'}}})"
     [ "$status" -eq 0 ]
     echo "$output" | jq -e '.ok == 1'
 
     # dumboBranch now shows config.pull (git branch -vv).
-    run mongo_json "$db_uri" "db.getSiblingDB('test@main').runCommand({dumboBranch:1}).branches"
+    run mongo_json "$db_uri" "db.getSiblingDB('test@main').runCommand({dumboBranch:1,action:'list'}).branches"
     [ "$status" -eq 0 ]
     echo "$output" | jq -e 'map(select(.name == "main"))[0].config.pull.remote == "origin"'
     echo "$output" | jq -e 'map(select(.name == "main"))[0].config.pull.branch == "main"'
