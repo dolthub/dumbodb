@@ -38,7 +38,7 @@ func branchEntry(t *testing.T, env *dumboDBTestEnv, dbName, branch string) bson.
 	t.Helper()
 	var res bson.M
 	require.NoError(t, env.Client.Database(dbName+"@"+branch).RunCommand(
-		context.Background(), bson.D{{Key: "dumboBranch", Value: int32(1)}},
+		context.Background(), bson.D{{Key: "dumboBranch", Value: int32(1)}, {Key: "action", Value: "list"}},
 	).Decode(&res))
 	arr, ok := res["branches"].(bson.A)
 	require.True(t, ok, "branches must be an array")
