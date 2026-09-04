@@ -205,19 +205,21 @@ db.getSiblingDB("admin").runCommand({ dumboClone: 1, from: "file:///tmp/dumbo-no
 // Expected: ok: 0 -- remote has no "main" branch; create a database and dumboFetch instead.
 ```
 
-Workaround -- create a database (it has `main`), register the remote, and fetch
-the branch you need:
+Workaround -- register the remote on a fresh name and fetch. `dumboFetch`
+materializes the database on demand (it gets its own `main`), so no throwaway
+commit is needed:
 
 ```js
 var w = db.getSiblingDB("nomainwork")
-w.seed.insertOne({ _id: 1 })
-w.runCommand({ dumboCommit: 1, message: "seed", author: "a <a@a>" })
 w.runCommand({ dumboRemote: 1, action: "add", name: "origin", url: "file:///tmp/dumbo-nomain" })
 w.runCommand({ dumboFetch: 1, from: "origin" })
 
 db.getSiblingDB("nomainwork@main").runCommand({ dumboBranch: 1, action: "list" })
 // Expected: local "main" plus the remote-tracking "origin/release".
 ```
+
+(Registering a remote does not require the database to exist -- a remote may point
+at a peer that will only come into being later, including cyclical setups.)
 
 ---
 

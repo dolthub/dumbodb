@@ -331,8 +331,8 @@ func TestDumboDBBranchCannotDeleteMain(t *testing.T) {
 	}
 }
 
-// TestRemoteSyncOnMissingDB verifies push/fetch/pull return a clean error, not
-// a nil-pointer panic, when the database does not exist.
+// TestRemoteSyncOnMissingDB verifies push and pull return a clean error, not a
+// nil-pointer panic, when the database does not exist.
 func TestRemoteSyncOnMissingDB(t *testing.T) {
 	ctx := context.Background()
 	b := newTestBackend(t)
@@ -341,17 +341,66 @@ func TestRemoteSyncOnMissingDB(t *testing.T) {
 	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: ghost, Remote: "origin", ConnBranch: "main", RefSpec: "main"}); err == nil {
 		t.Error("push on a missing database: want error, got nil")
 	}
-
-	// A remote can be registered without the database existing; fetch must still
-	// not panic (this is the reported crash).
-	if _, err := b.DumboDBRemote(ctx, &backends.RemoteParams{DBName: ghost, Action: "add", Name: "origin", URL: "file://" + t.TempDir()}); err != nil {
-		t.Fatalf("add remote: %v", err)
-	}
-	if _, err := b.DumboDBFetch(ctx, &backends.FetchParams{DBName: ghost, Remote: "origin"}); err == nil {
-		t.Error("fetch on a missing database: want error, got nil")
-	}
 	if _, err := b.DumboDBPull(ctx, &backends.PullParams{DBName: ghost, Branch: "main", Remote: "origin"}); err == nil {
 		t.Error("pull on a missing database: want error, got nil")
+	}
+}
+
+// TestRemoteAddAndFetchMaterialize covers two intentional behaviors: a remote
+// may be registered on a database that does not exist yet (remotes to a
+// not-yet-existing peer are allowed, including cyclical setups), and fetching
+// materializes the database on demand without a throwaway commit.
+func TestRemoteAddAndFetchMaterialize(t *testing.T) {
+	ctx := context.Background()
+	b := newTestBackend(t)
+
+	// Publish a remote that has a main branch.
+	remoteURL := "file://" + t.TempDir()
+	insertDoc(t, b, "srcdb", "col", mustDoc(t, "_id", int64(1)))
+	commitDB(t, b, "srcdb", "c1")
+	if _, err := b.DumboDBRemote(ctx, &backends.RemoteParams{DBName: "srcdb", Action: "add", Name: "origin", URL: remoteURL}); err != nil {
+		t.Fatalf("add src remote: %v", err)
+	}
+	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: "srcdb", Remote: "origin", RefSpec: "main"}); err != nil {
+		t.Fatalf("push src: %v", err)
+	}
+
+	// A remote can be registered on a database that does not exist yet.
+	const peer = "peer"
+	if _, err := b.DumboDBRemote(ctx, &backends.RemoteParams{DBName: peer, Action: "add", Name: "origin", URL: remoteURL}); err != nil {
+		t.Fatalf("remote add on a missing database must be allowed: %v", err)
+	}
+	list, err := b.DumboDBRemote(ctx, &backends.RemoteParams{DBName: peer, Action: "list"})
+	if err != nil {
+		t.Fatalf("remote list on a missing database: %v", err)
+	}
+	if len(list.Remotes) != 1 || list.Remotes[0].Name != "origin" {
+		t.Fatalf("remote must be listed for a not-yet-existing database, got %+v", list.Remotes)
+	}
+
+	// Fetching materializes the peer database (no throwaway commit).
+	if _, err := b.DumboDBFetch(ctx, &backends.FetchParams{DBName: peer, Remote: "origin"}); err != nil {
+		t.Fatalf("fetch into a not-yet-existing database must materialize it: %v", err)
+	}
+	// The materialized database has its own main and the fetched tracking ref.
+	res, err := b.DumboDBBranch(ctx, &backends.BranchParams{Action: "list", DBName: peer, From: "main"})
+	if err != nil {
+		t.Fatalf("list peer branches: %v", err)
+	}
+	var hasMain, hasTracking bool
+	for _, br := range res.Branches {
+		if br.Name == "main" {
+			hasMain = true
+		}
+		if br.Name == "origin/main" {
+			hasTracking = true
+		}
+	}
+	if !hasMain {
+		t.Error("materialized database must have a main branch")
+	}
+	if !hasTracking {
+		t.Error("fetch must create the origin/main tracking ref")
 	}
 }
 

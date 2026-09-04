@@ -194,12 +194,10 @@ func TestCloneVerify(t *testing.T) {
 		}).Decode(&res)
 		require.Error(t, err, "cloning a remote with no main must be rejected")
 
-		// Workaround: create a database (it has main), add the remote, fetch.
+		// Workaround: add the remote on a fresh name and fetch -- no throwaway
+		// commit; the fetch materializes the database (which has its own main).
 		wa := fmt.Sprintf("nomainwork%d", rand.Int64N(1_000_000))
 		w := env.Client.Database(wa)
-		_, err = w.Collection("seed").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
-		require.NoError(t, err)
-		dumboDBCommit(t, env, wa, "seed", "a <a@a>")
 		require.NoError(t, w.RunCommand(ctx, bson.D{
 			{Key: "dumboRemote", Value: int32(1)}, {Key: "action", Value: "add"},
 			{Key: "name", Value: "origin"}, {Key: "url", Value: noMainURL},

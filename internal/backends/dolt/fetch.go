@@ -54,13 +54,12 @@ func (b *Backend) DumboDBFetch(ctx context.Context, params *backends.FetchParams
 		return nil, fmt.Errorf("dumboFetch: remote scheme %q is not yet supported for fetch", ru.Scheme)
 	}
 
-	state, err := b.getOrOpenDB(ctx, params.DBName, false)
+	// Fetch materializes the database on demand: a remote can be fetched into a
+	// name that does not yet exist, so no throwaway commit is needed to bootstrap
+	// one (and a remote may legitimately point at a not-yet-existing peer).
+	state, err := b.getOrOpenDB(ctx, params.DBName, true)
 	if err != nil {
 		return nil, err
-	}
-	if state == nil {
-		return nil, backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
-			fmt.Errorf("dumboFetch: database %q does not exist", params.DBName))
 	}
 	nbf := state.doltDB.Format()
 
