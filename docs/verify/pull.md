@@ -418,6 +418,32 @@ db.getSiblingDB("rnwork@main").runCommand({ dumboPull: 1 })
 
 ---
 
+## Scenario 14: `noFF` and `ffOnly` together are rejected before any fetch
+
+`noFF` (force a merge commit) and `ffOnly` (require a fast-forward) are
+contradictory, like `dumboMerge`. The request is rejected up front, so it never
+fetches -- an invalid request must not move remote-tracking refs.
+
+```js
+db.getSiblingDB("admin").runCommand({ dumboClone: 1, from: "file:///tmp/dumbo-hub", as: "mxwork" })
+
+// Note origin/main's tracking commit, then advance the hub WITHOUT fetching.
+db.getSiblingDB("mxwork@main").runCommand({ dumboBranch: 1 })
+// (remember the "origin/main" entry's commitId)
+var hub = db.getSiblingDB("hub")
+hub.items.insertOne({ _id: 900, v: "mx" })
+hub.runCommand({ dumboCommit: 1, message: "mx advance", author: "alice <alice@acme.com>" })
+hub.runCommand({ dumboPush: 1, to: "origin", refSpec: "main" })
+
+db.getSiblingDB("mxwork@main").runCommand({ dumboPull: 1, noFF: true, ffOnly: true })
+// Expected: ok: 0 -- errmsg "noFF and ffOnly are mutually exclusive".
+
+db.getSiblingDB("mxwork@main").runCommand({ dumboBranch: 1 })
+// Expected: origin/main's commitId is UNCHANGED -- the rejected pull never fetched.
+```
+
+---
+
 ## Quick Reference
 
 | Command                                                | git analog                     |

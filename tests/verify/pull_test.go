@@ -468,4 +468,33 @@ func TestPullVerify(t *testing.T) {
 		require.NoError(t, err)
 		assert.EqualValues(t, 2, n, "bare pull must merge origin/trunk into the renamed local main")
 	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 14: noFF + ffOnly is rejected before any fetch side effect
+	// -------------------------------------------------------------------------
+	t.Run("Scenario14_PullConflictingFFOptionsRejected", func(t *testing.T) {
+		// A fresh clone gives a controlled tracking-ref baseline.
+		mxName := fmt.Sprintf("mxwork%d", suffix)
+		require.NoError(t, admin.RunCommand(ctx, bson.D{
+			{Key: "dumboClone", Value: int32(1)}, {Key: "from", Value: hubURL}, {Key: "as", Value: mxName},
+		}).Decode(&res))
+		trackingBefore := branchEntry(t, env, mxName, "origin/main")["commitId"]
+
+		// Advance origin/main on the hub, but do NOT fetch on the clone yet.
+		_, err := hub.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(900)}, {Key: "v", Value: "mx"}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, hubName, "mx advance", "alice <alice@acme.com>")
+		pushHub()
+
+		// noFF + ffOnly is contradictory: rejected up front, with no fetch.
+		raw := runCommandRaw(t, env.Client.Database(mxName+"@main"), bson.D{
+			{Key: "dumboPull", Value: int32(1)}, {Key: "noFF", Value: true}, {Key: "ffOnly", Value: true},
+		})
+		require.EqualValues(t, 0, raw["ok"], "noFF + ffOnly must be rejected")
+		assert.Contains(t, raw["errmsg"], "mutually exclusive")
+
+		// The tracking ref did not move -- the invalid request never fetched.
+		trackingAfter := branchEntry(t, env, mxName, "origin/main")["commitId"]
+		assert.Equal(t, trackingBefore, trackingAfter, "a rejected pull must not update remote-tracking refs")
+	})
 }

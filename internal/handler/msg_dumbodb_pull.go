@@ -71,6 +71,14 @@ func (h *Handler) MsgDumboDBPull(connCtx context.Context, msg *wire.OpMsg) (*wir
 	if err != nil {
 		return nil, err
 	}
+	// noFF (force a merge commit) and ffOnly (require a fast-forward) are
+	// contradictory. Reject the combination before any backend work -- like
+	// dumboMerge -- so an invalid request never reaches the fetch (which would
+	// move remote-tracking refs).
+	if noFF && ffOnly {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
+			"dumboPull: noFF and ffOnly are mutually exclusive", "noFF")
+	}
 	// Whether the fast-forward mode was set explicitly; if not, DumboDBPull uses
 	// the branch's stored pull policy.
 	ffSet := document.Has("noFF") || document.Has("ffOnly")
