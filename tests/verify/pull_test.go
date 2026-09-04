@@ -403,4 +403,69 @@ func TestPullVerify(t *testing.T) {
 		_, p2 := tipParents(t, name+"@main")
 		assert.NotEmpty(t, p2, "the override merge has a parent2")
 	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 13: a bare pull follows a differently-named upstream branch
+	// -------------------------------------------------------------------------
+	t.Run("Scenario13_PullRenamedUpstream", func(t *testing.T) {
+		// A local branch whose name differs from its upstream ref: local "main"
+		// tracks origin/trunk (config.pull.branch = "trunk"). A bare pull must
+		// resolve refs/remotes/origin/trunk, not refs/remotes/origin/main.
+		rnDir := t.TempDir()
+		rnURL := "file://" + rnDir
+		rnHub := fmt.Sprintf("rnhub%d", suffix)
+		rnWork := fmt.Sprintf("rnwork%d", suffix)
+		h := env.Client.Database(rnHub)
+		var res bson.M
+
+		// Hub: c1 on main, a "trunk" branch off it; register origin and push both.
+		_, err := h.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}, {Key: "v", Value: "one"}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, rnHub, "c1", "alice <alice@acme.com>")
+		require.NoError(t, h.RunCommand(ctx, bson.D{
+			{Key: "dumboRemote", Value: int32(1)}, {Key: "action", Value: "add"},
+			{Key: "name", Value: "origin"}, {Key: "url", Value: rnURL},
+		}).Decode(&res))
+		require.NoError(t, env.Client.Database(rnHub+"@main").RunCommand(ctx, bson.D{
+			{Key: "dumboBranch", Value: int32(1)}, {Key: "branch", Value: "trunk"},
+		}).Decode(&res))
+		require.NoError(t, env.Client.Database(rnHub+"@main").RunCommand(ctx, bson.D{
+			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"}, {Key: "refSpec", Value: "main"},
+		}).Decode(&res))
+		require.NoError(t, env.Client.Database(rnHub+"@trunk").RunCommand(ctx, bson.D{
+			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"}, {Key: "refSpec", Value: "trunk"},
+		}).Decode(&res))
+
+		// Work: clone, then re-point local main at origin/trunk via config.pull.
+		require.NoError(t, admin.RunCommand(ctx, bson.D{
+			{Key: "dumboClone", Value: int32(1)}, {Key: "from", Value: rnURL}, {Key: "as", Value: rnWork},
+		}).Decode(&res))
+		require.NoError(t, env.Client.Database(rnWork+"@main").RunCommand(ctx, bson.D{
+			{Key: "dumboBranch", Value: int32(1)}, {Key: "branch", Value: "main"},
+			{Key: "setConfig", Value: bson.D{{Key: "pull", Value: bson.D{
+				{Key: "remote", Value: "origin"}, {Key: "branch", Value: "trunk"},
+			}}}},
+		}).Decode(&res))
+
+		// Advance origin/trunk with a new commit.
+		_, err = env.Client.Database(rnHub+"@trunk").Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(2)}, {Key: "v", Value: "two"}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, rnHub+"@trunk", "c2 on trunk", "alice <alice@acme.com>")
+		require.NoError(t, env.Client.Database(rnHub+"@trunk").RunCommand(ctx, bson.D{
+			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"}, {Key: "refSpec", Value: "trunk"},
+		}).Decode(&res))
+
+		// A bare pull on work main follows config.pull.branch=trunk and fast-forwards.
+		require.NoError(t, env.Client.Database(rnWork+"@main").RunCommand(ctx, bson.D{
+			{Key: "dumboPull", Value: int32(1)},
+		}).Decode(&res))
+		assert.EqualValues(t, 1, res["ok"], "bare pull of a renamed upstream must succeed")
+		assert.Equal(t, "origin", res["remote"])
+		assert.Equal(t, true, res["fastForward"], "local main is an ancestor of origin/trunk")
+
+		// main received origin/trunk's commit (proves it resolved the right ref).
+		n, err := env.Client.Database(rnWork+"@main").Collection("items").CountDocuments(ctx, bson.D{})
+		require.NoError(t, err)
+		assert.EqualValues(t, 2, n, "bare pull must merge origin/trunk into the renamed local main")
+	})
 }

@@ -382,6 +382,42 @@ db.getSiblingDB("ffpol@main").runCommand({ dumboLog: 1, limit: 1 }).commits[0]
 
 ---
 
+## Scenario 13: A bare pull follows a differently-named upstream branch
+
+A local branch may track an upstream whose name differs from its own -- local
+`main` tracking `origin/trunk` (`config.pull.branch = "trunk"`, git's
+`branch.<name>.merge`). A bare pull must resolve `refs/remotes/origin/trunk`, not
+`refs/remotes/origin/main`. Use a fresh hub at `/tmp/dumbo-rn-hub` (remove it
+first for a clean run).
+
+```js
+// Hub: c1 on main, a "trunk" branch off it; push both to the remote.
+var h = db.getSiblingDB("rnhub")
+h.items.insertOne({ _id: 1, v: "one" })
+h.runCommand({ dumboCommit: 1, message: "c1", author: "alice <alice@acme.com>" })
+h.runCommand({ dumboRemote: 1, action: "add", name: "origin", url: "file:///tmp/dumbo-rn-hub" })
+db.getSiblingDB("rnhub@main").runCommand({ dumboBranch: 1, branch: "trunk" })
+db.getSiblingDB("rnhub@main").runCommand({ dumboPush: 1, to: "origin", refSpec: "main" })
+db.getSiblingDB("rnhub@trunk").runCommand({ dumboPush: 1, to: "origin", refSpec: "trunk" })
+
+// Work: clone, then re-point local main at origin/trunk.
+db.getSiblingDB("admin").runCommand({ dumboClone: 1, from: "file:///tmp/dumbo-rn-hub", as: "rnwork" })
+db.getSiblingDB("rnwork@main").runCommand({ dumboBranch: 1, branch: "main", setConfig: { pull: { remote: "origin", branch: "trunk" } } })
+
+// Advance origin/trunk with a new commit.
+var ht = db.getSiblingDB("rnhub@trunk")
+ht.items.insertOne({ _id: 2, v: "two" })
+ht.runCommand({ dumboCommit: 1, message: "c2 on trunk", author: "alice <alice@acme.com>" })
+db.getSiblingDB("rnhub@trunk").runCommand({ dumboPush: 1, to: "origin", refSpec: "trunk" })
+
+// A bare pull on work main follows config.pull.branch=trunk.
+db.getSiblingDB("rnwork@main").runCommand({ dumboPull: 1 })
+// Expected: ok: 1, remote "origin", fastForward true -- main advanced to
+// origin/trunk's commit (main now has both documents).
+```
+
+---
+
 ## Quick Reference
 
 | Command                                                | git analog                     |
