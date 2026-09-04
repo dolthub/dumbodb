@@ -18,10 +18,11 @@ guide uses `file://` remotes -- local directories the server can read and write
 
 ## Parameters
 
-| Parameter | Type   | Required | Description                                            |
-|-----------|--------|----------|--------------------------------------------------------|
-| `from`    | string | yes      | Remote URL to clone (`git clone <url>`).               |
-| `as`      | string | yes      | Name of the new database to create.                    |
+| Parameter     | Type   | Required | Description                                                                 |
+|---------------|--------|----------|-----------------------------------------------------------------------------|
+| `from`        | string | yes      | Remote URL to clone (`git clone <url>`).                                     |
+| `as`          | string | yes      | Name of the new database to create.                                         |
+| `trackAsMain` | string | no       | Map this remote branch onto the clone's local `main` (for a remote whose default is not `main`). See Scenario 8. |
 
 ## Response
 
@@ -188,50 +189,81 @@ db.getSiblingDB("admin").runCommand({ dumboClone: 1, from: "ssh://host/org/repo"
 
 ---
 
-## Scenario 8: Cloning a remote with no `main` is rejected
+## Scenario 8: A remote with no `main` -- rejected, or mapped with `trackAsMain`
 
-Every database must have a `main`, so a remote that lacks one cannot be cloned.
+Every database must have a `main`. A remote that lacks one cannot be cloned
+plainly; pass `trackAsMain` to map one of its branches onto the local `main`.
 Push `main` to a differently-named branch on a fresh remote so it holds only
-`release`, then try to clone it:
+`release`:
 
 ```js
 var s = db.getSiblingDB("srcnomain")
-s.items.insertOne({ _id: 1 })
+s.items.insertOne({ _id: 1, v: "rel" })
 s.runCommand({ dumboCommit: 1, message: "c1", author: "a <a@a>" })
 s.runCommand({ dumboRemote: 1, action: "add", name: "origin", url: "file:///tmp/dumbo-nomain" })
 s.runCommand({ dumboPush: 1, to: "origin", refSpec: "main:release" })   // remote has only "release"
 
+// Plain clone is rejected -- no main.
 db.getSiblingDB("admin").runCommand({ dumboClone: 1, from: "file:///tmp/dumbo-nomain", as: "nomainclone" })
-// Expected: ok: 0 -- remote has no "main" branch; create a database and dumboFetch instead.
+// Expected: ok: 0 -- remote has no "main" branch; clone with trackAsMain instead.
+
+// trackAsMain maps the remote's release branch onto the clone's local main.
+db.getSiblingDB("admin").runCommand({ dumboClone: 1, from: "file:///tmp/dumbo-nomain", as: "mapped", trackAsMain: "release" })
+// Expected: ok: 1.
+
+db.getSiblingDB("mapped@main").runCommand({ dumboBranch: 1, action: "list" })
+// Expected: local "main" (holding release's content) tracking origin/release
+//   -- config.pull { remote: "origin", branch: "release" } -- plus the
+//   remote-tracking "origin/release". There is NO separate local "release"
+//   branch (main only).
 ```
 
-Workaround -- register the remote on a fresh name and fetch. `dumboFetch`
-materializes the database on demand (it gets its own `main`), so no throwaway
-commit is needed:
+A `trackAsMain` that names a branch the remote does not have is rejected.
+
+---
+
+## Scenario 9: `trackAsMain` overrides the remote's own `main`
+
+When the remote already has a `main`, `trackAsMain` still wins: the named branch
+becomes the local `main`, and the remote's own `main` survives only as the
+`origin/main` tracking ref (no local `main` from it).
 
 ```js
-var w = db.getSiblingDB("nomainwork")
-w.runCommand({ dumboRemote: 1, action: "add", name: "origin", url: "file:///tmp/dumbo-nomain" })
-w.runCommand({ dumboFetch: 1, from: "origin" })
+// Remote with main (doc _id:1) and a feature branch ahead (doc _id:2).
+var o = db.getSiblingDB("srcov")
+o.items.insertOne({ _id: 1, v: "onmain" })
+o.runCommand({ dumboCommit: 1, message: "c1", author: "a <a@a>" })
+o.runCommand({ dumboRemote: 1, action: "add", name: "origin", url: "file:///tmp/dumbo-ov" })
+o.runCommand({ dumboPush: 1, to: "origin", refSpec: "main" })
+db.getSiblingDB("srcov@main").runCommand({ dumboBranch: 1, action: "add", branch: "feature" })
+var f = db.getSiblingDB("srcov@feature")
+f.items.insertOne({ _id: 2, v: "onfeature" })
+f.runCommand({ dumboCommit: 1, message: "c2", author: "a <a@a>" })
+db.getSiblingDB("srcov@feature").runCommand({ dumboPush: 1, to: "origin", refSpec: "feature" })
 
-db.getSiblingDB("nomainwork@main").runCommand({ dumboBranch: 1, action: "list" })
-// Expected: local "main" plus the remote-tracking "origin/release".
+db.getSiblingDB("admin").runCommand({ dumboClone: 1, from: "file:///tmp/dumbo-ov", as: "ovclone", trackAsMain: "feature" })
+
+db.getSiblingDB("ovclone@main").runCommand({ dumboBranch: 1, action: "list" })
+// Expected: local "main" holds feature's content (both _id:1 and _id:2) and
+//   tracks origin/feature; origin/main and origin/feature both exist as tracking
+//   refs; there is no separate local "feature" branch.
 ```
-
-(Registering a remote does not require the database to exist -- a remote may point
-at a peer that will only come into being later, including cyclical setups.)
 
 ---
 
 ## Quick Reference
 
-| Command                                                                | Effect                                        |
-|------------------------------------------------------------------------|-----------------------------------------------|
-| `admin.runCommand({ dumboClone: 1, from: "<url>", as: "db" })`         | Clone `<url>` into a new database `db`         |
+| Command                                                                            | Effect                                        |
+|------------------------------------------------------------------------------------|-----------------------------------------------|
+| `admin.runCommand({ dumboClone: 1, from: "<url>", as: "db" })`                      | Clone `<url>` into a new database `db`         |
+| `admin.runCommand({ dumboClone: 1, from: "<url>", as: "db", trackAsMain: "<b>" })` | Clone, mapping remote branch `<b>` onto local `main` |
 
 - `dumboClone` is an admin command; run it against the `admin` database.
-- The clone brings every branch; the default branch is `main` when present.
-- Like `git clone`, it registers an `origin` remote and makes the default branch
-  track `origin/<default>`, so `push`/`fetch` with no target work afterward.
+- The clone brings every branch and registers an `origin` remote; local `main`
+  tracks `origin/main` (or `origin/<trackAsMain>`), so `push`/`fetch` with no
+  target work afterward.
+- Every database must have a `main`: cloning a remote with no `main` is rejected
+  unless `trackAsMain` maps another branch onto it. `trackAsMain` becomes local
+  `main` (no separate local copy) and overrides the remote's own `main` if present.
 - Cloning into an existing database, a reserved name, or an unsupported scheme is
   rejected.

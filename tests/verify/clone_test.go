@@ -169,13 +169,13 @@ func TestCloneVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 8: Cloning a remote with no main is rejected; fetch is the workaround
+	// Scenario 8: A remote with no main -- rejected, or mapped via trackAsMain
 	// -------------------------------------------------------------------------
-	t.Run("Scenario8_CloneWithoutMainRejected", func(t *testing.T) {
+	t.Run("Scenario8_CloneWithoutMain_TrackAsMain", func(t *testing.T) {
 		noMainURL := "file://" + t.TempDir()
 		srcNM := fmt.Sprintf("srcnomain%d", rand.Int64N(1_000_000))
 		s := env.Client.Database(srcNM)
-		_, err := s.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
+		_, err := s.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}, {Key: "v", Value: "rel"}})
 		require.NoError(t, err)
 		dumboDBCommit(t, env, srcNM, "c1", "a <a@a>")
 		require.NoError(t, s.RunCommand(ctx, bson.D{
@@ -187,36 +187,107 @@ func TestCloneVerify(t *testing.T) {
 			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"}, {Key: "refSpec", Value: "main:release"},
 		}).Err())
 
-		// Cloning it is rejected.
+		// Without trackAsMain, cloning a main-less remote is rejected.
 		var res bson.M
 		err = admin.RunCommand(ctx, bson.D{
 			{Key: "dumboClone", Value: int32(1)}, {Key: "from", Value: noMainURL}, {Key: "as", Value: "nomainclone"},
 		}).Decode(&res)
 		require.Error(t, err, "cloning a remote with no main must be rejected")
 
-		// Workaround: add the remote on a fresh name and fetch -- no throwaway
-		// commit; the fetch materializes the database (which has its own main).
-		wa := fmt.Sprintf("nomainwork%d", rand.Int64N(1_000_000))
-		w := env.Client.Database(wa)
-		require.NoError(t, w.RunCommand(ctx, bson.D{
-			{Key: "dumboRemote", Value: int32(1)}, {Key: "action", Value: "add"},
-			{Key: "name", Value: "origin"}, {Key: "url", Value: noMainURL},
-		}).Err())
-		require.NoError(t, w.RunCommand(ctx, bson.D{
-			{Key: "dumboFetch", Value: int32(1)}, {Key: "from", Value: "origin"},
+		// trackAsMain maps the remote's release branch onto local main.
+		mapped := fmt.Sprintf("mapped%d", rand.Int64N(1_000_000))
+		require.NoError(t, admin.RunCommand(ctx, bson.D{
+			{Key: "dumboClone", Value: int32(1)}, {Key: "from", Value: noMainURL},
+			{Key: "as", Value: mapped}, {Key: "trackAsMain", Value: "release"},
 		}).Decode(&res))
 		assert.EqualValues(t, 1, res["ok"])
 
-		// The release tracking ref is now present alongside the local main.
+		// main holds release's content and tracks origin/release; there is no
+		// separate local "release" branch (main only).
+		n, err := env.Client.Database(mapped).Collection("items").CountDocuments(ctx, bson.D{})
+		require.NoError(t, err)
+		assert.EqualValues(t, 1, n, "main adopted release's content")
+
+		names := map[string]bson.M{}
 		var list bson.M
-		require.NoError(t, env.Client.Database(wa+"@main").RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(mapped+"@main").RunCommand(ctx, bson.D{
 			{Key: "dumboBranch", Value: int32(1)}, {Key: "action", Value: "list"},
 		}).Decode(&list))
-		names := map[string]bool{}
 		for _, e := range list["branches"].(bson.A) {
-			names[e.(bson.M)["name"].(string)] = true
+			m := e.(bson.M)
+			names[m["name"].(string)] = m
 		}
-		assert.True(t, names["main"], "the workaround database keeps its main")
-		assert.True(t, names["origin/release"], "the fetched branch appears as a tracking ref")
+		require.Contains(t, names, "main")
+		assert.NotContains(t, names, "release", "the mapped branch has no separate local copy (main only)")
+		assert.Contains(t, names, "origin/release", "the remote branch survives as a tracking ref")
+		pull := names["main"]["config"].(bson.M)["pull"].(bson.M)
+		assert.Equal(t, "origin", pull["remote"])
+		assert.Equal(t, "release", pull["branch"], "main tracks origin/release")
+
+		// A missing trackAsMain branch is rejected.
+		err = admin.RunCommand(ctx, bson.D{
+			{Key: "dumboClone", Value: int32(1)}, {Key: "from", Value: noMainURL},
+			{Key: "as", Value: "nope"}, {Key: "trackAsMain", Value: "ghost"},
+		}).Decode(&res)
+		require.Error(t, err, "trackAsMain naming a nonexistent remote branch must be rejected")
+	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 9: trackAsMain overrides the remote's own main
+	// -------------------------------------------------------------------------
+	t.Run("Scenario9_TrackAsMainOverride", func(t *testing.T) {
+		ovURL := "file://" + t.TempDir()
+		ov := fmt.Sprintf("srcov%d", rand.Int64N(1_000_000))
+		o := env.Client.Database(ov)
+		_, err := o.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}, {Key: "v", Value: "onmain"}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, ov, "c1", "a <a@a>")
+		require.NoError(t, o.RunCommand(ctx, bson.D{
+			{Key: "dumboRemote", Value: int32(1)}, {Key: "action", Value: "add"},
+			{Key: "name", Value: "origin"}, {Key: "url", Value: ovURL},
+		}).Err())
+		require.NoError(t, o.RunCommand(ctx, bson.D{
+			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"}, {Key: "refSpec", Value: "main"},
+		}).Err())
+		// A "feature" branch with an extra commit, pushed too.
+		require.NoError(t, env.Client.Database(ov+"@main").RunCommand(ctx, bson.D{
+			{Key: "dumboBranch", Value: int32(1)}, {Key: "action", Value: "add"}, {Key: "branch", Value: "feature"},
+		}).Err())
+		_, err = env.Client.Database(ov+"@feature").Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(2)}, {Key: "v", Value: "onfeature"}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, ov+"@feature", "c2", "a <a@a>")
+		require.NoError(t, env.Client.Database(ov+"@feature").RunCommand(ctx, bson.D{
+			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"}, {Key: "refSpec", Value: "feature"},
+		}).Err())
+
+		// Clone with trackAsMain: feature overrides the remote's own main.
+		var res bson.M
+		ovClone := fmt.Sprintf("ovclone%d", rand.Int64N(1_000_000))
+		require.NoError(t, admin.RunCommand(ctx, bson.D{
+			{Key: "dumboClone", Value: int32(1)}, {Key: "from", Value: ovURL},
+			{Key: "as", Value: ovClone}, {Key: "trackAsMain", Value: "feature"},
+		}).Decode(&res))
+		assert.EqualValues(t, 1, res["ok"])
+
+		// main holds feature's content (both docs), tracking origin/feature.
+		n, err := env.Client.Database(ovClone).Collection("items").CountDocuments(ctx, bson.D{})
+		require.NoError(t, err)
+		assert.EqualValues(t, 2, n, "main adopted feature's content, not remote main's")
+
+		names := map[string]bson.M{}
+		var list bson.M
+		require.NoError(t, env.Client.Database(ovClone+"@main").RunCommand(ctx, bson.D{
+			{Key: "dumboBranch", Value: int32(1)}, {Key: "action", Value: "list"},
+		}).Decode(&list))
+		for _, e := range list["branches"].(bson.A) {
+			m := e.(bson.M)
+			names[m["name"].(string)] = m
+		}
+		require.Contains(t, names, "main")
+		assert.NotContains(t, names, "feature", "the mapped branch has no separate local copy")
+		assert.Contains(t, names, "origin/main", "the overridden remote main survives as a tracking ref")
+		assert.Contains(t, names, "origin/feature")
+		pull := names["main"]["config"].(bson.M)["pull"].(bson.M)
+		assert.Equal(t, "feature", pull["branch"], "main tracks origin/feature, not origin/main")
 	})
 }

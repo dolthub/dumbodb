@@ -26,6 +26,7 @@ import (
 	"github.com/dolthub/dolt/go/libraries/doltcore/ref"
 	"github.com/dolthub/dolt/go/libraries/utils/filesys"
 	"github.com/dolthub/dolt/go/store/datas/pull"
+	"github.com/dolthub/dolt/go/store/hash"
 	dolttypes "github.com/dolthub/dolt/go/store/types"
 
 	"github.com/dolthub/dumbodb/internal/backends"
@@ -77,17 +78,25 @@ func (b *Backend) DumboDBClone(ctx context.Context, params *backends.CloneParams
 		return nil, fmt.Errorf("dumboClone: remote %q has no branches", ru.Raw)
 	}
 
-	// Every dumbo database must have a default branch, so a remote lacking one
-	// cannot be cloned. Create a database and dumboFetch the branch you need.
-	hasDefault := false
+	// The remote branch that populates local main: the remote's own main by
+	// default, or params.TrackAsMain when mapping a non-main default onto main.
+	// Every database must have a main, so the source branch must exist.
+	mainSource := defaultBranch
+	if params.TrackAsMain != "" {
+		mainSource = params.TrackAsMain
+	}
+	hasMainSource := false
 	for _, br := range branchRefs {
-		if br.GetPath() == defaultBranch {
-			hasDefault = true
+		if br.GetPath() == mainSource {
+			hasMainSource = true
 			break
 		}
 	}
-	if !hasDefault {
-		return nil, fmt.Errorf("dumboClone: remote %q has no %q branch; every database must have one -- create a database and dumboFetch the branch you need instead", ru.Raw, defaultBranch)
+	if !hasMainSource {
+		if params.TrackAsMain != "" {
+			return nil, fmt.Errorf("dumboClone: remote %q has no %q branch (trackAsMain)", ru.Raw, params.TrackAsMain)
+		}
+		return nil, fmt.Errorf("dumboClone: remote %q has no %q branch; every database must have one -- clone with trackAsMain to map another branch onto main, or create a database and dumboFetch the branch you need", ru.Raw, defaultBranch)
 	}
 
 	state, err := b.getOrOpenDB(ctx, params.As, true)
@@ -101,11 +110,30 @@ func (b *Backend) DumboDBClone(ctx context.Context, params *backends.CloneParams
 	}
 	defer func() { _ = os.RemoveAll(tempDir) }()
 
-	branchNames := make([]string, 0, len(branchRefs))
-	for _, br := range branchRefs {
-		branchNames = append(branchNames, br.GetPath())
+	// initLocalBranch points refs/heads/<local> at ch and initializes its working set.
+	initLocalBranch := func(local string, ch hash.Hash) error {
+		ds, err := state.datasDB.GetDataset(ctx, "refs/heads/"+local)
+		if err != nil {
+			return fmt.Errorf("dumboClone: getting dataset for %q: %w", local, err)
+		}
+		if _, err := state.datasDB.SetHead(ctx, ds, ch, ""); err != nil {
+			return fmt.Errorf("dumboClone: setting head for %q: %w", local, err)
+		}
+		localCommit, err := state.doltDB.ResolveCommitRef(ctx, ref.NewBranchRef(local))
+		if err != nil {
+			return fmt.Errorf("dumboClone: resolving cloned branch %q: %w", local, err)
+		}
+		rv, err := localCommit.GetRootValue(ctx)
+		if err != nil {
+			return fmt.Errorf("dumboClone: reading root for %q: %w", local, err)
+		}
+		wsRef := ref.NewWorkingSetRef("heads/" + local)
+		ws := doltdb.EmptyWorkingSet(wsRef).WithWorkingRoot(rv).WithStagedRoot(rv)
+		if err := updateWorkingSet(ctx, state.doltDB, ws, local); err != nil {
+			return fmt.Errorf("dumboClone: initializing working set for %q: %w", local, err)
+		}
+		return nil
 	}
-	defaultName := pickDefaultBranch(branchNames)
 
 	for _, br := range branchRefs {
 		name := br.GetPath()
@@ -124,66 +152,39 @@ func (b *Backend) DumboDBClone(ctx context.Context, params *backends.CloneParams
 			return nil, fmt.Errorf("dumboClone: fetching branch %q: %w", name, err)
 		}
 
-		ds, err := state.datasDB.GetDataset(ctx, "refs/heads/"+name)
-		if err != nil {
-			return nil, fmt.Errorf("dumboClone: getting dataset for %q: %w", name, err)
-		}
-		if _, err := state.datasDB.SetHead(ctx, ds, ch, ""); err != nil {
-			return nil, fmt.Errorf("dumboClone: setting head for %q: %w", name, err)
-		}
-
-		// git clone also records refs/remotes/origin/<branch>, so a later fetch
-		// reports a before->after change instead of a fresh ref.
+		// git clone records refs/remotes/origin/<branch> for every remote branch.
 		if err := state.doltDB.SetHead(ctx, ref.NewRemoteRef("origin", name), ch); err != nil {
 			return nil, fmt.Errorf("dumboClone: setting tracking ref for %q: %w", name, err)
 		}
 
-		// Initialize the branch working set from the cloned commit so the new
-		// database is immediately readable and writable on this branch.
-		localCommit, err := state.doltDB.ResolveCommitRef(ctx, ref.NewBranchRef(name))
-		if err != nil {
-			return nil, fmt.Errorf("dumboClone: resolving cloned branch %q: %w", name, err)
+		// Map to a local branch: the mainSource branch becomes local main; a
+		// remote "main" overridden by trackAsMain survives only as a tracking ref.
+		local := name
+		if name == mainSource {
+			local = defaultBranch
+		} else if name == defaultBranch {
+			continue
 		}
-		rv, err := localCommit.GetRootValue(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("dumboClone: reading root for %q: %w", name, err)
-		}
-		wsRef := ref.NewWorkingSetRef("heads/" + name)
-		ws := doltdb.EmptyWorkingSet(wsRef).WithWorkingRoot(rv).WithStagedRoot(rv)
-		if err := updateWorkingSet(ctx, state.doltDB, ws, name); err != nil {
-			return nil, fmt.Errorf("dumboClone: initializing working set for %q: %w", name, err)
+		if err := initLocalBranch(local, ch); err != nil {
+			return nil, err
 		}
 	}
 
-	// git clone parity: register an origin remote for the source and make the
-	// default branch track it, so push/fetch with no target work on the clone.
+	// git clone parity: register an origin remote for the source and make main
+	// track the source branch, so push/fetch with no target work on the clone.
 	if _, err := b.DumboDBRemote(ctx, &backends.RemoteParams{DBName: params.As, Action: "add", Name: "origin", URL: ru.Raw}); err != nil {
 		return nil, fmt.Errorf("dumboClone: registering origin remote: %w", err)
 	}
-	originName, defBranch := "origin", defaultName
-	if _, err := b.applyBranchConfig(ctx, params.As, defaultName, &backends.BranchConfigUpdate{
+	originName, upstreamBranch := "origin", mainSource
+	if _, err := b.applyBranchConfig(ctx, params.As, defaultBranch, &backends.BranchConfigUpdate{
 		PullRemote: &originName,
-		PullBranch: &defBranch,
+		PullBranch: &upstreamBranch,
 	}); err != nil {
-		return nil, fmt.Errorf("dumboClone: setting upstream for %q: %w", defaultName, err)
+		return nil, fmt.Errorf("dumboClone: setting upstream for %q: %w", defaultBranch, err)
 	}
 
 	return &backends.CloneResult{
 		DB:  params.As,
 		URL: ru.Raw,
 	}, nil
-}
-
-// pickDefaultBranch chooses the default branch of a freshly cloned database from
-// the remote's branch set: prefer main, then master, otherwise the first branch
-// listed. names is assumed non-empty (callers reject a branchless remote).
-func pickDefaultBranch(names []string) string {
-	for _, preferred := range []string{defaultBranch, "master"} {
-		for _, n := range names {
-			if n == preferred {
-				return preferred
-			}
-		}
-	}
-	return names[0]
 }

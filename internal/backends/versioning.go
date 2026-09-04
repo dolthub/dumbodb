@@ -851,6 +851,9 @@ type PullResult struct {
 type CloneParams struct {
 	From string // remote url (file:// only for now)
 	As   string // new database name
+	// TrackAsMain maps this remote branch onto the clone's local main (for a
+	// remote whose default is not main); empty means require a remote "main".
+	TrackAsMain string
 }
 
 // CloneResult is returned by DumboDBClone.

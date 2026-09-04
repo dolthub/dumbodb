@@ -44,7 +44,7 @@ func (h *Handler) MsgDumboDBClone(connCtx context.Context, msg *wire.OpMsg) (*wi
 		return nil, err
 	}
 
-	if err = common.RejectUnknownFields(document, "from", "as"); err != nil {
+	if err = common.RejectUnknownFields(document, "from", "as", "trackAsMain"); err != nil {
 		return nil, err
 	}
 
@@ -62,12 +62,19 @@ func (h *Handler) MsgDumboDBClone(connCtx context.Context, msg *wire.OpMsg) (*wi
 		return nil, err
 	}
 
+	// trackAsMain maps a remote branch onto the clone's local main, for a remote
+	// whose default is not main (or has no main at all).
+	trackAsMain, err := common.GetOptionalParam[string](document, "trackAsMain", "")
+	if err != nil {
+		return nil, err
+	}
+
 	vb := h.versioningBackend()
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, "dumboClone: versioning is not supported by the current backend")
 	}
 
-	res, err := vb.DumboDBClone(connCtx, &backends.CloneParams{From: from, As: as})
+	res, err := vb.DumboDBClone(connCtx, &backends.CloneParams{From: from, As: as, TrackAsMain: trackAsMain})
 	if err != nil {
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
