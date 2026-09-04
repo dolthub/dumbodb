@@ -60,14 +60,12 @@ func (h *Handler) MsgDumboDBPush(connCtx context.Context, msg *wire.OpMsg) (*wir
 		return nil, err
 	}
 
-	// 'to' is optional: an omitted target resolves from config.push/config.pull.
 	remote, err := common.GetOptionalParam[string](document, "to", "")
 	if err != nil {
 		return nil, err
 	}
 
 	// refSpec is an optional git-style [+]<src>[:<dst>]; empty means a bare push
-	// of the connection branch to its configured target.
 	refSpec, err := common.GetOptionalParam[string](document, "refSpec", "")
 	if err != nil {
 		return nil, err

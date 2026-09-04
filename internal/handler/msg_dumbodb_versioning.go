@@ -763,8 +763,7 @@ func (h *Handler) MsgDumboDBCommit(connCtx context.Context, msg *wire.OpMsg) (*w
 //	db.getSiblingDB("mydb@main").runCommand({dumboDBBranch: 1, branch: "feature"})             // create
 //	db.getSiblingDB("mydb@main").runCommand({dumboDBBranch: 1, branch: "feature", delete: 1})  // delete
 //
-// branchConfigDoc builds the wire config document {pull?:{...}, push?:{...}} from
-// the resolved sub-objects, omitting empty leaves and absent sub-objects.
+// branchConfigDoc builds the wire config document from the resolved pull and push sub-objects.
 func branchConfigDoc(pull *backends.BranchPullInfo, push *backends.BranchPushInfo) *types.Document {
 	cfg := must.NotFail(types.NewDocument())
 	if pull != nil {
@@ -794,8 +793,7 @@ func branchConfigErr(msg string) error {
 	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue, msg, "setConfig")
 }
 
-// normalizeBranchRebase validates a config.pull.rebase value: "true", or ""
-// (unset -- also what false clears to).
+// normalizeBranchRebase validates a config.pull.rebase value.
 func normalizeBranchRebase(v any) (string, error) {
 	if t, ok := v.(bool); ok {
 		if t {
@@ -806,8 +804,7 @@ func normalizeBranchRebase(v any) (string, error) {
 	return "", branchConfigErr("dumboBranch: setConfig.pull.rebase must be a bool")
 }
 
-// normalizeBranchFF validates a config.pull.ff value: "no", "only", or "" (unset
-// -- what "default" clears to).
+// normalizeBranchFF validates a config.pull.ff value.
 func normalizeBranchFF(v any) (string, error) {
 	if s, ok := v.(string); ok {
 		switch s {
@@ -822,8 +819,7 @@ func normalizeBranchFF(v any) (string, error) {
 	return "", branchConfigErr(`dumboBranch: setConfig.pull.ff must be "no", "only", or "default"`)
 }
 
-// normalizeBranchRefName validates a config.pull.branch / config.push.branch
-// value: a non-empty valid ref name.
+// normalizeBranchRefName validates a config.pull.branch / config.push.branch value.
 func normalizeBranchRefName(v any, path string) (string, error) {
 	s, ok := v.(string)
 	if !ok || s == "" {
@@ -835,8 +831,7 @@ func normalizeBranchRefName(v any, path string) (string, error) {
 	return s, nil
 }
 
-// normalizeRemoteName validates a config.pull.remote / config.push.remote value:
-// a non-empty string. Existence in admin.system.remotes is checked by the backend.
+// normalizeRemoteName validates a config.pull.remote / config.push.remote value.
 func normalizeRemoteName(v any, path string) (string, error) {
 	s, ok := v.(string)
 	if !ok || s == "" {
@@ -845,13 +840,7 @@ func normalizeRemoteName(v any, path string) (string, error) {
 	return s, nil
 }
 
-// parseBranchConfig reads the setConfig / unsetConfig fields of a dumboBranch
-// command into a partial config.{pull,push} update. configMode reports whether
-// either field was present. setConfig is a document {pull:{remote,branch,rebase,
-// ff}, push:{remote,branch}}; unsetConfig is an array of whole sub-objects
-// ("pull","push") and dotted leaves ("pull.remote","push.branch", ...). A leaf
-// touched by both setConfig and unsetConfig, or by a leaf-set and a whole-object
-// unset in the same sub-object, is rejected.
+// parseBranchConfig reads the setConfig / unsetConfig fields of a dumboBranch command into a partial config.{pull,push} update.
 func parseBranchConfig(document *types.Document) (update *backends.BranchConfigUpdate, configMode bool, err error) {
 	hasConfig, hasUnset := document.Has("setConfig"), document.Has("unsetConfig")
 	if !hasConfig && !hasUnset {
@@ -921,7 +910,6 @@ func parseBranchConfig(document *types.Document) (update *backends.BranchConfigU
 			}
 			switch path {
 			case "pull", "push":
-				// Whole sub-object: conflicts with any set leaf in that sub-object.
 				for t := range touched {
 					if strings.HasPrefix(t, path+".") {
 						return nil, true, unsetConflictErr(t, path)
@@ -1000,9 +988,6 @@ func (h *Handler) MsgDumboDBBranch(connCtx context.Context, msg *wire.OpMsg) (*w
 		return nil, err
 	}
 
-	// An absent "branch" lists every branch (local and remote-tracking). An
-	// explicit empty string remains an error, so a client that computes the name
-	// cannot silently list instead.
 	listMode := !document.Has("branch")
 
 	if !listMode {
@@ -1053,7 +1038,6 @@ func (h *Handler) MsgDumboDBBranch(connCtx context.Context, msg *wire.OpMsg) (*w
 		)
 	}
 
-	// setConfig / unsetConfig apply a partial change to config.{pull,push}.
 	configUpdate, configMode, err := parseBranchConfig(document)
 	if err != nil {
 		return nil, err
@@ -1106,20 +1090,14 @@ func (h *Handler) MsgDumboDBBranch(connCtx context.Context, msg *wire.OpMsg) (*w
 				"name", b.Name,
 				"commitId", b.CommitID,
 			))
-			// current is shown only on the checked-out branch. fromBranch is a
-			// rootish, so a hash or ancestor connection matches nothing, and a
-			// remote-tracking ref is never the checked-out branch.
 			if !b.RemoteTracking && b.Name == fromBranch {
 				entry.Set("current", true)
 			}
 			if b.RemoteTracking {
-				// A git remote-tracking branch (git branch -r): the remote it
-				// came from and the branch name on that remote.
 				entry.Set("remoteTracking", true)
 				entry.Set("remote", b.Remote)
 				entry.Set("ref", b.Ref)
 			}
-			// A local branch's config.{pull,push}, when set.
 			if b.Pull != nil || b.Push != nil {
 				entry.Set("config", branchConfigDoc(b.Pull, b.Push))
 			}

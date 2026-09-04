@@ -100,7 +100,6 @@ func TestPushVerify(t *testing.T) {
 	addRemote("origin", originURL)
 	addRemote("origin2", origin2URL)
 
-	// setConfig runs dumboBranch setConfig on a branch's own connection.
 	setConfig := func(t *testing.T, branch string, cfg bson.D) {
 		t.Helper()
 		var res bson.M
@@ -206,15 +205,12 @@ func TestPushVerify(t *testing.T) {
 	// Scenario 7: Fast-forward-only by default; force overwrites
 	// -------------------------------------------------------------------------
 	t.Run("Scenario7_FastForwardAndForce", func(t *testing.T) {
-		// A realistic non-fast-forward: the source and a clone share a common
-		// commit (c1), both add a commit, and the clone's later push is refused.
 		ffURL := "file://" + t.TempDir()
 		srcName := fmt.Sprintf("pushffsrc%d", rand.Int64N(1_000_000))
 		cloneName := fmt.Sprintf("pushffclone%d", rand.Int64N(1_000_000))
 		src := env.Client.Database(srcName)
 		var res bson.M
 
-		// Source: c1, pushed to a fresh remote.
 		_, err := src.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}, {Key: "who", Value: "base"}})
 		require.NoError(t, err)
 		dumboDBCommit(t, env, srcName, "c1", "a <a@a>")
@@ -226,12 +222,10 @@ func TestPushVerify(t *testing.T) {
 			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"}, {Key: "refSpec", Value: "main"},
 		}).Decode(&res))
 
-		// Clone the remote -- shares c1 as a common root and tracks origin/main.
 		require.NoError(t, env.Client.Database("admin").RunCommand(ctx, bson.D{
 			{Key: "dumboClone", Value: int32(1)}, {Key: "from", Value: ffURL}, {Key: "as", Value: cloneName},
 		}).Decode(&res))
 
-		// Source advances the remote first (c1 -> c2-source).
 		_, err = src.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(2)}, {Key: "who", Value: "source"}})
 		require.NoError(t, err)
 		dumboDBCommit(t, env, srcName, "c2-source", "a <a@a>")
@@ -239,17 +233,14 @@ func TestPushVerify(t *testing.T) {
 			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"}, {Key: "refSpec", Value: "main"},
 		}).Decode(&res))
 
-		// Clone commits its own change on top of the shared c1 (c1 -> c2-clone).
 		clone := env.Client.Database(cloneName)
 		_, err = clone.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(3)}, {Key: "who", Value: "clone"}})
 		require.NoError(t, err)
 		dumboDBCommit(t, env, cloneName, "c2-clone", "b <b@b>")
 
-		// The clone's push diverged from the shared c1 -> non-fast-forward, rejected.
 		err = clone.RunCommand(ctx, bson.D{{Key: "dumboPush", Value: int32(1)}}).Decode(&res)
 		assert.Error(t, err, "a non-fast-forward push (diverged from the shared base) must be rejected")
 
-		// force overwrites the remote with the clone's history.
 		require.NoError(t, clone.RunCommand(ctx, bson.D{
 			{Key: "dumboPush", Value: int32(1)}, {Key: "force", Value: true},
 		}).Decode(&res))
@@ -292,7 +283,6 @@ func TestPushVerify(t *testing.T) {
 		assert.Equal(t, "main", res["branch"])
 		assert.Equal(t, "published", res["remoteBranch"])
 
-		// An explicit refspec does not change main's config.pull.
 		pull := pullEntry(branchEntry(t, env, dbName, "main"))
 		require.NotNil(t, pull)
 		assert.Equal(t, "main", pull["branch"], "an explicit refspec must not change config.pull")
@@ -302,8 +292,6 @@ func TestPushVerify(t *testing.T) {
 	// Scenario 10: An explicit remote with no matching config pushes same-named
 	// -------------------------------------------------------------------------
 	t.Run("Scenario10_ExplicitRemoteSameNamed", func(t *testing.T) {
-		// A bare push to origin2 -- which main's config does NOT target -- sends
-		// main to origin2/main (the same name), with no simple-mode refusal.
 		var res bson.M
 		require.NoError(t, db.RunCommand(ctx, bson.D{
 			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin2"},
@@ -312,7 +300,6 @@ func TestPushVerify(t *testing.T) {
 		assert.Equal(t, "origin2", res["remote"])
 		assert.Equal(t, "main", res["branch"])
 
-		// The push never touches config.pull -- still origin/main.
 		pull := pullEntry(branchEntry(t, env, dbName, "main"))
 		require.NotNil(t, pull)
 		assert.Equal(t, "origin", pull["remote"], "a push to another remote must not change config.pull")
@@ -369,8 +356,6 @@ func TestPushVerify(t *testing.T) {
 	// Scenario 14: config.push is a persistent, differently-named push target
 	// -------------------------------------------------------------------------
 	t.Run("Scenario14_ConfigPushPersistentTarget", func(t *testing.T) {
-		// main fetches from origin/main (config.pull) but pushes to origin2/rev51
-		// (config.push) -- the triangular workflow git cannot persist.
 		setConfig(t, "main", bson.D{{Key: "push", Value: bson.D{
 			{Key: "remote", Value: "origin2"}, {Key: "branch", Value: "rev51"},
 		}}})
@@ -385,7 +370,6 @@ func TestPushVerify(t *testing.T) {
 		assert.Equal(t, "origin2", res["remote"], "a bare push follows config.push")
 		assert.Equal(t, "rev51", res["remoteBranch"])
 
-		// config.pull is untouched: the fetch upstream is still origin/main.
 		e := branchEntry(t, env, dbName, "main")
 		pull := pullEntry(e)
 		require.NotNil(t, pull)

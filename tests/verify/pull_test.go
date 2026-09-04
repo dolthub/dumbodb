@@ -49,9 +49,6 @@ func TestPullVerify(t *testing.T) {
 		}).Decode(&res))
 	}
 
-	// tipParents returns the parent1/parent2 of a branch's HEAD via dumboLog. A
-	// merge commit has a non-empty parent2; a rebased/fast-forwarded/regular
-	// commit has only parent1 -- so parent2 == "" means linear history.
 	tipParents := func(t *testing.T, connDB string) (parent1, parent2 string) {
 		t.Helper()
 		var res bson.M
@@ -114,8 +111,6 @@ func TestPullVerify(t *testing.T) {
 		var res bson.M
 		require.NoError(t, work.RunCommand(ctx, bson.D{{Key: "dumboFetch", Value: int32(1)}}).Decode(&res))
 		assert.Equal(t, "origin", res["remote"])
-		// Scenario 1 already fetched origin/main, so this fetch is a no-op:
-		// only branches that actually moved are reported, so branches is empty.
 		arr, _ := res["branches"].(bson.A)
 		assert.Empty(t, arr, "an up-to-date fetch reports no updated branches")
 	})
@@ -174,8 +169,6 @@ func TestPullVerify(t *testing.T) {
 		assert.Equal(t, false, res["alreadyUpToDate"])
 		assert.NotEqual(t, res["commitBefore"], res["commitAfter"], "a merge commit was created")
 
-		// The tip is a real merge commit: two parents. parent1 is the local
-		// pre-pull head; parent2 is the fetched commit.
 		p1, p2 := tipParents(t, workName+"@main")
 		assert.Equal(t, res["commitBefore"], p1, "parent1 is the pre-pull head")
 		assert.NotEmpty(t, p2, "a merge commit has a parent2")
@@ -283,7 +276,6 @@ func TestPullVerify(t *testing.T) {
 		assert.NotEqual(t, res["commitBefore"], res["commitAfter"], "a merge commit was created")
 		assert.NotEqual(t, h5, res["commitAfter"], "commitAfter is a merge commit, not the fetched commit (a plain pull would equal h5)")
 
-		// It is a real merge commit: parent2 is the fetched commit h5.
 		_, p2 := tipParents(t, nfName+"@main")
 		assert.Equal(t, h5, p2, "noFF's merge commit has parent2 == the fetched commit")
 
@@ -293,9 +285,6 @@ func TestPullVerify(t *testing.T) {
 		assert.EqualValues(t, 1, n, "c5 was merged in")
 	})
 
-	// diverge clones a fresh working db from the hub, adds one local commit
-	// (id localID), advances the hub with one commit (id hubID) and pushes it,
-	// leaving the clone's main diverged from origin/main. Returns the clone name.
 	diverge := func(t *testing.T, prefix string, localID, hubID int32) string {
 		t.Helper()
 		name := fmt.Sprintf("%s%d", prefix, suffix)
@@ -329,19 +318,15 @@ func TestPullVerify(t *testing.T) {
 		assert.Equal(t, false, res["fastForward"])
 		assert.Equal(t, false, res["alreadyUpToDate"])
 
-		// The local commit was replayed on top of the hub's commit: both present.
 		n, err := env.Client.Database(name).Collection("items").CountDocuments(ctx,
 			bson.D{{Key: "_id", Value: bson.D{{Key: "$in", Value: bson.A{int32(300), int32(6)}}}}})
 		require.NoError(t, err)
 		assert.EqualValues(t, 2, n)
 
-		// Rebase produces linear history: the tip has a parent1 and NO parent2
-		// (a merge would have set parent2).
 		p1, p2 := tipParents(t, name+"@main")
 		assert.NotEmpty(t, p1, "the replayed tip has a parent")
 		assert.Empty(t, p2, "a rebase is linear -- no parent2")
 
-		// rebase is a bool: "merges" is rejected (not supported).
 		err = env.Client.Database(name+"@main").RunCommand(ctx, bson.D{
 			{Key: "dumboPull", Value: int32(1)}, {Key: "rebase", Value: "merges"},
 		}).Err()
@@ -354,7 +339,6 @@ func TestPullVerify(t *testing.T) {
 	t.Run("Scenario11_PullPolicyRebase", func(t *testing.T) {
 		name := diverge(t, "rbpolicy", 301, 7)
 		var res bson.M
-		// Record the policy on the tracking branch (config.pull.rebase).
 		require.NoError(t, env.Client.Database(name+"@main").RunCommand(ctx, bson.D{
 			{Key: "dumboBranch", Value: int32(1)}, {Key: "branch", Value: "main"},
 			{Key: "setConfig", Value: bson.D{{Key: "pull", Value: bson.D{{Key: "rebase", Value: true}}}}},
@@ -362,14 +346,12 @@ func TestPullVerify(t *testing.T) {
 		cfg := res["config"].(bson.M)["pull"].(bson.M)
 		require.Equal(t, "true", cfg["rebase"])
 
-		// A bare pull honors the policy -> rebased.
 		require.NoError(t, env.Client.Database(name+"@main").RunCommand(ctx, bson.D{
 			{Key: "dumboPull", Value: int32(1)},
 		}).Decode(&res))
 		assert.EqualValues(t, 1, res["ok"])
 		assert.Equal(t, true, res["rebased"], "a bare pull must honor the rebase policy")
 
-		// Linear history: no parent2.
 		_, p2 := tipParents(t, name+"@main")
 		assert.Empty(t, p2, "a policy rebase is linear -- no parent2")
 	})
@@ -386,11 +368,9 @@ func TestPullVerify(t *testing.T) {
 			{Key: "setConfig", Value: bson.D{{Key: "pull", Value: bson.D{{Key: "ff", Value: "only"}}}}},
 		}).Decode(&res))
 
-		// A bare pull is not a fast-forward (main diverged) -> rejected.
 		raw := runCommandRaw(t, env.Client.Database(name+"@main"), bson.D{{Key: "dumboPull", Value: int32(1)}})
 		require.EqualValues(t, 0, raw["ok"], "ff:only policy must reject a non-fast-forward pull")
 
-		// An explicit noFF overrides the policy and creates a merge commit.
 		require.NoError(t, env.Client.Database(name+"@main").RunCommand(ctx, bson.D{
 			{Key: "dumboPull", Value: int32(1)}, {Key: "noFF", Value: true},
 			{Key: "message", Value: "merge over policy"}, {Key: "author", Value: "bob <bob@acme.com>"},
@@ -399,7 +379,6 @@ func TestPullVerify(t *testing.T) {
 		assert.Equal(t, false, res["fastForward"])
 		assert.NotEqual(t, true, res["rebased"], "a merge is not a rebase")
 
-		// The override produced a real merge commit: parent2 is present.
 		_, p2 := tipParents(t, name+"@main")
 		assert.NotEmpty(t, p2, "the override merge has a parent2")
 	})
@@ -408,9 +387,6 @@ func TestPullVerify(t *testing.T) {
 	// Scenario 13: a bare pull follows a differently-named upstream branch
 	// -------------------------------------------------------------------------
 	t.Run("Scenario13_PullRenamedUpstream", func(t *testing.T) {
-		// A local branch whose name differs from its upstream ref: local "main"
-		// tracks origin/trunk (config.pull.branch = "trunk"). A bare pull must
-		// resolve refs/remotes/origin/trunk, not refs/remotes/origin/main.
 		rnDir := t.TempDir()
 		rnURL := "file://" + rnDir
 		rnHub := fmt.Sprintf("rnhub%d", suffix)
@@ -418,7 +394,6 @@ func TestPullVerify(t *testing.T) {
 		h := env.Client.Database(rnHub)
 		var res bson.M
 
-		// Hub: c1 on main, a "trunk" branch off it; register origin and push both.
 		_, err := h.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}, {Key: "v", Value: "one"}})
 		require.NoError(t, err)
 		dumboDBCommit(t, env, rnHub, "c1", "alice <alice@acme.com>")
@@ -436,7 +411,6 @@ func TestPullVerify(t *testing.T) {
 			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"}, {Key: "refSpec", Value: "trunk"},
 		}).Decode(&res))
 
-		// Work: clone, then re-point local main at origin/trunk via config.pull.
 		require.NoError(t, admin.RunCommand(ctx, bson.D{
 			{Key: "dumboClone", Value: int32(1)}, {Key: "from", Value: rnURL}, {Key: "as", Value: rnWork},
 		}).Decode(&res))
@@ -447,7 +421,6 @@ func TestPullVerify(t *testing.T) {
 			}}}},
 		}).Decode(&res))
 
-		// Advance origin/trunk with a new commit.
 		_, err = env.Client.Database(rnHub+"@trunk").Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(2)}, {Key: "v", Value: "two"}})
 		require.NoError(t, err)
 		dumboDBCommit(t, env, rnHub+"@trunk", "c2 on trunk", "alice <alice@acme.com>")
@@ -455,7 +428,6 @@ func TestPullVerify(t *testing.T) {
 			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"}, {Key: "refSpec", Value: "trunk"},
 		}).Decode(&res))
 
-		// A bare pull on work main follows config.pull.branch=trunk and fast-forwards.
 		require.NoError(t, env.Client.Database(rnWork+"@main").RunCommand(ctx, bson.D{
 			{Key: "dumboPull", Value: int32(1)},
 		}).Decode(&res))
@@ -463,7 +435,6 @@ func TestPullVerify(t *testing.T) {
 		assert.Equal(t, "origin", res["remote"])
 		assert.Equal(t, true, res["fastForward"], "local main is an ancestor of origin/trunk")
 
-		// main received origin/trunk's commit (proves it resolved the right ref).
 		n, err := env.Client.Database(rnWork+"@main").Collection("items").CountDocuments(ctx, bson.D{})
 		require.NoError(t, err)
 		assert.EqualValues(t, 2, n, "bare pull must merge origin/trunk into the renamed local main")
@@ -473,27 +444,23 @@ func TestPullVerify(t *testing.T) {
 	// Scenario 14: noFF + ffOnly is rejected before any fetch side effect
 	// -------------------------------------------------------------------------
 	t.Run("Scenario14_PullConflictingFFOptionsRejected", func(t *testing.T) {
-		// A fresh clone gives a controlled tracking-ref baseline.
 		mxName := fmt.Sprintf("mxwork%d", suffix)
 		require.NoError(t, admin.RunCommand(ctx, bson.D{
 			{Key: "dumboClone", Value: int32(1)}, {Key: "from", Value: hubURL}, {Key: "as", Value: mxName},
 		}).Decode(&res))
 		trackingBefore := branchEntry(t, env, mxName, "origin/main")["commitId"]
 
-		// Advance origin/main on the hub, but do NOT fetch on the clone yet.
 		_, err := hub.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(900)}, {Key: "v", Value: "mx"}})
 		require.NoError(t, err)
 		dumboDBCommit(t, env, hubName, "mx advance", "alice <alice@acme.com>")
 		pushHub()
 
-		// noFF + ffOnly is contradictory: rejected up front, with no fetch.
 		raw := runCommandRaw(t, env.Client.Database(mxName+"@main"), bson.D{
 			{Key: "dumboPull", Value: int32(1)}, {Key: "noFF", Value: true}, {Key: "ffOnly", Value: true},
 		})
 		require.EqualValues(t, 0, raw["ok"], "noFF + ffOnly must be rejected")
 		assert.Contains(t, raw["errmsg"], "mutually exclusive")
 
-		// The tracking ref did not move -- the invalid request never fetched.
 		trackingAfter := branchEntry(t, env, mxName, "origin/main")["commitId"]
 		assert.Equal(t, trackingBefore, trackingAfter, "a rejected pull must not update remote-tracking refs")
 	})

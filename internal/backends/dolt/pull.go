@@ -33,9 +33,6 @@ func (b *Backend) DumboDBPull(ctx context.Context, params *backends.PullParams) 
 		branch = defaultBranch
 	}
 
-	// config.pull drives the fetch remote, the merged tracking branch, and the
-	// default merge policy. 'from' overrides the remote; per-call flags override
-	// rebase/ff -- exactly as git flags override branch.<name>.rebase and pull.ff.
 	pull, err := b.getBranchPull(ctx, params.DBName, branch)
 	if err != nil {
 		return nil, err
@@ -49,8 +46,6 @@ func (b *Backend) DumboDBPull(ctx context.Context, params *backends.PullParams) 
 		remote = pull.remote
 	}
 
-	// The remote branch to merge in: config.pull.branch (git branch.merge) when
-	// set -- it may differ from the local branch name -- else the local name.
 	remoteBranch := pull.branch
 	if remoteBranch == "" {
 		remoteBranch = branch
@@ -82,8 +77,6 @@ func (b *Backend) DumboDBPull(ctx context.Context, params *backends.PullParams) 
 	}
 	before := beforeHash.String()
 
-	// Fetch updates every tracking ref (dumboFetch only *reports* the ones that
-	// moved, so read the branch's tracking ref directly for the fetched commit).
 	if _, err := b.DumboDBFetch(ctx, &backends.FetchParams{DBName: params.DBName, Remote: remote}); err != nil {
 		return nil, err
 	}
@@ -109,8 +102,6 @@ func (b *Backend) DumboDBPull(ctx context.Context, params *backends.PullParams) 
 		}, nil
 	}
 
-	// Rebase path: replay the branch's local commits onto the fetched commit
-	// instead of merging. A *DumboDBRebaseConflictError propagates to the handler.
 	if doRebase {
 		rebaseRes, err := b.DumboDBRebase(ctx, &backends.RebaseParams{
 			DBName: params.DBName,
@@ -125,10 +116,8 @@ func (b *Backend) DumboDBPull(ctx context.Context, params *backends.PullParams) 
 			Branch:       branch,
 			CommitBefore: before,
 			CommitAfter:  rebaseRes.NewTip,
-			// A rebase with no local commits to replay lands exactly on the
-			// fetched commit -- a fast-forward.
-			FastForward: rebaseRes.NewTip == fetched,
-			Rebased:     true,
+			FastForward:  rebaseRes.NewTip == fetched,
+			Rebased:      true,
 		}, nil
 	}
 

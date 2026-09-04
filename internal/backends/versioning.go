@@ -53,18 +53,13 @@ type BranchParams struct {
 	Name   string // name of the new branch (or branch to delete when Delete is true); empty when List is true
 	Delete bool   // if true, delete the named branch instead of creating it
 	Force  bool   // if true together with Delete, skip the unmerged-commits safety check (forceDelete semantics)
-	List   bool   // if true, list every branch (local and remote-tracking); Name, Delete and Force are ignored
+	List   bool   // if true, list every branch (local and remote-tracking)
 
-	// Configure applies ConfigUpdate to the branch Name's config.{pull,push}.
-	Configure bool
-	// ConfigUpdate is the partial change to apply in configure mode.
+	Configure    bool
 	ConfigUpdate *BranchConfigUpdate
 }
 
-// BranchConfigUpdate is a partial change to a branch's config.{pull,push}. A nil
-// pointer leaves a leaf unchanged; a non-nil pointer sets it (a pointer to ""
-// clears that leaf). UnsetPull/UnsetPush drop the whole sub-object before the
-// leaf pointers apply.
+// BranchConfigUpdate is a partial change to a branch's config.{pull,push}.
 type BranchConfigUpdate struct {
 	PullRemote *string
 	PullBranch *string
@@ -77,26 +72,19 @@ type BranchConfigUpdate struct {
 }
 
 // BranchInfo describes a single branch returned when BranchParams.List is set.
-// A listing includes both local branches and remote-tracking branches.
 type BranchInfo struct {
 	Name     string
 	CommitID string // branch HEAD commit hash
 
-	// Pull and Push are a local branch's config.{pull,push}; nil when unset.
 	Pull *BranchPullInfo
 	Push *BranchPushInfo
 
-	// RemoteTracking marks an entry from refs/remotes/<remote>/<branch> -- a git
-	// remote-tracking branch -- rather than a local branch. Name is
-	// "<remote>/<ref>"; Remote and Ref split it. Such entries carry no config.
 	RemoteTracking bool
 	Remote         string
 	Ref            string
 }
 
-// BranchPullInfo is a branch's fetch/merge config: Remote+Branch name the
-// tracked upstream, Rebase ("true") and FF ("no"/"only") the persistent pull
-// policy. Empty fields are omitted on the wire.
+// BranchPullInfo is a branch's fetch/merge config.
 type BranchPullInfo struct {
 	Remote string
 	Branch string
@@ -104,7 +92,7 @@ type BranchPullInfo struct {
 	FF     string
 }
 
-// BranchPushInfo is a branch's persistent push target (always complete).
+// BranchPushInfo is a branch's persistent push target.
 type BranchPushInfo struct {
 	Remote string
 	Branch string
@@ -114,8 +102,6 @@ type BranchResult struct {
 	Branch   string       // name of the created or deleted branch; empty when listing
 	Branches []BranchInfo // populated only when BranchParams.List is set, sorted by Name
 
-	// Configured is set in configure mode; Pull/Push are the branch's resulting
-	// config.{pull,push} (nil when that sub-object is unset).
 	Configured bool
 	Pull       *BranchPullInfo
 	Push       *BranchPushInfo
@@ -799,7 +785,7 @@ type RemoteResult struct {
 // PushParams are the arguments to DumboDBPush.
 type PushParams struct {
 	DBName     string
-	Remote     string // remote name (looked up in admin.system.remotes); empty resolves from config.push/config.pull
+	Remote     string // remote name; empty resolves from config.push/config.pull
 	ConnBranch string // the connection's current branch; the local branch for a bare push and the target of HEAD
 	RefSpec    string // git-style [+]<src>[:<dst>]; empty means a bare push of the connection branch (git push)
 	Force      bool   // non-fast-forward (force) update; equivalent to a leading '+' in the refspec
@@ -844,9 +830,9 @@ type PullParams struct {
 	Remote    string // remote to pull from; empty means the branch upstream
 	NoFF      bool   // force a merge commit even when a fast-forward is possible
 	FFOnly    bool   // fail if the pull is not a fast-forward
-	FFSet     bool   // whether NoFF/FFOnly were passed explicitly (overrides the branch pull policy)
-	Rebase    string // "" (not set), "false", or "true": rebase onto the fetched commit instead of merging
-	RebaseSet bool   // whether Rebase was passed explicitly (overrides the branch pull policy)
+	FFSet     bool   // whether NoFF/FFOnly were passed explicitly
+	Rebase    string // rebase onto the fetched commit instead of merging
+	RebaseSet bool   // whether Rebase was passed explicitly
 	Message   string // optional merge commit message
 	Author    string // optional 'Name <email>' for a merge commit
 }
@@ -859,7 +845,7 @@ type PullResult struct {
 	CommitAfter     string // local branch head after the pull
 	FastForward     bool   // the pull advanced the branch without a merge commit
 	AlreadyUpToDate bool   // the branch already had the fetched commit
-	Rebased         bool   // the pull rebased the branch onto the fetched commit instead of merging
+	Rebased         bool   // the pull rebased instead of merging
 }
 
 // CloneParams are the arguments to DumboDBClone.

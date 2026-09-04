@@ -446,9 +446,6 @@ func TestBranchVerify(t *testing.T) {
 			{Key: "dumboBranch", Value: int32(1)}, {Key: "branch", Value: "feature"},
 		}).Err())
 
-		// A remote with both branches pushed -- push writes the tracking refs
-		// refs/remotes/origin/<branch> into the local store. Track main's upstream
-		// with setConfig (config.pull).
 		require.NoError(t, conn.RunCommand(ctx, bson.D{
 			{Key: "dumboRemote", Value: int32(1)}, {Key: "action", Value: "add"},
 			{Key: "name", Value: "origin"}, {Key: "url", Value: "file://" + t.TempDir()},
@@ -466,7 +463,6 @@ func TestBranchVerify(t *testing.T) {
 			}}}},
 		}).Err())
 
-		// The default listing includes local AND remote-tracking branches.
 		var res bson.M
 		require.NoError(t, env.Client.Database(rtDB+"@main").RunCommand(ctx, bson.D{
 			{Key: "dumboBranch", Value: int32(1)},
@@ -479,7 +475,6 @@ func TestBranchVerify(t *testing.T) {
 			byName[m["name"].(string)] = m
 		}
 
-		// Local branches, main with its config.pull tracking info.
 		require.Contains(t, byName, "main")
 		require.Contains(t, byName, "feature")
 		mainEntry := byName["main"]
@@ -490,7 +485,6 @@ func TestBranchVerify(t *testing.T) {
 		assert.Equal(t, "origin", pull["remote"])
 		assert.Equal(t, "main", pull["branch"])
 
-		// Remote-tracking branches, with remote/ref and never current.
 		require.Contains(t, byName, "origin/main")
 		require.Contains(t, byName, "origin/feature")
 		for _, name := range []string{"origin/main", "origin/feature"} {
@@ -519,7 +513,6 @@ func TestBranchVerify(t *testing.T) {
 		require.NoError(t, env.Client.Database(cfgDB+"@main").RunCommand(ctx, bson.D{
 			{Key: "dumboBranch", Value: int32(1)}, {Key: "branch", Value: "feature"},
 		}).Err())
-		// main tracks a remote; feature does not.
 		require.NoError(t, conn.RunCommand(ctx, bson.D{
 			{Key: "dumboRemote", Value: int32(1)}, {Key: "action", Value: "add"},
 			{Key: "name", Value: "origin"}, {Key: "url", Value: "file://" + t.TempDir()},
@@ -531,7 +524,6 @@ func TestBranchVerify(t *testing.T) {
 		mainConn := env.Client.Database(cfgDB + "@main")
 		var res bson.M
 
-		// Set config.pull identity + policy in one call; the response echoes it.
 		require.NoError(t, mainConn.RunCommand(ctx, bson.D{
 			{Key: "dumboBranch", Value: int32(1)}, {Key: "branch", Value: "main"},
 			{Key: "setConfig", Value: bson.D{{Key: "pull", Value: bson.D{
@@ -545,7 +537,6 @@ func TestBranchVerify(t *testing.T) {
 		assert.Equal(t, "true", pull["rebase"])
 		assert.Equal(t, "only", pull["ff"])
 
-		// The listing surfaces config.pull on the local main entry.
 		require.NoError(t, mainConn.RunCommand(ctx, bson.D{{Key: "dumboBranch", Value: int32(1)}}).Decode(&res))
 		for _, e := range res["branches"].(bson.A) {
 			m := e.(bson.M)
@@ -556,7 +547,6 @@ func TestBranchVerify(t *testing.T) {
 			}
 		}
 
-		// config.push is a persistent, differently-named triangular target.
 		require.NoError(t, mainConn.RunCommand(ctx, bson.D{
 			{Key: "dumboBranch", Value: int32(1)}, {Key: "branch", Value: "main"},
 			{Key: "setConfig", Value: bson.D{{Key: "push", Value: bson.D{
@@ -566,10 +556,8 @@ func TestBranchVerify(t *testing.T) {
 		push := res["config"].(bson.M)["push"].(bson.M)
 		assert.Equal(t, "origin", push["remote"])
 		assert.Equal(t, "rev51", push["branch"])
-		// The push update leaves config.pull untouched.
 		assert.Equal(t, "origin", res["config"].(bson.M)["pull"].(bson.M)["remote"])
 
-		// unsetConfig clears one leaf; the rest of config.pull remains.
 		require.NoError(t, mainConn.RunCommand(ctx, bson.D{
 			{Key: "dumboBranch", Value: int32(1)}, {Key: "branch", Value: "main"},
 			{Key: "unsetConfig", Value: bson.A{"pull.rebase"}},
@@ -579,7 +567,6 @@ func TestBranchVerify(t *testing.T) {
 		assert.False(t, hasRebase, "pull.rebase was unset")
 		assert.Equal(t, "only", pull["ff"])
 
-		// unsetConfig on a whole sub-object drops config.push entirely.
 		require.NoError(t, mainConn.RunCommand(ctx, bson.D{
 			{Key: "dumboBranch", Value: int32(1)}, {Key: "branch", Value: "main"},
 			{Key: "unsetConfig", Value: bson.A{"push"}},
@@ -587,7 +574,6 @@ func TestBranchVerify(t *testing.T) {
 		_, hasPush := res["config"].(bson.M)["push"]
 		assert.False(t, hasPush, "config.push was unset")
 
-		// pull.ff:"default" clears ff; config.pull keeps only its identity.
 		require.NoError(t, mainConn.RunCommand(ctx, bson.D{
 			{Key: "dumboBranch", Value: int32(1)}, {Key: "branch", Value: "main"},
 			{Key: "setConfig", Value: bson.D{{Key: "pull", Value: bson.D{{Key: "ff", Value: "default"}}}}},
@@ -597,40 +583,36 @@ func TestBranchVerify(t *testing.T) {
 		assert.False(t, hasFF, "pull.ff was cleared to default")
 		assert.Equal(t, "origin", pull["remote"], "config.pull identity is retained")
 
-		// A rebase/ff policy requires an upstream: feature has no config.pull -> error.
 		err = env.Client.Database(cfgDB+"@feature").RunCommand(ctx, bson.D{
 			{Key: "dumboBranch", Value: int32(1)}, {Key: "branch", Value: "feature"},
 			{Key: "setConfig", Value: bson.D{{Key: "pull", Value: bson.D{{Key: "rebase", Value: true}}}}},
 		}).Err()
 		assert.Error(t, err, "a pull policy applies only to a branch with a config.pull upstream")
 
-		// A partial config.push (remote without branch) is rejected at set time.
 		err = env.Client.Database(cfgDB+"@feature").RunCommand(ctx, bson.D{
 			{Key: "dumboBranch", Value: int32(1)}, {Key: "branch", Value: "feature"},
 			{Key: "setConfig", Value: bson.D{{Key: "push", Value: bson.D{{Key: "remote", Value: "origin"}}}}},
 		}).Err()
 		assert.Error(t, err, "config.push must set both remote and branch")
 
-		// An unknown remote is rejected.
 		err = mainConn.RunCommand(ctx, bson.D{
 			{Key: "dumboBranch", Value: int32(1)}, {Key: "branch", Value: "main"},
 			{Key: "setConfig", Value: bson.D{{Key: "pull", Value: bson.D{{Key: "remote", Value: "ghost"}}}}},
 		}).Err()
 		assert.Error(t, err, "config.pull.remote must name a configured remote")
 
-		// Invalid values, keys, and paths are rejected.
 		bad := []struct {
 			name string
 			cfg  bson.D
 		}{
-			{"rebase merges", bson.D{{Key: "pull", Value: bson.D{{Key: "rebase", Value: "merges"}}}}}, // rebase is a bool
-			{"rebase string", bson.D{{Key: "pull", Value: bson.D{{Key: "rebase", Value: "true"}}}}},   // not a bool
-			{"ff bad value", bson.D{{Key: "pull", Value: bson.D{{Key: "ff", Value: "sometimes"}}}}},   // no/only/default
-			{"ff bool", bson.D{{Key: "pull", Value: bson.D{{Key: "ff", Value: true}}}}},               // ff is a string
-			{"unknown pull leaf", bson.D{{Key: "pull", Value: bson.D{{Key: "squash", Value: true}}}}}, // unknown leaf
-			{"unknown push leaf", bson.D{{Key: "push", Value: bson.D{{Key: "rebase", Value: true}}}}}, // push has no rebase
-			{"unknown top key", bson.D{{Key: "rebase", Value: true}}},                                 // must be pull/push
-			{"non-doc sub", bson.D{{Key: "pull", Value: "origin"}}},                                   // pull must be a doc
+			{"rebase merges", bson.D{{Key: "pull", Value: bson.D{{Key: "rebase", Value: "merges"}}}}},
+			{"rebase string", bson.D{{Key: "pull", Value: bson.D{{Key: "rebase", Value: "true"}}}}},
+			{"ff bad value", bson.D{{Key: "pull", Value: bson.D{{Key: "ff", Value: "sometimes"}}}}},
+			{"ff bool", bson.D{{Key: "pull", Value: bson.D{{Key: "ff", Value: true}}}}},
+			{"unknown pull leaf", bson.D{{Key: "pull", Value: bson.D{{Key: "squash", Value: true}}}}},
+			{"unknown push leaf", bson.D{{Key: "push", Value: bson.D{{Key: "rebase", Value: true}}}}},
+			{"unknown top key", bson.D{{Key: "rebase", Value: true}}},
+			{"non-doc sub", bson.D{{Key: "pull", Value: "origin"}}},
 		}
 		for _, tc := range bad {
 			err = mainConn.RunCommand(ctx, bson.D{
@@ -640,23 +622,18 @@ func TestBranchVerify(t *testing.T) {
 			assert.Error(t, err, "setConfig %s must be rejected", tc.name)
 		}
 
-		// An unknown unsetConfig path is rejected.
 		err = mainConn.RunCommand(ctx, bson.D{
 			{Key: "dumboBranch", Value: int32(1)}, {Key: "branch", Value: "main"},
 			{Key: "unsetConfig", Value: bson.A{"pull.squash"}},
 		}).Err()
 		assert.Error(t, err, "an unknown unsetConfig path must be rejected")
 
-		// setConfig and unsetConfig may not both name the same leaf.
 		err = mainConn.RunCommand(ctx, bson.D{
 			{Key: "dumboBranch", Value: int32(1)}, {Key: "branch", Value: "main"},
 			{Key: "setConfig", Value: bson.D{{Key: "pull", Value: bson.D{{Key: "ff", Value: "no"}}}}},
 			{Key: "unsetConfig", Value: bson.A{"pull.ff"}},
 		}).Err()
 		assert.Error(t, err, "the same leaf in setConfig and unsetConfig must be rejected")
-
-		// NOTE: rebase + ff together is *allowed* (git-parity: rebase wins on
-		// pull, ff is inert) -- see the valid set at the top of this scenario.
 	})
 
 	// -------------------------------------------------------------------------
@@ -678,7 +655,6 @@ func TestBranchVerify(t *testing.T) {
 			{Key: "name", Value: "origin2"}, {Key: "url", Value: "file://" + t.TempDir()},
 		}).Err())
 
-		// Create release with a pull upstream and a triangular push target.
 		require.NoError(t, env.Client.Database(delDB+"@main").RunCommand(ctx, bson.D{
 			{Key: "dumboBranch", Value: int32(1)}, {Key: "branch", Value: "release"},
 		}).Err())
@@ -690,7 +666,6 @@ func TestBranchVerify(t *testing.T) {
 			}},
 		}).Err())
 
-		// Force-delete release, then recreate it from main.
 		require.NoError(t, env.Client.Database(delDB+"@main").RunCommand(ctx, bson.D{
 			{Key: "dumboBranch", Value: int32(1)}, {Key: "branch", Value: "release"}, {Key: "forceDelete", Value: true},
 		}).Err())
@@ -698,12 +673,9 @@ func TestBranchVerify(t *testing.T) {
 			{Key: "dumboBranch", Value: int32(1)}, {Key: "branch", Value: "release"},
 		}).Err())
 
-		// The recreated branch carries no config.
 		_, hasConfig := branchEntry(t, env, delDB, "release")["config"]
 		assert.False(t, hasConfig, "a recreated branch must not inherit the deleted branch's config")
 
-		// A bare push from release must error -- not silently follow the deleted
-		// branch's origin2/release push target.
 		var res bson.M
 		err = env.Client.Database(delDB+"@release").RunCommand(ctx, bson.D{{Key: "dumboPush", Value: int32(1)}}).Decode(&res)
 		assert.Error(t, err, "a bare push on the recreated branch must error (no config)")
@@ -743,8 +715,6 @@ func listBranches(t *testing.T, env *dumboDBTestEnv, connDB string) []branchList
 		require.True(t, isStr, "branches[%d].name must be a string", i)
 		commitID, isStr := doc["commitId"].(string)
 		require.True(t, isStr, "branches[%d].commitId must be a string", i)
-		// current is present (true) only on the checked-out branch; absent
-		// elsewhere.
 		current, _ := doc["current"].(bool)
 
 		out = append(out, branchListEntry{Name: name, CommitID: commitID, Current: current})

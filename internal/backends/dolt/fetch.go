@@ -34,7 +34,6 @@ import (
 // pulls novel chunks but does not touch any local branch head. Reuses Dolt's
 // actions.FetchCommit (no DoltEnv/RepoState).
 func (b *Backend) DumboDBFetch(ctx context.Context, params *backends.FetchParams) (*backends.FetchResult, error) {
-	// An omitted remote defaults to the pull remote recorded for the default branch.
 	remote := params.Remote
 	if remote == "" {
 		pull, err := b.getBranchPull(ctx, params.DBName, defaultBranch)
@@ -119,8 +118,6 @@ func (b *Backend) DumboDBFetch(ctx context.Context, params *backends.FetchParams
 			return nil, fmt.Errorf("dumboFetch: updating tracking ref for %q: %w", name, err)
 		}
 
-		// Report only branches whose tracking ref actually moved (or was newly
-		// created); an up-to-date branch is omitted, like git fetch's quiet output.
 		if commitBefore != ch.String() {
 			fetched = append(fetched, backends.FetchedRef{Branch: name, CommitBefore: commitBefore, Commit: ch.String()})
 		}

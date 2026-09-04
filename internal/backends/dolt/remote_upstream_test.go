@@ -97,9 +97,7 @@ func assertPullUpstream(t *testing.T, b *Backend, dbName, branch, wantRemote, wa
 // strp returns a pointer to a string literal, for BranchConfigUpdate fields.
 func strp(s string) *string { return &s }
 
-// TestDumboDBConfig_PullPush exercises the direction-grouped config model: a bare
-// push follows config.push when set, else config.pull; an explicit push never
-// mutates the stored config (there is no push -u).
+// TestDumboDBConfig_PullPush exercises the direction-grouped config model.
 func TestDumboDBConfig_PullPush(t *testing.T) {
 	ctx := context.Background()
 	b := newTestBackend(t)
@@ -117,7 +115,6 @@ func TestDumboDBConfig_PullPush(t *testing.T) {
 		t.Fatalf("add other: %v", err)
 	}
 
-	// (1) A named push does not record any config (there is no push -u).
 	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: dbName, Remote: "origin", RefSpec: "main"}); err != nil {
 		t.Fatalf("named push: %v", err)
 	}
@@ -125,7 +122,6 @@ func TestDumboDBConfig_PullPush(t *testing.T) {
 		t.Errorf("named push must not record config, got %v", doc)
 	}
 
-	// (2) config.pull is set explicitly via setConfig; a bare push follows it.
 	if _, err := b.applyBranchConfig(ctx, dbName, "main", &backends.BranchConfigUpdate{
 		PullRemote: strp("origin"), PullBranch: strp("main"),
 	}); err != nil {
@@ -143,7 +139,6 @@ func TestDumboDBConfig_PullPush(t *testing.T) {
 		t.Errorf("bare push = %s/%s, want origin/main", res.Remote, res.RemoteBranch)
 	}
 
-	// (3) config.push overrides config.pull for a bare push (triangular target).
 	if _, err := b.applyBranchConfig(ctx, dbName, "main", &backends.BranchConfigUpdate{
 		PushRemote: strp("other"), PushBranch: strp("review"),
 	}); err != nil {
@@ -157,7 +152,6 @@ func TestDumboDBConfig_PullPush(t *testing.T) {
 		t.Errorf("bare push = %s/%s, want other/review", res.Remote, res.RemoteBranch)
 	}
 
-	// (4) An explicit push to origin does not change the stored config.
 	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: dbName, Remote: "origin", RefSpec: "main"}); err != nil {
 		t.Fatalf("explicit push origin: %v", err)
 	}
@@ -170,7 +164,6 @@ func TestDumboDBConfig_PullPush(t *testing.T) {
 		t.Errorf("config.push = %s/%s, want other/review", push.remote, push.branch)
 	}
 
-	// A bare fetch follows the default branch's config.pull remote.
 	fres, err := b.DumboDBFetch(ctx, &backends.FetchParams{DBName: dbName})
 	if err != nil {
 		t.Fatalf("bare fetch: %v", err)
@@ -180,10 +173,7 @@ func TestDumboDBConfig_PullPush(t *testing.T) {
 	}
 }
 
-// TestDumboDBConfig_BarePushErrors covers the cases where a bare push cannot
-// resolve a target: no config and no explicit remote errors; a fetch with no
-// upstream errors. An explicit remote with no config pushes to the same-named
-// branch (the git simple-mode name refusal is dropped).
+// TestDumboDBConfig_BarePushErrors covers the cases where a bare push cannot resolve a target.
 func TestDumboDBConfig_BarePushErrors(t *testing.T) {
 	ctx := context.Background()
 	b := newTestBackend(t)
@@ -195,8 +185,6 @@ func TestDumboDBConfig_BarePushErrors(t *testing.T) {
 		t.Fatalf("add origin: %v", err)
 	}
 
-	// Explicit remote, no refspec, no config: pushes current branch to the
-	// same-named branch on that remote (no config recorded).
 	res, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: dbName, Remote: "origin", ConnBranch: "main"})
 	if err != nil {
 		t.Fatalf("explicit-remote bare push: %v", err)
@@ -208,20 +196,15 @@ func TestDumboDBConfig_BarePushErrors(t *testing.T) {
 		t.Errorf("push must not record config, got %v", doc)
 	}
 
-	// No remote and no config -> error (git push).
 	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: dbName, ConnBranch: "main"}); err == nil {
 		t.Error("push with no remote and no config: want error, got nil")
 	}
-	// Fetch with no remote and no config -> error.
 	if _, err := b.DumboDBFetch(ctx, &backends.FetchParams{DBName: dbName}); err == nil {
 		t.Error("fetch with no remote and no config: want error, got nil")
 	}
 }
 
-// TestDumboDBConfig_DeleteClearsConfig verifies that deleting a branch drops its
-// stored config, so a branch later recreated under the same name does not
-// inherit stale config.pull / config.push (a recreated branch's bare push must
-// not silently follow the deleted branch's push target).
+// TestDumboDBConfig_DeleteClearsConfig verifies that deleting a branch drops its stored config.
 func TestDumboDBConfig_DeleteClearsConfig(t *testing.T) {
 	ctx := context.Background()
 	b := newTestBackend(t)
@@ -245,7 +228,6 @@ func TestDumboDBConfig_DeleteClearsConfig(t *testing.T) {
 		}
 	}
 
-	// Create release, and give it both a pull upstream and a triangular push target.
 	branch(&backends.BranchParams{DBName: dbName, From: "main", Name: "release"})
 	if _, err := b.applyBranchConfig(ctx, dbName, "release", &backends.BranchConfigUpdate{
 		PullRemote: strp("origin"), PullBranch: strp("main"),
@@ -257,20 +239,16 @@ func TestDumboDBConfig_DeleteClearsConfig(t *testing.T) {
 		t.Fatalf("config must be present before delete (ok=%v, err=%v)", ok, err)
 	}
 
-	// Force-delete release; its config document must be gone.
 	branch(&backends.BranchParams{DBName: dbName, From: "main", Name: "release", Delete: true, Force: true})
 	if _, ok, err := b.readBranchConfig(ctx, dbName, "release"); err != nil || ok {
 		t.Fatalf("config must be cleared after delete (ok=%v, err=%v)", ok, err)
 	}
 
-	// Recreate release from main -- it starts with no config.
 	branch(&backends.BranchParams{DBName: dbName, From: "main", Name: "release"})
 	if _, ok, err := b.readBranchConfig(ctx, dbName, "release"); err != nil || ok {
 		t.Fatalf("recreated branch must have no config (ok=%v, err=%v)", ok, err)
 	}
 
-	// A bare push from the recreated release must error -- not silently follow
-	// the deleted branch's origin2/release push target.
 	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: dbName, ConnBranch: "release"}); err == nil {
 		t.Error("bare push on a recreated branch with no config: want error, got nil")
 	}
@@ -289,7 +267,6 @@ func TestDumboDBConfig_Scoping(t *testing.T) {
 			t.Fatalf("add remote %s: %v", db, err)
 		}
 	}
-	// Only dbA sets config.pull.
 	if _, err := b.applyBranchConfig(ctx, "dbA", "main", &backends.BranchConfigUpdate{
 		PullRemote: strp("origin"), PullBranch: strp("main"),
 	}); err != nil {

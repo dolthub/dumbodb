@@ -71,19 +71,12 @@ func (h *Handler) MsgDumboDBPull(connCtx context.Context, msg *wire.OpMsg) (*wir
 	if err != nil {
 		return nil, err
 	}
-	// noFF (force a merge commit) and ffOnly (require a fast-forward) are
-	// contradictory. Reject the combination before any backend work -- like
-	// dumboMerge -- so an invalid request never reaches the fetch (which would
-	// move remote-tracking refs).
 	if noFF && ffOnly {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
 			"dumboPull: noFF and ffOnly are mutually exclusive", "noFF")
 	}
-	// Whether the fast-forward mode was set explicitly; if not, DumboDBPull uses
-	// the branch's stored pull policy.
 	ffSet := document.Has("noFF") || document.Has("ffOnly")
 
-	// rebase is a bool; when set it overrides the branch's stored rebase policy.
 	rebaseSet := document.Has("rebase")
 	var rebaseVal string
 	if rebaseSet {
@@ -128,8 +121,6 @@ func (h *Handler) MsgDumboDBPull(connCtx context.Context, msg *wire.OpMsg) (*wir
 		Author:    author,
 	})
 	if err != nil {
-		// A conflicting merge OR rebase reports per-collection conflicts, like
-		// dumboMerge / dumboRebase, and leaves the branch staged for resolution.
 		var conflicts []backends.ConflictSummary
 		var mergeErr *backends.MergeConflictError
 		var rebaseErr *backends.DumboDBRebaseConflictError
@@ -167,7 +158,6 @@ func (h *Handler) MsgDumboDBPull(connCtx context.Context, msg *wire.OpMsg) (*wir
 	out.Set("commitAfter", res.CommitAfter)
 	out.Set("fastForward", res.FastForward)
 	out.Set("alreadyUpToDate", res.AlreadyUpToDate)
-	// rebased is shown only when the pull rebased instead of merging.
 	if res.Rebased {
 		out.Set("rebased", true)
 	}

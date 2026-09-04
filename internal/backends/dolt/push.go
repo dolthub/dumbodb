@@ -57,11 +57,6 @@ func (b *Backend) DumboDBPush(ctx context.Context, params *backends.PushParams) 
 		return nil, err
 	}
 
-	// Resolve the destination from the branch's config.{push,pull}. Unlike git's
-	// push.default=simple, the push target is always explicit (config.push) or
-	// defaulted (config.pull, then the branch name), so there is no same-named
-	// refusal: a differently-named push is a first-class persistent target, and a
-	// missing config.push falls back to the config.pull upstream (clone-then-push).
 	var pushCfg branchPush
 	var pullCfg branchPull
 	if localBranch != "" {
@@ -75,8 +70,6 @@ func (b *Backend) DumboDBPush(ctx context.Context, params *backends.PushParams) 
 
 	remote := params.Remote
 	if explicit {
-		// git push <remote> <refspec>: a missing 'to' falls back to config.push
-		// then config.pull.
 		if remote == "" {
 			switch {
 			case pushCfg.complete():
@@ -88,11 +81,8 @@ func (b *Backend) DumboDBPush(ctx context.Context, params *backends.PushParams) 
 			}
 		}
 	} else {
-		// Bare push: resolve both remote and dst.
 		switch {
 		case remote != "":
-			// Explicit 'to' wins for the remote; the dst matches the config target
-			// for that remote, else the branch's own name.
 			switch {
 			case pushCfg.complete() && pushCfg.remote == remote:
 				dst = pushCfg.branch

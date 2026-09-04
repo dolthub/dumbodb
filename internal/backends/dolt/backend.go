@@ -87,7 +87,7 @@ const (
 	branchRefPrefix = "refs/heads/"
 
 	// remoteRefPrefix is the dataset-ID prefix for remote-tracking branches
-	// (refs/remotes/<remote>/<branch>), written by push/fetch/clone.
+	// (refs/remotes/<remote>/<branch>).
 	remoteRefPrefix = "refs/remotes/"
 
 	// mainDataset is the dataset ID used for the "refs/heads/main" branch.
@@ -1507,9 +1507,7 @@ func (b *Backend) DumboDBBranch(ctx context.Context, params *backends.BranchPara
 }
 
 // dumboDBBranchList returns every branch in the database with its HEAD commit,
-// sorted by name: local branches (refs/heads/*) with their upstream tracking,
-// and remote-tracking branches (refs/remotes/<remote>/<branch>). Caller must
-// hold db.mu.Lock().
+// sorted by name. Caller must hold db.mu.Lock().
 func dumboDBBranchList(ctx context.Context, db *dbState) (*backends.BranchResult, error) {
 	dsMap, err := db.datasDB.Datasets(ctx)
 	if err != nil {
@@ -1530,14 +1528,13 @@ func dumboDBBranchList(ctx context.Context, db *dbState) (*backends.BranchResult
 			}
 			branches = append(branches, info)
 		case strings.HasPrefix(id, remoteRefPrefix):
-			// refs/remotes/<remote>/<branch> -- split off the remote from the ref.
 			rest := strings.TrimPrefix(id, remoteRefPrefix)
 			remote, ref, ok := strings.Cut(rest, "/")
 			if !ok {
-				return nil // malformed; skip rather than surface a partial name
+				return nil
 			}
 			branches = append(branches, backends.BranchInfo{
-				Name:           rest, // "<remote>/<branch>"
+				Name:           rest,
 				CommitID:       headAddr.String(),
 				RemoteTracking: true,
 				Remote:         remote,
@@ -1554,9 +1551,8 @@ func dumboDBBranchList(ctx context.Context, db *dbState) (*backends.BranchResult
 	return &backends.BranchResult{Branches: branches}, nil
 }
 
-// dumboDBBranchConfigure sets or clears a tracking branch's pull policy (the
-// rebase / ff keys) and returns the resulting policy. Caller must hold
-// db.mu.Lock().
+// dumboDBBranchConfigure sets or clears a tracking branch's pull policy and
+// returns the resulting policy. Caller must hold db.mu.Lock().
 func dumboDBBranchConfigure(ctx context.Context, db *dbState, params *backends.BranchParams) (*backends.BranchResult, error) {
 	branchDS, err := db.datasDB.GetDataset(ctx, branchRefPrefix+params.Name)
 	if err != nil {
@@ -1580,8 +1576,7 @@ func dumboDBBranchConfigure(ctx context.Context, db *dbState, params *backends.B
 	}, nil
 }
 
-// pullInfo/pushInfo project stored config sub-objects to the wire shape, nil
-// when empty so the listing/configure response omits them.
+// pullInfo/pushInfo project stored config sub-objects to the wire shape.
 func pullInfo(p branchPull) *backends.BranchPullInfo {
 	if p.empty() {
 		return nil
@@ -1686,9 +1681,6 @@ func dumboDBBranchDelete(ctx context.Context, db *dbState, params *backends.Bran
 
 	db.clearBranchWS(params.Name)
 
-	// Drop the branch's stored config (config.pull / config.push) so a branch
-	// later recreated under the same name does not inherit stale tracking -- a
-	// bare push must not silently follow the deleted branch's push target.
 	if err := db.backend.writeBranchConfig(ctx, db.name, params.Name, branchConfig{}); err != nil {
 		return nil, fmt.Errorf("DumboDBBranch: clearing config for deleted branch %q: %w", params.Name, err)
 	}

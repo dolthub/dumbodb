@@ -26,16 +26,10 @@ import (
 )
 
 // branchesCollection is the admin-database collection that stores per-branch
-// configuration, one document per branch keyed by "<db>.<branch>". The config is
-// grouped by direction: config.pull {remote, branch, rebase, ff} is the fetch
-// upstream and its merge policy; config.push {remote, branch} is a persistent
-// push target. It mirrors the identity model of system.remotes and system.users.
+// configuration, one document per branch keyed by "<db>.<branch>".
 const branchesCollection = "system.branches"
 
-// branchPull is a branch's fetch/merge configuration. remote+branch name the
-// tracked upstream (git branch.<name>.remote + branch.<name>.merge); rebase and
-// ff are the persistent pull policy. Empty strings mean "unset". rebase is "" or
-// "true"; ff is "", "no", or "only".
+// branchPull is a branch's fetch/merge configuration.
 type branchPull struct {
 	remote string
 	branch string
@@ -47,13 +41,10 @@ func (p branchPull) empty() bool {
 	return p.remote == "" && p.branch == "" && p.rebase == "" && p.ff == ""
 }
 
-// hasUpstream reports whether a fetch remote is configured; the rebase/ff policy
-// applies only to a branch that tracks an upstream.
+// hasUpstream reports whether a fetch remote is configured.
 func (p branchPull) hasUpstream() bool { return p.remote != "" }
 
-// branchPush is a branch's persistent push target: config.push.remote (git
-// branch.<name>.pushRemote) and config.push.branch (the destination ref, which
-// git cannot persist). It is always complete (both set) or empty (both unset).
+// branchPush is a branch's persistent push target.
 type branchPush struct {
 	remote string
 	branch string
@@ -83,8 +74,7 @@ func (b *Backend) branchesColl() (backends.Collection, error) {
 	return adminDB.Collection(branchesCollection)
 }
 
-// readBranchConfig returns the stored configuration for a branch; ok is false
-// when the branch has no config document.
+// readBranchConfig returns the stored configuration for a branch.
 func (b *Backend) readBranchConfig(ctx context.Context, dbName, branch string) (branchConfig, bool, error) {
 	coll, err := b.branchesColl()
 	if err != nil {
@@ -142,9 +132,7 @@ func docString(doc *types.Document, key string) string {
 	return s
 }
 
-// writeBranchConfig replaces the branch's config document. An empty config
-// deletes the document. Upsert is a delete-then-insert on the "<db>.<branch>"
-// key.
+// writeBranchConfig replaces the branch's config document.
 func (b *Backend) writeBranchConfig(ctx context.Context, dbName, branch string, cfg branchConfig) error {
 	coll, err := b.branchesColl()
 	if err != nil {
@@ -212,10 +200,7 @@ func (b *Backend) getBranchPush(ctx context.Context, dbName, branch string) (bra
 }
 
 // applyBranchConfig merges an update into a branch's stored config and writes it
-// back, returning the resulting config. It enforces the model invariants:
-// config.push is complete (both remote and branch) or absent, and the rebase/ff
-// pull policy applies only to a branch with a pull upstream. Remote names, when
-// set, must be registered in admin.system.remotes.
+// back, returning the resulting config.
 func (b *Backend) applyBranchConfig(ctx context.Context, dbName, branch string, up *backends.BranchConfigUpdate) (branchConfig, error) {
 	cfg, _, err := b.readBranchConfig(ctx, dbName, branch)
 	if err != nil {
