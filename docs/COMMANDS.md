@@ -150,47 +150,41 @@ db.runCommand({ dumboCommit: 1, message: "add order #1", author: "alice <alice@a
 
 ## dumboBranch
 
-Creates or deletes a branch from the rootish encoded in the database name, or
-lists every branch when `branch` is omitted.
+Adds, updates, removes, or lists branches. The operation is selected by a
+required `action`, like `dumboRemote`.
 
 **Alias:** `doltBranch`
 
 ### Parameters
 
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `branch` | string | no |  -- | Name of the branch to create, delete, or configure. Omit to list every branch (local and remote-tracking) |
-| `delete` | bool/int | no | `false` | Safe-delete: fails if the branch has unmerged commits |
-| `forceDelete` | bool/int | no | `false` | Force-delete: succeeds unconditionally |
-| `setConfig` | document | no |  -- | Set the branch's `config`: `pull` `{ remote, branch, rebase, ff }` and/or `push` `{ remote, branch }`. Requires `branch` |
-| `unsetConfig` | array | no |  -- | Clear config leaves or whole sub-objects, e.g. `["pull.rebase", "push"]`. Requires `branch` |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `action` | string | **yes** | `add`, `update`, `remove`, or `list` |
+| `branch` | string | for add/update/remove | Branch name (the source for `add` is the connection rootish) |
+| `setConfig` | document | for update; optional on add | Set/clear the branch's `config` (see below) |
+| `force` | bool | no (remove only) | Skip the unmerged-commits safety check (force delete) |
 
-`delete` and `forceDelete` are mutually exclusive, and both require `branch`.
-`setConfig` / `unsetConfig` are the config write surface, grouped by direction:
-`config.pull` `{ remote, branch, rebase, ff }` is the fetch upstream and pull
-policy (`git config branch.<name>.remote` / `merge` / `rebase` and `pull.ff`);
+Per action:
+- **add** -- create `branch` from the connection rootish (branch name, commit hash, or `branch~N`). An optional `setConfig` is applied atomically (the branch is rolled back if the config is invalid).
+- **update** -- change an existing `branch`'s config; requires `setConfig`.
+- **remove** -- delete `branch`. Without `force` it is a safe delete (refuses a branch with commits not reachable from any other branch); `force: true` removes unconditionally. Removing a branch also drops its stored config.
+- **list** -- list every branch (local and remote-tracking); takes no other fields.
+
+`setConfig` is the config write surface, grouped by direction: `config.pull`
+`{ remote, branch, rebase, ff }` is the fetch upstream and pull policy
+(`git config branch.<name>.remote` / `merge` / `rebase` and `pull.ff`);
 `config.push` `{ remote, branch }` is a persistent push target. Each sub-object
-updates independently (setting `push` leaves `pull` untouched). `rebase`/`ff`
-require a `config.pull` upstream; `config.push` must set both `remote` and
-`branch` (complete) or neither. A `false` `rebase` or `"default"` `ff` clears
-that leaf. They require a `branch` and cannot be combined with `delete`. The
+updates independently. **A value sets a leaf; `null` clears it, or clears a whole
+`pull`/`push` sub-object.** `rebase`/`ff` require a `config.pull` upstream;
+`config.push` must set both `remote` and `branch` (complete) or neither
+(`push: null` to clear). `rebase: false` clears `rebase` (same as `null`). The
 branch's current config is read back in the listing entry's `config` field.
 
 ### Response fields
 
-Create and delete return:
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `branch` | string | Branch name (echoed) |
-| `ok` | number | `1` on success |
-
-A listing returns:
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `branches` | array | One entry per branch -- local and remote-tracking -- sorted by `name` |
-| `ok` | number | `1` on success |
+`add`, `update`, and `remove` return `{ branch, ok }` (plus `config` when
+`setConfig` was applied). `list` returns `{ branches, ok }` with one entry per
+branch, sorted by `name`.
 
 ### Branch entry
 
@@ -207,12 +201,16 @@ A listing returns:
 ### Example
 
 ```js
-// Create a "feature" branch from main HEAD
-db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, branch: "feature" })
+// Add a "feature" branch from main HEAD
+db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, action: "add", branch: "feature" })
 // { branch: "feature", ok: 1 }
 
-// List every branch: local (with config tracking) and remote-tracking
-db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1 })
+// Add + config in one atomic call
+db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, action: "add", branch: "wip", setConfig: { pull: { remote: "origin", branch: "main" } } })
+// { branch: "wip", config: { pull: { remote: "origin", branch: "main" } }, ok: 1 }
+
+// List every branch: local (with config) and remote-tracking
+db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, action: "list" })
 // {
 //   branches: [
 //     { name: "feature",     commitId: "<hash>" },
@@ -224,54 +222,43 @@ db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1 })
 //   ok: 1
 // }
 
-// Create a branch from an ancestor commit
-db.getSiblingDB("orders@main~2").runCommand({ dumboBranch: 1, branch: "rollback-point" })
-// { branch: "rollback-point", ok: 1 }
-
-// Safe-delete a merged branch
-db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, branch: "feature", delete: 1 })
-// { branch: "feature", ok: 1 }
-
-// Force-delete a branch with unmerged commits
-db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, branch: "abandoned", forceDelete: 1 })
-// { branch: "abandoned", ok: 1 }
-
-// Set a tracking branch's config.pull upstream + rebase policy
-db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, branch: "main", setConfig: { pull: { remote: "origin", branch: "main", rebase: true } } })
+// Update: set config.pull upstream + rebase policy
+db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, action: "update", branch: "main", setConfig: { pull: { remote: "origin", branch: "main", rebase: true } } })
 // { branch: "main", config: { pull: { remote: "origin", branch: "main", rebase: "true" } }, ok: 1 }
 
-// Add a persistent triangular push target (config.push); pull is untouched
-db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, branch: "main", setConfig: { push: { remote: "review", branch: "rev51" } } })
-// { branch: "main", config: { pull: {...}, push: { remote: "review", branch: "rev51" } }, ok: 1 }
+// Update: add a persistent triangular push target (config.push); pull is untouched
+db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, action: "update", branch: "main", setConfig: { push: { remote: "review", branch: "rev51" } } })
 
-// Clear a config leaf (or a whole sub-object with "push")
-db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, branch: "main", unsetConfig: ["pull.rebase"] })
-// { branch: "main", config: { pull: { remote: "origin", branch: "main" }, push: {...} }, ok: 1 }
+// Update: clear a leaf (or a whole sub-object) with null
+db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, action: "update", branch: "main", setConfig: { pull: { rebase: null } } })
+db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, action: "update", branch: "main", setConfig: { push: null } })
+
+// Remove a merged branch (safe); force for unmerged
+db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, action: "remove", branch: "feature" })
+db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, action: "remove", branch: "abandoned", force: true })
 ```
 
 ### Error cases
 
 | Condition | Error |
 |-----------|-------|
-| `branch` is empty | `BadValue: dumboBranch: branch name must not be empty` |
-| `delete` or `forceDelete` without `branch` | `BadValue: dumboBranch: branch name is required for delete` |
-| `delete` and `forceDelete` both set | `BadValue: dumboBranch: delete and forceDelete are mutually exclusive` |
+| `action` missing | `BadValue: dumboBranch: action is required (add, update, remove, list)` |
+| unknown `action` | `BadValue: dumboBranch: unknown action "<a>" (add, update, remove, list)` |
+| a field not valid for the action (e.g. `branch` on list, `force` on add) | `BadValue: dumboBranch: "<field>" is not valid with action "<a>"` |
+| add/update/remove with empty `branch` | `BadValue: dumboBranch: branch name must not be empty` |
+| update with no `setConfig` | `BadValue: dumboBranch: action update requires setConfig` |
 | `rebase`/`ff` with no `config.pull` upstream | `OperationFailed: ... config.pull rebase/ff requires an upstream; set config.pull.remote first` |
 | partial `config.push` (remote xor branch) | `OperationFailed: ... config.push must set both remote and branch, or neither` |
 | unknown remote in `config.pull`/`config.push` | `OperationFailed: ... remote "<name>" is not configured for database "<db>"` |
-| `setConfig` combined with `delete` | `BadValue: dumboBranch: setConfig cannot be combined with delete` |
-| `setConfig` value out of range | `BadValue: dumboBranch: setConfig.pull.rebase must be a bool` / `setConfig.pull.ff must be "no", "only", or "default"` |
-| unknown `setConfig` key/path | `BadValue: dumboBranch: unknown setConfig key "<path>"` / `unknown unsetConfig path "<path>"` |
-| Safe-delete on branch with unmerged commits | `OperationFailed: ... unmerged commits` |
+| `setConfig` value out of range | `BadValue: dumboBranch: setConfig.pull.rebase must be a bool` / `setConfig.pull.ff must be "no" or "only" (null to clear)` |
+| unknown `setConfig` key | `BadValue: dumboBranch: unknown setConfig key "<path>"` |
+| safe remove of a branch with unmerged commits | `OperationFailed: ... unmerged commits` |
 
 ### Notes
 
-- Branch creation works from any rootish: branch name, commit hash, or `branch~N` ancestor expression.
-- The new branch HEAD equals the commit resolved from the source rootish.
-- Data on the new branch is fully isolated from its source.
-- A listing includes local branches and remote-tracking branches in one result. Remote-tracking entries are the `refs/remotes/<remote>/<branch>` refs populated by `dumboClone` / `dumboFetch` / `dumboPush`; they are named `<remote>/<branch>`, carry `remoteTracking: true`, `remote`, and `ref`, are never `current`, and have no `config`. A local branch's own tracking is shown by its `config` field, the `git branch -vv` analog.
-- `setConfig` / `unsetConfig` set a branch's direction-grouped `config`. `config.pull` `{ remote, branch, rebase, ff }` is the fetch upstream and pull policy: `rebase` (`git config branch.<name>.rebase`) rebases instead of merging on pull; `ff` (`git config pull.ff`) fixes the fast-forward mode (`no`/`only`); `branch` may differ from the local name (`git config branch.<name>.merge`). `config.push` `{ remote, branch }` is a persistent push target git cannot store. A bare `dumboPull` honors `config.pull` (explicit flags override it); a bare `dumboPush` follows `config.push`, else falls back to `config.pull` (see `dumboPull` / `dumboPush`). The config is read back in the listing entry's `config` field.
-- Omitting `branch` lists every branch. Only an absent `branch` lists; an explicit `branch: ""` is still an error.
+- `add` works from any rootish: branch name, commit hash, or `branch~N` ancestor expression. The new branch HEAD equals the resolved commit; data is fully isolated from the source. An optional `setConfig` is applied atomically (invalid config rolls the branch back).
+- A `list` includes local branches and remote-tracking branches in one result. Remote-tracking entries are the `refs/remotes/<remote>/<branch>` refs populated by `dumboClone` / `dumboFetch` / `dumboPush`; they are named `<remote>/<branch>`, carry `remoteTracking: true`, `remote`, and `ref`, are never `current`, and have no `config`. A local branch's own tracking is shown by its `config` field, the `git branch -vv` analog.
+- `setConfig` (on `add` or `update`) sets a branch's direction-grouped `config`. `config.pull` `{ remote, branch, rebase, ff }` is the fetch upstream and pull policy: `rebase` (`git config branch.<name>.rebase`) rebases instead of merging on pull; `ff` (`git config pull.ff`) fixes the fast-forward mode (`no`/`only`); `branch` may differ from the local name (`git config branch.<name>.merge`). `config.push` `{ remote, branch }` is a persistent push target git cannot store. A value sets a leaf; `null` clears a leaf or a whole `pull`/`push` sub-object. A bare `dumboPull` honors `config.pull` (explicit flags override it); a bare `dumboPush` follows `config.push`, else falls back to `config.pull` (see `dumboPull` / `dumboPush`).
 - `current: true` marks the branch encoded in the database name and is omitted from every other entry. A connection pinned to a commit hash or ancestor expression is on no branch, so no entry carries `current`.
 
 ---
