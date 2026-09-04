@@ -1946,7 +1946,7 @@ db.runCommand({ dumboPush: 1, to: "origin", refSpec: "main" })
 // { remote: "origin", branch: "main", commitPushed: "<hash>", upToDate: false, ok: 1 }
 
 // Record the upstream via config.pull (there is no push -u)
-db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, branch: "main", setConfig: { pull: { remote: "origin", branch: "main" } } })
+db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, action: "update", branch: "main", setConfig: { pull: { remote: "origin", branch: "main" } } })
 
 // git push (bare; follows config.push, else config.pull)
 db.runCommand({ dumboPush: 1 })
