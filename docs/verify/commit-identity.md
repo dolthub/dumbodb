@@ -93,7 +93,7 @@ As `aa` (`authSource=admin`), author a commit on a feature branch:
 ```js
 const repo = db.getSiblingDB("repo")
 repo.items.insertOne({ _id: 1 }); repo.runCommand({ dumboCommit: 1, message: "base" })
-db.getSiblingDB("repo@main").runCommand({ dumboBranch: 1, branch: "feature" })
+db.getSiblingDB("repo@main").runCommand({ dumboBranch: 1, action: "add", branch: "feature" })
 db.getSiblingDB("repo@feature").items.insertOne({ _id: 2 })
 const c2 = db.getSiblingDB("repo@feature").runCommand({ dumboCommit: 1, message: "add-two" })
 // c2.author == "Alice Dev <alice@corp.io>"
@@ -120,7 +120,7 @@ and feature; as `bb`, merge (no fast-forward):
 // as aa:
 const mrg = db.getSiblingDB("mrg")
 mrg.items.insertOne({ _id: 1 }); mrg.runCommand({ dumboCommit: 1, message: "base" })
-db.getSiblingDB("mrg@main").runCommand({ dumboBranch: 1, branch: "feature" })
+db.getSiblingDB("mrg@main").runCommand({ dumboBranch: 1, action: "add", branch: "feature" })
 mrg.items.insertOne({ _id: 2 }); mrg.runCommand({ dumboCommit: 1, message: "main-2" })
 db.getSiblingDB("mrg@feature").items.insertOne({ _id: 3 })
 db.getSiblingDB("mrg@feature").runCommand({ dumboCommit: 1, message: "feat-3" })
@@ -137,7 +137,7 @@ as `bb`, rebase feature onto main and read HEAD:
 // as aa:
 const rbs = db.getSiblingDB("rbs")
 rbs.items.insertOne({ _id: 1 }); rbs.runCommand({ dumboCommit: 1, message: "base" })
-db.getSiblingDB("rbs@main").runCommand({ dumboBranch: 1, branch: "feature" })
+db.getSiblingDB("rbs@main").runCommand({ dumboBranch: 1, action: "add", branch: "feature" })
 rbs.items.insertOne({ _id: 2 }); rbs.runCommand({ dumboCommit: 1, message: "main-2" })
 db.getSiblingDB("rbs@feature").items.insertOne({ _id: 3 })
 db.getSiblingDB("rbs@feature").runCommand({ dumboCommit: 1, message: "feat-3" })
@@ -233,7 +233,7 @@ the other lacks so the merge is a true three-way merge rather than a fast-forwar
 const m = db.getSiblingDB(name + "@main")
 m.items.insertOne({ _id: 1 })
 m.runCommand({ dumboCommit: 1, message: "base", author: "testuser" })
-m.runCommand({ dumboBranch: 1, branch: "feature" })
+m.runCommand({ dumboBranch: 1, action: "add", branch: "feature" })
 m.items.insertOne({ _id: 2 })
 m.runCommand({ dumboCommit: 1, message: "main-2", author: "testuser" })
 

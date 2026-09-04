@@ -204,7 +204,7 @@ func TestRootishIsReadOnly(t *testing.T) {
 		// Dolt commit hashes (read-only): exactly 32 lowercase base32 chars (0-9a-v).
 		// Abbreviated hashes are not detectable at parse time; they resolve as branches.
 		{"na7kfra98h45fr2u5qtr30o2ggm7vh61", true}, // full 32-char Dolt hash
-		{"00000000000000000000000000000000", true},  // all-zero hash (edge case)
+		{"00000000000000000000000000000000", true}, // all-zero hash (edge case)
 
 		// Abbreviated hash-like strings  -- treated as branches at parse time (writable).
 		{"abc123", false},

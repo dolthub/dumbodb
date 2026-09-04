@@ -44,8 +44,8 @@ const (
 )
 
 type lockEntry struct {
-	owner    string
-	kind     LockKind
+	owner string
+	kind  LockKind
 }
 
 type DocLockManager struct {

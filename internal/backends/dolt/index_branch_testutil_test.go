@@ -24,8 +24,8 @@ import (
 	"sort"
 	"testing"
 
-	doltref "github.com/dolthub/dolt/go/libraries/doltcore/ref"
 	"github.com/dolthub/dolt/go/gen/fb/serial"
+	doltref "github.com/dolthub/dolt/go/libraries/doltcore/ref"
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/prolly"
 	"github.com/dolthub/dolt/go/store/prolly/tree"
@@ -51,6 +51,7 @@ func openBackendInDir(t *testing.T, dir string) *Backend {
 func branchFrom(t *testing.T, b *Backend, dbName, from, name string) {
 	t.Helper()
 	if _, err := b.DumboDBBranch(context.Background(), &backends.BranchParams{
+		Action: "add",
 		DBName: dbName,
 		From:   from,
 		Name:   name,

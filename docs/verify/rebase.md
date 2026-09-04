@@ -32,7 +32,6 @@ Run this once before the scenarios below.
 
 ```js
 var db = db.getSiblingDB("rebasedb")
-db.dropDatabase()
 
 // C1: initial commit on main.
 db.items.insertOne({_id: 1, v: 1})
@@ -42,7 +41,7 @@ printjson(r1)
 const hashC1 = r1.commitId
 
 // Create "feature" branch at C1.
-const rBranch = db.getSiblingDB("rebasedb@main").runCommand({doltBranch: 1, branch: "feature"})
+const rBranch = db.getSiblingDB("rebasedb@main").runCommand({doltBranch: 1, action: "add", branch: "feature"})
 printjson(rBranch)
 // Expected: { branch: "feature", ok: 1 }
 
@@ -168,12 +167,11 @@ Create a feature branch with three commits, advance main, then rebase all three.
 
 ```js
 var tdb = db.getSiblingDB("rebase3c")
-tdb.dropDatabase()
 
 tdb.items.insertOne({_id: 1, v: 1})
 tdb.runCommand({doltCommit: 1, message: "C1", author: "alice <alice@acme.com>"})
 
-tdb.getSiblingDB("rebase3c@main").runCommand({doltBranch: 1, branch: "feature"})
+tdb.getSiblingDB("rebase3c@main").runCommand({doltBranch: 1, action: "add", branch: "feature"})
 
 var feat = tdb.getSiblingDB("rebase3c@feature")
 feat.items.insertOne({_id: 10, v: 10})
@@ -201,12 +199,11 @@ Key checks:
 
 ```js
 var tdb = db.getSiblingDB("rebase3cf")
-tdb.dropDatabase()
 
 tdb.items.insertOne({_id: 1, v: 1})
 tdb.runCommand({doltCommit: 1, message: "C1", author: "alice <alice@acme.com>"})
 
-tdb.getSiblingDB("rebase3cf@main").runCommand({doltBranch: 1, branch: "feature"})
+tdb.getSiblingDB("rebase3cf@main").runCommand({doltBranch: 1, action: "add", branch: "feature"})
 
 var feat = tdb.getSiblingDB("rebase3cf@feature")
 // F1: modify _id:1 (will conflict)
@@ -246,12 +243,11 @@ Key checks:
 
 ```js
 var tdb = db.getSiblingDB("rebase3cl")
-tdb.dropDatabase()
 
 tdb.items.insertOne({_id: 1, v: 1})
 tdb.runCommand({doltCommit: 1, message: "C1", author: "alice <alice@acme.com>"})
 
-tdb.getSiblingDB("rebase3cl@main").runCommand({doltBranch: 1, branch: "feature"})
+tdb.getSiblingDB("rebase3cl@main").runCommand({doltBranch: 1, action: "add", branch: "feature"})
 
 var feat = tdb.getSiblingDB("rebase3cl@feature")
 // F1, F2: add new docs (clean)
@@ -298,14 +294,13 @@ Use a fresh database.
 
 ```js
 var cdb = db.getSiblingDB("rebaseconflict")
-cdb.dropDatabase()
 
 cdb.items.insertOne({_id: 1, v: 1})
 const rc1 = cdb.getSiblingDB("rebaseconflict@main").runCommand({doltCommit: 1, message: "initial", author: "test <test@example.com>"})
 printjson(rc1)
 // Expected: { commitId: "<hash>", branch: "main", message: "initial", ok: 1 }
 
-const rBranchC = cdb.getSiblingDB("rebaseconflict@main").runCommand({doltBranch: 1, branch: "feature"})
+const rBranchC = cdb.getSiblingDB("rebaseconflict@main").runCommand({doltBranch: 1, action: "add", branch: "feature"})
 printjson(rBranchC)
 // Expected: { branch: "feature", ok: 1 }
 
@@ -364,14 +359,13 @@ Use another fresh database.
 
 ```js
 var rdb = db.getSiblingDB("rebaseresolve")
-rdb.dropDatabase()
 
 rdb.items.insertOne({_id: 1, v: 1})
 const rr1 = rdb.getSiblingDB("rebaseresolve@main").runCommand({doltCommit: 1, message: "initial", author: "test <test@example.com>"})
 printjson(rr1)
 // Expected: { commitId: "<hash>", branch: "main", message: "initial", ok: 1 }
 
-const rBranchR = rdb.getSiblingDB("rebaseresolve@main").runCommand({doltBranch: 1, branch: "feature"})
+const rBranchR = rdb.getSiblingDB("rebaseresolve@main").runCommand({doltBranch: 1, action: "add", branch: "feature"})
 printjson(rBranchR)
 // Expected: { branch: "feature", ok: 1 }
 

@@ -572,6 +572,7 @@ func TestDiffVerify(t *testing.T) {
 		// Create a feature branch that starts at current main HEAD.
 		require.NoError(t, env.Client.Database(dbName+"@main").RunCommand(ctx, bson.D{
 			{Key: "doltBranch", Value: int32(1)},
+			{Key: "action", Value: "add"},
 			{Key: "branch", Value: "rootishtest"},
 		}).Err(), "doltBranch to create 'rootishtest'")
 

@@ -167,6 +167,7 @@ func TestMergeFieldMatrix(t *testing.T) {
 			var branchRaw bson.M
 			require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 				{Key: "doltBranch", Value: int32(1)},
+				{Key: "action", Value: "add"},
 				{Key: "branch", Value: "edit"},
 			}).Decode(&branchRaw))
 
@@ -237,6 +238,7 @@ func TestMergeFieldModifyDeleteResolution(t *testing.T) {
 			var branchRaw bson.M
 			require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 				{Key: "doltBranch", Value: int32(1)},
+				{Key: "action", Value: "add"},
 				{Key: "branch", Value: "edit"},
 			}).Decode(&branchRaw))
 

@@ -241,8 +241,8 @@ func TestLogIDFilter_DocumentID(t *testing.T) {
 	const db = "fdoc"
 	h := map[string]string{}
 
-	idAB := mustDoc(t, "a", int64(1), "b", "x")  // {a:1, b:"x"}
-	idBA := mustDoc(t, "b", "x", "a", int64(1))  // {b:"x", a:1}  (distinct _id)
+	idAB := mustDoc(t, "a", int64(1), "b", "x") // {a:1, b:"x"}
+	idBA := mustDoc(t, "b", "x", "a", int64(1)) // {b:"x", a:1}  (distinct _id)
 
 	insertOne(t, ctx, collAt(t, b, db, "main", "orders"), mustDoc(t, "_id", idAB, "v", int64(1)))
 	h["cAB"] = commitTS(t, b, db, "main", "cAB", 10_000)

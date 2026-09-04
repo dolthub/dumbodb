@@ -55,10 +55,12 @@ func indexBranchVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) {
 
 	require.NoError(t, env.Client.Database(dbName+"@main").RunCommand(ctx, bson.D{
 		{Key: "doltBranch", Value: int32(1)},
+		{Key: "action", Value: "add"},
 		{Key: "branch", Value: "am"},
 	}).Err(), "doltBranch to create 'am'")
 	require.NoError(t, env.Client.Database(dbName+"@main").RunCommand(ctx, bson.D{
 		{Key: "doltBranch", Value: int32(1)},
+		{Key: "action", Value: "add"},
 		{Key: "branch", Value: "nz"},
 	}).Err(), "doltBranch to create 'nz'")
 }

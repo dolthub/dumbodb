@@ -47,6 +47,10 @@ func (b *Backend) DumboDBPush(ctx context.Context, params *backends.PushParams) 
 	if err != nil {
 		return nil, err
 	}
+	if state == nil {
+		return nil, backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
+			fmt.Errorf("dumboPush: database %q does not exist", params.DBName))
+	}
 
 	// Parse the refspec into: srcRev (a commit-ish resolved below), localBranch
 	// (the branch the source names, empty when the source is a bare revision that
@@ -57,55 +61,49 @@ func (b *Backend) DumboDBPush(ctx context.Context, params *backends.PushParams) 
 		return nil, err
 	}
 
-	// Resolve the remote the git way (push.default=simple). A branch's "own
-	// remote" is the remote it tracks (its upstream), defaulting to origin when
-	// untracked. Only a bare push to the branch's own remote demands a matching,
-	// same-named upstream; a bare push to any other remote is a triangular
-	// current-branch push. An explicit refspec already has its destination and
-	// skips the gate.
-	remote := params.Remote
-	var up upstream
-	hasUpstream := false
+	var pushCfg branchPush
+	var pullCfg branchPull
 	if localBranch != "" {
-		up, hasUpstream, err = b.getUpstream(ctx, params.DBName, localBranch)
-		if err != nil {
+		if pushCfg, err = b.getBranchPush(ctx, params.DBName, localBranch); err != nil {
+			return nil, err
+		}
+		if pullCfg, err = b.getBranchPull(ctx, params.DBName, localBranch); err != nil {
 			return nil, err
 		}
 	}
 
+	remote := params.Remote
 	if explicit {
-		// git push <remote> <refspec>: a missing 'to' falls back to the source
-		// branch's upstream remote.
 		if remote == "" {
-			if !hasUpstream {
+			switch {
+			case pushCfg.complete():
+				remote = pushCfg.remote
+			case pullCfg.hasUpstream():
+				remote = pullCfg.remote
+			default:
 				return nil, fmt.Errorf("dumboPush: no remote given; specify 'to'")
 			}
-			remote = up.remote
 		}
 	} else {
-		// Bare push (git push): the upstream drives both the remote and the dst.
-		if remote == "" {
-			if !hasUpstream {
-				return nil, fmt.Errorf("dumboPush: no remote given and branch %q has no upstream; specify 'to' or push with a refSpec", localBranch)
+		switch {
+		case remote != "":
+			switch {
+			case pushCfg.complete() && pushCfg.remote == remote:
+				dst = pushCfg.branch
+			case pullCfg.remote == remote && pullCfg.branch != "":
+				dst = pullCfg.branch
+			default:
+				dst = localBranch
 			}
-			remote = up.remote
-		}
-		ownRemote := defaultRemote
-		if hasUpstream {
-			ownRemote = up.remote
-		}
-		if remote == ownRemote {
-			if !hasUpstream {
-				return nil, fmt.Errorf("dumboPush: branch %q has no upstream; specify a different remote or push with a refSpec", localBranch)
+		case pushCfg.complete():
+			remote, dst = pushCfg.remote, pushCfg.branch
+		case pullCfg.hasUpstream():
+			remote = pullCfg.remote
+			if dst = pullCfg.branch; dst == "" {
+				dst = localBranch
 			}
-			// git simple refuses a bare push when the upstream branch's name
-			// differs from the local branch; push explicitly instead.
-			if up.ref != localBranch {
-				return nil, fmt.Errorf("dumboPush: branch %q tracks %s/%s and their names differ; push explicitly, e.g. refSpec %q", localBranch, up.remote, up.ref, localBranch+":"+up.ref)
-			}
-			dst = up.ref
-		} else {
-			dst = localBranch // triangular: same-named branch on the other remote
+		default:
+			return nil, fmt.Errorf("dumboPush: no remote given and branch %q has no push or pull config; specify 'to' or push with a refSpec", localBranch)
 		}
 	}
 
@@ -201,19 +199,6 @@ func (b *Backend) DumboDBPush(ctx context.Context, params *backends.PushParams) 
 		}
 		if err := state.doltDB.SetHead(ctx, remoteRef, commitHash); err != nil {
 			return nil, fmt.Errorf("dumboPush: updating local tracking ref: %w", err)
-		}
-	}
-
-	// Only -u records the upstream (git push -u); a plain push never changes it.
-	// The tracked ref is the destination branch, which may differ from the local
-	// branch when a refspec renames it. A bare revision source names no branch to
-	// track, so setUpstream is an error there (git silently skips it).
-	if params.SetUpstream {
-		if localBranch == "" {
-			return nil, fmt.Errorf("dumboPush: cannot set upstream: source %q is not a branch", srcRev)
-		}
-		if err := b.setUpstream(ctx, params.DBName, localBranch, upstream{remote: remote, ref: dst}); err != nil {
-			return nil, fmt.Errorf("dumboPush: recording upstream: %w", err)
 		}
 	}
 

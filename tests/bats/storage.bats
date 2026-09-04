@@ -149,7 +149,7 @@ teardown() {
   echo "$output" | jq -e '.ok == 1'
 
   # Create a branch via dumboDB.
-  run mongo_json "$mongo_uri" 'db.runCommand({doltBranch: 1, branch: "feature-x"})'
+  run mongo_json "$mongo_uri" 'db.runCommand({doltBranch: 1, action: "add", branch: "feature-x"})'
   [ "$status" -eq 0 ]
   echo "$output" | jq -e '.ok == 1'
 

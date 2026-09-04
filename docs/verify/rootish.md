@@ -28,7 +28,6 @@ Run this once before the verification scenarios below.
 
 ```js
 var db = db.getSiblingDB("verifydb")
-db.dropDatabase()
 
 // Commit 1: one document
 db.items.insertOne({ _id: 1, label: "first", version: 1 })
@@ -41,7 +40,7 @@ const result2 = db.runCommand({ doltCommit: 1, message: "second commit", author:
 const hash2 = result2.commitId
 
 // Create a branch "feature" at current main HEAD
-db.getSiblingDB("verifydb@main").runCommand({ doltBranch: 1, branch: "feature" })
+db.getSiblingDB("verifydb@main").runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 // Create a tag "release-1" at commit 1
 db.runCommand({ dumboTag: 1, name: "release-1", hash: hash1 })
@@ -136,7 +135,7 @@ tagged.items.insertOne({ _id: 99, label: "should fail" })
 //   MongoServerError[OperationFailed]: cannot write to a read-only database snapshot
 
 // Branch creation from a tag works -- it resolves to the tagged commit
-tagged.runCommand({ doltBranch: 1, branch: "from-tag" })
+tagged.runCommand({ doltBranch: 1, action: "add", branch: "from-tag" })
 // Expected: { branch: "from-tag", ok: 1 }
 
 db.getSiblingDB("verifydb@from-tag").items.countDocuments({})
@@ -172,7 +171,7 @@ snap1.items.insertOne({ _id: 99, label: "should fail" })
 // Expected error (code 96)
 
 // Branch creation from a hash works
-snap1.runCommand({ doltBranch: 1, branch: "from-hash1" })
+snap1.runCommand({ doltBranch: 1, action: "add", branch: "from-hash1" })
 // Expected: { branch: "from-hash1", ok: 1 }
 
 db.getSiblingDB("verifydb@from-hash1").items.countDocuments({})
@@ -253,12 +252,11 @@ To test `^2` and chained expressions, create a merge commit:
 
 ```js
 var cdb = db.getSiblingDB("chaindb")
-cdb.dropDatabase()
 
 cdb.items.insertOne({ _id: 1, v: "root" })
 const hashC1 = cdb.runCommand({ doltCommit: 1, message: "C1", author: "alice <alice@acme.com>" }).commitId
 
-cdb.getSiblingDB("chaindb@main").runCommand({ doltBranch: 1, branch: "feature" })
+cdb.getSiblingDB("chaindb@main").runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 cdb.getSiblingDB("chaindb@feature").items.insertOne({ _id: 2, v: "feat" })
 const rC2 = cdb.getSiblingDB("chaindb@feature").runCommand({ doltCommit: 1, message: "C2-feature", author: "bob <bob@widgets.io>" })
@@ -323,7 +321,7 @@ Common encodings: `.` -> `%2E`, `/` -> `%2F`, `$` -> `%24`
 
 ```js
 // Create a branch with a dot in its name
-db.getSiblingDB("verifydb@main").runCommand({ doltBranch: 1, branch: "v1.0" })
+db.getSiblingDB("verifydb@main").runCommand({ doltBranch: 1, action: "add", branch: "v1.0" })
 // Expected: { branch: "v1.0", ok: 1 }
 
 // Using the unencoded name fails -- '.' is invalid in MongoDB database names
@@ -473,7 +471,7 @@ Key checks:
 | Range | `mydb@main%2E%2Efeature` | no | no | no | Not supported (code 96) |
 
 [1] **Write** = collection mutations (insertOne, updateOne, deleteOne, etc.)
-[2] **Branch creation** = `db.runCommand({ doltBranch: 1, branch: "name" })`. Works whenever
+[2] **Branch creation** = `db.runCommand({ doltBranch: 1, action: "add", branch: "name" })`. Works whenever
 the rootish resolves to a commit -- only needs a commit address, not write access.
 
 All errors use MongoDB error code **96** (`OperationFailed`).

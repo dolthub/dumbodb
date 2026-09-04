@@ -268,8 +268,6 @@ func TestTagVerify(t *testing.T) {
 		}).Decode(&result)
 		require.NoError(t, err, "dumboTag with ancestor expression must succeed")
 
-		
-		
 		assert.Equal(t, "v-ancestor", result["name"])
 		assert.Equal(t, hash1, result["commitId"], "main~1 must resolve to hash1")
 	})
@@ -287,8 +285,6 @@ func TestTagVerify(t *testing.T) {
 		}).Decode(&result)
 		require.NoError(t, err, "dumboTag with branch name as hash must succeed")
 
-		
-		
 		assert.Equal(t, hash2, result["commitId"], "main must resolve to hash2 (current HEAD)")
 	})
 
@@ -305,8 +301,6 @@ func TestTagVerify(t *testing.T) {
 		}).Decode(&result)
 		require.NoError(t, err, "dumboTag with another tag as hash must succeed")
 
-		
-		
 		assert.Equal(t, hash1, result["commitId"], "v1.0 resolves to hash1")
 	})
 }

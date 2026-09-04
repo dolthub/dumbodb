@@ -22,11 +22,11 @@ import (
 
 	"github.com/FerretDB/wire"
 
-	"github.com/dolthub/dumbodb/internal/version"
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 	"github.com/dolthub/dumbodb/internal/util/must"
+	"github.com/dolthub/dumbodb/internal/version"
 )
 
 // MsgServerStatus implements `serverStatus` command.

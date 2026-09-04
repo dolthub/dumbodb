@@ -42,7 +42,6 @@ Run this once before the scenarios below.
 
 ```js
 var db = db.getSiblingDB("commitdb")
-db.dropDatabase()
 
 // Baseline: two documents, committed
 db.orders.insertOne({ _id: 1, label: "alpha", v: 1 })
@@ -105,7 +104,7 @@ data is visible on the branch but not on main (isolation check).
 
 ```js
 // Create branch "feature" from main HEAD
-db.getSiblingDB("commitdb@main").runCommand({ doltBranch: 1, branch: "feature" })
+db.getSiblingDB("commitdb@main").runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 // Expected: { branch: "feature", ok: 1 }
 
 var feature = db.getSiblingDB("commitdb@feature")

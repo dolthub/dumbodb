@@ -49,30 +49,61 @@ type CommitResult struct {
 
 type BranchParams struct {
 	DBName string
-	From   string // source branch to branch from (current connection branch); also used to detect current-branch delete
-	Name   string // name of the new branch (or branch to delete when Delete is true); empty when List is true
-	Delete bool   // if true, delete the named branch instead of creating it
-	Force  bool   // if true together with Delete, skip the unmerged-commits safety check (forceDelete semantics)
-	List   bool   // if true, list every branch in the database; Name, Delete and Force are ignored
+	Action string // "add", "update", "remove", or "list"
+	From   string // connection rootish: the source for add, and the current-branch guard for remove
+	Name   string // branch to add, update, or remove; empty for list
+	Force  bool   // remove: skip the unmerged-commits safety check (force delete)
+
+	// ConfigUpdate is applied on add (optional, atomic) and update.
+	ConfigUpdate *BranchConfigUpdate
+}
+
+// BranchConfigUpdate is a partial change to a branch's config.{pull,push}.
+type BranchConfigUpdate struct {
+	PullRemote *string
+	PullBranch *string
+	PullRebase *string
+	PullFF     *string
+	PushRemote *string
+	PushBranch *string
+	UnsetPull  bool
+	UnsetPush  bool
 }
 
 // BranchInfo describes a single branch returned when BranchParams.List is set.
 type BranchInfo struct {
 	Name     string
-	CommitID string       // branch HEAD commit hash
-	Upstream *UpstreamRef // nil when the branch tracks no upstream
+	CommitID string // branch HEAD commit hash
+
+	Pull *BranchPullInfo
+	Push *BranchPushInfo
+
+	RemoteTracking bool
+	Remote         string
+	Ref            string
 }
 
-// UpstreamRef is a branch's tracked {remote, ref}, the analog of git's
-// upstream shown by `git branch -vv`.
-type UpstreamRef struct {
+// BranchPullInfo is a branch's fetch/merge config.
+type BranchPullInfo struct {
 	Remote string
-	Ref    string
+	Branch string
+	Rebase string
+	FF     string
+}
+
+// BranchPushInfo is a branch's persistent push target.
+type BranchPushInfo struct {
+	Remote string
+	Branch string
 }
 
 type BranchResult struct {
 	Branch   string       // name of the created or deleted branch; empty when listing
 	Branches []BranchInfo // populated only when BranchParams.List is set, sorted by Name
+
+	Configured bool
+	Pull       *BranchPullInfo
+	Push       *BranchPushInfo
 }
 
 type MergeParams struct {
@@ -752,12 +783,11 @@ type RemoteResult struct {
 
 // PushParams are the arguments to DumboDBPush.
 type PushParams struct {
-	DBName      string
-	Remote      string // remote name (looked up in admin.system.remotes); empty means use the branch upstream
-	ConnBranch  string // the connection's current branch; the local branch for a bare push and the target of HEAD
-	RefSpec     string // git-style [+]<src>[:<dst>]; empty means a bare push of the connection branch (git push)
-	Force       bool   // non-fast-forward (force) update; equivalent to a leading '+' in the refspec
-	SetUpstream bool   // record the target as the branch upstream (git push -u)
+	DBName     string
+	Remote     string // remote name; empty resolves from config.push/config.pull
+	ConnBranch string // the connection's current branch; the local branch for a bare push and the target of HEAD
+	RefSpec    string // git-style [+]<src>[:<dst>]; empty means a bare push of the connection branch (git push)
+	Force      bool   // non-fast-forward (force) update; equivalent to a leading '+' in the refspec
 }
 
 // PushResult is returned by DumboDBPush.
@@ -794,13 +824,16 @@ type FetchResult struct {
 
 // PullParams are the arguments to DumboDBPull.
 type PullParams struct {
-	DBName  string
-	Branch  string // current branch to pull into (the connection branch)
-	Remote  string // remote to pull from; empty means the branch upstream
-	NoFF    bool   // force a merge commit even when a fast-forward is possible
-	FFOnly  bool   // fail if the pull is not a fast-forward
-	Message string // optional merge commit message
-	Author  string // optional 'Name <email>' for a merge commit
+	DBName    string
+	Branch    string // current branch to pull into (the connection branch)
+	Remote    string // remote to pull from; empty means the branch upstream
+	NoFF      bool   // force a merge commit even when a fast-forward is possible
+	FFOnly    bool   // fail if the pull is not a fast-forward
+	FFSet     bool   // whether NoFF/FFOnly were passed explicitly
+	Rebase    string // rebase onto the fetched commit instead of merging
+	RebaseSet bool   // whether Rebase was passed explicitly
+	Message   string // optional merge commit message
+	Author    string // optional 'Name <email>' for a merge commit
 }
 
 // PullResult is returned by DumboDBPull.
@@ -811,19 +844,20 @@ type PullResult struct {
 	CommitAfter     string // local branch head after the pull
 	FastForward     bool   // the pull advanced the branch without a merge commit
 	AlreadyUpToDate bool   // the branch already had the fetched commit
+	Rebased         bool   // the pull rebased instead of merging
 }
 
 // CloneParams are the arguments to DumboDBClone.
 type CloneParams struct {
 	From string // remote url (file:// only for now)
 	As   string // new database name
+	// TrackAsMain maps this remote branch onto the clone's local main (for a
+	// remote whose default is not main); empty means require a remote "main".
+	TrackAsMain string
 }
 
 // CloneResult is returned by DumboDBClone.
 type CloneResult struct {
-	DB            string
-	URL           string
-	DefaultBranch string
-	Commit        string   // default branch head after clone
-	Branches      []string // branches cloned
+	DB  string
+	URL string
 }

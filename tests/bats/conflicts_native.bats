@@ -62,7 +62,7 @@ mongosh_eval() {
 
     # Create "feature" branch from main.
     run mongosh_eval "$main_db" '
-        JSON.stringify(db.runCommand({doltBranch: 1, branch: "feature"}))
+        JSON.stringify(db.runCommand({doltBranch: 1, action: "add", branch: "feature"}))
     '
     [ "$status" -eq 0 ]
     echo "$output" | jq -e '.ok == 1'
@@ -140,7 +140,7 @@ mongosh_eval() {
 
     # Create "feature" branch from main C1.
     run mongosh_eval "$main_db" '
-        JSON.stringify(db.runCommand({doltBranch: 1, branch: "feature"}))
+        JSON.stringify(db.runCommand({doltBranch: 1, action: "add", branch: "feature"}))
     '
     [ "$status" -eq 0 ]
     echo "$output" | jq -e '.ok == 1'
@@ -220,7 +220,7 @@ mongosh_eval() {
 
     # Create "feature" branch from main C1.
     run mongosh_eval "$main_db" '
-        JSON.stringify(db.runCommand({doltBranch: 1, branch: "feature"}))
+        JSON.stringify(db.runCommand({doltBranch: 1, action: "add", branch: "feature"}))
     '
     [ "$status" -eq 0 ]
     echo "$output" | jq -e '.ok == 1'
@@ -359,7 +359,7 @@ mongosh_eval() {
     [ "$status" -eq 0 ]
 
     run mongosh_eval "$main_db" '
-        JSON.stringify(db.runCommand({doltBranch: 1, branch: "feat"}))
+        JSON.stringify(db.runCommand({doltBranch: 1, action: "add", branch: "feat"}))
     '
     [ "$status" -eq 0 ]
 

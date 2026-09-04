@@ -45,9 +45,6 @@ func TestDumboDBClone_FromFileRemote(t *testing.T) {
 	if err != nil {
 		t.Fatalf("clone: %v", err)
 	}
-	if res.Commit != c1 {
-		t.Errorf("clone default commit = %s, want c1 %s", res.Commit, c1)
-	}
 	if res.DB != "clonedb" {
 		t.Errorf("clone db = %s, want clonedb", res.DB)
 	}

@@ -208,7 +208,7 @@ func TestAutoCommit_BranchScoping(t *testing.T) {
 
 	_, err := main.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
 	require.NoError(t, err)
-	require.NoError(t, main.RunCommand(ctx, bson.D{{Key: "doltBranch", Value: int32(1)}, {Key: "branch", Value: "feature"}}).Err())
+	require.NoError(t, main.RunCommand(ctx, bson.D{{Key: "doltBranch", Value: int32(1)}, {Key: "action", Value: "add"}, {Key: "branch", Value: "feature"}}).Err())
 
 	mainBefore := acCommitCount(t, main)
 	feat := env.Client.Database(dbBase + "@feature")

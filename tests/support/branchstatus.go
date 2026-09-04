@@ -49,6 +49,7 @@ func BsBranchCreate(t *testing.T, env *Env, dbName, source, name string) {
 	var res bson.M
 	require.NoError(t, env.Client.Database(dbName+"@"+source).RunCommand(context.Background(), bson.D{
 		{Key: "doltBranch", Value: int32(1)},
+		{Key: "action", Value: "add"},
 		{Key: "branch", Value: name},
 	}).Decode(&res), "doltBranch %q from %q", name, source)
 }

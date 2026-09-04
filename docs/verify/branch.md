@@ -10,6 +10,18 @@ scenario top to bottom. Each section builds on the previous setup.
 > go test ./tests/... -run TestBranchVerify -v
 > ```
 
+`doltBranch` takes a required `action`, like `doltRemote`:
+
+| action   | Fields                              | Meaning                                              |
+|----------|-------------------------------------|------------------------------------------------------|
+| `add`    | `branch`, optional `setConfig`      | Create `branch` from the connection rootish          |
+| `update` | `branch`, `setConfig`               | Change `branch`'s `config.{pull,push}`               |
+| `remove` | `branch`, optional `force`          | Delete `branch` (`force: true` skips the safety check)|
+| `list`   | (none)                              | List every branch (local and remote-tracking)        |
+
+`setConfig` is the single config write surface: a value **sets** a leaf; `null`
+**clears** it, or clears a whole `pull`/`push` sub-object. See Scenario 13.
+
 ## Prerequisites
 
 A running DumboDB instance and `mongosh` installed. Connect to your instance:
@@ -28,20 +40,15 @@ Run this once before the scenarios below.
 
 ```js
 var db = db.getSiblingDB("branchvdb")
-db.dropDatabase()
 
 // Commit 1: one document
 db.products.insertOne({ _id: 1, label: "alpha" })
 const r1 = db.runCommand({ doltCommit: 1, message: "commit one", author: "alice <alice@acme.com>" })
-printjson(r1)
-// Expected: { hash: "<hash1>", branch: "main", message: "commit one", ok: 1 }
 const hash1 = r1.commitId
 
 // Commit 2: second document added
 db.products.insertOne({ _id: 2, label: "beta" })
 const r2 = db.runCommand({ doltCommit: 1, message: "commit two", author: "bob <bob@widgets.io>" })
-printjson(r2)
-// Expected: { hash: "<hash2>", branch: "main", message: "commit two", ok: 1 }
 const hash2 = r2.commitId
 
 print("hash1 =", hash1)
@@ -55,13 +62,12 @@ After setup, `branchvdb` has:
 
 ---
 
-## Scenario 1: Create branch from main HEAD  -- response shape
+## Scenario 1: Add a branch from main HEAD -- response shape
 
-`doltBranch` creates a new branch and returns `{ branch: "<name>", ok: 1 }`.
-The connection must be a branch rootish (writable or hash  -- see Scenario 3).
+`action: "add"` creates a new branch and returns `{ branch: "<name>", ok: 1 }`.
 
 ```js
-db.getSiblingDB("branchvdb@main").runCommand({ doltBranch: 1, branch: "feature" })
+db.getSiblingDB("branchvdb@main").runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 ```
 
 Expected:
@@ -70,286 +76,316 @@ Expected:
 { "branch": "feature", "ok": 1 }
 ```
 
-Key checks:
-- `branch` echoes the name you provided
-- `ok` is `1`
-
 ---
 
 ## Scenario 2: New branch points to the same commit as its source
 
-Immediately after branching, the new branch HEAD equals the source branch HEAD.
-`doltDiff` between the two should show no changes.
+A new branch starts at the connection rootish's commit, so a diff against the
+source is empty.
 
 ```js
-// Create "snapshot" branch from current main HEAD
-db.getSiblingDB("branchvdb@main").runCommand({ doltBranch: 1, branch: "snapshot" })
-
-// Diff main vs snapshot  -- must be empty (identical commits)
-db.getSiblingDB("branchvdb@main").runCommand({
-  doltDiff: 1,
-  from: "snapshot",
-  to:   "main"
-})
-// Expected: { "changes": [], "ok": 1 }
+db.getSiblingDB("branchvdb@main").runCommand({ doltBranch: 1, action: "add", branch: "snapshot" })
+db.getSiblingDB("branchvdb@main").runCommand({ doltDiff: 1, from: "snapshot", to: "main" })
+// Expected: no collection changes -- identical commits.
 ```
 
 ---
 
-## Scenario 3: Branch isolation  -- writes on branch do not affect source
-
-After branching, writes committed to the new branch are invisible from main, and
-vice versa.
+## Scenario 3: Branch isolation -- writes on a branch do not affect the source
 
 ```js
-var feature = db.getSiblingDB("branchvdb@feature")
+var f = db.getSiblingDB("branchvdb@feature")
+f.products.insertOne({ _id: 3, label: "gamma" })
+f.runCommand({ doltCommit: 1, message: "feature adds gamma", author: "alice <alice@acme.com>" })
 
-// Add a document on the feature branch and commit it
-feature.products.insertOne({ _id: 3, label: "gamma" })
-feature.runCommand({ doltCommit: 1, message: "feature adds gamma", author: "carol <carol@startup.dev>" })
-
-// main must not see _id:3
-db.getSiblingDB("branchvdb@main").products.countDocuments({})
-// Expected: 2   (_id:3 is on feature only)
-
-// feature must see all three documents
-feature.products.countDocuments({})
-// Expected: 3
+db.getSiblingDB("branchvdb@main").products.countDocuments({})    // 2 -- unchanged
+f.products.countDocuments({})                                    // 3
 ```
 
 ---
 
-## Scenario 4: Create branch from a commit hash rootish
-
-`doltBranch` works even when the connection is a read-only commit-hash rootish.
-The new branch starts at that exact commit.
+## Scenario 4: Add a branch from a commit hash rootish
 
 ```js
-// Create branch "at-commit-one" from the commit-hash rootish at hash1
-db.getSiblingDB("branchvdb@" + hash1).runCommand({
-  doltBranch: 1,
-  branch: "at-commit-one"
-})
-// Expected: { branch: "at-commit-one", ok: 1 }
-
-// The new branch should see only the one document from commit 1
-db.getSiblingDB("branchvdb@at-commit-one").products.find({}).toArray()
-// Expected: [ { _id: 1, label: "alpha" } ]
+db.getSiblingDB("branchvdb@" + hash1).runCommand({ doltBranch: 1, action: "add", branch: "at-commit-one" })
+db.getSiblingDB("branchvdb@at-commit-one").products.countDocuments({})   // 1 (commit 1 state)
 ```
-
-Key check: `branch` is `"at-commit-one"`, `ok` is `1`; the branch has one document.
 
 ---
 
-## Scenario 5: Create branch from an ancestor expression rootish
+## Scenario 5: Add a branch from an ancestor expression rootish
 
-`doltBranch` also works from an ancestor expression rootish (`branch~N`). The new
-branch starts at the resolved ancestor commit. Use a fresh database to verify the
-correct document count at the ancestor state.
+`main~1` resolves to commit 1.
 
 ```js
-// Fresh database: two commits (hash1 = 1 doc, hash2/HEAD = 2 docs)
-var db2 = db.getSiblingDB("branchvdb2")
-db2.dropDatabase()
-db2.products.insertOne({ _id: 1, label: "alpha" })
-db2.runCommand({ doltCommit: 1, message: "commit one", author: "alice <alice@acme.com>" })
-db2.products.insertOne({ _id: 2, label: "beta" })
-db2.runCommand({ doltCommit: 1, message: "commit two", author: "bob <bob@widgets.io>" })
-
-// main~1 resolves to commit 1 (one document)
-db2.getSiblingDB("branchvdb2@main~1").runCommand({
-  doltBranch: 1,
-  branch: "back-one"
-})
-// Expected: { branch: "back-one", ok: 1 }
-
-// back-one should see only one document (the state at main~1)
-db2.getSiblingDB("branchvdb2@back-one").products.find({}).toArray()
-// Expected: [ { _id: 1, label: "alpha" } ]
+db.getSiblingDB("branchvdb@main~1").runCommand({ doltBranch: 1, action: "add", branch: "back-one" })
+db.getSiblingDB("branchvdb@back-one").products.countDocuments({})   // 1
 ```
-
-Key check: branch created successfully and sees only commit-1 state.
 
 ---
 
-## Scenario 6: Safe delete (delete)  -- branch already merged into main
+## Scenario 6: Safe remove -- branch already merged into main
 
-`doltBranch` with `delete: 1` deletes a branch only if its HEAD is reachable from
-another branch (i.e. no data would be lost).  A branch whose HEAD equals the
-source branch HEAD is always safe to delete.
+`action: "remove"` with no `force` is a safe delete: it refuses if the branch has
+commits not reachable from any other branch. A branch at main's HEAD is reachable,
+so it removes cleanly.
 
 ```js
-// Create a branch at current main HEAD and immediately safe-delete it.
-db.getSiblingDB("branchvdb@main").runCommand({ doltBranch: 1, branch: "merged-branch" })
-db.getSiblingDB("branchvdb@main").runCommand({ doltBranch: 1, branch: "merged-branch", delete: 1 })
-// Expected: { "branch": "merged-branch", "ok": 1 }
+db.getSiblingDB("branchvdb@main").runCommand({ doltBranch: 1, action: "add", branch: "merged-branch" })
+db.getSiblingDB("branchvdb@main").runCommand({ doltBranch: 1, action: "remove", branch: "merged-branch" })
+// Expected: { branch: "merged-branch", ok: 1 }
 ```
-
-Key check: `branch` echoes the name, `ok` is `1`.
 
 ---
 
-## Scenario 7: Safe delete (delete)  -- branch has unmerged commits, rejected
-
-If the branch to delete has commits that are not reachable from any other branch,
-safe delete must fail with an error.
+## Scenario 7: Safe remove -- branch has unmerged commits, rejected
 
 ```js
-// Create "unmerged-branch" from main and add an exclusive commit.
-db.getSiblingDB("branchvdb@main").runCommand({ doltBranch: 1, branch: "unmerged-branch" })
-var ub = db.getSiblingDB("branchvdb@unmerged-branch")
-ub.products.insertOne({ _id: 99, label: "extra" })
-ub.runCommand({ doltCommit: 1, message: "extra commit", author: "carol <carol@startup.dev>" })
+db.getSiblingDB("branchvdb@main").runCommand({ doltBranch: 1, action: "add", branch: "unmerged-branch" })
+var u = db.getSiblingDB("branchvdb@unmerged-branch")
+u.products.insertOne({ _id: 99, label: "extra" })
+u.runCommand({ doltCommit: 1, message: "extra commit", author: "alice <alice@acme.com>" })
 
-// Safe delete must fail.
-db.getSiblingDB("branchvdb@main").runCommand({ doltBranch: 1, branch: "unmerged-branch", delete: 1 })
-// Expected: error response  -- ok: 0, errmsg contains "unmerged commits"
+db.getSiblingDB("branchvdb@main").runCommand({ doltBranch: 1, action: "remove", branch: "unmerged-branch" })
+// Expected: ok: 0 -- has unmerged commits; use force: true.
 ```
-
-Key check: command returns an error; `unmerged-branch` still exists afterwards.
 
 ---
 
-## Scenario 8: Force delete (forceDelete)  -- branch has unmerged commits, succeeds
-
-`doltBranch` with `forceDelete: 1` deletes a branch unconditionally, even if it has
-commits that are not reachable from any other branch.
+## Scenario 8: Force remove -- branch has unmerged commits, succeeds
 
 ```js
-// Create "force-branch" from main and add an exclusive commit.
-db.getSiblingDB("branchvdb@main").runCommand({ doltBranch: 1, branch: "force-branch" })
-var fb = db.getSiblingDB("branchvdb@force-branch")
-fb.products.insertOne({ _id: 77, label: "gone" })
-fb.runCommand({ doltCommit: 1, message: "unmerged commit", author: "bob <bob@widgets.io>" })
-
-// Force delete succeeds regardless of merge status.
-db.getSiblingDB("branchvdb@main").runCommand({ doltBranch: 1, branch: "force-branch", forceDelete: 1 })
-// Expected: { "branch": "force-branch", "ok": 1 }
+db.getSiblingDB("branchvdb@main").runCommand({ doltBranch: 1, action: "remove", branch: "unmerged-branch", force: true })
+// Expected: { branch: "unmerged-branch", ok: 1 }
 ```
-
-Key check: `branch` echoes the name, `ok` is `1`; the branch is gone.
 
 ---
 
-## Scenario 9: Branch name that looks like a commit hash is rejected
+## Scenario 9: A branch name that looks like a commit hash is rejected
 
-Branch names must not end with a path segment that is exactly 32 lowercase
-base32 characters (`[0-9a-v]{32}`), as this would be ambiguous with a Dolt
-commit hash.
+A 32-char lowercase base32 name (the last path segment) collides with the commit
+rootish namespace and is refused.
 
 ```js
-// 32 lowercase base32 chars -- looks like a commit hash
-db.runCommand({ doltBranch: 1, branch: "na7kfra98h45fr2u5qtr30o2ggm7vh61" })
-// Expected error: name looks like a commit hash
+db.getSiblingDB("branchvdb@main").runCommand({ doltBranch: 1, action: "add", branch: "na7kfra98h45fr2u5qtr30o2ggm7vh61" })
+// Expected: ok: 0.
 
-// Path ending with a hash-like segment is also rejected
-db.runCommand({ doltBranch: 1, branch: "feature/na7kfra98h45fr2u5qtr30o2ggm7vh61" })
-// Expected error: name ends with a segment that looks like a commit hash
-
-// Uppercase is fine -- commit hashes are always lowercase
-db.runCommand({ doltBranch: 1, branch: "NA7KFRA98H45FR2U5QTR30O2GGM7VH61" })
-// Expected: { branch: "NA7KFRA98H45FR2U5QTR30O2GGM7VH61", ok: 1 }
-
-// Path-like branch names work
-db.runCommand({ doltBranch: 1, branch: "team/alice/experiment" })
-// Expected: { branch: "team/alice/experiment", ok: 1 }
-
-// Hash-like segment in the middle is allowed -- only the last segment matters
-db.runCommand({ doltBranch: 1, branch: "na7kfra98h45fr2u5qtr30o2ggm7vh61/feature" })
-// Expected: { branch: "na7kfra98h45fr2u5qtr30o2ggm7vh61/feature", ok: 1 }
+// Only the last segment matters; a hash-like middle segment or uppercase is fine.
+db.getSiblingDB("branchvdb@main").runCommand({ doltBranch: 1, action: "add", branch: "team/alice/experiment" })   // ok
 ```
-
-Key checks:
-- Bare 32-char lowercase base32 name is rejected
-- Path ending with such a segment is rejected
-- Uppercase 32-char name is allowed (not a valid commit hash)
-- Path-like branch names work
-- Hash-like segment in the middle is allowed
 
 ---
 
-## Scenario 10: List branches  -- no `branch` argument
+## Scenario 10: List branches (`action: "list"`)
 
-Omitting `branch` lists every branch in the database, as `git branch` does.
-Entries are sorted by name and the branch encoded in the connection is flagged
-with `current: true`.
-
-Use a fresh database so the listing is exact:
+`action: "list"` returns every branch, sorted by name, with the connection's
+branch flagged `current: true`.
 
 ```js
-var lb = db.getSiblingDB("branchlistdb")
-lb.dropDatabase()
-lb.products.insertOne({ _id: 1, label: "alpha" })
-lb.runCommand({ doltCommit: 1, message: "commit one" })
-
-// Created out of alphabetical order to show the listing is sorted.
-lb.runCommand({ doltBranch: 1, branch: "zeta" })
-lb.runCommand({ doltBranch: 1, branch: "alpha" })
-
-db.getSiblingDB("branchlistdb@main").runCommand({ doltBranch: 1 })
+var l = db.getSiblingDB("branchvdb@main")
+l.runCommand({ doltBranch: 1, action: "add", branch: "zeta" })
+l.runCommand({ doltBranch: 1, action: "add", branch: "alpha" })
+l.runCommand({ doltBranch: 1, action: "list" })
 ```
 
-Expected:
+Expected -- sorted, with `current` on the connection branch:
 
 ```json
 {
   "branches": [
-    { "name": "alpha", "commitId": "<hash>", "current": false },
-    { "name": "main",  "commitId": "<hash>", "current": true  },
-    { "name": "zeta",  "commitId": "<hash>", "current": false }
+    { "name": "alpha",   "commitId": "<hash>" },
+    { "name": "feature", "commitId": "<hash>" },
+    { "name": "main",    "commitId": "<hash>", "current": true },
+    { "name": "snapshot","commitId": "<hash>" },
+    { "name": "zeta",    "commitId": "<hash>" }
   ],
   "ok": 1
 }
 ```
 
-Key checks:
-- Every branch appears exactly once, sorted by `name`
-- `commitId` is the branch HEAD commit; `alpha` and `zeta` branched from `main`
-  HEAD, so all three match here
-- Exactly one entry has `current: true`  -- the branch encoded in the connection
+`current` follows the connection, not the default branch: listing on
+`branchvdb@zeta` marks `zeta` current. A hash rootish is on no branch, so nothing
+is `current`.
 
-Listing follows the connection, not the default branch:
+---
 
-```js
-db.getSiblingDB("branchlistdb@zeta").runCommand({ doltBranch: 1 })
-// Expected: same three entries, but "zeta" is the one with current: true
-```
-
-A connection pinned to a commit hash or an ancestor expression is not on any
-branch, so no entry is current:
+## Scenario 11: `action` is required and per-action fields are validated
 
 ```js
-const h = db.getSiblingDB("branchlistdb@main").runCommand({ doltLog: 1, limit: 1 }).commits[0].commitId
-db.getSiblingDB("branchlistdb@" + h).runCommand({ doltBranch: 1 })
-// Expected: the same three entries, all with current: false
+db.getSiblingDB("branchvdb@main").runCommand({ doltBranch: 1 })
+// Expected: ok: 0 -- action is required (add, update, remove, list).
+
+db.getSiblingDB("branchvdb@main").runCommand({ doltBranch: 1, action: "rename" })
+// Expected: ok: 0 -- unknown action.
+
+db.getSiblingDB("branchvdb@main").runCommand({ doltBranch: 1, action: "add", branch: "" })
+// Expected: ok: 0 -- branch name must not be empty.
+
+db.getSiblingDB("branchvdb@main").runCommand({ doltBranch: 1, action: "list", branch: "zeta" })
+// Expected: ok: 0 -- "branch" is not valid with action "list".
+
+db.getSiblingDB("branchvdb@main").runCommand({ doltBranch: 1, action: "remove" })
+// Expected: ok: 0 -- branch name must not be empty.
+
+db.getSiblingDB("branchvdb@main").runCommand({ doltBranch: 1, action: "update", branch: "main" })
+// Expected: ok: 0 -- action update requires setConfig.
 ```
 
 ---
 
-## Scenario 11: Listing does not swallow a malformed request
+## Scenario 12: A listing includes remote-tracking branches with tracking info
 
-Only an absent `branch` lists. An explicit empty string is still an error, so a
-client that builds the name from a variable cannot silently list every branch
-when that variable is empty.
-
-```js
-db.getSiblingDB("branchlistdb@main").runCommand({ doltBranch: 1, branch: "" })
-// Expected error: BadValue: dumboBranch: branch name must not be empty
-```
-
-Deleting still requires a name:
+A listing shows local branches (with their `config`) **and** remote-tracking
+branches (`refs/remotes/<remote>/<branch>`). Set up a database whose `main`
+tracks a remote at `/tmp/dumbo-rt-remote` (remove it first for a clean run).
 
 ```js
-db.getSiblingDB("branchlistdb@main").runCommand({ doltBranch: 1, delete: 1 })
-// Expected error: BadValue: dumboBranch: branch name is required for delete
+var rt = db.getSiblingDB("rtlistdb")
+rt.items.insertOne({ _id: 1 })
+rt.runCommand({ doltCommit: 1, message: "c1" })
+rt.runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
-db.getSiblingDB("branchlistdb@main").runCommand({ doltBranch: 1, forceDelete: 1 })
-// Expected error: BadValue: dumboBranch: branch name is required for delete
+rt.runCommand({ doltRemote: 1, action: "add", name: "origin", url: "file:///tmp/dumbo-rt-remote" })
+db.getSiblingDB("rtlistdb@main").runCommand({ doltPush: 1, to: "origin", refSpec: "main" })
+db.getSiblingDB("rtlistdb@feature").runCommand({ doltPush: 1, to: "origin", refSpec: "feature" })
+db.getSiblingDB("rtlistdb@main").runCommand({ doltBranch: 1, action: "update", branch: "main", setConfig: { pull: { remote: "origin", branch: "main" } } })
+
+db.getSiblingDB("rtlistdb@main").runCommand({ doltBranch: 1, action: "list" })
 ```
 
-Key checks:
-- `branch: ""` is rejected, not treated as a list request
-- `delete` / `forceDelete` without `branch` is rejected
+Expected -- local branches (`main` carries its `config.pull`) alongside the
+`origin/*` remote-tracking entries:
+
+```json
+{
+  "branches": [
+    { "name": "feature", "commitId": "<hash>" },
+    { "name": "main", "commitId": "<hash>", "current": true,
+      "config": { "pull": { "remote": "origin", "branch": "main" } } },
+    { "name": "origin/feature", "commitId": "<hash>",
+      "remoteTracking": true, "remote": "origin", "ref": "feature" },
+    { "name": "origin/main", "commitId": "<hash>",
+      "remoteTracking": true, "remote": "origin", "ref": "main" }
+  ],
+  "ok": 1
+}
+```
+
+A remote-tracking entry carries `remoteTracking: true`, `remote`, and `ref`, is
+never `current`, and has no `config`.
+
+---
+
+## Scenario 13: Branch config -- a value sets, `null` clears
+
+`config` groups by direction: `config.pull` `{ remote, branch, rebase, ff }` is
+the fetch upstream and pull policy; `config.push` `{ remote, branch }` is a
+persistent push target. Set leaves with `action: "update"` and `setConfig`; clear
+a leaf or a whole sub-object by setting it to `null`. Use a database whose `main`
+tracks a remote at `/tmp/dumbo-cfg-remote` (remove it first).
+
+```js
+var c = db.getSiblingDB("cfgdb")
+c.items.insertOne({ _id: 1 })
+c.runCommand({ doltCommit: 1, message: "c1" })
+c.runCommand({ doltBranch: 1, action: "add", branch: "feature" })
+c.runCommand({ doltRemote: 1, action: "add", name: "origin", url: "file:///tmp/dumbo-cfg-remote" })
+db.getSiblingDB("cfgdb@main").runCommand({ doltPush: 1, to: "origin", refSpec: "main" })
+
+// Set config.pull identity + policy in one call.
+db.getSiblingDB("cfgdb@main").runCommand({ doltBranch: 1, action: "update", branch: "main", setConfig: { pull: { remote: "origin", branch: "main", rebase: true, ff: "only" } } })
+// { branch: "main", config: { pull: { remote: "origin", branch: "main", rebase: "true", ff: "only" } }, ok: 1 }
+
+// Add a config.push triangular target; pull is untouched.
+db.getSiblingDB("cfgdb@main").runCommand({ doltBranch: 1, action: "update", branch: "main", setConfig: { push: { remote: "origin", branch: "rev51" } } })
+
+// null clears a single leaf.
+db.getSiblingDB("cfgdb@main").runCommand({ doltBranch: 1, action: "update", branch: "main", setConfig: { pull: { rebase: null } } })
+// config.pull keeps remote/branch/ff; rebase is gone.
+
+// null on a whole sub-object clears it.
+db.getSiblingDB("cfgdb@main").runCommand({ doltBranch: 1, action: "update", branch: "main", setConfig: { push: null } })
+// config.push is gone.
+```
+
+Validation (all rejected with `ok: 0`):
+- `rebase`/`ff` without a `config.pull` upstream (e.g. on `feature`)
+- a partial `config.push` (`{ remote }` without `branch`)
+- an unknown remote name
+- `rebase` that is not a bool; `ff` other than `"no"`/`"only"` (there is no `"default"` -- use `null`)
+- an unknown key (`pull.squash`, a top-level key other than `pull`/`push`); a non-document, non-null sub-object; an empty `setConfig`
+
+`rebase: false` clears `rebase` (the same as `null`), since dumbo has no distinct
+"explicit false" pull behavior.
+
+---
+
+## Scenario 14: Removing a branch clears its config
+
+A branch's `config` is part of the branch: removing it drops the config, so a
+branch recreated under the same name starts clean and a bare push does not follow
+the deleted branch's push target. Use a database with two remotes at
+`/tmp/dumbo-del-1` and `/tmp/dumbo-del-2` (remove them first).
+
+```js
+var d = db.getSiblingDB("delcfgdb")
+d.items.insertOne({ _id: 1 })
+d.runCommand({ doltCommit: 1, message: "c1" })
+d.runCommand({ doltRemote: 1, action: "add", name: "origin", url: "file:///tmp/dumbo-del-1" })
+d.runCommand({ doltRemote: 1, action: "add", name: "origin2", url: "file:///tmp/dumbo-del-2" })
+
+db.getSiblingDB("delcfgdb@main").runCommand({ doltBranch: 1, action: "add", branch: "release" })
+db.getSiblingDB("delcfgdb@release").runCommand({ doltBranch: 1, action: "update", branch: "release", setConfig: {
+  pull: { remote: "origin", branch: "main" },
+  push: { remote: "origin2", branch: "release" }
+} })
+
+// Remove and recreate release.
+db.getSiblingDB("delcfgdb@main").runCommand({ doltBranch: 1, action: "remove", branch: "release", force: true })
+db.getSiblingDB("delcfgdb@main").runCommand({ doltBranch: 1, action: "add", branch: "release" })
+
+db.getSiblingDB("delcfgdb@main").runCommand({ doltBranch: 1, action: "list" })
+// Expected: the "release" entry has no "config" field.
+
+db.getSiblingDB("delcfgdb@release").runCommand({ dumboPush: 1 })
+// Expected: ok: 0 -- release has no push or pull config.
+```
+
+---
+
+## Scenario 15: `action: "add"` with `setConfig` applies config atomically
+
+`add` accepts a `setConfig`: the branch is created and the config applied in one
+call. If the config is invalid, the branch is rolled back (add is all-or-nothing).
+
+```js
+var a = db.getSiblingDB("addcfgdb")
+a.items.insertOne({ _id: 1 })
+a.runCommand({ doltCommit: 1, message: "c1" })
+a.runCommand({ doltRemote: 1, action: "add", name: "origin", url: "file:///tmp/dumbo-add-remote" })
+
+db.getSiblingDB("addcfgdb@main").runCommand({ doltBranch: 1, action: "add", branch: "feature", setConfig: { pull: { remote: "origin", branch: "main" } } })
+// { branch: "feature", config: { pull: { remote: "origin", branch: "main" } }, ok: 1 }
+
+db.getSiblingDB("addcfgdb@main").runCommand({ doltBranch: 1, action: "add", branch: "bad", setConfig: { pull: { rebase: true } } })
+// Expected: ok: 0 -- rebase needs an upstream; "bad" is NOT created.
+```
+
+---
+
+## Scenario 16: The default branch `main` can never be removed
+
+Every database must have `main`, so `action: "remove"` refuses it (with or
+without `force`) and points you at `dumboReset` to discard its history instead.
+
+```js
+db.getSiblingDB("branchvdb@feature").runCommand({ doltBranch: 1, action: "remove", branch: "main" })
+// Expected: ok: 0 -- cannot remove the default branch "main"; move it with
+//           dumboReset { to: "<commit>", hard: true } instead.
+
+db.getSiblingDB("branchvdb@feature").runCommand({ doltBranch: 1, action: "remove", branch: "main", force: true })
+// Expected: ok: 0 -- force does not override the guard.
+```
 
 ---
 
@@ -357,21 +393,15 @@ Key checks:
 
 | Command | Connection | Result |
 |---|---|---|
-| `{ doltBranch: 1, branch: "name" }` | `@main` | `{ branch: "name", ok: 1 }` |
-| `{ doltBranch: 1, branch: "name" }` | `@feature` | `{ branch: "name", ok: 1 }` |
-| `{ doltBranch: 1, branch: "name" }` | `@<hash>` | `{ branch: "name", ok: 1 }` |
-| `{ doltBranch: 1, branch: "name" }` | `@main~1` | `{ branch: "name", ok: 1 }` |
-| `{ doltBranch: 1, branch: "name", delete: 1 }` | `@main` | `{ branch: "name", ok: 1 }` (merged) or error (unmerged) |
-| `{ doltBranch: 1, branch: "name", forceDelete: 1 }` | `@main` | `{ branch: "name", ok: 1 }` (always) |
-| `{ doltBranch: 1 }` | `@main` | `{ branches: [ { name, commitId, current }, ... ], ok: 1 }` |
-| `{ doltBranch: 1 }` | `@<hash>` | same list, every entry `current: false` |
+| `{ doltBranch: 1, action: "add", branch: "x" }` | `@main` | `{ branch: "x", ok: 1 }` |
+| `{ doltBranch: 1, action: "add", branch: "x", setConfig: {...} }` | `@main` | `{ branch: "x", config: {...}, ok: 1 }` (atomic) |
+| `{ doltBranch: 1, action: "update", branch: "x", setConfig: {...} }` | `@main` | `{ branch: "x", config: {...}, ok: 1 }` |
+| `{ doltBranch: 1, action: "remove", branch: "x" }` | `@main` | `{ branch: "x", ok: 1 }` (merged) or `ok: 0` (unmerged) |
+| `{ doltBranch: 1, action: "remove", branch: "x", force: true }` | `@main` | `{ branch: "x", ok: 1 }` (always) |
+| `{ doltBranch: 1, action: "list" }` | `@main` | `{ branches: [ { name, commitId, current?, config?, remoteTracking? }, ... ], ok: 1 }` |
 
-- `branch` in the response echoes the name you provided.
-- Branch creation works from any rootish that resolves to a commit (branch name, hash, ancestor expression).
-- The new branch HEAD equals the commit that was resolved from the source rootish.
-- Writes on the new branch are isolated from the source branch.
-- `delete: 1` (safe delete): fails if the branch has commits not reachable from any other branch.
-- `forceDelete: 1` (force delete): succeeds unconditionally.
-- `delete` and `forceDelete` are mutually exclusive; passing both returns an error.
-- Omitting `branch` lists every branch, sorted by name, with the connection's branch flagged `current: true`.
-- An explicit `branch: ""` is an error, not a list request; `delete`/`forceDelete` still require a name.
+- `action` is required: `add`, `update`, `remove`, or `list`. Missing or unknown is an error.
+- `add` creates from the connection rootish (branch name, hash, or `branch~N`); the new HEAD equals the resolved commit; data is isolated from the source.
+- `remove` is a safe delete unless `force: true`; a safe delete refuses a branch with commits not reachable elsewhere.
+- `setConfig` (on `add` or `update`) sets `config.pull` `{ remote, branch, rebase, ff }` and/or `config.push` `{ remote, branch }`. A value sets a leaf; `null` clears it (or a whole `pull`/`push` sub-object). `rebase`/`ff` require a `config.pull` upstream; `config.push` is complete (both `remote` and `branch`) or absent.
+- A listing includes local branches (with their `config` when set) and remote-tracking branches (`<remote>/<branch>`, `remoteTracking: true`, never `current`, no `config`).

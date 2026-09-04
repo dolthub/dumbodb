@@ -33,21 +33,42 @@ func (b *Backend) DumboDBPull(ctx context.Context, params *backends.PullParams) 
 		branch = defaultBranch
 	}
 
+	pull, err := b.getBranchPull(ctx, params.DBName, branch)
+	if err != nil {
+		return nil, err
+	}
+
 	remote := params.Remote
 	if remote == "" {
-		up, ok, err := b.getUpstream(ctx, params.DBName, branch)
-		if err != nil {
-			return nil, err
-		}
-		if !ok {
+		if !pull.hasUpstream() {
 			return nil, fmt.Errorf("dumboPull: branch %q has no upstream; specify a remote with 'from'", branch)
 		}
-		remote = up.remote
+		remote = pull.remote
 	}
+
+	remoteBranch := pull.branch
+	if remoteBranch == "" {
+		remoteBranch = branch
+	}
+
+	rebaseMode := pull.rebase
+	if params.RebaseSet {
+		rebaseMode = params.Rebase
+	}
+	noFF, ffOnly := params.NoFF, params.FFOnly
+	if !params.FFSet {
+		noFF = pull.ff == "no"
+		ffOnly = pull.ff == "only"
+	}
+	doRebase := rebaseMode == "true"
 
 	state, err := b.getOrOpenDB(ctx, params.DBName, false)
 	if err != nil {
 		return nil, err
+	}
+	if state == nil {
+		return nil, backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
+			fmt.Errorf("dumboPull: database %q does not exist", params.DBName))
 	}
 	branchRef := ref.NewBranchRef(branch)
 	beforeCommit, err := state.doltDB.ResolveCommitRef(ctx, branchRef)
@@ -60,20 +81,19 @@ func (b *Backend) DumboDBPull(ctx context.Context, params *backends.PullParams) 
 	}
 	before := beforeHash.String()
 
-	// Fetch updates every tracking ref; take the fetched commit for this branch.
-	fetchRes, err := b.DumboDBFetch(ctx, &backends.FetchParams{DBName: params.DBName, Remote: remote})
+	if _, err := b.DumboDBFetch(ctx, &backends.FetchParams{DBName: params.DBName, Remote: remote}); err != nil {
+		return nil, err
+	}
+	trackingRef := ref.NewRemoteRef(remote, remoteBranch)
+	fetchedCommit, err := state.doltDB.ResolveCommitRef(ctx, trackingRef)
+	if err != nil {
+		return nil, fmt.Errorf("dumboPull: remote %q has no branch %q", remote, remoteBranch)
+	}
+	fetchedHash, err := fetchedCommit.HashOf()
 	if err != nil {
 		return nil, err
 	}
-	var fetched string
-	for _, fr := range fetchRes.Branches {
-		if fr.Branch == branch {
-			fetched = fr.Commit
-		}
-	}
-	if fetched == "" {
-		return nil, fmt.Errorf("dumboPull: remote %q has no branch %q", remote, branch)
-	}
+	fetched := fetchedHash.String()
 
 	// Already up to date: the branch head equals the fetched commit.
 	if before == fetched {
@@ -86,14 +106,33 @@ func (b *Backend) DumboDBPull(ctx context.Context, params *backends.PullParams) 
 		}, nil
 	}
 
+	if doRebase {
+		rebaseRes, err := b.DumboDBRebase(ctx, &backends.RebaseParams{
+			DBName: params.DBName,
+			Branch: branch,
+			Onto:   fetched,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return &backends.PullResult{
+			Remote:       remote,
+			Branch:       branch,
+			CommitBefore: before,
+			CommitAfter:  rebaseRes.NewTip,
+			FastForward:  rebaseRes.NewTip == fetched,
+			Rebased:      true,
+		}, nil
+	}
+
 	// Merge the fetched commit into the branch. A commit hash resolves cleanly;
 	// a *MergeConflictError propagates to the handler unchanged.
 	mergeRes, err := b.DumboDBMerge(ctx, &backends.MergeParams{
 		DBName:  params.DBName,
 		Into:    branch,
 		From:    fetched,
-		NoFF:    params.NoFF,
-		FFOnly:  params.FFOnly,
+		NoFF:    noFF,
+		FFOnly:  ffOnly,
 		Message: params.Message,
 		Author:  params.Author,
 	})

@@ -54,7 +54,6 @@ commit, which is what exercises the view-merge path.
 
 ```js
 var db = db.getSiblingDB("vwmrg1")
-db.dropDatabase()
 
 db.items.insertMany([
   { _id: 1, status: "active" },
@@ -63,7 +62,7 @@ db.items.insertMany([
 ])
 db.runCommand({ doltCommit: 1, message: "seed items", author: "alice <alice@acme.com>" })
 
-db.runCommand({ doltBranch: 1, branch: "feature" })
+db.runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 // Feature adds the view.
 var feat = db.getSiblingDB("vwmrg1@feature")
@@ -95,7 +94,6 @@ conflict; `doltConflicts` reports it as a `type: "view"` entry in the unified
 
 ```js
 var db = db.getSiblingDB("vwmrg2")
-db.dropDatabase()
 
 db.items.insertMany([
   { _id: 1, status: "active" }, { _id: 2, status: "inactive" }, { _id: 3, status: "pending" }
@@ -103,7 +101,7 @@ db.items.insertMany([
 db.runCommand({ create: "cv", viewOn: "items", pipeline: [ { $match: { status: "active" } } ] })
 db.runCommand({ doltCommit: 1, message: "seed items + view cv", author: "alice <alice@acme.com>" })
 
-db.runCommand({ doltBranch: 1, branch: "feature" })
+db.runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 // Feature: cv -> inactive.
 var feat = db.getSiblingDB("vwmrg2@feature")
@@ -151,13 +149,12 @@ Same setup as Scenario 2; resolving "ours" keeps this branch's definition.
 
 ```js
 var db = db.getSiblingDB("vwmrg3")
-db.dropDatabase()
 db.items.insertMany([
   { _id: 1, status: "active" }, { _id: 2, status: "inactive" }, { _id: 3, status: "pending" }
 ])
 db.runCommand({ create: "cv", viewOn: "items", pipeline: [ { $match: { status: "active" } } ] })
 db.runCommand({ doltCommit: 1, message: "seed items + view cv", author: "alice <alice@acme.com>" })
-db.runCommand({ doltBranch: 1, branch: "feature" })
+db.runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 var feat = db.getSiblingDB("vwmrg3@feature")
 feat.runCommand({ collMod: "cv", viewOn: "items", pipeline: [ { $match: { status: "inactive" } } ] })
@@ -184,13 +181,12 @@ definition, which need match neither side.
 
 ```js
 var db = db.getSiblingDB("vwmrg4")
-db.dropDatabase()
 db.items.insertMany([
   { _id: 1, status: "active" }, { _id: 2, status: "inactive" }, { _id: 3, status: "pending" }
 ])
 db.runCommand({ create: "cv", viewOn: "items", pipeline: [ { $match: { status: "active" } } ] })
 db.runCommand({ doltCommit: 1, message: "seed items + view cv", author: "alice <alice@acme.com>" })
-db.runCommand({ doltBranch: 1, branch: "feature" })
+db.runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 var feat = db.getSiblingDB("vwmrg4@feature")
 feat.runCommand({ collMod: "cv", viewOn: "items", pipeline: [ { $match: { status: "inactive" } } ] })
@@ -221,13 +217,12 @@ after the merge.
 
 ```js
 var db = db.getSiblingDB("vwmrg5")
-db.dropDatabase()
 db.items.insertMany([
   { _id: 1, status: "active" }, { _id: 2, status: "inactive" }, { _id: 3, status: "pending" }
 ])
 db.runCommand({ create: "cv", viewOn: "items", pipeline: [ { $match: { status: "active" } } ] })
 db.runCommand({ doltCommit: 1, message: "seed items + view cv", author: "alice <alice@acme.com>" })
-db.runCommand({ doltBranch: 1, branch: "feature" })
+db.runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 // Feature drops the view.
 var feat = db.getSiblingDB("vwmrg5@feature")

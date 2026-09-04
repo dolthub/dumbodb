@@ -29,7 +29,6 @@ commit. Before any user commits, `doltLog` returns exactly that one commit.
 
 ```js
 var db = db.getSiblingDB("logdb")
-db.dropDatabase()
 
 db.events.insertOne({ _id: 0 })
 
@@ -201,7 +200,7 @@ no `refs` field.
 
 ```js
 // Create a second branch pointing at the current main HEAD.
-db.getSiblingDB("logdb@main").runCommand({ doltBranch: 1, branch: "feature" })
+db.getSiblingDB("logdb@main").runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 // Query from main  -- hash3 is tip of both "main" and "feature".
 db.runCommand({ doltLog: 1, limit: 2 })
@@ -253,14 +252,13 @@ The next three scenarios require a database that has a true three-way merge.
 
 ```js
 var mdb = db.getSiblingDB("logmerge")
-mdb.dropDatabase()
 
 mdb.events.insertOne({ _id: 1, v: 1 })
 const rA = mdb.runCommand({ doltCommit: 1, message: "add-one", author: "alice <alice@acme.com>" })
 const hashA = rA.commitId
 
 // Create "feat" branch from main HEAD (hashA).
-mdb.getSiblingDB("logmerge@main").runCommand({ doltBranch: 1, branch: "feat" })
+mdb.getSiblingDB("logmerge@main").runCommand({ doltBranch: 1, action: "add", branch: "feat" })
 
 // Advance main: _id:2 -> hashB.
 mdb.events.insertOne({ _id: 2, v: 2 })
@@ -565,7 +563,6 @@ Run this in a fresh database:
 
 ```js
 var idb = db.getSiblingDB("logidxvdb")
-idb.dropDatabase()
 
 idb.items.insertOne({ _id: 1, age: 30, name: "alpha" })
 idb.runCommand({ doltCommit: 1, message: "seed", author: "alice <alice@acme.com>" })

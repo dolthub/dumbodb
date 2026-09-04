@@ -53,7 +53,7 @@ func TestDumboDBPushFetch_S3Live(t *testing.T) {
 	src := newTestBackend(t)
 	insertDoc(t, src, "srcdb", "col", mustDoc(t, "_id", int64(1), "v", int64(7)))
 	want := commitDB(t, src, "srcdb", "seed on main")
-	if _, err := src.DumboDBBranch(ctx, &backends.BranchParams{DBName: "srcdb", From: "main", Name: branch}); err != nil {
+	if _, err := src.DumboDBBranch(ctx, &backends.BranchParams{Action: "add", DBName: "srcdb", From: "main", Name: branch}); err != nil {
 		t.Fatalf("create branch %s: %v", branch, err)
 	}
 

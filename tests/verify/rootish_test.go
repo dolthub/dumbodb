@@ -55,6 +55,7 @@ func rootishVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (hash1
 	var branchResult bson.M
 	err = env.Client.Database(dbName+"@main").RunCommand(ctx, bson.D{
 		{Key: "doltBranch", Value: int32(1)},
+		{Key: "action", Value: "add"},
 		{Key: "branch", Value: "feature"},
 	}).Decode(&branchResult)
 	require.NoError(t, err, "doltBranch to create feature")
@@ -142,6 +143,7 @@ func TestRootishVerify(t *testing.T) {
 		var branchResult bson.M
 		require.NoError(t, tagDB.RunCommand(ctx, bson.D{
 			{Key: "doltBranch", Value: int32(1)},
+			{Key: "action", Value: "add"},
 			{Key: "branch", Value: "from-tag"},
 		}).Decode(&branchResult))
 		assert.Equal(t, "from-tag", branchResult["branch"])
@@ -169,6 +171,7 @@ func TestRootishVerify(t *testing.T) {
 		var branchResult bson.M
 		require.NoError(t, env.Client.Database(dbName+"@"+hash1).RunCommand(ctx, bson.D{
 			{Key: "doltBranch", Value: int32(1)},
+			{Key: "action", Value: "add"},
 			{Key: "branch", Value: "from-hash1"},
 		}).Decode(&branchResult))
 		assert.Equal(t, "from-hash1", branchResult["branch"])
@@ -213,6 +216,7 @@ func TestRootishVerify(t *testing.T) {
 
 		require.NoError(t, env.Client.Database(chainDB+"@main").RunCommand(ctx, bson.D{
 			{Key: "doltBranch", Value: int32(1)},
+			{Key: "action", Value: "add"},
 			{Key: "branch", Value: "feature"},
 		}).Err())
 
@@ -263,11 +267,12 @@ func TestRootishVerify(t *testing.T) {
 	t.Run("Scenario7_PercentEncoding", func(t *testing.T) {
 		require.NoError(t, env.Client.Database(dbName+"@main").RunCommand(ctx, bson.D{
 			{Key: "doltBranch", Value: int32(1)},
+			{Key: "action", Value: "add"},
 			{Key: "branch", Value: "v1.0"},
 		}).Err())
 
 		// Unencoded dot fails: the server parses it as a namespace separator.
-		_, unencodedErr := env.Client.Database(dbName + "@v1.0").Collection("items").CountDocuments(ctx, bson.D{})
+		_, unencodedErr := env.Client.Database(dbName+"@v1.0").Collection("items").CountDocuments(ctx, bson.D{})
 		require.Error(t, unencodedErr, "unencoded dot in rootish must fail")
 
 		v1Items := env.Client.Database(dbName + "@v1%2E0").Collection("items")

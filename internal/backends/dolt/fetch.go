@@ -34,17 +34,16 @@ import (
 // pulls novel chunks but does not touch any local branch head. Reuses Dolt's
 // actions.FetchCommit (no DoltEnv/RepoState).
 func (b *Backend) DumboDBFetch(ctx context.Context, params *backends.FetchParams) (*backends.FetchResult, error) {
-	// An omitted remote defaults to the upstream recorded for the default branch.
 	remote := params.Remote
 	if remote == "" {
-		up, ok, err := b.getUpstream(ctx, params.DBName, defaultBranch)
+		pull, err := b.getBranchPull(ctx, params.DBName, defaultBranch)
 		if err != nil {
 			return nil, err
 		}
-		if !ok {
+		if !pull.hasUpstream() {
 			return nil, fmt.Errorf("dumboFetch: no upstream configured for branch %q; specify a remote with 'from'", defaultBranch)
 		}
-		remote = up.remote
+		remote = pull.remote
 	}
 
 	ru, err := b.resolveRemoteURL(ctx, params.DBName, remote)
@@ -58,6 +57,10 @@ func (b *Backend) DumboDBFetch(ctx context.Context, params *backends.FetchParams
 	state, err := b.getOrOpenDB(ctx, params.DBName, false)
 	if err != nil {
 		return nil, err
+	}
+	if state == nil {
+		return nil, backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
+			fmt.Errorf("dumboFetch: database %q does not exist", params.DBName))
 	}
 	nbf := state.doltDB.Format()
 
@@ -119,7 +122,9 @@ func (b *Backend) DumboDBFetch(ctx context.Context, params *backends.FetchParams
 			return nil, fmt.Errorf("dumboFetch: updating tracking ref for %q: %w", name, err)
 		}
 
-		fetched = append(fetched, backends.FetchedRef{Branch: name, CommitBefore: commitBefore, Commit: ch.String()})
+		if commitBefore != ch.String() {
+			fetched = append(fetched, backends.FetchedRef{Branch: name, CommitBefore: commitBefore, Commit: ch.String()})
+		}
 	}
 
 	return &backends.FetchResult{

@@ -175,6 +175,7 @@ func TestRevertVerify(t *testing.T) {
 		var branchResult bson.M
 		err := mainDB.RunCommand(ctx, bson.D{
 			{Key: "doltBranch", Value: int32(1)},
+			{Key: "action", Value: "add"},
 			{Key: "branch", Value: "conflict-feat"},
 		}).Decode(&branchResult)
 		require.NoError(t, err)

@@ -48,13 +48,12 @@ merge, index lookups on the merged branch find both sides' documents.
 
 ```js
 var db = db.getSiblingDB("idxmrg1")
-db.dropDatabase()
 
 db.items.insertOne({ _id: 1, name: "base" })
 db.items.createIndex({ name: 1 }, { name: "by_name" })
 db.runCommand({ doltCommit: 1, message: "seed + index", author: "alice <alice@acme.com>" })
 
-db.getSiblingDB("idxmrg1@main").runCommand({ doltBranch: 1, branch: "feature" })
+db.getSiblingDB("idxmrg1@main").runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 // Main writes the a-side.
 db.items.insertMany([
@@ -103,11 +102,10 @@ never saw it. After the merge the index covers feature's documents.
 
 ```js
 var db = db.getSiblingDB("idxmrg2")
-db.dropDatabase()
 
 db.items.insertOne({ _id: 1, city: "base" })
 db.runCommand({ doltCommit: 1, message: "seed, no index", author: "alice <alice@acme.com>" })
-db.getSiblingDB("idxmrg2@main").runCommand({ doltBranch: 1, branch: "feature" })
+db.getSiblingDB("idxmrg2@main").runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 // Index exists only on main.
 db.items.createIndex({ city: 1 }, { name: "by_city" })
@@ -137,7 +135,6 @@ feature's delete to main's indexed state and drop the value from the index.
 
 ```js
 var db = db.getSiblingDB("idxmrg2b")
-db.dropDatabase()
 
 // Seed data, no index yet.
 db.items.insertOne({ _id: 1, city: "base" })
@@ -145,7 +142,7 @@ db.items.insertOne({ _id: 2, city: "paris" })
 db.runCommand({ doltCommit: 1, message: "seed (no index)", author: "alice <alice@acme.com>" })
 
 // Branch before the index exists, so feature never has it.
-db.getSiblingDB("idxmrg2b@main").runCommand({ doltBranch: 1, branch: "feature" })
+db.getSiblingDB("idxmrg2b@main").runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 // Create the index only on main; the branches now diverge.
 db.items.createIndex({ city: 1 }, { name: "by_city" })
@@ -183,7 +180,6 @@ main's indexed state (new value in, old value out).
 
 ```js
 var db = db.getSiblingDB("idxmrg2c")
-db.dropDatabase()
 
 // Seed data, no index yet.
 db.items.insertOne({ _id: 1, city: "base" })
@@ -191,7 +187,7 @@ db.items.insertOne({ _id: 2, city: "paris" })
 db.runCommand({ doltCommit: 1, message: "seed (no index)", author: "alice <alice@acme.com>" })
 
 // Branch before the index exists, so feature never has it.
-db.getSiblingDB("idxmrg2c@main").runCommand({ doltBranch: 1, branch: "feature" })
+db.getSiblingDB("idxmrg2c@main").runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 // Create the index only on main; the branches now diverge.
 db.items.createIndex({ city: 1 }, { name: "by_city" })
@@ -228,12 +224,11 @@ collection scans and remain correct.
 
 ```js
 var db = db.getSiblingDB("idxmrg3")
-db.dropDatabase()
 
 db.items.insertOne({ _id: 1, name: "base" })
 db.items.createIndex({ name: 1 }, { name: "by_name" })
 db.runCommand({ doltCommit: 1, message: "seed + index", author: "alice <alice@acme.com>" })
-db.getSiblingDB("idxmrg3@main").runCommand({ doltBranch: 1, branch: "feature" })
+db.getSiblingDB("idxmrg3@main").runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 db.items.dropIndex("by_name")
 db.runCommand({ doltCommit: 1, message: "main: drop by_name", author: "alice <alice@acme.com>" })
@@ -264,12 +259,11 @@ recreate the collision; resolving with "ours" completes the merge.
 
 ```js
 var db = db.getSiblingDB("idxmrg4")
-db.dropDatabase()
 
 db.items.insertOne({ _id: 1, sku: "SEED" })
 db.items.createIndex({ sku: 1 }, { name: "by_sku", unique: true })
 db.runCommand({ doltCommit: 1, message: "seed + unique index", author: "alice <alice@acme.com>" })
-db.getSiblingDB("idxmrg4@main").runCommand({ doltBranch: 1, branch: "feature" })
+db.getSiblingDB("idxmrg4@main").runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 // Same unique key, different documents, one per branch.
 db.items.insertOne({ _id: 10, sku: "S-1" })
@@ -341,13 +335,12 @@ and resolvable independently.
 
 ```js
 var db = db.getSiblingDB("idxmrg4b")
-db.dropDatabase()
 
 db.items.insertOne({ _id: 1, sku: "SEED", code: "SEED" })
 db.items.createIndex({ sku: 1 }, { name: "by_sku", unique: true })
 db.items.createIndex({ code: 1 }, { name: "by_code", unique: true })
 db.runCommand({ doltCommit: 1, message: "seed + two unique indexes", author: "alice <alice@acme.com>" })
-db.getSiblingDB("idxmrg4b@main").runCommand({ doltBranch: 1, branch: "feature" })
+db.getSiblingDB("idxmrg4b@main").runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 // One pair will collide on by_sku, a separate pair on by_code.
 db.items.insertOne({ _id: 10, sku: "S-1", code: "K-10" })
@@ -398,7 +391,6 @@ conflict) is what index lookups must see after the merge commits.
 
 ```js
 var db = db.getSiblingDB("idxmrg5")
-db.dropDatabase()
 
 db.items.insertMany([
   { _id: 1, name: "alpha" },
@@ -406,7 +398,7 @@ db.items.insertMany([
 ])
 db.items.createIndex({ name: 1 }, { name: "by_name" })
 db.runCommand({ doltCommit: 1, message: "seed + index", author: "alice <alice@acme.com>" })
-db.getSiblingDB("idxmrg5@main").runCommand({ doltBranch: 1, branch: "feature" })
+db.getSiblingDB("idxmrg5@main").runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 // Both sides edit the same field of the same docs.
 db.items.updateOne({ _id: 1 }, { $set: { name: "ours-1" } })
@@ -466,12 +458,11 @@ branch; `theirs` is the cherry-picked commit.
 
 ```js
 var db = db.getSiblingDB("idxmrg6")
-db.dropDatabase()
 
 db.items.insertOne({ _id: 1, sku: "SEED" })
 db.items.createIndex({ sku: 1 }, { name: "by_sku", unique: true })
 db.runCommand({ doltCommit: 1, message: "seed + unique index", author: "alice <alice@acme.com>" })
-db.getSiblingDB("idxmrg6@main").runCommand({ doltBranch: 1, branch: "feature" })
+db.getSiblingDB("idxmrg6@main").runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 // main takes the key.
 db.items.insertOne({ _id: 10, sku: "S-1" })
@@ -522,12 +513,11 @@ other way round: `ours` is the replayed commit, `theirs` is the onto branch.
 
 ```js
 var db = db.getSiblingDB("idxmrg7")
-db.dropDatabase()
 
 db.items.insertOne({ _id: 1, sku: "SEED" })
 db.items.createIndex({ sku: 1 }, { name: "by_sku", unique: true })
 db.runCommand({ doltCommit: 1, message: "seed + unique index", author: "alice <alice@acme.com>" })
-db.getSiblingDB("idxmrg7@main").runCommand({ doltBranch: 1, branch: "feature" })
+db.getSiblingDB("idxmrg7@main").runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 // feature takes the key first (diverging from main).
 var feat = db.getSiblingDB("idxmrg7@feature")
@@ -580,7 +570,6 @@ document now holds its unique key, the revert parks a `uniqueKeyCollision`.
 
 ```js
 var db = db.getSiblingDB("idxmrg8")
-db.dropDatabase()
 
 db.items.insertOne({ _id: 1, sku: "SEED" })
 db.items.createIndex({ sku: 1 }, { name: "by_sku", unique: true })

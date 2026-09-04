@@ -31,13 +31,13 @@ import (
 )
 
 var getParameterMetaKeys = map[string]struct{}{
-	"getParameter":  {},
-	"$db":           {},
-	"comment":       {},
-	"lsid":          {},
-	"$clusterTime":  {},
+	"getParameter":    {},
+	"$db":             {},
+	"comment":         {},
+	"lsid":            {},
+	"$clusterTime":    {},
 	"$readPreference": {},
-	"maxTimeMS":     {},
+	"maxTimeMS":       {},
 }
 
 // MsgGetParameter implements `getParameter` command.

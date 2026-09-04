@@ -45,7 +45,6 @@ the next call's `from`. When the walk is exhausted, `next` is **omitted**.
 
 ```js
 var pg = db.getSiblingDB("logpage")
-pg.dropDatabase()
 
 // main: m1, m2
 pg.coll.insertOne({ _id: 1 })
@@ -55,7 +54,7 @@ const m2 = pg.runCommand({ doltCommit: 1, message: "m2", author: "a <a@x.io>" })
 
 // branch "feat" from main HEAD (m2), then advance feat FIRST so its
 // commits get older timestamps than the later main commits.
-pg.getSiblingDB("logpage@main").runCommand({ doltBranch: 1, branch: "feat" })
+pg.getSiblingDB("logpage@main").runCommand({ doltBranch: 1, action: "add", branch: "feat" })
 const fdb = db.getSiblingDB("logpage@feat")
 fdb.coll.insertOne({ _id: 101 })
 const f1 = fdb.runCommand({ doltCommit: 1, message: "f1", author: "a <a@x.io>" }).commitId
@@ -233,7 +232,7 @@ only on an un-merged branch appear. It is mutually exclusive with `from`.
 
 ```js
 // Create a side branch off main with a commit that is NOT merged back.
-pg.getSiblingDB("logpage@main").runCommand({ doltBranch: 1, branch: "side" })
+pg.getSiblingDB("logpage@main").runCommand({ doltBranch: 1, action: "add", branch: "side" })
 var side = db.getSiblingDB("logpage@side")
 side.coll.insertOne({ _id: 900 })
 const s1 = side.runCommand({ doltCommit: 1, message: "s1", author: "a <a@x.io>" }).commitId
@@ -271,7 +270,6 @@ always the id-list form.
 
 ```js
 var ff = db.getSiblingDB("logfilter")
-ff.dropDatabase()
 
 ff.orders.insertMany([ { _id: 1, status: "pending" }, { _id: 2, status: "shipped" } ])
 ff.runCommand({ doltCommit: 1, message: "c1 add orders 1,2", author: "a <a@x.io>" })
@@ -356,7 +354,6 @@ Key checks:
 
 ```js
 var nf = db.getSiblingDB("logfilter_ids")
-nf.dropDatabase()
 
 const oid = ObjectId()
 nf.events.insertOne({ _id: oid, kind: "login" })
@@ -401,7 +398,6 @@ the post-image may satisfy it. `$match`es and explicit `_id`s OR.
 
 ```js
 var mf = db.getSiblingDB("logfilter_match")
-mf.dropDatabase()
 
 mf.orders.insertMany([ { _id: 1, status: "pending" }, { _id: 2, status: "shipped" } ])
 mf.runCommand({ doltCommit: 1, message: "m1 add 1,2", author: "a <a@x.io>" })
@@ -430,7 +426,6 @@ This example uses `$gt`; try `$gte`/`$lt`/`$regex`/`$exists` the same way.
 
 ```js
 var gf = db.getSiblingDB("logfilter_gt")
-gf.dropDatabase()
 
 gf.orders.insertOne({ _id: 1, amount: 50 })
 gf.runCommand({ doltCommit: 1, message: "g1 add cheap order", author: "a <a@x.io>" })
@@ -457,7 +452,6 @@ conditions (implicit AND).
 
 ```js
 var cf = db.getSiblingDB("logfilter_changed")
-cf.dropDatabase()
 
 cf.orders.insertMany([
   { _id: 1, customer: "4242", status: "pending" },

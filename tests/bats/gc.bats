@@ -214,7 +214,7 @@ quit(0)"
 
     # Create feature branch from current main HEAD.
     run mongosh_eval "$db_name" '
-        print(JSON.stringify(db.runCommand({doltBranch: 1, branch: "feature"})))
+        print(JSON.stringify(db.runCommand({doltBranch: 1, action: "add", branch: "feature"})))
     '
     [ "$status" -eq 0 ]
     echo "$output" | jq -e '.ok == 1'
@@ -263,7 +263,7 @@ quit(0)"
     # feature is garbage. forceDelete bypasses the merged-into-main
     # safety check.
     run mongosh_eval "$db_name" '
-        print(JSON.stringify(db.runCommand({doltBranch: 1, branch: "feature", forceDelete: true})))
+        print(JSON.stringify(db.runCommand({doltBranch: 1, action: "remove", branch: "feature", force: true})))
     '
     [ "$status" -eq 0 ]
     echo "$output" | jq -e '.ok == 1'

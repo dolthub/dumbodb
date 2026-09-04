@@ -86,6 +86,10 @@ const (
 	// namespace used by `dolt branch`.
 	branchRefPrefix = "refs/heads/"
 
+	// remoteRefPrefix is the dataset-ID prefix for remote-tracking branches
+	// (refs/remotes/<remote>/<branch>).
+	remoteRefPrefix = "refs/remotes/"
+
 	// mainDataset is the dataset ID used for the "refs/heads/main" branch.
 	// Dolt expects the full ref path including "refs/" prefix.
 	mainDataset = "refs/heads/main"
@@ -1418,20 +1422,8 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 	}, nil
 }
 
-// DumboDBBranch implements backends.VersioningBackend.
-//
-// When params.List is true, it returns every branch in the database with its
-// HEAD commit, sorted by name; the other operation fields are ignored.
-//
-// When params.Delete is false (default), it creates a new Dolt branch named
-// params.Name, starting from the HEAD commit of the source branch params.From.
-//
-// When params.Delete is true, it deletes the branch named params.Name:
-//   - Safe delete (Force=false, delete semantics): refuses if the branch HEAD is not
-//     reachable from any other branch (i.e. data would be lost).
-//   - Force delete (Force=true, forceDelete semantics): deletes unconditionally.
-//
-// Both branch names map to dataset IDs of the form "refs/heads/<name>".
+// DumboDBBranch implements backends.VersioningBackend, dispatching on
+// params.Action: "list", "add", "update", or "remove".
 func (b *Backend) DumboDBBranch(ctx context.Context, params *backends.BranchParams) (*backends.BranchResult, error) {
 	db, err := b.getOrOpenDB(ctx, params.DBName, false)
 	if err != nil {
@@ -1445,16 +1437,24 @@ func (b *Backend) DumboDBBranch(ctx context.Context, params *backends.BranchPara
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	if params.List {
+	switch params.Action {
+	case "list":
 		return dumboDBBranchList(ctx, db)
-	}
-
-	if params.Delete {
+	case "update":
+		return dumboDBBranchConfigure(ctx, db, params)
+	case "remove":
 		return dumboDBBranchDelete(ctx, db, params)
+	case "add":
+		return dumboDBBranchCreate(ctx, db, params)
+	default:
+		return nil, fmt.Errorf("DumboDBBranch: unknown action %q", params.Action)
 	}
+}
 
-	// Resolve From to a commit hash. From may be a branch name, commit hash, or
-	// ancestor expression (e.g. "main~1"), so we use the general rootish resolver.
+// dumboDBBranchCreate creates a branch from the connection rootish; when
+// params.ConfigUpdate is set it is applied atomically, rolling back the new
+// branch on a config error. Caller must hold db.mu.Lock().
+func dumboDBBranchCreate(ctx context.Context, db *dbState, params *backends.BranchParams) (*backends.BranchResult, error) {
 	headHash, err := resolveRootishToCommitHash(ctx, db, params.From)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBBranch: resolving source %q: %w", params.From, err)
@@ -1489,13 +1489,26 @@ func (b *Backend) DumboDBBranch(ctx context.Context, params *backends.BranchPara
 	if sess := sessionFromContext(ctx); sess != nil {
 		if tx, ok := sess.GetTransaction().(*dsess.DoltTransaction); ok {
 			sqlCtx := sqlctx.Wrap(ctx, sess)
-			if vdb, vok := b.provider.BaseDatabase(sqlCtx, params.DBName); vok {
+			if vdb, vok := db.backend.provider.BaseDatabase(sqlCtx, params.DBName); vok {
 				_ = tx.AddDb(sqlCtx, vdb)
 			}
 		}
 	}
 
-	return &backends.BranchResult{Branch: params.Name}, nil
+	res := &backends.BranchResult{Branch: params.Name}
+	if params.ConfigUpdate != nil {
+		cfg, cfgErr := db.backend.applyBranchConfig(ctx, db.name, params.Name, params.ConfigUpdate)
+		if cfgErr != nil {
+			_, _ = dumboDBBranchDelete(ctx, db, &backends.BranchParams{
+				DBName: params.DBName, From: params.From, Name: params.Name, Force: true,
+			})
+			return nil, fmt.Errorf("DumboDBBranch: %w", cfgErr)
+		}
+		res.Configured = true
+		res.Pull = pullInfo(cfg.pull)
+		res.Push = pushInfo(cfg.push)
+	}
+	return res, nil
 }
 
 // dumboDBBranchList returns every branch in the database with its HEAD commit,
@@ -1508,17 +1521,31 @@ func dumboDBBranchList(ctx context.Context, db *dbState) (*backends.BranchResult
 
 	branches := []backends.BranchInfo{}
 	if iterErr := dsMap.IterAll(ctx, func(id string, headAddr hash.Hash) error {
-		if !strings.HasPrefix(id, branchRefPrefix) {
-			return nil
+		switch {
+		case strings.HasPrefix(id, branchRefPrefix):
+			name := strings.TrimPrefix(id, branchRefPrefix)
+			info := backends.BranchInfo{Name: name, CommitID: headAddr.String()}
+			if cfg, ok, err := db.backend.readBranchConfig(ctx, db.name, name); err != nil {
+				return err
+			} else if ok {
+				info.Pull = pullInfo(cfg.pull)
+				info.Push = pushInfo(cfg.push)
+			}
+			branches = append(branches, info)
+		case strings.HasPrefix(id, remoteRefPrefix):
+			rest := strings.TrimPrefix(id, remoteRefPrefix)
+			remote, ref, ok := strings.Cut(rest, "/")
+			if !ok {
+				return nil
+			}
+			branches = append(branches, backends.BranchInfo{
+				Name:           rest,
+				CommitID:       headAddr.String(),
+				RemoteTracking: true,
+				Remote:         remote,
+				Ref:            ref,
+			})
 		}
-		name := strings.TrimPrefix(id, branchRefPrefix)
-		info := backends.BranchInfo{Name: name, CommitID: headAddr.String()}
-		if up, ok, err := db.backend.getUpstream(ctx, db.name, name); err != nil {
-			return err
-		} else if ok {
-			info.Upstream = &backends.UpstreamRef{Remote: up.remote, Ref: up.ref}
-		}
-		branches = append(branches, info)
 		return nil
 	}); iterErr != nil {
 		return nil, fmt.Errorf("DumboDBBranch: iterating datasets: %w", iterErr)
@@ -1529,9 +1556,53 @@ func dumboDBBranchList(ctx context.Context, db *dbState) (*backends.BranchResult
 	return &backends.BranchResult{Branches: branches}, nil
 }
 
+// dumboDBBranchConfigure sets or clears a tracking branch's pull policy and
+// returns the resulting policy. Caller must hold db.mu.Lock().
+func dumboDBBranchConfigure(ctx context.Context, db *dbState, params *backends.BranchParams) (*backends.BranchResult, error) {
+	branchDS, err := db.datasDB.GetDataset(ctx, branchRefPrefix+params.Name)
+	if err != nil {
+		return nil, fmt.Errorf("DumboDBBranch: resolving branch %q: %w", params.Name, err)
+	}
+	if !branchDS.HasHead() {
+		return nil, backends.NewError(backends.ErrorCodeCollectionDoesNotExist,
+			fmt.Errorf("DumboDBBranch: branch %q does not exist", params.Name))
+	}
+
+	cfg, err := db.backend.applyBranchConfig(ctx, db.name, params.Name, params.ConfigUpdate)
+	if err != nil {
+		return nil, fmt.Errorf("DumboDBBranch: %w", err)
+	}
+
+	return &backends.BranchResult{
+		Configured: true,
+		Branch:     params.Name,
+		Pull:       pullInfo(cfg.pull),
+		Push:       pushInfo(cfg.push),
+	}, nil
+}
+
+// pullInfo/pushInfo project stored config sub-objects to the wire shape.
+func pullInfo(p branchPull) *backends.BranchPullInfo {
+	if p.empty() {
+		return nil
+	}
+	return &backends.BranchPullInfo{Remote: p.remote, Branch: p.branch, Rebase: p.rebase, FF: p.ff}
+}
+
+func pushInfo(p branchPush) *backends.BranchPushInfo {
+	if p.empty() {
+		return nil
+	}
+	return &backends.BranchPushInfo{Remote: p.remote, Branch: p.branch}
+}
+
 // dumboDBBranchDelete deletes the branch named params.Name.
 // Caller must hold db.mu.Lock().
 func dumboDBBranchDelete(ctx context.Context, db *dbState, params *backends.BranchParams) (*backends.BranchResult, error) {
+	// The default branch must always exist; it can never be deleted.
+	if params.Name == defaultBranch {
+		return nil, fmt.Errorf("DumboDBBranch: cannot delete the default branch %q; every database must have it", defaultBranch)
+	}
 	// Refuse to delete the current connection's branch.
 	if params.Name == params.From {
 		return nil, fmt.Errorf("DumboDBBranch: cannot delete the currently checked-out branch %q", params.Name)
@@ -1618,6 +1689,10 @@ func dumboDBBranchDelete(ctx context.Context, db *dbState, params *backends.Bran
 	}
 
 	db.clearBranchWS(params.Name)
+
+	if err := db.backend.writeBranchConfig(ctx, db.name, params.Name, branchConfig{}); err != nil {
+		return nil, fmt.Errorf("DumboDBBranch: clearing config for deleted branch %q: %w", params.Name, err)
+	}
 
 	return &backends.BranchResult{Branch: params.Name}, nil
 }

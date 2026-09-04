@@ -173,6 +173,23 @@ func findRemoteDoc(ctx context.Context, coll backends.Collection, id string) (*t
 	return nil, nil
 }
 
+// remoteExists reports whether a remote is registered for the database.
+func (b *Backend) remoteExists(ctx context.Context, dbName, name string) (bool, error) {
+	adminDB, err := b.Database("admin")
+	if err != nil {
+		return false, err
+	}
+	coll, err := adminDB.Collection(remotesCollection)
+	if err != nil {
+		return false, err
+	}
+	doc, err := findRemoteDoc(ctx, coll, remoteID(dbName, name))
+	if err != nil {
+		return false, err
+	}
+	return doc != nil, nil
+}
+
 // validateRemoteName rejects empty names and the two characters reserved
 // elsewhere in the identity/branch encoding.
 func validateRemoteName(name string) error {

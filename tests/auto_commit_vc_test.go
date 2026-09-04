@@ -96,7 +96,7 @@ func TestAutoCommit_BranchTagNoDataCommit(t *testing.T) {
 	require.NoError(t, err)
 
 	before := acCommitCount(t, main)
-	require.NoError(t, main.RunCommand(ctx, bson.D{{Key: "doltBranch", Value: int32(1)}, {Key: "branch", Value: "feature"}}).Err())
+	require.NoError(t, main.RunCommand(ctx, bson.D{{Key: "doltBranch", Value: int32(1)}, {Key: "action", Value: "add"}, {Key: "branch", Value: "feature"}}).Err())
 	require.NoError(t, main.RunCommand(ctx, bson.D{{Key: "doltTag", Value: int32(1)}, {Key: "name", Value: "v1"}}).Err())
 	assert.Equal(t, before, acCommitCount(t, main), "branch/tag must not create data commits")
 }
@@ -111,7 +111,7 @@ func TestAutoCommit_CleanMergeOneCommit(t *testing.T) {
 
 	_, err := main.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
 	require.NoError(t, err)
-	require.NoError(t, main.RunCommand(ctx, bson.D{{Key: "doltBranch", Value: int32(1)}, {Key: "branch", Value: "feature"}}).Err())
+	require.NoError(t, main.RunCommand(ctx, bson.D{{Key: "doltBranch", Value: int32(1)}, {Key: "action", Value: "add"}, {Key: "branch", Value: "feature"}}).Err())
 	_, err = main.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(2)}})
 	require.NoError(t, err)
 	_, err = feat.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(3)}})
@@ -132,7 +132,7 @@ func TestAutoCommit_MergeStateSurvivesRestart(t *testing.T) {
 
 	_, err := main.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}, {Key: "v", Value: "base"}})
 	require.NoError(t, err)
-	require.NoError(t, main.RunCommand(ctx, bson.D{{Key: "doltBranch", Value: int32(1)}, {Key: "branch", Value: "feature"}}).Err())
+	require.NoError(t, main.RunCommand(ctx, bson.D{{Key: "doltBranch", Value: int32(1)}, {Key: "action", Value: "add"}, {Key: "branch", Value: "feature"}}).Err())
 	_, err = feat.Collection("items").UpdateOne(ctx, bson.D{{Key: "_id", Value: int32(1)}}, bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: "feat"}}}})
 	require.NoError(t, err)
 	_, err = main.Collection("items").UpdateOne(ctx, bson.D{{Key: "_id", Value: int32(1)}}, bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: "main"}}}})

@@ -56,7 +56,7 @@ func TestDumboDBPushFetch_DoltHubLive(t *testing.T) {
 	src := newTestBackend(t)
 	insertDoc(t, src, "srcdb", "col", mustDoc(t, "_id", int64(1), "v", int64(42)))
 	want := commitDB(t, src, "srcdb", "seed on main")
-	if _, err := src.DumboDBBranch(ctx, &backends.BranchParams{DBName: "srcdb", From: "main", Name: branch}); err != nil {
+	if _, err := src.DumboDBBranch(ctx, &backends.BranchParams{Action: "add", DBName: "srcdb", From: "main", Name: branch}); err != nil {
 		t.Fatalf("create branch %s: %v", branch, err)
 	}
 
@@ -121,17 +121,11 @@ func TestDumboDBClone_DoltHubLive(t *testing.T) {
 	if res.DB != "hubclone" {
 		t.Errorf("clone db = %q, want hubclone", res.DB)
 	}
-	if len(res.Branches) == 0 {
-		t.Fatal("clone returned no branches")
-	}
-	if res.DefaultBranch == "" || res.Commit == "" {
-		t.Errorf("clone default branch/commit empty: branch=%q commit=%q", res.DefaultBranch, res.Commit)
-	}
-	t.Logf("cloned %s: default=%s @ %s, branches=%v", remoteURL, res.DefaultBranch, res.Commit, res.Branches)
+	t.Logf("cloned %s into %s", remoteURL, res.DB)
 
 	// The cloned database opens and its default branch head resolves.
 	st := mustDB(t, b, "hubclone")
-	if _, err := st.doltDB.ResolveCommitRef(ctx, ref.NewBranchRef(res.DefaultBranch)); err != nil {
-		t.Errorf("resolve cloned default branch %q: %v", res.DefaultBranch, err)
+	if _, err := st.doltDB.ResolveCommitRef(ctx, ref.NewBranchRef("main")); err != nil {
+		t.Errorf("resolve cloned default branch: %v", err)
 	}
 }

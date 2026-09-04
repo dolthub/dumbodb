@@ -51,6 +51,7 @@ func conflictingMerge(t *testing.T, env *dumboDBTestEnv, dbName string, collecti
 	var branchRaw bson.M
 	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 		{Key: "doltBranch", Value: int32(1)},
+		{Key: "action", Value: "add"},
 		{Key: "branch", Value: "feature"},
 	}).Decode(&branchRaw))
 
@@ -153,7 +154,7 @@ func TestResolveConflict_MetadataByIDAlone(t *testing.T) {
 	mainDB := env.Client.Database(dbName + "@main")
 	var branchRaw bson.M
 	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
-		{Key: "doltBranch", Value: int32(1)}, {Key: "branch", Value: "feature"},
+		{Key: "doltBranch", Value: int32(1)}, {Key: "action", Value: "add"}, {Key: "branch", Value: "feature"},
 	}).Decode(&branchRaw))
 
 	require.NoError(t, env.Client.Database(dbName+"@feature").RunCommand(ctx, bson.D{

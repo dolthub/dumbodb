@@ -38,7 +38,7 @@ func TestMerge_CollectionAddedOnBothBranches(t *testing.T) {
 	dumboDBCommit(t, env, dbName, "main: add items/10", "alice <a@x.io>")
 
 	require.NoError(t, env.Client.Database(dbName+"@main~1").RunCommand(ctx, bson.D{
-		{Key: "doltBranch", Value: int32(1)}, {Key: "branch", Value: "featureA"},
+		{Key: "doltBranch", Value: int32(1)}, {Key: "action", Value: "add"}, {Key: "branch", Value: "featureA"},
 	}).Err())
 	featDB := env.Client.Database(dbName + "@featureA")
 	_, err = featDB.Collection("items").InsertOne(ctx,
@@ -76,7 +76,7 @@ func TestMerge_CollectionAddedOnBothBranches_Conflict(t *testing.T) {
 	dumboDBCommit(t, env, dbName, "main: add items/10", "alice <a@x.io>")
 
 	require.NoError(t, env.Client.Database(dbName+"@main~1").RunCommand(ctx, bson.D{
-		{Key: "doltBranch", Value: int32(1)}, {Key: "branch", Value: "featureA"},
+		{Key: "doltBranch", Value: int32(1)}, {Key: "action", Value: "add"}, {Key: "branch", Value: "featureA"},
 	}).Err())
 	featDB := env.Client.Database(dbName + "@featureA")
 	_, err = featDB.Collection("items").InsertOne(ctx,

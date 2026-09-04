@@ -28,7 +28,6 @@ Run this once before the scenarios below.
 
 ```js
 var db = db.getSiblingDB("resetdb")
-db.dropDatabase()
 
 db.tasks.insertOne({ _id: 1, v: 1 })
 const r1 = db.runCommand({ doltCommit: 1, message: "initial", author: "alice <alice@acme.com>" })
@@ -259,14 +258,13 @@ Run this setup once before each scenario (drop and rebuild for a clean state).
 
 ```js
 var mdb = db.getSiblingDB("resetbranchdb")
-mdb.dropDatabase()
 
 // main: one committed document (M1).
 mdb.tasks.insertOne({ _id: 1, v: 1 })
 const hashM1 = mdb.runCommand({ doltCommit: 1, message: "main-base", author: "alice <alice@acme.com>" }).commitId
 
 // Create a feature branch from main.
-mdb.runCommand({ doltBranch: 1, branch: "feature" })
+mdb.runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 // Switch to the feature branch and add two commits (F1, F2).
 var fdb = db.getSiblingDB("resetbranchdb@feature")
