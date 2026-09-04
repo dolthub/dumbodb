@@ -47,6 +47,10 @@ func (b *Backend) DumboDBPush(ctx context.Context, params *backends.PushParams) 
 	if err != nil {
 		return nil, err
 	}
+	if state == nil {
+		return nil, backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
+			fmt.Errorf("dumboPush: database %q does not exist", params.DBName))
+	}
 
 	// Parse the refspec into: srcRev (a commit-ish resolved below), localBranch
 	// (the branch the source names, empty when the source is a bare revision that

@@ -66,6 +66,10 @@ func (b *Backend) DumboDBPull(ctx context.Context, params *backends.PullParams) 
 	if err != nil {
 		return nil, err
 	}
+	if state == nil {
+		return nil, backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
+			fmt.Errorf("dumboPull: database %q does not exist", params.DBName))
+	}
 	branchRef := ref.NewBranchRef(branch)
 	beforeCommit, err := state.doltDB.ResolveCommitRef(ctx, branchRef)
 	if err != nil {

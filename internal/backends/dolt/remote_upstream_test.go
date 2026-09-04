@@ -331,6 +331,30 @@ func TestDumboDBBranchCannotDeleteMain(t *testing.T) {
 	}
 }
 
+// TestRemoteSyncOnMissingDB verifies push/fetch/pull return a clean error, not
+// a nil-pointer panic, when the database does not exist.
+func TestRemoteSyncOnMissingDB(t *testing.T) {
+	ctx := context.Background()
+	b := newTestBackend(t)
+	const ghost = "ghost" // never created
+
+	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: ghost, Remote: "origin", ConnBranch: "main", RefSpec: "main"}); err == nil {
+		t.Error("push on a missing database: want error, got nil")
+	}
+
+	// A remote can be registered without the database existing; fetch must still
+	// not panic (this is the reported crash).
+	if _, err := b.DumboDBRemote(ctx, &backends.RemoteParams{DBName: ghost, Action: "add", Name: "origin", URL: "file://" + t.TempDir()}); err != nil {
+		t.Fatalf("add remote: %v", err)
+	}
+	if _, err := b.DumboDBFetch(ctx, &backends.FetchParams{DBName: ghost, Remote: "origin"}); err == nil {
+		t.Error("fetch on a missing database: want error, got nil")
+	}
+	if _, err := b.DumboDBPull(ctx, &backends.PullParams{DBName: ghost, Branch: "main", Remote: "origin"}); err == nil {
+		t.Error("pull on a missing database: want error, got nil")
+	}
+}
+
 // TestDumboDBConfig_Scoping verifies config docs are keyed per database.
 func TestDumboDBConfig_Scoping(t *testing.T) {
 	ctx := context.Background()

@@ -58,6 +58,10 @@ func (b *Backend) DumboDBFetch(ctx context.Context, params *backends.FetchParams
 	if err != nil {
 		return nil, err
 	}
+	if state == nil {
+		return nil, backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
+			fmt.Errorf("dumboFetch: database %q does not exist", params.DBName))
+	}
 	nbf := state.doltDB.Format()
 
 	remoteParams, err := b.remoteDBParams(ru.Scheme)
