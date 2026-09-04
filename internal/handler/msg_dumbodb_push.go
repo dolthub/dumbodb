@@ -46,7 +46,7 @@ func (h *Handler) MsgDumboDBPush(connCtx context.Context, msg *wire.OpMsg) (*wir
 		return nil, err
 	}
 
-	if err = common.RejectUnknownFields(document, "to", "refSpec", "force", "setUpstream"); err != nil {
+	if err = common.RejectUnknownFields(document, "to", "refSpec", "force"); err != nil {
 		return nil, err
 	}
 
@@ -60,14 +60,14 @@ func (h *Handler) MsgDumboDBPush(connCtx context.Context, msg *wire.OpMsg) (*wir
 		return nil, err
 	}
 
-	// 'to' is optional: an omitted target defaults to the branch's upstream.
+	// 'to' is optional: an omitted target resolves from config.push/config.pull.
 	remote, err := common.GetOptionalParam[string](document, "to", "")
 	if err != nil {
 		return nil, err
 	}
 
 	// refSpec is an optional git-style [+]<src>[:<dst>]; empty means a bare push
-	// of the connection branch to its upstream.
+	// of the connection branch to its configured target.
 	refSpec, err := common.GetOptionalParam[string](document, "refSpec", "")
 	if err != nil {
 		return nil, err
@@ -78,23 +78,17 @@ func (h *Handler) MsgDumboDBPush(connCtx context.Context, msg *wire.OpMsg) (*wir
 		return nil, err
 	}
 
-	setUpstream, err := common.GetOptionalBoolOrIntParam(document, "setUpstream", false)
-	if err != nil {
-		return nil, err
-	}
-
 	vb := h.versioningBackend()
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, "dumboPush: versioning is not supported by the current backend")
 	}
 
 	res, err := vb.DumboDBPush(connCtx, &backends.PushParams{
-		DBName:      dbName,
-		Remote:      remote,
-		ConnBranch:  connBranch,
-		RefSpec:     refSpec,
-		Force:       force,
-		SetUpstream: setUpstream,
+		DBName:     dbName,
+		Remote:     remote,
+		ConnBranch: connBranch,
+		RefSpec:    refSpec,
+		Force:      force,
 	})
 	if err != nil {
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())

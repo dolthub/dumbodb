@@ -110,7 +110,7 @@ Expected: both branches exist locally, each at `hash1`.
   "branches": [
     { "name": "feature", "commitId": "<hash1>" },
     { "name": "main",    "commitId": "<hash1>", "current": true,
-      "upstream": { "remote": "origin", "ref": "main" } }
+      "config": { "pull": { "remote": "origin", "branch": "main" } } }
   ],
   "ok": 1
 }
@@ -118,7 +118,7 @@ Expected: both branches exist locally, each at `hash1`.
 
 Key checks:
 - both `main` and `feature` are present
-- `main` (the default) carries an upstream (see Scenario 4); `feature` does not
+- `main` (the default) carries a `config.pull` upstream (see Scenario 4); `feature` does not
 
 ---
 
@@ -140,23 +140,23 @@ Expected:
 
 ## Scenario 4: The default branch tracks origin, so a bare push works
 
-`main` is set to track `origin/main`, so `dumboPush` needs no target -- exactly
-like a freshly cloned git repo.
+`main` is set to track `origin/main` via `config.pull`, so `dumboPush` needs no
+target -- exactly like a freshly cloned git repo.
 
 ```js
 db.getSiblingDB("clonedb@main").runCommand({ dumboBranch: 1 })
-// Expected: main has upstream { remote: "origin", ref: "main" }.
+// Expected: main has config.pull { remote: "origin", branch: "main" }.
 
 // Add a commit and push with no target.
 var c = db.getSiblingDB("clonedb")
 c.items.insertOne({ _id: 2, label: "beta" })
 c.runCommand({ dumboCommit: 1, message: "local change", author: "bob <bob@acme.com>" })
 c.runCommand({ dumboPush: 1 })
-// Expected: remote "origin", ok 1 -- the bare push follows the tracked upstream.
+// Expected: remote "origin", ok 1 -- the bare push falls back to config.pull.
 ```
 
 Key checks:
-- `clonedb`'s `main` carries `upstream: { remote: "origin", ref: "main" }`
+- `clonedb`'s `main` carries `config.pull: { remote: "origin", branch: "main" }`
 - `dumboPush` with no `to` succeeds and reports `remote: "origin"`
 
 ---

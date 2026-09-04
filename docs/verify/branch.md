@@ -353,14 +353,15 @@ Key checks:
 
 ## Scenario 12: A listing includes remote-tracking branches with tracking info
 
-A listing shows local branches (with their `upstream`) **and** remote-tracking
+A listing shows local branches (with their `config`) **and** remote-tracking
 branches -- the `refs/remotes/<remote>/<branch>` refs written by `dumboClone` /
 `dumboFetch` / `dumboPush`. There are no scope flags: `{ doltBranch: 1 }` returns
 everything.
 
 Set up a database with two branches, push them to a `file://` remote (push writes
-the tracking refs into the local store), and track `main`'s upstream. The remote
-directory is `/tmp/dumbo-rt-remote` (remove it first for a clean run).
+the tracking refs into the local store), and track `main`'s upstream with
+`setConfig` (`config.pull`). The remote directory is `/tmp/dumbo-rt-remote`
+(remove it first for a clean run).
 
 ```js
 var rt = db.getSiblingDB("rtlistdb")
@@ -369,13 +370,14 @@ rt.runCommand({ doltCommit: 1, message: "c1" })
 rt.runCommand({ doltBranch: 1, branch: "feature" })
 
 rt.runCommand({ doltRemote: 1, action: "add", name: "origin", url: "file:///tmp/dumbo-rt-remote" })
-db.getSiblingDB("rtlistdb@main").runCommand({ doltPush: 1, to: "origin", refSpec: "main", setUpstream: true })
+db.getSiblingDB("rtlistdb@main").runCommand({ doltPush: 1, to: "origin", refSpec: "main" })
 db.getSiblingDB("rtlistdb@feature").runCommand({ doltPush: 1, to: "origin", refSpec: "feature" })
+db.getSiblingDB("rtlistdb@main").runCommand({ doltBranch: 1, branch: "main", setConfig: { pull: { remote: "origin", branch: "main" } } })
 
 db.getSiblingDB("rtlistdb@main").runCommand({ doltBranch: 1 })
 ```
 
-Expected -- local branches (`main` carries its `upstream`) alongside the
+Expected -- local branches (`main` carries its `config.pull`) alongside the
 `origin/*` remote-tracking entries:
 
 ```json
@@ -383,7 +385,7 @@ Expected -- local branches (`main` carries its `upstream`) alongside the
   "branches": [
     { "name": "feature", "commitId": "<hash>" },
     { "name": "main", "commitId": "<hash>", "current": true,
-      "upstream": { "remote": "origin", "ref": "main" } },
+      "config": { "pull": { "remote": "origin", "branch": "main" } } },
     { "name": "origin/feature", "commitId": "<hash>",
       "remoteTracking": true, "remote": "origin", "ref": "feature" },
     { "name": "origin/main", "commitId": "<hash>",
@@ -395,22 +397,26 @@ Expected -- local branches (`main` carries its `upstream`) alongside the
 
 Key checks:
 - The listing includes both local and remote-tracking branches, sorted by `name`
-- A local branch shows its `upstream` when it tracks one (the `git branch -vv` info)
+- A local branch shows its `config.pull` / `config.push` when set (the `git branch -vv` info)
 - A remote-tracking entry's `name` is `<remote>/<branch>`; it carries
-  `remoteTracking: true`, `remote`, and `ref`, is never `current`, and has no `upstream`
+  `remoteTracking: true`, `remote`, and `ref`, is never `current`, and has no `config`
 
 ---
 
-## Scenario 13: A tracking branch's pull policy (`config` / `unsetConfig`)
+## Scenario 13: A branch's direction-grouped config (`setConfig` / `unsetConfig`)
 
-A branch that tracks a remote can carry a persistent pull policy that drives a
-bare `dumboPull` (see `pull.md`): `rebase` (`git config branch.<name>.rebase`) and
-`ff` (`git config pull.ff`). Set it with `setConfig`, clear keys with
-`unsetConfig`, and see it in the listing entry's `config`. It applies only to a
-tracking branch.
+A branch carries `config` grouped by direction:
 
-Set up a database whose `main` tracks a remote at `/tmp/dumbo-cfg-remote` (remove
-it first for a clean run):
+- `config.pull` `{ remote, branch, rebase, ff }` -- the fetch upstream and its
+  persistent pull policy: `rebase` (`git config branch.<name>.rebase`) and `ff`
+  (`git config pull.ff`).
+- `config.push` `{ remote, branch }` -- a persistent, possibly-triangular push
+  target (the branch git cannot persist alongside `pushRemote`).
+
+Set leaves with `setConfig` (each sub-object updates independently), clear leaves
+or whole sub-objects with `unsetConfig`, and see the result in the listing entry's
+`config`. Set up a database whose `main` tracks a remote at
+`/tmp/dumbo-cfg-remote` (remove it first for a clean run):
 
 ```js
 var c = db.getSiblingDB("cfgdb")
@@ -418,44 +424,54 @@ c.items.insertOne({ _id: 1 })
 c.runCommand({ doltCommit: 1, message: "c1" })
 c.runCommand({ doltBranch: 1, branch: "feature" })
 c.runCommand({ doltRemote: 1, action: "add", name: "origin", url: "file:///tmp/dumbo-cfg-remote" })
-db.getSiblingDB("cfgdb@main").runCommand({ doltPush: 1, to: "origin", refSpec: "main", setUpstream: true })
+db.getSiblingDB("cfgdb@main").runCommand({ doltPush: 1, to: "origin", refSpec: "main" })
 ```
 
-Set the policy; the response echoes the resulting config:
+Set `config.pull` (identity + policy in one call); the response echoes it:
 
 ```js
-db.getSiblingDB("cfgdb@main").runCommand({ doltBranch: 1, branch: "main", setConfig: { rebase: true, ff: "only" } })
-// { branch: "main", config: { rebase: "true", ff: "only" }, ok: 1 }
+db.getSiblingDB("cfgdb@main").runCommand({ doltBranch: 1, branch: "main", setConfig: { pull: { remote: "origin", branch: "main", rebase: true, ff: "only" } } })
+// { branch: "main", config: { pull: { remote: "origin", branch: "main", rebase: "true", ff: "only" } }, ok: 1 }
 ```
 
-The listing surfaces it on `main`:
+Add a `config.push` triangular target; the `pull` sub-object is untouched:
 
 ```js
-db.getSiblingDB("cfgdb@main").runCommand({ doltBranch: 1 })
-// The "main" entry carries config: { rebase: "true", ff: "only" }.
+db.getSiblingDB("cfgdb@main").runCommand({ doltBranch: 1, branch: "main", setConfig: { push: { remote: "origin", branch: "rev51" } } })
+// { branch: "main", config: { pull: {...}, push: { remote: "origin", branch: "rev51" } }, ok: 1 }
 ```
 
-Clear one key with `unsetConfig`; `setConfig: { ff: "default" }` clears `ff`:
+Clear a leaf, or a whole sub-object, with `unsetConfig`:
 
 ```js
-db.getSiblingDB("cfgdb@main").runCommand({ doltBranch: 1, branch: "main", unsetConfig: ["rebase"] })
-// { branch: "main", config: { ff: "only" }, ok: 1 }
+db.getSiblingDB("cfgdb@main").runCommand({ doltBranch: 1, branch: "main", unsetConfig: ["pull.rebase"] })
+// { branch: "main", config: { pull: { remote, branch, ff: "only" }, push: {...} }, ok: 1 }
 
-db.getSiblingDB("cfgdb@main").runCommand({ doltBranch: 1, branch: "main", setConfig: { ff: "default" } })
-// { branch: "main", config: {}, ok: 1 } -- the policy is now empty.
+db.getSiblingDB("cfgdb@main").runCommand({ doltBranch: 1, branch: "main", unsetConfig: ["push"] })
+// { branch: "main", config: { pull: {...} }, ok: 1 } -- config.push is gone.
+
+db.getSiblingDB("cfgdb@main").runCommand({ doltBranch: 1, branch: "main", setConfig: { pull: { ff: "default" } } })
+// { branch: "main", config: { pull: { remote, branch } }, ok: 1 } -- ff cleared, identity kept.
 ```
 
-A pull policy needs an upstream: `feature` tracks nothing, so this errors:
+A `rebase`/`ff` policy needs an upstream; `config.push` must be complete
+(both `remote` and `branch`). Both are rejected on `feature`, which has no config:
 
 ```js
-db.getSiblingDB("cfgdb@feature").runCommand({ doltBranch: 1, branch: "feature", setConfig: { rebase: true } })
-// Expected error: branch "feature" has no upstream; a pull policy applies only to a tracking branch.
+db.getSiblingDB("cfgdb@feature").runCommand({ doltBranch: 1, branch: "feature", setConfig: { pull: { rebase: true } } })
+// Error: config.pull rebase/ff requires an upstream; set config.pull.remote first.
+
+db.getSiblingDB("cfgdb@feature").runCommand({ doltBranch: 1, branch: "feature", setConfig: { push: { remote: "origin" } } })
+// Error: config.push must set both remote and branch, or neither.
 ```
 
 Key checks:
-- `setConfig` accepts `rebase` (`true` / `false`) and `ff` (`"no"` / `"only"` / `"default"`); `false`/`"default"` clear a key
-- The set response and the listing entry both report the branch's `config`
-- Setting a policy on a branch with no upstream is rejected
+- `setConfig` keys are `pull` and `push`, each a document; unknown keys/leaves are rejected
+- `pull.rebase` is a bool (`false` clears); `pull.ff` is `"no"`/`"only"`/`"default"` (`"default"` clears)
+- `pull.remote` / `push.remote` must name a configured remote
+- `config.push` is complete (both `remote` and `branch`) or absent
+- `unsetConfig` accepts whole sub-objects (`"pull"`, `"push"`) and dotted leaves (`"pull.rebase"`, `"push.branch"`, ...); the same leaf may not be both set and unset
+- `rebase`/`ff` require a `config.pull` upstream
 
 ---
 
@@ -469,10 +485,10 @@ Key checks:
 | `{ doltBranch: 1, branch: "name" }` | `@main~1` | `{ branch: "name", ok: 1 }` |
 | `{ doltBranch: 1, branch: "name", delete: 1 }` | `@main` | `{ branch: "name", ok: 1 }` (merged) or error (unmerged) |
 | `{ doltBranch: 1, branch: "name", forceDelete: 1 }` | `@main` | `{ branch: "name", ok: 1 }` (always) |
-| `{ doltBranch: 1 }` | `@main` | `{ branches: [ { name, commitId, current, upstream?, remoteTracking?, config? }, ... ], ok: 1 }` |
+| `{ doltBranch: 1 }` | `@main` | `{ branches: [ { name, commitId, current, config?, remoteTracking? }, ... ], ok: 1 }` |
 | `{ doltBranch: 1 }` | `@<hash>` | same list, no entry marked `current` |
-| `{ doltBranch: 1, branch: "name", setConfig: { rebase, ff } }` | `@main` | `{ branch: "name", config: {...}, ok: 1 }` (set pull policy) |
-| `{ doltBranch: 1, branch: "name", unsetConfig: ["rebase"] }` | `@main` | `{ branch: "name", config: {...}, ok: 1 }` (clear a key) |
+| `{ doltBranch: 1, branch: "name", setConfig: { pull: {...}, push: {...} } }` | `@main` | `{ branch: "name", config: {...}, ok: 1 }` (set config) |
+| `{ doltBranch: 1, branch: "name", unsetConfig: ["pull.rebase", "push"] }` | `@main` | `{ branch: "name", config: {...}, ok: 1 }` (clear leaves/sub-objects) |
 
 - `branch` in the response echoes the name you provided.
 - Branch creation works from any rootish that resolves to a commit (branch name, hash, ancestor expression).
@@ -482,6 +498,6 @@ Key checks:
 - `forceDelete: 1` (force delete): succeeds unconditionally.
 - `delete` and `forceDelete` are mutually exclusive; passing both returns an error.
 - Omitting `branch` lists every branch, sorted by name, with the connection's branch flagged `current: true`.
-- A listing includes local branches (each with its `upstream` when it tracks one) and remote-tracking branches; a remote-tracking entry is `<remote>/<branch>` with `remoteTracking: true`, never `current`, and carries no `upstream`.
-- `setConfig` / `unsetConfig` set or clear a tracking branch's persistent pull policy (`rebase`, `ff`), the analog of `git config branch.<name>.rebase` / `pull.ff`; the branch's current policy is shown in its listing entry's `config`. It drives a bare `dumboPull` (see `pull.md`) and applies only to a branch with an upstream.
+- A listing includes local branches (each with its `config.pull` / `config.push` when set) and remote-tracking branches; a remote-tracking entry is `<remote>/<branch>` with `remoteTracking: true`, never `current`, and carries no `config`.
+- `setConfig` / `unsetConfig` set or clear a branch's direction-grouped `config`: `config.pull` `{ remote, branch, rebase, ff }` (the fetch upstream + pull policy, analog of `git config branch.<name>.remote/merge/rebase` and `pull.ff`) and `config.push` `{ remote, branch }` (a persistent push target). `config.pull` drives a bare `dumboPull` (see `pull.md`); a bare `dumboPush` (see `push.md`) follows `config.push`, else `config.pull`. `rebase`/`ff` require a `config.pull` upstream; `config.push` is complete or absent.
 - An explicit `branch: ""` is an error, not a list request; `delete`/`forceDelete` still require a name.

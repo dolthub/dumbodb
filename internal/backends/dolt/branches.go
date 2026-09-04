@@ -26,34 +26,49 @@ import (
 )
 
 // branchesCollection is the admin-database collection that stores per-branch
-// configuration, one document per branch keyed by "<db>.<branch>": the upstream
-// tracking {remote, ref} and, for a tracking branch, a pull policy {rebase, ff}.
-// It mirrors the identity model of system.remotes and system.users.
+// configuration, one document per branch keyed by "<db>.<branch>". The config is
+// grouped by direction: config.pull {remote, branch, rebase, ff} is the fetch
+// upstream and its merge policy; config.push {remote, branch} is a persistent
+// push target. It mirrors the identity model of system.remotes and system.users.
 const branchesCollection = "system.branches"
 
-// upstream is the tracked {remote, ref} a branch pushes to / fetches from.
-type upstream struct {
+// branchPull is a branch's fetch/merge configuration. remote+branch name the
+// tracked upstream (git branch.<name>.remote + branch.<name>.merge); rebase and
+// ff are the persistent pull policy. Empty strings mean "unset". rebase is "" or
+// "true"; ff is "", "no", or "only".
+type branchPull struct {
 	remote string
-	ref    string
-}
-
-// pullPolicy is a tracking branch's persistent pull behavior, the analog of
-// git's branch.<name>.rebase and pull.ff. Empty strings mean "unset" (use the
-// default). rebase is "" or "true"; ff is "", "no", or "only".
-type pullPolicy struct {
+	branch string
 	rebase string
 	ff     string
 }
 
-func (p pullPolicy) empty() bool { return p.rebase == "" && p.ff == "" }
+func (p branchPull) empty() bool {
+	return p.remote == "" && p.branch == "" && p.rebase == "" && p.ff == ""
+}
+
+// hasUpstream reports whether a fetch remote is configured; the rebase/ff policy
+// applies only to a branch that tracks an upstream.
+func (p branchPull) hasUpstream() bool { return p.remote != "" }
+
+// branchPush is a branch's persistent push target: config.push.remote (git
+// branch.<name>.pushRemote) and config.push.branch (the destination ref, which
+// git cannot persist). It is always complete (both set) or empty (both unset).
+type branchPush struct {
+	remote string
+	branch string
+}
+
+func (p branchPush) empty() bool    { return p.remote == "" && p.branch == "" }
+func (p branchPush) complete() bool { return p.remote != "" && p.branch != "" }
 
 // branchConfig is the full stored configuration for one branch.
 type branchConfig struct {
-	upstream *upstream
-	pull     pullPolicy
+	pull branchPull
+	push branchPush
 }
 
-func (c branchConfig) empty() bool { return c.upstream == nil && c.pull.empty() }
+func (c branchConfig) empty() bool { return c.pull.empty() && c.push.empty() }
 
 // branchID builds the db-qualified document key for a branch.
 func branchID(dbName, branch string) string {
@@ -98,28 +113,33 @@ func (b *Backend) readBranchConfig(ctx context.Context, dbName, branch string) (
 		}
 
 		var cfg branchConfig
-		if up, _ := doc.Get("upstream"); up != nil {
-			if upDoc, ok := up.(*types.Document); ok {
-				remote, _ := upDoc.Get("remote")
-				refv, _ := upDoc.Get("ref")
-				rs, _ := remote.(string)
-				rf, _ := refv.(string)
-				if rs != "" {
-					cfg.upstream = &upstream{remote: rs, ref: rf}
+		if cv, _ := doc.Get("config"); cv != nil {
+			if cfgDoc, ok := cv.(*types.Document); ok {
+				if pl, _ := cfgDoc.Get("pull"); pl != nil {
+					if plDoc, ok := pl.(*types.Document); ok {
+						cfg.pull.remote = docString(plDoc, "remote")
+						cfg.pull.branch = docString(plDoc, "branch")
+						cfg.pull.rebase = docString(plDoc, "rebase")
+						cfg.pull.ff = docString(plDoc, "ff")
+					}
 				}
-			}
-		}
-		if pl, _ := doc.Get("pull"); pl != nil {
-			if plDoc, ok := pl.(*types.Document); ok {
-				rb, _ := plDoc.Get("rebase")
-				ff, _ := plDoc.Get("ff")
-				cfg.pull.rebase, _ = rb.(string)
-				cfg.pull.ff, _ = ff.(string)
+				if ps, _ := cfgDoc.Get("push"); ps != nil {
+					if psDoc, ok := ps.(*types.Document); ok {
+						cfg.push.remote = docString(psDoc, "remote")
+						cfg.push.branch = docString(psDoc, "branch")
+					}
+				}
 			}
 		}
 		return cfg, true, nil
 	}
 	return branchConfig{}, false, nil
+}
+
+func docString(doc *types.Document, key string) string {
+	v, _ := doc.Get(key)
+	s, _ := v.(string)
+	return s
 }
 
 // writeBranchConfig replaces the branch's config document. An empty config
@@ -139,96 +159,117 @@ func (b *Backend) writeBranchConfig(ctx context.Context, dbName, branch string, 
 		return nil
 	}
 
+	config := must.NotFail(types.NewDocument())
+	if !cfg.pull.empty() {
+		pl := must.NotFail(types.NewDocument())
+		setIfNotEmpty(pl, "remote", cfg.pull.remote)
+		setIfNotEmpty(pl, "branch", cfg.pull.branch)
+		setIfNotEmpty(pl, "rebase", cfg.pull.rebase)
+		setIfNotEmpty(pl, "ff", cfg.pull.ff)
+		config.Set("pull", pl)
+	}
+	if !cfg.push.empty() {
+		ps := must.NotFail(types.NewDocument())
+		setIfNotEmpty(ps, "remote", cfg.push.remote)
+		setIfNotEmpty(ps, "branch", cfg.push.branch)
+		config.Set("push", ps)
+	}
+
 	doc := must.NotFail(types.NewDocument(
 		"_id", id,
 		"branch", branch,
 		"db", dbName,
+		"config", config,
 	))
-	if cfg.upstream != nil {
-		doc.Set("upstream", must.NotFail(types.NewDocument(
-			"remote", cfg.upstream.remote,
-			"ref", cfg.upstream.ref,
-		)))
-	}
-	if !cfg.pull.empty() {
-		pl := must.NotFail(types.NewDocument())
-		if cfg.pull.rebase != "" {
-			pl.Set("rebase", cfg.pull.rebase)
-		}
-		if cfg.pull.ff != "" {
-			pl.Set("ff", cfg.pull.ff)
-		}
-		doc.Set("pull", pl)
-	}
 	if _, err := coll.InsertAll(ctx, &backends.InsertAllParams{Docs: []*types.Document{doc}}); err != nil {
 		return err
 	}
 	return nil
 }
 
-// getUpstream returns the recorded upstream for a branch, ok=false when none is
-// configured.
-func (b *Backend) getUpstream(ctx context.Context, dbName, branch string) (upstream, bool, error) {
-	cfg, ok, err := b.readBranchConfig(ctx, dbName, branch)
-	if err != nil || !ok || cfg.upstream == nil {
-		return upstream{}, false, err
+func setIfNotEmpty(doc *types.Document, key, val string) {
+	if val != "" {
+		doc.Set(key, val)
 	}
-	return *cfg.upstream, true, nil
 }
 
-// setUpstream records (or replaces) the upstream for a branch, preserving any
-// existing pull policy.
-func (b *Backend) setUpstream(ctx context.Context, dbName, branch string, up upstream) error {
-	cfg, _, err := b.readBranchConfig(ctx, dbName, branch)
-	if err != nil {
-		return err
-	}
-	cfg.upstream = &up
-	return b.writeBranchConfig(ctx, dbName, branch, cfg)
-}
-
-// getPullPolicy returns a branch's stored pull policy (zero value when unset).
-func (b *Backend) getPullPolicy(ctx context.Context, dbName, branch string) (pullPolicy, error) {
+// getBranchPull returns a branch's config.pull (zero value when unset).
+func (b *Backend) getBranchPull(ctx context.Context, dbName, branch string) (branchPull, error) {
 	cfg, ok, err := b.readBranchConfig(ctx, dbName, branch)
 	if err != nil || !ok {
-		return pullPolicy{}, err
+		return branchPull{}, err
 	}
 	return cfg.pull, nil
 }
 
-// setPullPolicy applies the given rebase/ff values to a branch's pull policy.
-// Only non-nil values are changed; an empty-string value clears that key. The
-// branch must already track an upstream.
-func (b *Backend) setPullPolicy(ctx context.Context, dbName, branch string, rebase, ff *string) error {
-	cfg, _, err := b.readBranchConfig(ctx, dbName, branch)
-	if err != nil {
-		return err
-	}
-	if cfg.upstream == nil {
-		return fmt.Errorf("branch %q has no upstream; a pull policy applies only to a tracking branch", branch)
-	}
-	if rebase != nil {
-		cfg.pull.rebase = *rebase
-	}
-	if ff != nil {
-		cfg.pull.ff = *ff
-	}
-	return b.writeBranchConfig(ctx, dbName, branch, cfg)
-}
-
-// unsetPullPolicy clears the named pull-policy keys ("rebase", "ff") on a branch.
-func (b *Backend) unsetPullPolicy(ctx context.Context, dbName, branch string, keys []string) error {
+// getBranchPush returns a branch's config.push (zero value when unset).
+func (b *Backend) getBranchPush(ctx context.Context, dbName, branch string) (branchPush, error) {
 	cfg, ok, err := b.readBranchConfig(ctx, dbName, branch)
 	if err != nil || !ok {
-		return err
+		return branchPush{}, err
 	}
-	for _, k := range keys {
-		switch k {
-		case "rebase":
-			cfg.pull.rebase = ""
-		case "ff":
-			cfg.pull.ff = ""
+	return cfg.push, nil
+}
+
+// applyBranchConfig merges an update into a branch's stored config and writes it
+// back, returning the resulting config. It enforces the model invariants:
+// config.push is complete (both remote and branch) or absent, and the rebase/ff
+// pull policy applies only to a branch with a pull upstream. Remote names, when
+// set, must be registered in admin.system.remotes.
+func (b *Backend) applyBranchConfig(ctx context.Context, dbName, branch string, up *backends.BranchConfigUpdate) (branchConfig, error) {
+	cfg, _, err := b.readBranchConfig(ctx, dbName, branch)
+	if err != nil {
+		return branchConfig{}, err
+	}
+
+	if up.UnsetPull {
+		cfg.pull = branchPull{}
+	}
+	if up.UnsetPush {
+		cfg.push = branchPush{}
+	}
+	applyStr(&cfg.pull.remote, up.PullRemote)
+	applyStr(&cfg.pull.branch, up.PullBranch)
+	applyStr(&cfg.pull.rebase, up.PullRebase)
+	applyStr(&cfg.pull.ff, up.PullFF)
+	applyStr(&cfg.push.remote, up.PushRemote)
+	applyStr(&cfg.push.branch, up.PushBranch)
+
+	if err := b.validateBranchConfig(ctx, dbName, cfg); err != nil {
+		return branchConfig{}, err
+	}
+	if err := b.writeBranchConfig(ctx, dbName, branch, cfg); err != nil {
+		return branchConfig{}, err
+	}
+	return cfg, nil
+}
+
+func applyStr(dst *string, src *string) {
+	if src != nil {
+		*dst = *src
+	}
+}
+
+// validateBranchConfig enforces the config.{pull,push} invariants on a resulting
+// config before it is written.
+func (b *Backend) validateBranchConfig(ctx context.Context, dbName string, cfg branchConfig) error {
+	if (cfg.pull.rebase != "" || cfg.pull.ff != "") && !cfg.pull.hasUpstream() {
+		return fmt.Errorf("config.pull rebase/ff requires an upstream; set config.pull.remote first")
+	}
+	if !cfg.push.empty() && !cfg.push.complete() {
+		return fmt.Errorf("config.push must set both remote and branch, or neither")
+	}
+	for _, remote := range []string{cfg.pull.remote, cfg.push.remote} {
+		if remote == "" {
+			continue
+		}
+		known, err := b.remoteExists(ctx, dbName, remote)
+		if err != nil {
+			return err
+		}
+		if !known {
+			return fmt.Errorf("remote %q is not configured for database %q", remote, dbName)
 		}
 	}
-	return b.writeBranchConfig(ctx, dbName, branch, cfg)
+	return nil
 }

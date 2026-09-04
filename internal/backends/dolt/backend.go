@@ -1525,11 +1525,8 @@ func dumboDBBranchList(ctx context.Context, db *dbState) (*backends.BranchResult
 			if cfg, ok, err := db.backend.readBranchConfig(ctx, db.name, name); err != nil {
 				return err
 			} else if ok {
-				if cfg.upstream != nil {
-					info.Upstream = &backends.UpstreamRef{Remote: cfg.upstream.remote, Ref: cfg.upstream.ref}
-				}
-				info.Rebase = cfg.pull.rebase
-				info.FF = cfg.pull.ff
+				info.Pull = pullInfo(cfg.pull)
+				info.Push = pushInfo(cfg.push)
 			}
 			branches = append(branches, info)
 		case strings.HasPrefix(id, remoteRefPrefix):
@@ -1570,20 +1567,33 @@ func dumboDBBranchConfigure(ctx context.Context, db *dbState, params *backends.B
 			fmt.Errorf("DumboDBBranch: branch %q does not exist", params.Name))
 	}
 
-	if err := db.backend.setPullPolicy(ctx, db.name, params.Name, params.SetRebase, params.SetFF); err != nil {
+	cfg, err := db.backend.applyBranchConfig(ctx, db.name, params.Name, params.ConfigUpdate)
+	if err != nil {
 		return nil, fmt.Errorf("DumboDBBranch: %w", err)
 	}
 
-	pp, err := db.backend.getPullPolicy(ctx, db.name, params.Name)
-	if err != nil {
-		return nil, err
-	}
 	return &backends.BranchResult{
 		Configured: true,
 		Branch:     params.Name,
-		Rebase:     pp.rebase,
-		FF:         pp.ff,
+		Pull:       pullInfo(cfg.pull),
+		Push:       pushInfo(cfg.push),
 	}, nil
+}
+
+// pullInfo/pushInfo project stored config sub-objects to the wire shape, nil
+// when empty so the listing/configure response omits them.
+func pullInfo(p branchPull) *backends.BranchPullInfo {
+	if p.empty() {
+		return nil
+	}
+	return &backends.BranchPullInfo{Remote: p.remote, Branch: p.branch, Rebase: p.rebase, FF: p.ff}
+}
+
+func pushInfo(p branchPush) *backends.BranchPushInfo {
+	if p.empty() {
+		return nil
+	}
+	return &backends.BranchPushInfo{Remote: p.remote, Branch: p.branch}
 }
 
 // dumboDBBranchDelete deletes the branch named params.Name.

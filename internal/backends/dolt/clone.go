@@ -147,7 +147,11 @@ func (b *Backend) DumboDBClone(ctx context.Context, params *backends.CloneParams
 	if _, err := b.DumboDBRemote(ctx, &backends.RemoteParams{DBName: params.As, Action: "add", Name: "origin", URL: ru.Raw}); err != nil {
 		return nil, fmt.Errorf("dumboClone: registering origin remote: %w", err)
 	}
-	if err := b.setUpstream(ctx, params.As, defaultName, upstream{remote: "origin", ref: defaultName}); err != nil {
+	originName, defBranch := "origin", defaultName
+	if _, err := b.applyBranchConfig(ctx, params.As, defaultName, &backends.BranchConfigUpdate{
+		PullRemote: &originName,
+		PullBranch: &defBranch,
+	}); err != nil {
 		return nil, fmt.Errorf("dumboClone: setting upstream for %q: %w", defaultName, err)
 	}
 

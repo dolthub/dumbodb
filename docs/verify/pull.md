@@ -40,9 +40,11 @@ Upstream tracking drives the no-argument forms, exactly as in git: a bare
 
 \* Required only when the branch has no upstream.
 
-A tracking branch may carry a persistent **pull policy** (`rebase`, `ff`) set via
-`dumboBranch` (see `branch.md`), the analog of git's `branch.<name>.rebase` and
-`pull.ff`. A bare `dumboPull` honors that policy; passing `rebase` / `ffOnly` /
+A tracking branch may carry a persistent **pull policy** in `config.pull`
+(`rebase`, `ff`) set via `dumboBranch` (see `branch.md`), the analog of git's
+`branch.<name>.rebase` and `pull.ff`. `config.pull.branch` may name a
+differently-named remote branch to merge (git's `branch.<name>.merge`). A bare
+`dumboPull` honors the policy; passing `rebase` / `ffOnly` /
 `noFF` explicitly overrides it for that call, exactly as git's command line beats
 config.
 
@@ -329,8 +331,8 @@ any per-call argument (`git config branch.main.rebase true; git pull`).
 ```js
 db.getSiblingDB("admin").runCommand({ dumboClone: 1, from: "file:///tmp/dumbo-hub", as: "rbpol" })
 
-db.getSiblingDB("rbpol@main").runCommand({ dumboBranch: 1, branch: "main", setConfig: { rebase: true } })
-// Expected: { branch: "main", config: { rebase: "true" }, ok: 1 }
+db.getSiblingDB("rbpol@main").runCommand({ dumboBranch: 1, branch: "main", setConfig: { pull: { rebase: true } } })
+// Expected: { branch: "main", config: { pull: { remote, branch, rebase: "true" } }, ok: 1 }
 
 // Diverge (local + remote commit), then a BARE pull.
 var r = db.getSiblingDB("rbpol")
@@ -357,7 +359,7 @@ Record `ff: "only"`; a bare pull then fails on a non-fast-forward (like
 
 ```js
 db.getSiblingDB("admin").runCommand({ dumboClone: 1, from: "file:///tmp/dumbo-hub", as: "ffpol" })
-db.getSiblingDB("ffpol@main").runCommand({ dumboBranch: 1, branch: "main", setConfig: { ff: "only" } })
+db.getSiblingDB("ffpol@main").runCommand({ dumboBranch: 1, branch: "main", setConfig: { pull: { ff: "only" } } })
 
 // Diverge so the pull is not a fast-forward.
 var r = db.getSiblingDB("ffpol")
@@ -391,8 +393,8 @@ db.getSiblingDB("ffpol@main").runCommand({ dumboLog: 1, limit: 1 }).commits[0]
 | `{ dumboPull: 1, ffOnly: true }`                       | `git pull --ff-only`           |
 | `{ dumboPull: 1, noFF: true }`                         | `git pull --no-ff`             |
 | `{ dumboPull: 1, rebase: true }`                       | `git pull --rebase`            |
-| `{ dumboBranch: 1, branch: "main", setConfig: { rebase: true } }` | `git config branch.main.rebase true` |
-| `{ dumboBranch: 1, branch: "main", setConfig: { ff: "only" } }`   | `git config pull.ff only`      |
+| `{ dumboBranch: 1, branch: "main", setConfig: { pull: { rebase: true } } }` | `git config branch.main.rebase true` |
+| `{ dumboBranch: 1, branch: "main", setConfig: { pull: { ff: "only" } } }`   | `git config pull.ff only`      |
 
 - `dumboFetch` updates every tracking ref and never moves a local branch.
 - `dumboPull` fetches, then merges (or, with `rebase`, rebases) the fetched commit

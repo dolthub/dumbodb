@@ -55,50 +55,70 @@ type BranchParams struct {
 	Force  bool   // if true together with Delete, skip the unmerged-commits safety check (forceDelete semantics)
 	List   bool   // if true, list every branch (local and remote-tracking); Name, Delete and Force are ignored
 
-	// Configure sets/clears the pull policy of the tracking branch Name.
-	// SetRebase/SetFF are nil to leave unchanged, "" to clear a key, or a value
-	// ("true" for rebase; "no"/"only" for ff) to set it.
+	// Configure applies ConfigUpdate to the branch Name's config.{pull,push}.
 	Configure bool
-	SetRebase *string
-	SetFF     *string
+	// ConfigUpdate is the partial change to apply in configure mode.
+	ConfigUpdate *BranchConfigUpdate
+}
+
+// BranchConfigUpdate is a partial change to a branch's config.{pull,push}. A nil
+// pointer leaves a leaf unchanged; a non-nil pointer sets it (a pointer to ""
+// clears that leaf). UnsetPull/UnsetPush drop the whole sub-object before the
+// leaf pointers apply.
+type BranchConfigUpdate struct {
+	PullRemote *string
+	PullBranch *string
+	PullRebase *string
+	PullFF     *string
+	PushRemote *string
+	PushBranch *string
+	UnsetPull  bool
+	UnsetPush  bool
 }
 
 // BranchInfo describes a single branch returned when BranchParams.List is set.
 // A listing includes both local branches and remote-tracking branches.
 type BranchInfo struct {
 	Name     string
-	CommitID string       // branch HEAD commit hash
-	Upstream *UpstreamRef // a local branch's tracked upstream; nil when it tracks nothing
+	CommitID string // branch HEAD commit hash
 
-	// Rebase and FF are a tracking branch's persistent pull policy (empty when
-	// unset): Rebase is "true"; FF is "no"/"only".
-	Rebase string
-	FF     string
+	// Pull and Push are a local branch's config.{pull,push}; nil when unset.
+	Pull *BranchPullInfo
+	Push *BranchPushInfo
 
 	// RemoteTracking marks an entry from refs/remotes/<remote>/<branch> -- a git
 	// remote-tracking branch -- rather than a local branch. Name is
-	// "<remote>/<ref>"; Remote and Ref split it. Such entries carry no Upstream.
+	// "<remote>/<ref>"; Remote and Ref split it. Such entries carry no config.
 	RemoteTracking bool
 	Remote         string
 	Ref            string
 }
 
-// UpstreamRef is a branch's tracked {remote, ref}, the analog of git's
-// upstream shown by `git branch -vv`.
-type UpstreamRef struct {
+// BranchPullInfo is a branch's fetch/merge config: Remote+Branch name the
+// tracked upstream, Rebase ("true") and FF ("no"/"only") the persistent pull
+// policy. Empty fields are omitted on the wire.
+type BranchPullInfo struct {
 	Remote string
-	Ref    string
+	Branch string
+	Rebase string
+	FF     string
+}
+
+// BranchPushInfo is a branch's persistent push target (always complete).
+type BranchPushInfo struct {
+	Remote string
+	Branch string
 }
 
 type BranchResult struct {
 	Branch   string       // name of the created or deleted branch; empty when listing
 	Branches []BranchInfo // populated only when BranchParams.List is set, sorted by Name
 
-	// Configured is set in configure mode; Rebase/FF are the branch's resulting
-	// pull policy (empty strings when unset).
+	// Configured is set in configure mode; Pull/Push are the branch's resulting
+	// config.{pull,push} (nil when that sub-object is unset).
 	Configured bool
-	Rebase     string
-	FF         string
+	Pull       *BranchPullInfo
+	Push       *BranchPushInfo
 }
 
 type MergeParams struct {
@@ -778,12 +798,11 @@ type RemoteResult struct {
 
 // PushParams are the arguments to DumboDBPush.
 type PushParams struct {
-	DBName      string
-	Remote      string // remote name (looked up in admin.system.remotes); empty means use the branch upstream
-	ConnBranch  string // the connection's current branch; the local branch for a bare push and the target of HEAD
-	RefSpec     string // git-style [+]<src>[:<dst>]; empty means a bare push of the connection branch (git push)
-	Force       bool   // non-fast-forward (force) update; equivalent to a leading '+' in the refspec
-	SetUpstream bool   // record the target as the branch upstream (git push -u)
+	DBName     string
+	Remote     string // remote name (looked up in admin.system.remotes); empty resolves from config.push/config.pull
+	ConnBranch string // the connection's current branch; the local branch for a bare push and the target of HEAD
+	RefSpec    string // git-style [+]<src>[:<dst>]; empty means a bare push of the connection branch (git push)
+	Force      bool   // non-fast-forward (force) update; equivalent to a leading '+' in the refspec
 }
 
 // PushResult is returned by DumboDBPush.

@@ -33,33 +33,37 @@ func (b *Backend) DumboDBPull(ctx context.Context, params *backends.PullParams) 
 		branch = defaultBranch
 	}
 
-	remote := params.Remote
-	if remote == "" {
-		up, ok, err := b.getUpstream(ctx, params.DBName, branch)
-		if err != nil {
-			return nil, err
-		}
-		if !ok {
-			return nil, fmt.Errorf("dumboPull: branch %q has no upstream; specify a remote with 'from'", branch)
-		}
-		remote = up.remote
-	}
-
-	// Resolve the effective pull behavior: explicit arguments override the
-	// branch's stored pull policy, exactly as git command-line flags override
-	// branch.<name>.rebase and pull.ff.
-	policy, err := b.getPullPolicy(ctx, params.DBName, branch)
+	// config.pull drives the fetch remote, the merged tracking branch, and the
+	// default merge policy. 'from' overrides the remote; per-call flags override
+	// rebase/ff -- exactly as git flags override branch.<name>.rebase and pull.ff.
+	pull, err := b.getBranchPull(ctx, params.DBName, branch)
 	if err != nil {
 		return nil, err
 	}
-	rebaseMode := policy.rebase
+
+	remote := params.Remote
+	if remote == "" {
+		if !pull.hasUpstream() {
+			return nil, fmt.Errorf("dumboPull: branch %q has no upstream; specify a remote with 'from'", branch)
+		}
+		remote = pull.remote
+	}
+
+	// The remote branch to merge in: config.pull.branch (git branch.merge) when
+	// set -- it may differ from the local branch name -- else the local name.
+	remoteBranch := pull.branch
+	if remoteBranch == "" {
+		remoteBranch = branch
+	}
+
+	rebaseMode := pull.rebase
 	if params.RebaseSet {
 		rebaseMode = params.Rebase
 	}
 	noFF, ffOnly := params.NoFF, params.FFOnly
 	if !params.FFSet {
-		noFF = policy.ff == "no"
-		ffOnly = policy.ff == "only"
+		noFF = pull.ff == "no"
+		ffOnly = pull.ff == "only"
 	}
 	doRebase := rebaseMode == "true"
 
@@ -83,10 +87,10 @@ func (b *Backend) DumboDBPull(ctx context.Context, params *backends.PullParams) 
 	if _, err := b.DumboDBFetch(ctx, &backends.FetchParams{DBName: params.DBName, Remote: remote}); err != nil {
 		return nil, err
 	}
-	trackingRef := ref.NewRemoteRef(remote, branch)
+	trackingRef := ref.NewRemoteRef(remote, remoteBranch)
 	fetchedCommit, err := state.doltDB.ResolveCommitRef(ctx, trackingRef)
 	if err != nil {
-		return nil, fmt.Errorf("dumboPull: remote %q has no branch %q", remote, branch)
+		return nil, fmt.Errorf("dumboPull: remote %q has no branch %q", remote, remoteBranch)
 	}
 	fetchedHash, err := fetchedCommit.HashOf()
 	if err != nil {

@@ -34,17 +34,17 @@ import (
 // pulls novel chunks but does not touch any local branch head. Reuses Dolt's
 // actions.FetchCommit (no DoltEnv/RepoState).
 func (b *Backend) DumboDBFetch(ctx context.Context, params *backends.FetchParams) (*backends.FetchResult, error) {
-	// An omitted remote defaults to the upstream recorded for the default branch.
+	// An omitted remote defaults to the pull remote recorded for the default branch.
 	remote := params.Remote
 	if remote == "" {
-		up, ok, err := b.getUpstream(ctx, params.DBName, defaultBranch)
+		pull, err := b.getBranchPull(ctx, params.DBName, defaultBranch)
 		if err != nil {
 			return nil, err
 		}
-		if !ok {
+		if !pull.hasUpstream() {
 			return nil, fmt.Errorf("dumboFetch: no upstream configured for branch %q; specify a remote with 'from'", defaultBranch)
 		}
-		remote = up.remote
+		remote = pull.remote
 	}
 
 	ru, err := b.resolveRemoteURL(ctx, params.DBName, remote)

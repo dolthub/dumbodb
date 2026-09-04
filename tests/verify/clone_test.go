@@ -98,7 +98,7 @@ func TestCloneVerify(t *testing.T) {
 		require.Contains(t, got, "main")
 		require.Contains(t, got, "feature")
 		assert.Equal(t, hash1, got["feature"]["commitId"])
-		_, featureTracks := got["feature"]["upstream"]
+		_, featureTracks := got["feature"]["config"]
 		assert.False(t, featureTracks, "only the default branch is set to track")
 	})
 
@@ -121,10 +121,10 @@ func TestCloneVerify(t *testing.T) {
 	// Scenario 4: The default branch tracks origin, so a bare push works
 	// -------------------------------------------------------------------------
 	t.Run("Scenario4_DefaultBranchTracksOrigin", func(t *testing.T) {
-		up, ok := branchEntry(t, env, cloneName, "main")["upstream"].(bson.M)
-		require.True(t, ok, "cloned main must track an upstream")
-		assert.Equal(t, "origin", up["remote"])
-		assert.Equal(t, "main", up["ref"])
+		pull, ok := branchEntry(t, env, cloneName, "main")["config"].(bson.M)["pull"].(bson.M)
+		require.True(t, ok, "cloned main must track a config.pull upstream")
+		assert.Equal(t, "origin", pull["remote"])
+		assert.Equal(t, "main", pull["branch"])
 
 		c := env.Client.Database(cloneName)
 		_, err := c.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(2)}, {Key: "label", Value: "beta"}})

@@ -162,14 +162,19 @@ lists every branch when `branch` is omitted.
 | `branch` | string | no |  -- | Name of the branch to create, delete, or configure. Omit to list every branch (local and remote-tracking) |
 | `delete` | bool/int | no | `false` | Safe-delete: fails if the branch has unmerged commits |
 | `forceDelete` | bool/int | no | `false` | Force-delete: succeeds unconditionally |
-| `setConfig` | document | no |  -- | Set the branch's pull policy: `rebase` (bool) and/or `ff` (`"no"`/`"only"`/`"default"`). Requires `branch` with an upstream |
-| `unsetConfig` | array | no |  -- | Clear pull-policy keys, e.g. `["rebase", "ff"]`. Requires `branch` |
+| `setConfig` | document | no |  -- | Set the branch's `config`: `pull` `{ remote, branch, rebase, ff }` and/or `push` `{ remote, branch }`. Requires `branch` |
+| `unsetConfig` | array | no |  -- | Clear config leaves or whole sub-objects, e.g. `["pull.rebase", "push"]`. Requires `branch` |
 
 `delete` and `forceDelete` are mutually exclusive, and both require `branch`.
-`setConfig` / `unsetConfig` are the pull-policy write surface (`git config
-branch.<name>.rebase` / `pull.ff`); they require a `branch` that tracks a remote
-and cannot be combined with `delete`. A `false` / `"default"` value clears a key.
-The branch's current policy is read back in the listing entry's `config` field.
+`setConfig` / `unsetConfig` are the config write surface, grouped by direction:
+`config.pull` `{ remote, branch, rebase, ff }` is the fetch upstream and pull
+policy (`git config branch.<name>.remote` / `merge` / `rebase` and `pull.ff`);
+`config.push` `{ remote, branch }` is a persistent push target. Each sub-object
+updates independently (setting `push` leaves `pull` untouched). `rebase`/`ff`
+require a `config.pull` upstream; `config.push` must set both `remote` and
+`branch` (complete) or neither. A `false` `rebase` or `"default"` `ff` clears
+that leaf. They require a `branch` and cannot be combined with `delete`. The
+branch's current config is read back in the listing entry's `config` field.
 
 ### Response fields
 
@@ -197,8 +202,7 @@ A listing returns:
 | `remoteTracking` | bool | Present and `true` only for a remote-tracking branch (`refs/remotes/<remote>/<branch>`) |
 | `remote` | string | Remote-tracking only: the remote it came from |
 | `ref` | string | Remote-tracking only: the branch name on that remote |
-| `upstream` | object | Local branches that track a remote: `{ remote, ref }` (`git branch -vv`) |
-| `config` | object | A tracking branch's pull policy when set: `{ rebase?, ff? }` |
+| `config` | object | A local branch's config when set: `{ pull?: { remote, branch, rebase?, ff? }, push?: { remote, branch } }` (`git branch -vv`) |
 
 ### Example
 
@@ -207,13 +211,13 @@ A listing returns:
 db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, branch: "feature" })
 // { branch: "feature", ok: 1 }
 
-// List every branch: local (with upstream tracking) and remote-tracking
+// List every branch: local (with config tracking) and remote-tracking
 db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1 })
 // {
 //   branches: [
 //     { name: "feature",     commitId: "<hash>" },
 //     { name: "main",        commitId: "<hash>", current: true,
-//       upstream: { remote: "origin", ref: "main" } },
+//       config: { pull: { remote: "origin", branch: "main" } } },
 //     { name: "origin/main", commitId: "<hash>",
 //       remoteTracking: true, remote: "origin", ref: "main" }
 //   ],
@@ -232,13 +236,17 @@ db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, branch: "feature", d
 db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, branch: "abandoned", forceDelete: 1 })
 // { branch: "abandoned", ok: 1 }
 
-// Set a tracking branch's pull policy (git config branch.main.rebase true)
-db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, branch: "main", setConfig: { rebase: true } })
-// { branch: "main", config: { rebase: "true" }, ok: 1 }
+// Set a tracking branch's config.pull upstream + rebase policy
+db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, branch: "main", setConfig: { pull: { remote: "origin", branch: "main", rebase: true } } })
+// { branch: "main", config: { pull: { remote: "origin", branch: "main", rebase: "true" } }, ok: 1 }
 
-// Clear a pull-policy key
-db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, branch: "main", unsetConfig: ["rebase"] })
-// { branch: "main", config: {}, ok: 1 }
+// Add a persistent triangular push target (config.push); pull is untouched
+db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, branch: "main", setConfig: { push: { remote: "review", branch: "rev51" } } })
+// { branch: "main", config: { pull: {...}, push: { remote: "review", branch: "rev51" } }, ok: 1 }
+
+// Clear a config leaf (or a whole sub-object with "push")
+db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, branch: "main", unsetConfig: ["pull.rebase"] })
+// { branch: "main", config: { pull: { remote: "origin", branch: "main" }, push: {...} }, ok: 1 }
 ```
 
 ### Error cases
@@ -248,10 +256,12 @@ db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, branch: "main", unse
 | `branch` is empty | `BadValue: dumboBranch: branch name must not be empty` |
 | `delete` or `forceDelete` without `branch` | `BadValue: dumboBranch: branch name is required for delete` |
 | `delete` and `forceDelete` both set | `BadValue: dumboBranch: delete and forceDelete are mutually exclusive` |
-| `setConfig` on a branch with no upstream | `OperationFailed: ... branch "<name>" has no upstream; a pull policy applies only to a tracking branch` |
+| `rebase`/`ff` with no `config.pull` upstream | `OperationFailed: ... config.pull rebase/ff requires an upstream; set config.pull.remote first` |
+| partial `config.push` (remote xor branch) | `OperationFailed: ... config.push must set both remote and branch, or neither` |
+| unknown remote in `config.pull`/`config.push` | `OperationFailed: ... remote "<name>" is not configured for database "<db>"` |
 | `setConfig` combined with `delete` | `BadValue: dumboBranch: setConfig cannot be combined with delete` |
-| `setConfig` value out of range | `BadValue: dumboBranch: setConfig.rebase must be a bool` / `setConfig.ff must be "no", "only", or "default"` |
-| unknown `setConfig` key | `BadValue: dumboBranch: unknown setConfig key "<k>" (allowed: rebase, ff)` |
+| `setConfig` value out of range | `BadValue: dumboBranch: setConfig.pull.rebase must be a bool` / `setConfig.pull.ff must be "no", "only", or "default"` |
+| unknown `setConfig` key/path | `BadValue: dumboBranch: unknown setConfig key "<path>"` / `unknown unsetConfig path "<path>"` |
 | Safe-delete on branch with unmerged commits | `OperationFailed: ... unmerged commits` |
 
 ### Notes
@@ -259,8 +269,8 @@ db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, branch: "main", unse
 - Branch creation works from any rootish: branch name, commit hash, or `branch~N` ancestor expression.
 - The new branch HEAD equals the commit resolved from the source rootish.
 - Data on the new branch is fully isolated from its source.
-- A listing includes local branches and remote-tracking branches in one result. Remote-tracking entries are the `refs/remotes/<remote>/<branch>` refs populated by `dumboClone` / `dumboFetch` / `dumboPush`; they are named `<remote>/<branch>`, carry `remoteTracking: true`, `remote`, and `ref`, are never `current`, and have no `upstream`. A local branch's own tracking is shown by its `upstream` field, the `git branch -vv` analog.
-- `setConfig` / `unsetConfig` set a tracking branch's persistent pull policy: `rebase` (`git config branch.<name>.rebase`) rebases instead of merging on pull; `ff` (`git config pull.ff`) fixes the fast-forward mode (`no`/`only`). A bare `dumboPull` honors it; explicit `dumboPull` flags override it (see `dumboPull`). The policy is read back in the listing entry's `config` field.
+- A listing includes local branches and remote-tracking branches in one result. Remote-tracking entries are the `refs/remotes/<remote>/<branch>` refs populated by `dumboClone` / `dumboFetch` / `dumboPush`; they are named `<remote>/<branch>`, carry `remoteTracking: true`, `remote`, and `ref`, are never `current`, and have no `config`. A local branch's own tracking is shown by its `config` field, the `git branch -vv` analog.
+- `setConfig` / `unsetConfig` set a branch's direction-grouped `config`. `config.pull` `{ remote, branch, rebase, ff }` is the fetch upstream and pull policy: `rebase` (`git config branch.<name>.rebase`) rebases instead of merging on pull; `ff` (`git config pull.ff`) fixes the fast-forward mode (`no`/`only`); `branch` may differ from the local name (`git config branch.<name>.merge`). `config.push` `{ remote, branch }` is a persistent push target git cannot store. A bare `dumboPull` honors `config.pull` (explicit flags override it); a bare `dumboPush` follows `config.push`, else falls back to `config.pull` (see `dumboPull` / `dumboPush`). The config is read back in the listing entry's `config` field.
 - Omitting `branch` lists every branch. Only an absent `branch` lists; an explicit `branch: ""` is still an error.
 - `current: true` marks the branch encoded in the database name and is omitted from every other entry. A connection pinned to a commit hash or ancestor expression is on no branch, so no entry carries `current`.
 
@@ -1921,12 +1931,11 @@ on the branch encoded in the connection.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `to` | string | no\* | branch's upstream | Remote **name** to push to. Omit to use the branch's upstream. |
+| `to` | string | no\* | `config.push`/`config.pull` remote | Remote **name** to push to. Omit to resolve from branch config. |
 | `refSpec` | string | no | connection branch | git-style `[+]<source>[:<destination>]` (see Notes). Omit for a bare push. |
 | `force` | bool | no | `false` | Overwrite a non-fast-forward remote (`git push --force`); same as a leading `+`. |
-| `setUpstream` | bool | no | `false` | Record the target as the source branch's upstream (`git push -u`). |
 
-\* Push needs a remote from somewhere: an explicit `to`, or the source branch's upstream.
+\* Push needs a remote from somewhere: an explicit `to`, `config.push`, or `config.pull` (see `dumboBranch`).
 
 ### Response fields
 
@@ -1949,10 +1958,10 @@ var db = db.getSiblingDB("orders@main")
 db.runCommand({ dumboPush: 1, to: "origin", refSpec: "main" })
 // { remote: "origin", branch: "main", commitPushed: "<hash>", upToDate: false, ok: 1 }
 
-// git push -u origin main (records the upstream)
-db.runCommand({ dumboPush: 1, to: "origin", refSpec: "main", setUpstream: true })
+// Record the upstream via config.pull (there is no push -u)
+db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, branch: "main", setConfig: { pull: { remote: "origin", branch: "main" } } })
 
-// git push (bare; uses the recorded upstream)
+// git push (bare; follows config.push, else config.pull)
 db.runCommand({ dumboPush: 1 })
 
 // git push origin main:published (refspec rename)
@@ -1963,11 +1972,9 @@ db.runCommand({ dumboPush: 1, to: "origin", refSpec: "main:published" })
 
 | Condition | Error |
 |-----------|-------|
-| No `to` and the branch has no upstream | `OperationFailed: dumboPush: no remote given and branch "<b>" has no upstream; specify 'to' or push with a refSpec` |
-| Bare push to the branch's own remote with no upstream | `OperationFailed: dumboPush: branch "<b>" has no upstream; specify a different remote or push with a refSpec` |
-| Bare push where the upstream branch name differs from the local branch | `OperationFailed: dumboPush: branch "<b>" tracks <remote>/<ref> and their names differ; push explicitly, e.g. refSpec "<b>:<ref>"` |
+| Bare push with no `to` and no branch config | `OperationFailed: dumboPush: no remote given and branch "<b>" has no push or pull config; specify 'to' or push with a refSpec` |
+| Explicit refSpec with no `to` and no branch config | `OperationFailed: dumboPush: no remote given; specify 'to'` |
 | `refSpec` names a commit, not a branch, with no `:destination` | `OperationFailed: dumboPush: refspec "<spec>" names a commit, not a branch; use <source>:<branch>` |
-| `setUpstream` with a revision source (no branch) | `OperationFailed: dumboPush: cannot set upstream: source "<src>" is not a branch` |
 | Push is not a fast-forward and `force` is not set | `OperationFailed: dumboPush: ...` (non-fast-forward) |
 | Remote not found / scheme unsupported | `OperationFailed: remote "<r>" not found for database "<db>"` / `... scheme "<s>" is not yet supported for push` |
 
@@ -1978,8 +1985,8 @@ db.runCommand({ dumboPush: 1, to: "origin", refSpec: "main:published" })
   - `<destination>` is the branch to update on the remote. Unlike git, a revision source may be pushed straight to a branch (`HEAD~1:older`) -- the right-hand side is always a branch name.
   - colon-less `main` means `main:main`; `HEAD` means the connection branch's name; a bare revision (`HEAD~3`) with no `:destination` errors.
   - a leading `+` forces (like `force: true`).
-- Pushing to the branch's **own** remote (its upstream, or `origin` by default) with no upstream errors; pushing to a **different** remote is a triangular push to a same-named branch that needs no upstream.
-- Upstream is recorded only by `setUpstream`; a plain push never changes it. It is shown by `dumboBranch`, not by reading `admin.system.branches`.
+- A bare push (no `refSpec`) resolves its target from `config.push` `{ remote, branch }` when set (a persistent, possibly-triangular target), else falls back to `config.pull` `{ remote, branch }`, else errors. An explicit `to` a remote with no matching config pushes to the same-named branch. There is no `push.default=simple` same-named refusal.
+- A push never mutates stored config -- there is no `git push -u`. Set `config.pull` / `config.push` explicitly with `dumboBranch { setConfig }`. Config is shown by `dumboBranch`, not by reading `admin.system.branches`.
 
 ---
 

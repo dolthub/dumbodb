@@ -763,8 +763,39 @@ func (h *Handler) MsgDumboDBCommit(connCtx context.Context, msg *wire.OpMsg) (*w
 //	db.getSiblingDB("mydb@main").runCommand({dumboDBBranch: 1, branch: "feature"})             // create
 //	db.getSiblingDB("mydb@main").runCommand({dumboDBBranch: 1, branch: "feature", delete: 1})  // delete
 //
-// normalizeBranchRebase validates a config.rebase value and returns its stored
-// form: "true", or "" (unset -- also what false clears to).
+// branchConfigDoc builds the wire config document {pull?:{...}, push?:{...}} from
+// the resolved sub-objects, omitting empty leaves and absent sub-objects.
+func branchConfigDoc(pull *backends.BranchPullInfo, push *backends.BranchPushInfo) *types.Document {
+	cfg := must.NotFail(types.NewDocument())
+	if pull != nil {
+		pl := must.NotFail(types.NewDocument())
+		setDocIfNotEmpty(pl, "remote", pull.Remote)
+		setDocIfNotEmpty(pl, "branch", pull.Branch)
+		setDocIfNotEmpty(pl, "rebase", pull.Rebase)
+		setDocIfNotEmpty(pl, "ff", pull.FF)
+		cfg.Set("pull", pl)
+	}
+	if push != nil {
+		ps := must.NotFail(types.NewDocument())
+		setDocIfNotEmpty(ps, "remote", push.Remote)
+		setDocIfNotEmpty(ps, "branch", push.Branch)
+		cfg.Set("push", ps)
+	}
+	return cfg
+}
+
+func setDocIfNotEmpty(doc *types.Document, key, val string) {
+	if val != "" {
+		doc.Set(key, val)
+	}
+}
+
+func branchConfigErr(msg string) error {
+	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue, msg, "setConfig")
+}
+
+// normalizeBranchRebase validates a config.pull.rebase value: "true", or ""
+// (unset -- also what false clears to).
 func normalizeBranchRebase(v any) (string, error) {
 	if t, ok := v.(bool); ok {
 		if t {
@@ -772,12 +803,11 @@ func normalizeBranchRebase(v any) (string, error) {
 		}
 		return "", nil
 	}
-	return "", handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
-		"dumboBranch: setConfig.rebase must be a bool", "setConfig")
+	return "", branchConfigErr("dumboBranch: setConfig.pull.rebase must be a bool")
 }
 
-// normalizeBranchFF validates a config.ff value and returns its stored form:
-// "no", "only", or "" (unset -- what "default" clears to).
+// normalizeBranchFF validates a config.pull.ff value: "no", "only", or "" (unset
+// -- what "default" clears to).
 func normalizeBranchFF(v any) (string, error) {
 	if s, ok := v.(string); ok {
 		switch s {
@@ -789,47 +819,88 @@ func normalizeBranchFF(v any) (string, error) {
 			return "", nil
 		}
 	}
-	return "", handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
-		`dumboBranch: setConfig.ff must be "no", "only", or "default"`, "setConfig")
+	return "", branchConfigErr(`dumboBranch: setConfig.pull.ff must be "no", "only", or "default"`)
+}
+
+// normalizeBranchRefName validates a config.pull.branch / config.push.branch
+// value: a non-empty valid ref name.
+func normalizeBranchRefName(v any, path string) (string, error) {
+	s, ok := v.(string)
+	if !ok || s == "" {
+		return "", branchConfigErr(fmt.Sprintf("dumboBranch: %s must be a non-empty branch name", path))
+	}
+	if err := validateRefName(s, "dumboBranch"); err != nil {
+		return "", err
+	}
+	return s, nil
+}
+
+// normalizeRemoteName validates a config.pull.remote / config.push.remote value:
+// a non-empty string. Existence in admin.system.remotes is checked by the backend.
+func normalizeRemoteName(v any, path string) (string, error) {
+	s, ok := v.(string)
+	if !ok || s == "" {
+		return "", branchConfigErr(fmt.Sprintf("dumboBranch: %s must be a non-empty remote name", path))
+	}
+	return s, nil
 }
 
 // parseBranchConfig reads the setConfig / unsetConfig fields of a dumboBranch
-// command into set-pointers for the pull policy. configMode reports whether
-// either field was present. A nil pointer leaves the key unchanged; a pointer to
-// "" clears it; otherwise it is set.
-func parseBranchConfig(document *types.Document) (setRebase, setFF *string, configMode bool, err error) {
+// command into a partial config.{pull,push} update. configMode reports whether
+// either field was present. setConfig is a document {pull:{remote,branch,rebase,
+// ff}, push:{remote,branch}}; unsetConfig is an array of whole sub-objects
+// ("pull","push") and dotted leaves ("pull.remote","push.branch", ...). A leaf
+// touched by both setConfig and unsetConfig, or by a leaf-set and a whole-object
+// unset in the same sub-object, is rejected.
+func parseBranchConfig(document *types.Document) (update *backends.BranchConfigUpdate, configMode bool, err error) {
 	hasConfig, hasUnset := document.Has("setConfig"), document.Has("unsetConfig")
 	if !hasConfig && !hasUnset {
-		return nil, nil, false, nil
+		return nil, false, nil
 	}
 
-	set := map[string]string{}
+	up := &backends.BranchConfigUpdate{}
+	touched := map[string]bool{} // dotted leaf paths named by setConfig
+	changed := false
 
 	if hasConfig {
 		raw, _ := document.Get("setConfig")
 		cfgDoc, ok := raw.(*types.Document)
 		if !ok {
-			return nil, nil, true, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
-				"dumboBranch: setConfig must be a document", "setConfig")
+			return nil, true, branchConfigErr("dumboBranch: setConfig must be a document")
 		}
 		for _, key := range cfgDoc.Keys() {
 			v, _ := cfgDoc.Get(key)
-			switch key {
-			case "rebase":
-				norm, perr := normalizeBranchRebase(v)
-				if perr != nil {
-					return nil, nil, true, perr
+			sub, ok := v.(*types.Document)
+			if !ok || (key != "pull" && key != "push") {
+				return nil, true, branchConfigErr(fmt.Sprintf("dumboBranch: setConfig.%s: setConfig keys are pull and push, each a document", key))
+			}
+			for _, leaf := range sub.Keys() {
+				lv, _ := sub.Get(leaf)
+				path := key + "." + leaf
+				var norm string
+				switch path {
+				case "pull.remote", "push.remote":
+					if norm, err = normalizeRemoteName(lv, path); err != nil {
+						return nil, true, err
+					}
+				case "pull.branch", "push.branch":
+					if norm, err = normalizeBranchRefName(lv, path); err != nil {
+						return nil, true, err
+					}
+				case "pull.rebase":
+					if norm, err = normalizeBranchRebase(lv); err != nil {
+						return nil, true, err
+					}
+				case "pull.ff":
+					if norm, err = normalizeBranchFF(lv); err != nil {
+						return nil, true, err
+					}
+				default:
+					return nil, true, branchConfigErr(fmt.Sprintf("dumboBranch: unknown setConfig key %q", path))
 				}
-				set["rebase"] = norm
-			case "ff":
-				norm, perr := normalizeBranchFF(v)
-				if perr != nil {
-					return nil, nil, true, perr
-				}
-				set["ff"] = norm
-			default:
-				return nil, nil, true, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
-					fmt.Sprintf("dumboBranch: unknown setConfig key %q (allowed: rebase, ff)", key), "setConfig")
+				setUpdateLeaf(up, path, norm)
+				touched[path] = true
+				changed = true
 			}
 		}
 	}
@@ -838,35 +909,70 @@ func parseBranchConfig(document *types.Document) (setRebase, setFF *string, conf
 		raw, _ := document.Get("unsetConfig")
 		arr, ok := raw.(*types.Array)
 		if !ok {
-			return nil, nil, true, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
+			return nil, true, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
 				"dumboBranch: unsetConfig must be an array of strings", "unsetConfig")
 		}
 		for i := 0; i < arr.Len(); i++ {
 			ev, _ := arr.Get(i)
-			key, ok := ev.(string)
-			if !ok || (key != "rebase" && key != "ff") {
-				return nil, nil, true, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
-					`dumboBranch: unsetConfig entries must be "rebase" or "ff"`, "unsetConfig")
+			path, ok := ev.(string)
+			if !ok {
+				return nil, true, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
+					"dumboBranch: unsetConfig entries must be strings", "unsetConfig")
 			}
-			if _, dup := set[key]; dup {
-				return nil, nil, true, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
-					fmt.Sprintf("dumboBranch: %q appears in both setConfig and unsetConfig", key), "unsetConfig")
+			switch path {
+			case "pull", "push":
+				// Whole sub-object: conflicts with any set leaf in that sub-object.
+				for t := range touched {
+					if strings.HasPrefix(t, path+".") {
+						return nil, true, unsetConflictErr(t, path)
+					}
+				}
+				if path == "pull" {
+					up.UnsetPull = true
+				} else {
+					up.UnsetPush = true
+				}
+			case "pull.remote", "pull.branch", "pull.rebase", "pull.ff", "push.remote", "push.branch":
+				if touched[path] {
+					return nil, true, unsetConflictErr(path, path)
+				}
+				setUpdateLeaf(up, path, "")
+			default:
+				return nil, true, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
+					fmt.Sprintf("dumboBranch: unknown unsetConfig path %q", path), "unsetConfig")
 			}
-			set[key] = ""
+			changed = true
 		}
 	}
 
-	if len(set) == 0 {
-		return nil, nil, true, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
-			"dumboBranch: setConfig or unsetConfig must name at least one key (rebase, ff)", "setConfig")
+	if !changed {
+		return nil, true, branchConfigErr("dumboBranch: setConfig or unsetConfig must name at least one key")
 	}
-	if v, ok := set["rebase"]; ok {
-		setRebase = &v
+	return up, true, nil
+}
+
+func unsetConflictErr(leaf, unsetPath string) error {
+	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
+		fmt.Sprintf("dumboBranch: %q is both set and unset (unsetConfig %q)", leaf, unsetPath), "unsetConfig")
+}
+
+// setUpdateLeaf points the matching field of the update at a copy of val.
+func setUpdateLeaf(up *backends.BranchConfigUpdate, path, val string) {
+	v := val
+	switch path {
+	case "pull.remote":
+		up.PullRemote = &v
+	case "pull.branch":
+		up.PullBranch = &v
+	case "pull.rebase":
+		up.PullRebase = &v
+	case "pull.ff":
+		up.PullFF = &v
+	case "push.remote":
+		up.PushRemote = &v
+	case "push.branch":
+		up.PushBranch = &v
 	}
-	if v, ok := set["ff"]; ok {
-		setFF = &v
-	}
-	return setRebase, setFF, true, nil
 }
 
 func (h *Handler) MsgDumboDBBranch(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
@@ -947,8 +1053,8 @@ func (h *Handler) MsgDumboDBBranch(connCtx context.Context, msg *wire.OpMsg) (*w
 		)
 	}
 
-	// config / unsetConfig set or clear the tracking branch's pull policy.
-	setRebase, setFF, configMode, err := parseBranchConfig(document)
+	// setConfig / unsetConfig apply a partial change to config.{pull,push}.
+	configUpdate, configMode, err := parseBranchConfig(document)
 	if err != nil {
 		return nil, err
 	}
@@ -972,31 +1078,23 @@ func (h *Handler) MsgDumboDBBranch(connCtx context.Context, msg *wire.OpMsg) (*w
 	}
 
 	res, err := vb.DumboDBBranch(connCtx, &backends.BranchParams{
-		DBName:    dbName,
-		From:      fromBranch,
-		Name:      newBranch,
-		Delete:    safeDelete || forceDelete,
-		Force:     forceDelete,
-		List:      listMode,
-		Configure: configMode,
-		SetRebase: setRebase,
-		SetFF:     setFF,
+		DBName:       dbName,
+		From:         fromBranch,
+		Name:         newBranch,
+		Delete:       safeDelete || forceDelete,
+		Force:        forceDelete,
+		List:         listMode,
+		Configure:    configMode,
+		ConfigUpdate: configUpdate,
 	})
 	if err != nil {
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
 	if res.Configured {
-		cfg := must.NotFail(types.NewDocument())
-		if res.Rebase != "" {
-			cfg.Set("rebase", res.Rebase)
-		}
-		if res.FF != "" {
-			cfg.Set("ff", res.FF)
-		}
 		return documentOpMsg(must.NotFail(types.NewDocument(
 			"branch", res.Branch,
-			"config", cfg,
+			"config", branchConfigDoc(res.Pull, res.Push),
 			"ok", float64(1),
 		)))
 	}
@@ -1021,22 +1119,9 @@ func (h *Handler) MsgDumboDBBranch(connCtx context.Context, msg *wire.OpMsg) (*w
 				entry.Set("remote", b.Remote)
 				entry.Set("ref", b.Ref)
 			}
-			if b.Upstream != nil {
-				entry.Set("upstream", must.NotFail(types.NewDocument(
-					"remote", b.Upstream.Remote,
-					"ref", b.Upstream.Ref,
-				)))
-			}
-			// A tracking branch's pull policy (config), when set.
-			if b.Rebase != "" || b.FF != "" {
-				cfg := must.NotFail(types.NewDocument())
-				if b.Rebase != "" {
-					cfg.Set("rebase", b.Rebase)
-				}
-				if b.FF != "" {
-					cfg.Set("ff", b.FF)
-				}
-				entry.Set("config", cfg)
+			// A local branch's config.{pull,push}, when set.
+			if b.Pull != nil || b.Push != nil {
+				entry.Set("config", branchConfigDoc(b.Pull, b.Push))
 			}
 			branches.Append(entry)
 		}

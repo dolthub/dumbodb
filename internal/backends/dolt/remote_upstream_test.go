@@ -60,7 +60,8 @@ func readBranchDoc(t *testing.T, b *Backend, dbName, branch string) *types.Docum
 	return nil
 }
 
-func assertUpstream(t *testing.T, b *Backend, dbName, branch, wantRemote, wantRef string) {
+// assertPullUpstream checks the stored config.pull.{remote,branch} for a branch.
+func assertPullUpstream(t *testing.T, b *Backend, dbName, branch, wantRemote, wantBranch string) {
 	t.Helper()
 	doc := readBranchDoc(t, b, dbName, branch)
 	if doc == nil {
@@ -75,23 +76,31 @@ func assertUpstream(t *testing.T, b *Backend, dbName, branch, wantRemote, wantRe
 	if bv, _ := doc.Get("branch"); bv != branch {
 		t.Errorf("branch = %v, want %q", bv, branch)
 	}
-	up, _ := doc.Get("upstream")
-	upDoc, ok := up.(*types.Document)
+	cfgv, _ := doc.Get("config")
+	cfgDoc, ok := cfgv.(*types.Document)
 	if !ok {
-		t.Fatalf("upstream is not a document: %T", up)
+		t.Fatalf("config is not a document: %T", cfgv)
 	}
-	if rv, _ := upDoc.Get("remote"); rv != wantRemote {
-		t.Errorf("upstream.remote = %v, want %q", rv, wantRemote)
+	pullv, _ := cfgDoc.Get("pull")
+	pullDoc, ok := pullv.(*types.Document)
+	if !ok {
+		t.Fatalf("config.pull is not a document: %T", pullv)
 	}
-	if rf, _ := upDoc.Get("ref"); rf != wantRef {
-		t.Errorf("upstream.ref = %v, want %q", rf, wantRef)
+	if rv, _ := pullDoc.Get("remote"); rv != wantRemote {
+		t.Errorf("config.pull.remote = %v, want %q", rv, wantRemote)
+	}
+	if rf, _ := pullDoc.Get("branch"); rf != wantBranch {
+		t.Errorf("config.pull.branch = %v, want %q", rf, wantBranch)
 	}
 }
 
-// TestDumboDBUpstream_GitSemantics mirrors git: naming a branch pushes without
-// changing tracking; only setUpstream records it (and overwrites a prior one); a
-// bare push follows the upstream; an explicit push never changes it.
-func TestDumboDBUpstream_GitSemantics(t *testing.T) {
+// strp returns a pointer to a string literal, for BranchConfigUpdate fields.
+func strp(s string) *string { return &s }
+
+// TestDumboDBConfig_PullPush exercises the direction-grouped config model: a bare
+// push follows config.push when set, else config.pull; an explicit push never
+// mutates the stored config (there is no push -u).
+func TestDumboDBConfig_PullPush(t *testing.T) {
 	ctx := context.Background()
 	b := newTestBackend(t)
 	const dbName = "mydb"
@@ -108,56 +117,74 @@ func TestDumboDBUpstream_GitSemantics(t *testing.T) {
 		t.Fatalf("add other: %v", err)
 	}
 
-	// (1) Named push does not set an upstream (git push origin main).
+	// (1) A named push does not record any config (there is no push -u).
 	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: dbName, Remote: "origin", RefSpec: "main"}); err != nil {
 		t.Fatalf("named push: %v", err)
 	}
 	if doc := readBranchDoc(t, b, dbName, "main"); doc != nil {
-		t.Errorf("named push must not record an upstream, got %v", doc)
+		t.Errorf("named push must not record config, got %v", doc)
 	}
 
-	// (2) setUpstream records it (git push -u origin main).
-	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: dbName, Remote: "origin", RefSpec: "main", SetUpstream: true}); err != nil {
-		t.Fatalf("push -u origin: %v", err)
+	// (2) config.pull is set explicitly via setConfig; a bare push follows it.
+	if _, err := b.applyBranchConfig(ctx, dbName, "main", &backends.BranchConfigUpdate{
+		PullRemote: strp("origin"), PullBranch: strp("main"),
+	}); err != nil {
+		t.Fatalf("set config.pull: %v", err)
 	}
-	assertUpstream(t, b, dbName, "main", "origin", "main")
+	assertPullUpstream(t, b, dbName, "main", "origin", "main")
 
-	// (3) A bare push (no remote) follows the upstream (git push).
 	insertDoc(t, b, dbName, "col", mustDoc(t, "_id", int64(2)))
 	commitDB(t, b, dbName, "c2")
 	res, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: dbName, ConnBranch: "main"})
 	if err != nil {
-		t.Fatalf("bare push: %v", err)
+		t.Fatalf("bare push (config.pull): %v", err)
 	}
-	if res.Remote != "origin" {
-		t.Errorf("bare push remote = %q, want origin", res.Remote)
+	if res.Remote != "origin" || res.RemoteBranch != "main" {
+		t.Errorf("bare push = %s/%s, want origin/main", res.Remote, res.RemoteBranch)
 	}
 
-	// (4) setUpstream to another remote overwrites the upstream (git push -u origin2).
-	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: dbName, Remote: "other", RefSpec: "main", SetUpstream: true}); err != nil {
-		t.Fatalf("push -u other: %v", err)
+	// (3) config.push overrides config.pull for a bare push (triangular target).
+	if _, err := b.applyBranchConfig(ctx, dbName, "main", &backends.BranchConfigUpdate{
+		PushRemote: strp("other"), PushBranch: strp("review"),
+	}); err != nil {
+		t.Fatalf("set config.push: %v", err)
 	}
-	assertUpstream(t, b, dbName, "main", "other", "main")
+	res, err = b.DumboDBPush(ctx, &backends.PushParams{DBName: dbName, ConnBranch: "main"})
+	if err != nil {
+		t.Fatalf("bare push (config.push): %v", err)
+	}
+	if res.Remote != "other" || res.RemoteBranch != "review" {
+		t.Errorf("bare push = %s/%s, want other/review", res.Remote, res.RemoteBranch)
+	}
 
-	// (5) An explicit push to origin does not change the upstream (still other).
+	// (4) An explicit push to origin does not change the stored config.
 	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: dbName, Remote: "origin", RefSpec: "main"}); err != nil {
 		t.Fatalf("explicit push origin: %v", err)
 	}
-	assertUpstream(t, b, dbName, "main", "other", "main")
+	assertPullUpstream(t, b, dbName, "main", "origin", "main")
+	push, err := b.getBranchPush(ctx, dbName, "main")
+	if err != nil {
+		t.Fatalf("get config.push: %v", err)
+	}
+	if push.remote != "other" || push.branch != "review" {
+		t.Errorf("config.push = %s/%s, want other/review", push.remote, push.branch)
+	}
 
-	// A bare fetch follows the (default-branch) upstream too.
+	// A bare fetch follows the default branch's config.pull remote.
 	fres, err := b.DumboDBFetch(ctx, &backends.FetchParams{DBName: dbName})
 	if err != nil {
 		t.Fatalf("bare fetch: %v", err)
 	}
-	if fres.Remote != "other" {
-		t.Errorf("bare fetch remote = %q, want other", fres.Remote)
+	if fres.Remote != "origin" {
+		t.Errorf("bare fetch remote = %q, want origin", fres.Remote)
 	}
 }
 
-// TestDumboDBUpstream_BarePushErrors covers the git-faithful refusal to push
-// with no branch named and no upstream configured.
-func TestDumboDBUpstream_BarePushErrors(t *testing.T) {
+// TestDumboDBConfig_BarePushErrors covers the cases where a bare push cannot
+// resolve a target: no config and no explicit remote errors; a fetch with no
+// upstream errors. An explicit remote with no config pushes to the same-named
+// branch (the git simple-mode name refusal is dropped).
+func TestDumboDBConfig_BarePushErrors(t *testing.T) {
 	ctx := context.Background()
 	b := newTestBackend(t)
 	const dbName = "mydb"
@@ -168,22 +195,31 @@ func TestDumboDBUpstream_BarePushErrors(t *testing.T) {
 		t.Fatalf("add origin: %v", err)
 	}
 
-	// Remote named but branch not explicit and no upstream -> error (git push origin).
-	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: dbName, Remote: "origin", ConnBranch: "main"}); err == nil {
-		t.Error("bare push to a remote with no upstream: want error, got nil")
+	// Explicit remote, no refspec, no config: pushes current branch to the
+	// same-named branch on that remote (no config recorded).
+	res, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: dbName, Remote: "origin", ConnBranch: "main"})
+	if err != nil {
+		t.Fatalf("explicit-remote bare push: %v", err)
 	}
-	// No remote and no upstream -> error (git push).
+	if res.RemoteBranch != "main" {
+		t.Errorf("remoteBranch = %q, want main", res.RemoteBranch)
+	}
+	if doc := readBranchDoc(t, b, dbName, "main"); doc != nil {
+		t.Errorf("push must not record config, got %v", doc)
+	}
+
+	// No remote and no config -> error (git push).
 	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: dbName, ConnBranch: "main"}); err == nil {
-		t.Error("push with no remote and no upstream: want error, got nil")
+		t.Error("push with no remote and no config: want error, got nil")
 	}
-	// Fetch with no remote and no upstream -> error.
+	// Fetch with no remote and no config -> error.
 	if _, err := b.DumboDBFetch(ctx, &backends.FetchParams{DBName: dbName}); err == nil {
-		t.Error("fetch with no remote and no upstream: want error, got nil")
+		t.Error("fetch with no remote and no config: want error, got nil")
 	}
 }
 
-// TestDumboDBUpstream_Scoping verifies upstream docs are keyed per database.
-func TestDumboDBUpstream_Scoping(t *testing.T) {
+// TestDumboDBConfig_Scoping verifies config docs are keyed per database.
+func TestDumboDBConfig_Scoping(t *testing.T) {
 	ctx := context.Background()
 	b := newTestBackend(t)
 	originURL := "file://" + t.TempDir()
@@ -195,12 +231,14 @@ func TestDumboDBUpstream_Scoping(t *testing.T) {
 			t.Fatalf("add remote %s: %v", db, err)
 		}
 	}
-	// Only dbA sets an upstream.
-	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: "dbA", Remote: "origin", RefSpec: "main", SetUpstream: true}); err != nil {
-		t.Fatalf("push dbA: %v", err)
+	// Only dbA sets config.pull.
+	if _, err := b.applyBranchConfig(ctx, "dbA", "main", &backends.BranchConfigUpdate{
+		PullRemote: strp("origin"), PullBranch: strp("main"),
+	}); err != nil {
+		t.Fatalf("set config dbA: %v", err)
 	}
-	assertUpstream(t, b, "dbA", "main", "origin", "main")
+	assertPullUpstream(t, b, "dbA", "main", "origin", "main")
 	if doc := readBranchDoc(t, b, "dbB", "main"); doc != nil {
-		t.Errorf("dbB should have no upstream doc, got %v", doc)
+		t.Errorf("dbB should have no config doc, got %v", doc)
 	}
 }
