@@ -1244,6 +1244,7 @@ func TestDumboDBDiff_BranchNameRootish(t *testing.T) {
 
 	// Create a feature branch from main.
 	if _, err := b.DumboDBBranch(ctx, &backends.BranchParams{
+		Action: "add",
 		DBName: "testdb",
 		From:   "main",
 		Name:   "feature",
@@ -1335,6 +1336,7 @@ func TestDumboDBDiff_HeadOnNonMainBranch(t *testing.T) {
 
 	// Create feature branch from c1.
 	if _, err := b.DumboDBBranch(ctx, &backends.BranchParams{
+		Action: "add",
 		DBName: "testdb",
 		From:   "main",
 		Name:   "feature",

@@ -43,6 +43,7 @@ func emptyCommit(t *testing.T, b *Backend, dbName, branch, msg string) string {
 func bsBranch(t *testing.T, b *Backend, dbName, from, name string) {
 	t.Helper()
 	if _, err := b.DumboDBBranch(context.Background(), &backends.BranchParams{
+		Action: "add",
 		DBName: dbName,
 		From:   from,
 		Name:   name,
@@ -117,11 +118,11 @@ func initBaseline(t *testing.T) *Backend {
 // TestDumboDBBranchStatus_DivergentGraph ports dolt's first scenario (time flows
 // left to right; anc is the shared baseline):
 //
-//	          * b1 --- * b2
-//	         /
-//	* anc
-//	         \
-//	          * main --- * b3 --- * b4 --- * b5
+//   - b1 --- * b2
+//     /
+//   - anc
+//     \
+//   - main --- * b3 --- * b4 --- * b5
 func TestDumboDBBranchStatus_DivergentGraph(t *testing.T) {
 	b := initBaseline(t)
 
@@ -185,11 +186,11 @@ func TestDumboDBBranchStatus_DivergentGraph(t *testing.T) {
 // and after merging b1 into b2 (time flows left to right; anc is the shared
 // baseline, branch heads are labeled in parentheses):
 //
-//	          * b1c1 --- * b1c2              (b1)
-//	         /
-//	* anc --- * m1 --- * m2                  (main)
-//	         \
-//	          * b2c1 --- * b2c2 --- * b2c3   (b2)
+//   - b1c1 --- * b1c2              (b1)
+//     /
+//   - anc --- * m1 --- * m2                  (main)
+//     \
+//   - b2c1 --- * b2c2 --- * b2c3   (b2)
 func TestDumboDBBranchStatus_Merge(t *testing.T) {
 	b := initBaseline(t)
 
@@ -230,11 +231,11 @@ func TestDumboDBBranchStatus_Merge(t *testing.T) {
 // Graph: merge b2 (one commit off anc) into a branch off main (one commit off
 // anc). The merge is 2 ahead of main: the b2 commit and the merge commit.
 //
-//	          * b2
-//	         /     \
-//	* anc            \
-//	         \         \
-//	          * main --- * merge   (merge is 2 ahead of main)
+//   - b2
+//     /     \
+//   - anc            \
+//     \         \
+//   - main --- * merge   (merge is 2 ahead of main)
 func TestDumboDBBranchStatus_MergeCommitAsTarget(t *testing.T) {
 	b := initBaseline(t)
 
@@ -253,11 +254,11 @@ func TestDumboDBBranchStatus_MergeCommitAsTarget(t *testing.T) {
 // main line and a two-commit feature branch. The merge is 3 ahead of main: the
 // two feature commits plus the merge commit.
 //
-//	          * b1 --- * b2
-//	         /            \
-//	* anc                  \
-//	         \               \
-//	          * x1 --- * x2 --- * main --- * merge   (merge is 3 ahead of main)
+//   - b1 --- * b2
+//     /            \
+//   - anc                  \
+//     \               \
+//   - x1 --- * x2 --- * main --- * merge   (merge is 3 ahead of main)
 func TestDumboDBBranchStatus_MergeCommitDeeperGraph(t *testing.T) {
 	b := initBaseline(t)
 

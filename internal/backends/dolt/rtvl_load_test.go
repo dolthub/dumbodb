@@ -377,6 +377,7 @@ func TestRTVLLoad_DumboDBBranch_FromHash(t *testing.T) {
 
 	// Create a branch "snap" rooted at hash1 (not main HEAD).
 	_, err := b.DumboDBBranch(ctx, &backends.BranchParams{
+		Action: "add",
 		DBName: "testdb",
 		Name:   "snap",
 		From:   hash1,
@@ -408,6 +409,7 @@ func TestRTVLLoad_DumboDBBranch_FromAncestor(t *testing.T) {
 
 	// Create branch "back1" from main~1 (parent of HEAD = second commit = 2 docs).
 	_, err := b.DumboDBBranch(ctx, &backends.BranchParams{
+		Action: "add",
 		DBName: "testdb",
 		Name:   "back1",
 		From:   "main~1",
@@ -446,6 +448,7 @@ func TestRTVLLoad_BranchWrite_Isolation(t *testing.T) {
 
 	// Create branch "feature" from main HEAD.
 	_, err := b.DumboDBBranch(ctx, &backends.BranchParams{
+		Action: "add",
 		DBName: "testdb",
 		Name:   "feature",
 		From:   "main",

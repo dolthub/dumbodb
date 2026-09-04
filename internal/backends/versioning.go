@@ -49,13 +49,12 @@ type CommitResult struct {
 
 type BranchParams struct {
 	DBName string
-	From   string // source branch to branch from (current connection branch); also used to detect current-branch delete
-	Name   string // name of the new branch (or branch to delete when Delete is true); empty when List is true
-	Delete bool   // if true, delete the named branch instead of creating it
-	Force  bool   // if true together with Delete, skip the unmerged-commits safety check (forceDelete semantics)
-	List   bool   // if true, list every branch (local and remote-tracking)
+	Action string // "add", "update", "remove", or "list"
+	From   string // connection rootish: the source for add, and the current-branch guard for remove
+	Name   string // branch to add, update, or remove; empty for list
+	Force  bool   // remove: skip the unmerged-commits safety check (force delete)
 
-	Configure    bool
+	// ConfigUpdate is applied on add (optional, atomic) and update.
 	ConfigUpdate *BranchConfigUpdate
 }
 

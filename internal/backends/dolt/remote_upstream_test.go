@@ -228,7 +228,7 @@ func TestDumboDBConfig_DeleteClearsConfig(t *testing.T) {
 		}
 	}
 
-	branch(&backends.BranchParams{DBName: dbName, From: "main", Name: "release"})
+	branch(&backends.BranchParams{Action: "add", DBName: dbName, From: "main", Name: "release"})
 	if _, err := b.applyBranchConfig(ctx, dbName, "release", &backends.BranchConfigUpdate{
 		PullRemote: strp("origin"), PullBranch: strp("main"),
 		PushRemote: strp("origin2"), PushBranch: strp("release"),
@@ -239,18 +239,57 @@ func TestDumboDBConfig_DeleteClearsConfig(t *testing.T) {
 		t.Fatalf("config must be present before delete (ok=%v, err=%v)", ok, err)
 	}
 
-	branch(&backends.BranchParams{DBName: dbName, From: "main", Name: "release", Delete: true, Force: true})
+	branch(&backends.BranchParams{Action: "remove", DBName: dbName, From: "main", Name: "release", Force: true})
 	if _, ok, err := b.readBranchConfig(ctx, dbName, "release"); err != nil || ok {
 		t.Fatalf("config must be cleared after delete (ok=%v, err=%v)", ok, err)
 	}
 
-	branch(&backends.BranchParams{DBName: dbName, From: "main", Name: "release"})
+	branch(&backends.BranchParams{Action: "add", DBName: dbName, From: "main", Name: "release"})
 	if _, ok, err := b.readBranchConfig(ctx, dbName, "release"); err != nil || ok {
 		t.Fatalf("recreated branch must have no config (ok=%v, err=%v)", ok, err)
 	}
 
 	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: dbName, ConnBranch: "release"}); err == nil {
 		t.Error("bare push on a recreated branch with no config: want error, got nil")
+	}
+}
+
+// TestDumboDBBranchAddWithConfig covers action "add" with setConfig: a valid
+// config is applied to the new branch, and an invalid config rolls the branch
+// back (add is atomic).
+func TestDumboDBBranchAddWithConfig(t *testing.T) {
+	ctx := context.Background()
+	b := newTestBackend(t)
+	const dbName = "mydb"
+
+	insertDoc(t, b, dbName, "col", mustDoc(t, "_id", int64(1)))
+	commitDB(t, b, dbName, "c1")
+	if _, err := b.DumboDBRemote(ctx, &backends.RemoteParams{DBName: dbName, Action: "add", Name: "origin", URL: "file://" + t.TempDir()}); err != nil {
+		t.Fatalf("add origin: %v", err)
+	}
+
+	if _, err := b.DumboDBBranch(ctx, &backends.BranchParams{
+		Action: "add", DBName: dbName, From: "main", Name: "feature",
+		ConfigUpdate: &backends.BranchConfigUpdate{PullRemote: strp("origin"), PullBranch: strp("main")},
+	}); err != nil {
+		t.Fatalf("add with config: %v", err)
+	}
+	assertPullUpstream(t, b, dbName, "feature", "origin", "main")
+
+	rebase := "true"
+	if _, err := b.DumboDBBranch(ctx, &backends.BranchParams{
+		Action: "add", DBName: dbName, From: "main", Name: "bad",
+		ConfigUpdate: &backends.BranchConfigUpdate{PullRebase: &rebase},
+	}); err == nil {
+		t.Fatal("add with invalid config (rebase, no upstream): want error, got nil")
+	}
+	if _, ok, err := b.readBranchConfig(ctx, dbName, "bad"); err != nil || ok {
+		t.Fatalf("rolled-back add must leave no config (ok=%v, err=%v)", ok, err)
+	}
+	if _, err := b.DumboDBBranch(ctx, &backends.BranchParams{
+		Action: "add", DBName: dbName, From: "main", Name: "bad",
+	}); err != nil {
+		t.Fatalf("re-add after rolled-back config error must succeed: %v", err)
 	}
 }
 

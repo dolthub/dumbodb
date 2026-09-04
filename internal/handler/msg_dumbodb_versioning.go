@@ -1061,14 +1061,21 @@ func (h *Handler) MsgDumboDBBranch(connCtx context.Context, msg *wire.OpMsg) (*w
 		)
 	}
 
+	action := "add"
+	switch {
+	case listMode:
+		action = "list"
+	case safeDelete || forceDelete:
+		action = "remove"
+	case configMode:
+		action = "update"
+	}
 	res, err := vb.DumboDBBranch(connCtx, &backends.BranchParams{
 		DBName:       dbName,
+		Action:       action,
 		From:         fromBranch,
 		Name:         newBranch,
-		Delete:       safeDelete || forceDelete,
 		Force:        forceDelete,
-		List:         listMode,
-		Configure:    configMode,
 		ConfigUpdate: configUpdate,
 	})
 	if err != nil {

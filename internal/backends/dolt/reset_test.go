@@ -101,9 +101,9 @@ func TestDumboDBReset_Soft_HeadMovesToTarget(t *testing.T) {
 
 	// Soft reset to hash1.
 	res, err := b.DumboDBReset(ctx, &backends.ResetParams{
-		DBName: "testdb",
+		DBName:   "testdb",
 		CommitID: hash1,
-		Hard:   false,
+		Hard:     false,
 	})
 	if err != nil {
 		t.Fatalf("DumboDBReset: %v", err)
@@ -134,9 +134,9 @@ func TestDumboDBReset_Soft_LogShowsTargetAsHead(t *testing.T) {
 
 	// Soft reset to hash1.
 	_, err := b.DumboDBReset(context.Background(), &backends.ResetParams{
-		DBName: "testdb",
+		DBName:   "testdb",
 		CommitID: hash1,
-		Hard:   false,
+		Hard:     false,
 	})
 	if err != nil {
 		t.Fatalf("DumboDBReset: %v", err)
@@ -170,9 +170,9 @@ func TestDumboDBReset_Soft_DiffShowsUncommittedChange(t *testing.T) {
 
 	// Soft reset to hash1.
 	_, err := b.DumboDBReset(ctx, &backends.ResetParams{
-		DBName: "testdb",
+		DBName:   "testdb",
 		CommitID: hash1,
-		Hard:   false,
+		Hard:     false,
 	})
 	if err != nil {
 		t.Fatalf("DumboDBReset: %v", err)
@@ -216,9 +216,9 @@ func TestDumboDBReset_Hard_WorkingTreeMatchesTarget(t *testing.T) {
 
 	// Hard reset to hash1.
 	res, err := b.DumboDBReset(ctx, &backends.ResetParams{
-		DBName: "testdb",
+		DBName:   "testdb",
 		CommitID: hash1,
-		Hard:   true,
+		Hard:     true,
 	})
 	if err != nil {
 		t.Fatalf("DumboDBReset(hard): %v", err)
@@ -249,9 +249,9 @@ func TestDumboDBReset_Hard_LogShowsTargetAsHead(t *testing.T) {
 
 	// Hard reset to hash1.
 	_, err := b.DumboDBReset(context.Background(), &backends.ResetParams{
-		DBName: "testdb",
+		DBName:   "testdb",
 		CommitID: hash1,
-		Hard:   true,
+		Hard:     true,
 	})
 	if err != nil {
 		t.Fatalf("DumboDBReset(hard): %v", err)
@@ -283,9 +283,9 @@ func TestDumboDBReset_Hard_DiffIsClean(t *testing.T) {
 
 	// Hard reset to hash1.
 	_, err := b.DumboDBReset(ctx, &backends.ResetParams{
-		DBName: "testdb",
+		DBName:   "testdb",
 		CommitID: hash1,
-		Hard:   true,
+		Hard:     true,
 	})
 	if err != nil {
 		t.Fatalf("DumboDBReset(hard): %v", err)
@@ -316,7 +316,7 @@ func TestDumboDBReset_InvalidHash(t *testing.T) {
 	}
 
 	_, err = b.DumboDBReset(ctx, &backends.ResetParams{
-		DBName: "testdb",
+		DBName:   "testdb",
 		CommitID: "notavalidhash",
 	})
 	if err == nil {
@@ -339,7 +339,7 @@ func TestDumboDBReset_UnknownButValidHash(t *testing.T) {
 	unknownHash := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 	_, err = b.DumboDBReset(ctx, &backends.ResetParams{
-		DBName: "testdb",
+		DBName:   "testdb",
 		CommitID: unknownHash,
 	})
 	if err == nil {

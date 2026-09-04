@@ -141,7 +141,7 @@ func TestDumboDBPush_NewBranchAtExistingCommit(t *testing.T) {
 	}
 
 	// New local branch at the same commit; its chunks are already on the remote.
-	if _, err := b.DumboDBBranch(ctx, &backends.BranchParams{DBName: "mydb", From: "main", Name: "dev"}); err != nil {
+	if _, err := b.DumboDBBranch(ctx, &backends.BranchParams{Action: "add", DBName: "mydb", From: "main", Name: "dev"}); err != nil {
 		t.Fatalf("create dev: %v", err)
 	}
 	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: "mydb", Remote: "origin", RefSpec: "dev"}); err != nil {

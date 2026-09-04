@@ -54,9 +54,9 @@ func TestRangePrefilter_BasicGtLte(t *testing.T) {
 		i    int32
 		want bool
 	}{
-		{5, false},  // exclusive lower
+		{5, false}, // exclusive lower
 		{6, true},
-		{10, true},  // inclusive upper
+		{10, true}, // inclusive upper
 		{11, false},
 		{0, false},
 	} {
