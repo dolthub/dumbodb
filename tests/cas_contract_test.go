@@ -108,3 +108,69 @@ func TestCAS_FailedCompareAndSwapIsNotAnError(t *testing.T) {
 	require.Equal(t, acknowledged, readVersion(),
 		"the stored counter must equal the number of acknowledged increments")
 }
+
+// Every acknowledged increment has to be applied, so 80 blind $inc:1 leave the
+// counter at 80. This is MongoDB's per-document atomicity, and no merge of end
+// states can produce it: two increments from the same base both arrive at
+// v=n+1, so the merge can only accept one of them. The second one is applied
+// by re-running the operation against the tip that refused it.
+//
+// The same replay is what makes the compare-and-swap above answer n:0 as a
+// fact -- its filter is re-evaluated against the new tip and genuinely matches
+// nothing -- rather than as a count the server rewrote.
+func TestCAS_EveryAcknowledgedIncrementIsApplied(t *testing.T) {
+	const workers = 80
+
+	env := startDumboDB(t)
+	ctx := context.Background()
+	dbName := fmt.Sprintf("inc_%d", rand.Int64N(1_000_000))
+
+	setup := siClient(t, env).Database(dbName).Collection("documents")
+	id := bson.D{{Key: "_id", Value: "counter"}}
+	_, err := setup.InsertOne(ctx,
+		bson.D{{Key: "_id", Value: "counter"}, {Key: "v", Value: int32(0)}})
+	require.NoError(t, err)
+
+	inc := bson.D{{Key: "$inc", Value: bson.D{{Key: "v", Value: int32(1)}}}}
+	matched := make([]int64, workers)
+	failures := make([]error, workers)
+	clients := make([]*mongo.Client, workers)
+	for i := range clients {
+		clients[i] = siClient(t, env)
+	}
+
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := range clients {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			result, err := clients[i].Database(dbName).Collection("documents").
+				UpdateOne(ctx, id, inc)
+			if err != nil {
+				failures[i] = err
+				return
+			}
+			matched[i] = result.MatchedCount
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	applied := int64(0)
+	for i := range clients {
+		require.NoError(t, failures[i], "worker %d: a blind increment must not fail", i)
+		require.EqualValues(t, 1, matched[i],
+			"worker %d: a blind increment has no precondition, so it must match", i)
+		applied += matched[i]
+	}
+	require.EqualValues(t, workers, applied)
+
+	var stored struct {
+		V int32 `bson:"v"`
+	}
+	require.NoError(t, setup.FindOne(ctx, id).Decode(&stored))
+	require.EqualValues(t, workers, stored.V,
+		"%d acknowledged increments must leave the counter at %d", workers, workers)
+}
