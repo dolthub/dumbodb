@@ -58,12 +58,18 @@ func (state *dbState) reconcileWorkingSets(ctx context.Context, base, ours, thei
 		return nil, fmt.Errorf("hashing theirs root: %w", err)
 	}
 
+	// One side changed nothing, so there is nothing to reconcile.
 	if baseHash == oursHash {
 		return theirs, nil
 	}
-	if baseHash == theirsHash || oursHash == theirsHash {
+	if baseHash == theirsHash {
 		return ours, nil
 	}
+	// Deliberately no fast path for ours == theirs. Two sides reaching the
+	// identical result is the convergent edit, which is the case the Touched
+	// modes exist to refuse: two compare-and-swap increments from the same
+	// base both produce v=n+1, and short-circuiting on the equal hash would
+	// accept both and lose one. Only the merge mode may decide it.
 
 	oursAM, err := amFromWorkingRoot(ctx, ours.WorkingRoot(), state.ns)
 	if err != nil {

@@ -695,6 +695,17 @@ func (c *conn) dispatchThroughSession(connCtx context.Context, msg *wire.OpMsg, 
 		}
 		if err := c.h.ReconcileWriteBoundary(connCtx); err != nil {
 			c.h.AbandonWriteBoundary(connCtx)
+			// The collection's merge mode refused this write. That is not an
+			// error: the reply has not gone out yet, so it can report that
+			// nothing matched, which is what a MongoDB client's
+			// compare-and-swap branches on. A refusal we cannot phrase that
+			// way stays an error rather than becoming a false success.
+			if errors.Is(err, handler.ErrWriteRefused) {
+				if refused, ok := refusedWriteReply(resMsg); ok {
+					resMsg = refused
+					return nil
+				}
+			}
 			return err
 		}
 		return c.h.AutoCommitBoundary(connCtx)
