@@ -1272,12 +1272,33 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 		branch = defaultBranch
 	}
 
-	if b.sessionIsolation {
-		return b.doltCommitSessionIsolation(ctx, params, db, branch, message, ts)
-	}
-
 	db.mu.Lock()
 	defer db.mu.Unlock()
+
+	// A conflict paused an earlier dumboCommit on this branch. If the client
+	// has resolved it, publish the resolution so the commit below takes it;
+	// the resolution lives in ms.resolvedAM until then (applyResolvedAM is a
+	// no-op for a session commit). This runs before the merge guard below,
+	// which would otherwise report a merge in progress and leave the client
+	// with no way to finish.
+	if ms := db.mergeState; ms != nil && ms.isSessionCommit && ms.intoBranch == branch {
+		if ms.hasUnresolvedConflicts() {
+			return nil, &backends.MergeConflictError{Conflicts: ms.summaries()}
+		}
+		_ = clearConflictArtifacts(ctx, db, ms)
+		if err := db.persistAM(ctx, branch, ms.resolvedAM); err != nil {
+			return nil, fmt.Errorf("dumboCommit: publishing the resolved merge for %q: %w", branch, err)
+		}
+		db.mergeState = nil
+		_ = clearMergeState(db)
+		if sess := sessionFromContext(ctx); sess != nil {
+			if err := releaseSessionOverlay(sqlctx.Wrap(ctx, sess), sess, db.name, branch); err != nil {
+				return nil, fmt.Errorf("dumboCommit: %w", err)
+			}
+		}
+	} else if err := db.publishSessionOverlay(ctx, branch); err != nil {
+		return nil, err
+	}
 
 	// Guard: reject dumboDBCommit during any in-progress merge, cherry-pick, or rebase.
 	if db.mergeState != nil && db.mergeState.intoBranch == branch {

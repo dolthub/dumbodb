@@ -613,53 +613,15 @@ func (state *dbState) commitDirtyBranchesForSession(sqlCtx *sql.Context, sess *d
 		if branch == "" {
 			branch = defaultBranch
 		}
-		qualified := qualifiedDbName(base, branch)
 		if !strings.EqualFold(base, state.name) {
 			continue
 		}
-
-		sessState, sok, err := sess.LookupDbState(sqlCtx, qualified)
+		published, _, err := state.reconcileBranchForSession(sqlCtx, sess, dtx, branch)
 		if err != nil {
-			return branches, fmt.Errorf("commitTransaction: LookupDbState for %q: %w", qualified, err)
+			return branches, fmt.Errorf("commitTransaction: merging %q: %w", qualifiedDbName(base, branch), err)
 		}
-		if !sok {
+		if published == nil {
 			continue
-		}
-		ours := sessState.WorkingSet()
-		if ours == nil {
-			continue
-		}
-
-		startRoot, ok := dtx.GetInitialRoot(state.name)
-		if !ok {
-			return branches, fmt.Errorf("commitTransaction: no initial root for %q", state.name)
-		}
-		wsRef := doltref.NewWorkingSetRef("heads/" + branch)
-		baseWS, err := state.doltDB.ResolveWorkingSetAtRoot(sqlCtx, wsRef, startRoot)
-		if err != nil {
-			return branches, fmt.Errorf("commitTransaction: resolving base WS for %q: %w", branch, err)
-		}
-		theirs, err := state.doltDB.ResolveWorkingSet(sqlCtx, wsRef)
-		if err != nil {
-			return branches, fmt.Errorf("commitTransaction: resolving theirs WS for %q: %w", branch, err)
-		}
-
-		merged, err := state.reconcileWorkingSets(sqlCtx, baseWS, ours, theirs)
-		if err != nil {
-			return branches, fmt.Errorf("commitTransaction: merging %q: %w", qualified, err)
-		}
-
-		if err := updateWorkingSet(sqlCtx, state.doltDB, merged, branch); err != nil {
-			return branches, fmt.Errorf("commitTransaction: persisting WS for %q: %w", branch, err)
-		}
-		if err := sess.SetWorkingSet(sqlCtx, qualified, merged); err != nil {
-			return branches, fmt.Errorf("commitTransaction: updating sess WS for %q: %w", qualified, err)
-		}
-		// Refresh the singleton entry so non-session readers see the
-		// merged WS and the next updateBranchWS's optimistic lock uses
-		// the post-merge wsHash.
-		if err := state.reloadBranchWSFromDisk(sqlCtx, branch); err != nil {
-			return branches, fmt.Errorf("commitTransaction: refreshing cache for %q: %w", qualified, err)
 		}
 		branches = append(branches, branch)
 	}
@@ -675,6 +637,156 @@ func (state *dbState) commitDirtyBranchesForSession(sqlCtx *sql.Context, sess *d
 		}
 	}
 	return branches, nil
+}
+
+// reconcileBranchForSession reconciles one branch's session overlay against
+// the branch's published working set and publishes the result, returning the
+// published set. Reports (nil, nil, nil) when the session holds no overlay for
+// the branch and there is nothing to reconcile.
+//
+// This is the product's one reconciliation. A mode decides only where it is
+// reached from -- the end of a command, commitTransaction, or dumboCommit --
+// never what happens once it is. On a refusal the unresolved conflicts come
+// back alongside the error, so a caller able to offer resolution can install
+// them. Caller must hold state.mu write lock.
+func (state *dbState) reconcileBranchForSession(
+	sqlCtx *sql.Context,
+	sess *dsess.DoltSession,
+	dtx *dsess.DoltTransaction,
+	branch string,
+) (*doltdb.WorkingSet, *mergeInProgress, error) {
+	qualified := qualifiedDbName(state.name, branch)
+
+	sessState, sok, err := sess.LookupDbState(sqlCtx, qualified)
+	if err != nil {
+		return nil, nil, fmt.Errorf("LookupDbState for %q: %w", qualified, err)
+	}
+	if !sok {
+		return nil, nil, nil
+	}
+	ours := sessState.WorkingSet()
+	if ours == nil {
+		return nil, nil, nil
+	}
+
+	startRoot, ok := dtx.GetInitialRoot(state.name)
+	if !ok {
+		return nil, nil, fmt.Errorf("no initial root for %q", state.name)
+	}
+	wsRef := doltref.NewWorkingSetRef("heads/" + branch)
+	baseWS, err := state.doltDB.ResolveWorkingSetAtRoot(sqlCtx, wsRef, startRoot)
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolving base WS for %q: %w", branch, err)
+	}
+	theirs, err := state.doltDB.ResolveWorkingSet(sqlCtx, wsRef)
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolving theirs WS for %q: %w", branch, err)
+	}
+
+	merged, unresolved, err := state.reconcileWorkingSets(sqlCtx, branch, baseWS, ours, theirs)
+	if err != nil {
+		return nil, unresolved, err
+	}
+
+	if err := updateWorkingSet(sqlCtx, state.doltDB, merged, branch); err != nil {
+		return nil, nil, fmt.Errorf("persisting WS for %q: %w", branch, err)
+	}
+	if err := sess.SetWorkingSet(sqlCtx, qualified, merged); err != nil {
+		return nil, nil, fmt.Errorf("updating sess WS for %q: %w", qualified, err)
+	}
+	// Refresh the singleton entry so non-session readers see the merged WS and
+	// the next updateBranchWS's optimistic lock uses the post-merge wsHash.
+	if err := state.reloadBranchWSFromDisk(sqlCtx, branch); err != nil {
+		return nil, nil, fmt.Errorf("refreshing cache for %q: %w", qualified, err)
+	}
+	return merged, nil, nil
+}
+
+// publishSessionOverlay reconciles this branch's session overlay onto the
+// branch before a commit is taken from it, so dumboCommit commits a working
+// set that already accounts for everyone else's writes rather than one that
+// silently replaces them.
+//
+// dumboCommit is just another boundary. In default mode there is usually
+// nothing left to publish, because the command boundary already did it; under
+// --session-isolation this is where the whole fork lands. A refusal installs
+// the conflicts so the client can resolve them and commit again, instead of
+// throwing the fork's work away. Caller must hold state.mu write lock.
+func (state *dbState) publishSessionOverlay(ctx context.Context, branch string) error {
+	if !dbNameDsessFriendly(state.name) || alwaysAutoCommit(state.name) {
+		return nil
+	}
+	sess := sessionFromContext(ctx)
+	if sess == nil {
+		return nil
+	}
+	dtx, ok := sess.GetTransaction().(*dsess.DoltTransaction)
+	if !ok {
+		return nil
+	}
+
+	sqlCtx := sqlctx.Wrap(ctx, sess)
+	published, unresolved, err := state.reconcileBranchForSession(sqlCtx, sess, dtx, branch)
+	if err != nil {
+		if unresolved != nil {
+			// Reported, not wrapped: the handler recognizes this error and
+			// turns it into a conflict response the client can act on.
+			unresolved.isSessionCommit = true
+			state.mergeState = unresolved
+		}
+		return err
+	}
+	if published == nil {
+		return nil
+	}
+	return releaseSessionOverlay(sqlCtx, sess, state.name, branch)
+}
+
+// releaseSessionOverlay drops the overlay for one published (database,
+// branch), and restarts the transaction so every other overlay survives --
+// dsess.StartTransaction wipes each branchState, so they have to be carried
+// across by hand.
+//
+// The unit is the branch, not the database: one session can hold an overlay
+// on several branches at once, and committing one of them must not discard
+// the uncommitted work on the others.
+//
+// Leaving a published overlay in place is not harmless either. The next
+// boundary would reconcile it against the branch it was just published to,
+// and a Touched mode reads that as both sides having written the same fields.
+func releaseSessionOverlay(sqlCtx *sql.Context, sess *dsess.DoltSession, dbName, published string) error {
+	preserved := map[string]*doltdb.WorkingSet{}
+	for _, dirty := range sess.DirtyBranches() {
+		branch := dirty.Branch
+		if branch == "" {
+			branch = defaultBranch
+		}
+		if strings.EqualFold(dirty.DbName, dbName) && strings.EqualFold(branch, published) {
+			continue
+		}
+		qualified := qualifiedDbName(dirty.DbName, branch)
+		sessState, ok, err := sess.LookupDbState(sqlCtx, qualified)
+		if err != nil || !ok {
+			continue
+		}
+		if ws := sessState.WorkingSet(); ws != nil {
+			preserved[qualified] = ws
+		}
+	}
+
+	sqlCtx.SetTransaction(nil)
+	if len(preserved) == 0 {
+		return nil
+	}
+	if _, err := sess.StartTransaction(sqlCtx, sql.ReadWrite); err != nil {
+		return fmt.Errorf("restarting transaction for preserved overlays: %w", err)
+	}
+	for qualified, ws := range preserved {
+		if err := sess.SetWorkingSet(sqlCtx, qualified, ws); err != nil {
+			return fmt.Errorf("restoring overlay for %q: %w", qualified, err)
+		}
+	}
+	return nil
 }
 
 // rollbackDirtyBranchesForSession is session-wide -- dsess has no per-

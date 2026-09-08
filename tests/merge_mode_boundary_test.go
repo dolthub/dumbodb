@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand/v2"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -124,11 +125,36 @@ func TestMergeMode_GovernsTheWriteBoundary(t *testing.T) {
 				if wantConflict {
 					require.Error(t, err,
 						"mergeMode=%s must refuse a %s edit at the write boundary", tc.mode, edit.name)
+					require.Contains(t, strings.ToLower(err.Error()), "conflict",
+						"mergeMode=%s must refuse a %s edit as a conflict", tc.mode, edit.name)
 					return
 				}
-				require.NoError(t, err,
-					"mergeMode=%s must accept a %s edit at the write boundary", tc.mode, edit.name)
+
+				// A convergent edit accepted by the mode merges to exactly
+				// what the first writer already published, so there is
+				// nothing left to commit and dumboCommit says so. That is
+				// acceptance, not refusal, and it is the same answer the
+				// default mode has always given an empty commit.
+				if err != nil {
+					require.Contains(t, err.Error(), "nothing to commit",
+						"mergeMode=%s must accept a %s edit at the write boundary", tc.mode, edit.name)
+				}
+				assertMergedState(t, env, dbName, edit)
 			})
 		}
 	}
+}
+
+// assertMergedState checks that an accepted reconcile kept both writers'
+// changes, so "no conflict" cannot pass by having quietly dropped one.
+func assertMergedState(t *testing.T, env *dumboDBTestEnv, dbName string, edit writeShape) {
+	t.Helper()
+	var stored bson.M
+	require.NoError(t, siClient(t, env).Database(dbName).Collection("docs").
+		FindOne(context.Background(), bson.D{{Key: "_id", Value: "d"}}).Decode(&stored))
+
+	require.EqualValues(t, edit.firstValue, stored[edit.firstField],
+		"%s edit: the first writer's %s must survive", edit.name, edit.firstField)
+	require.EqualValues(t, edit.secondValue, stored[edit.secondField],
+		"%s edit: the second writer's %s must survive", edit.name, edit.secondField)
 }
