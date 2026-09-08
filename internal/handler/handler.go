@@ -291,13 +291,26 @@ func (h *Handler) SessionRegistry() *sqlctx.SessionRegistry {
 	return nil
 }
 
+// ErrWriteRefused reports that a write reached its boundary and the
+// collection's merge mode refused it. It is not a failure: the write simply
+// did not apply, and where the boundary is still inside the command the reply
+// can say so the way MongoDB does. Callers match it with errors.Is.
+var ErrWriteRefused = errors.New("write refused at its reconciliation boundary")
+
 // ReconcileWriteBoundary reconciles the connection's pending writes against
 // the current tip and publishes them. This is the same reconciliation an
 // explicit commitTransaction performs; the only thing that varies by mode is
 // when it is reached.
+//
+// A merge-mode refusal comes back wrapping ErrWriteRefused, so the caller can
+// tell "this write did not apply" from "this write broke".
 func (h *Handler) ReconcileWriteBoundary(ctx context.Context) error {
 	if sab, ok := h.b.(backends.SessionAwareBackend); ok {
 		if err := sab.OnTransactionCommit(ctx, conninfo.Get(ctx).Owner()); err != nil {
+			var refusal *backends.MergeConflictError
+			if errors.As(err, &refusal) {
+				return fmt.Errorf("%w: %w", ErrWriteRefused, err)
+			}
 			if backends.ErrorCodeIs(err, backends.ErrorCodeWriteConflict) {
 				return common.TranslateBackendWriteError(err)
 			}
