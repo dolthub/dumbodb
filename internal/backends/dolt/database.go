@@ -290,6 +290,7 @@ func (db *database) CreateCollection(ctx context.Context, params *backends.Creat
 		TimeField:        params.TimeField,
 		MetaField:        params.MetaField,
 		Granularity:      params.Granularity,
+		MergeMode:        params.MergeMode,
 	}
 	createAM, err := state.getOrInitBranchAM(ctx, db.rootish)
 	if err != nil {
@@ -493,6 +494,9 @@ func (db *database) CollMod(ctx context.Context, params *backends.CollModParams)
 	}
 	if params.ValidationAction != "" {
 		meta.ValidationAction = params.ValidationAction
+	}
+	if params.MergeMode != "" {
+		meta.MergeMode = params.MergeMode
 	}
 	if err := state.upsertCatalogDocMsg(ctx, db.rootish, params.Name,
 		fmt.Sprintf("auto: modify collection %s", params.Name), meta); err != nil {
