@@ -650,6 +650,11 @@ func (c *conn) dispatchThroughSession(connCtx context.Context, msg *wire.OpMsg, 
 		runFn = shadow.Commit
 	}
 
+	if writes {
+		ci.SetWriting(true)
+		defer ci.SetWriting(false)
+	}
+
 	var resMsg *wire.OpMsg
 	runErr := runFn(time.Now(), func(sess *dsess.DoltSession) error {
 		if forked {
@@ -657,9 +662,17 @@ func (c *conn) dispatchThroughSession(connCtx context.Context, msg *wire.OpMsg, 
 			if _, txErr := sqlctx.EnsureTxn(sqlCtx, sess); txErr != nil {
 				return fmt.Errorf("dispatchThroughSession: %w", txErr)
 			}
-			ci.SetForked(true)
-			if reconcileAtCommandEnd {
-				defer ci.SetForked(false)
+			// Forked covers the writes that have no client transaction to
+			// speak for them. Inside one, InTransaction already reports the
+			// fork, and it is cleared when the transaction ends -- whereas a
+			// Forked set here would outlive the transaction, because only the
+			// command-end boundary clears it, and every later read on the
+			// connection would stay pinned to a finished transaction's root.
+			if !inClientTxn {
+				ci.SetForked(true)
+				if reconcileAtCommandEnd {
+					defer ci.SetForked(false)
+				}
 			}
 		}
 		var handlerErr error
