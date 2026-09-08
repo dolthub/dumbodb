@@ -27,7 +27,6 @@ import (
 	"go.opentelemetry.io/otel"
 
 	"github.com/dolthub/dumbodb/internal/backends"
-	"github.com/dolthub/dumbodb/internal/backends/decorators/oplog"
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/clientconn/cursor"
 	"github.com/dolthub/dumbodb/internal/handler/common"
@@ -124,10 +123,8 @@ func New(opts *NewOpts) (*Handler, error) {
 		opts.BatchSize = int(maxWriteBatchSize)
 	}
 
-	b := oplog.NewBackend(opts.Backend, logging.WithName(opts.L, "oplog"))
-
 	h := &Handler{
-		b:         b,
+		b:         opts.Backend,
 		NewOpts:   opts,
 		cursors:   cursor.NewRegistry(logging.WithName(opts.L, "cursors")),
 		processID: types.NewObjectID(),
