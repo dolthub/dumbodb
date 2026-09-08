@@ -602,6 +602,14 @@ func (c *conn) route(connCtx context.Context, reqHeader *wire.MsgHeader, reqBody
 	return
 }
 
+// maxWriteReplays breaks a livelock; it is not a concurrency policy. MongoDB
+// waits for a contended document rather than giving up on it after a fixed
+// number of tries, so the real bound on a replay is the operation's own
+// lifetime, which the context carries. Each round settles at least one writer,
+// so N writers on one document need at most N rounds, and this is set well
+// clear of any contention a single document can sustain.
+const maxWriteReplays = 256
+
 func (c *conn) dispatchThroughSession(connCtx context.Context, msg *wire.OpMsg, name string, cmd *handler.Command) (*wire.OpMsg, error) {
 	reg := c.h.SessionRegistry()
 	if reg == nil {
@@ -693,22 +701,45 @@ func (c *conn) dispatchThroughSession(connCtx context.Context, msg *wire.OpMsg, 
 			c.h.AbandonWriteBoundary(connCtx)
 			return handlerErr
 		}
-		if err := c.h.ReconcileWriteBoundary(connCtx); err != nil {
-			c.h.AbandonWriteBoundary(connCtx)
-			// The collection's merge mode refused this write. That is not an
-			// error: the reply has not gone out yet, so it can report that
-			// nothing matched, which is what a MongoDB client's
-			// compare-and-swap branches on. A refusal we cannot phrase that
-			// way stays an error rather than becoming a false success.
-			if errors.Is(err, handler.ErrWriteRefused) {
-				if refused, ok := refusedWriteReply(resMsg); ok {
-					resMsg = refused
-					return nil
-				}
+
+		// The boundary is still inside this command, and the command is still
+		// here, so a refusal does not have to be reported -- it can be
+		// answered. Discard the overlay, re-pin at the tip that refused it,
+		// and run the operation again.
+		//
+		// Running the operation is what a merge of end states cannot do. Two
+		// blind $inc:1 both produce v=n+1 and are indistinguishable at merge
+		// time from two compare-and-swap increments, so the merge can only
+		// ever refuse the second one; re-applying it against the new tip
+		// gives v=n+2, which is MongoDB's answer. And the same replay gives a
+		// compare-and-swap the other MongoDB answer for free: its filter is
+		// re-evaluated against the tip, genuinely matches nothing, and n:0
+		// comes back as a fact rather than something the server invented.
+		for attempt := 0; ; attempt++ {
+			err := c.h.ReconcileWriteBoundary(connCtx)
+			if err == nil {
+				return c.h.AutoCommitBoundary(connCtx)
 			}
-			return err
+			c.h.AbandonWriteBoundary(connCtx)
+			if !errors.Is(err, handler.ErrWriteRefused) || attempt >= maxWriteReplays {
+				return err
+			}
+			// The client is no longer waiting for this, so stop working on it.
+			if ctxErr := connCtx.Err(); ctxErr != nil {
+				return err
+			}
+
+			sqlCtx := sqlctx.Wrap(connCtx, sess)
+			sqlCtx.SetTransaction(nil)
+			if _, txErr := sqlctx.EnsureTxn(sqlCtx, sess); txErr != nil {
+				return fmt.Errorf("replaying refused write: %w", txErr)
+			}
+			resMsg, handlerErr = c.invokeHandler(connCtx, msg, name, cmd)
+			if handlerErr != nil {
+				c.h.AbandonWriteBoundary(connCtx)
+				return handlerErr
+			}
 		}
-		return c.h.AutoCommitBoundary(connCtx)
 	})
 	if errors.Is(runErr, sqlctx.ErrShadowInvalidated) {
 		return nil, shadowGoneError(shadow)
