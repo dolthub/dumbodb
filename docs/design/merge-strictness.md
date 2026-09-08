@@ -67,10 +67,10 @@ is either the whole `document` or an individual `field`.
 
 Row 3 is the reason this document exists: two compare-and-swap updates that
 agree on the resulting value are read as agreement, and one of them is
-discarded. Section 6 traces that row key by key.
+discarded. Section 4 traces that row key by key.
 
 Row 2 separates `fieldTouched` from `documentDivergent`, and row 4 separates
-`fieldDivergent` from `documentDivergent`. Section 5 gives the predicates the
+`fieldDivergent` from `documentDivergent`. Section 3 gives the predicates the
 table is derived from.
 
 ### They do not form a line
@@ -120,100 +120,35 @@ and both `$inc` the same `v` from 7 to 8:
 | `fieldDivergent` | **merges**; `v` is 8 either way, `status` and `owner` are disjoint |
 
 That last row is the behaviour this document changes -- row 4 of the table
-above, made concrete. Section 6 traces it key by key.
+above, made concrete. Section 4 traces it key by key.
 
 ### Where this stands today
 
-There is exactly one behaviour, `fieldDivergent`, and it is not configurable.
-**It silently loses updates on every merge path**, in every server mode:
-explicit `dumboMerge` of two branches, `dumboRebase`, `dumboCherryPick`,
-`dumboRevert`, and the implicit merge at `dumboCommit`. Section 2.1 is the
-proof and section 3 names the exact line responsible. The
-default becomes `fieldTouched` (section 8).
+Nothing is configurable, and today's behaviour is not even one mode. It depends
+on which merge runs.
+
+- **A branch merge composes field by field.** `dumboMerge` and the replay
+  commands go through `mergeBSONDoc` (`internal/backends/dolt/bson_merge.go`),
+  which walks top-level keys, so two sides editing disjoint fields merge into a
+  document neither of them wrote. That is `fieldDivergent`.
+- **A commit-time merge compares whole documents.** Reconciling a transaction
+  against the tip goes through Dolt's row merge with `doc` as a single cell
+  (`internal/backends/dolt/txn_merge.go`), so any two changes to one document
+  that differ at all conflict. That is `documentDivergent`.
+
+Two granularities for one question, decided by which path a write happens to
+take. Neither was chosen; both are inherited.
+
+They agree on the case that matters. Both accept a convergent edit -- two sides
+landing on the same bytes -- and merge it without reporting anything. That is
+the compare-and-swap race of section 1, and it is why the race survives on
+every path. The default becomes `fieldTouched` (section 6).
 
 The modes decide what counts as a collision. A separate defect stops an
 ordinary write reaching a merge at all, so it has to be fixed before the modes
 govern anything but `dumboMerge`; see `docs/design/working-set-publish.md`.
 
-## 2. The problem, measured
-
-The compare-and-swap of section 1 fails because of what the merge does with two
-changes that agree.
-
-### 2.1 Any merge of two divergent lines
-
-Measured with two explicit branches and an explicit `doltMerge`. Baseline
-`{_id: 1, v: 1, a: "s", b: "s"}` committed, branch `feature` created, then
-each branch runs the same CAS on `v == 1`:
-
-| scenario | branch CAS matched | `doltMerge` | final |
-|---|---|---|---|
-| each branch sets a different field and `$inc`s `v` | main 1 / feature 1 | **`ok: 1`, no conflict** | `{a: "A", b: "B", v: 2}` |
-| each branch only `$inc`s `v` | main 1 / feature 1 | **`ok: 1`, no conflict** | `{v: 2}` |
-
-Two CAS-guarded increments from `v: 1` and the counter reads 2. The merge
-reported success. Nobody was told anything.
-
-**The loss is in the merge itself**, so it reaches every path that merges:
-`dumboMerge`, `dumboRebase`, `dumboCherryPick`, `dumboRevert`, and the
-commit-time merge. Any two lines of history that both ran the compare-and-swap
-produce this, however they came to diverge.
-
-### 2.2 Why convergence is the wrong test
-
-The reason is that the merge treats a field both sides changed to the *same*
-value as agreement. A disciplined CAS protocol -- everybody increments by
-exactly one -- **guarantees** the two sides converge, which guarantees a clean
-merge, which guarantees the lock is defeated. Increment by inconsistent amounts
-and the merge catches it instead. The mechanism fails safe only when it is
-misused.
-
-For any field derived from its own prior value -- `$inc`, `$mul`, `$push`,
-`$addToSet`, `$bit` -- **convergence is coincidence, not agreement.** By the
-time the merge runs the derivation is gone and only the value remains. Two
-writers arriving at 8 from 7 did two increments, not one.
-
-Under `--session-isolation` the per-session fork and the `dumboCommit` merge
-are both implicit, so "avoid merges" is not a state a user can arrange or even
-observe. This is what two ordinary concurrent clients get.
-
-## 3. Two independent knobs, and only one of them is the bug
-
-**Knob A -- comparison granularity.** Which units the merge compares.
-Ground truth: `mergeBSONDoc` (`internal/backends/dolt/bson_merge.go:27`)
-enumerates **top-level keys only** and compares whole values with
-`reflect.DeepEqual`. Subdocuments and arrays are atomic values.
-
-**Knob B -- the conflict trigger.** Given a unit that both sides changed
-relative to base, is that a conflict? Today:
-
-```go
-case bOK && lOK && rOK:
-    leftUnchanged  := reflect.DeepEqual(lVal, bVal)
-    rightUnchanged := reflect.DeepEqual(rVal, bVal)
-    sameMod        := reflect.DeepEqual(lVal, rVal)
-    switch {
-    case leftUnchanged && rightUnchanged: out.Set(k, lVal)
-    case leftUnchanged:                   out.Set(k, rVal)
-    case rightUnchanged:                  out.Set(k, lVal)
-    case sameMod:                         out.Set(k, lVal)   // <-- the bug
-    default:                              return nil, true
-    }
-```
-
-**`case sameMod` is the lost update.** Both sides changed `v` from 7 to 8, so
-`leftUnchanged` and `rightUnchanged` are both false and `sameMod` is true, and
-the field merges. That single branch is the entire difference between
-`fieldDivergent` and `fieldTouched`.
-
-**The four modes vary knob B. The CAS fix is knob B alone.** `v` is a
-top-level scalar, so knob A already isolates it correctly; nothing about key
-enumeration needs to change to fix the CAS. But knob B does have to change:
-`fieldTouched` means deleting the `case sameMod` escape, so **this is a change
-to the differ**, not a no-op. Knob A is a separate question, still open
-(section 9).
-
-## 4. What this requires from Dolt
+## 2. What this requires from Dolt
 
 A dumbodb collection is a Dolt table with two columns: `_id binary(20)` as the
 primary key, and `doc longblob` holding the whole BSON document
@@ -281,16 +216,15 @@ Two cases defer unconditionally: keyless tables, and merges that also change
 schema, where the shape of a returned row would be ambiguous.
 
 This is generic. No document format and no dumbodb concept appears in Dolt.
-The four modes live entirely on the dumbodb side, as one policy: the knob B
-decision of section 3, supplied to Dolt's merge rather than run beside it. That
-is where `mergeBSONDoc` ends up.
+The four modes live entirely on the dumbodb side, as one policy supplied to
+Dolt's merge rather than run beside it. That is where `mergeBSONDoc` ends up.
 
 The Dolt change stands on its own: it is reviewable and testable there, with
 the four modes written as test policies over ordinary SQL rows and over a
 single adaptive blob column in dumbodb's shape, and it carries no dependency on
 dumbodb.
 
-## 5. The four mergeModes, precisely
+## 3. The four mergeModes, precisely
 
 Section 1 introduced the names. This is the formal statement.
 
@@ -332,7 +266,7 @@ What each is for:
   twice), and for cross-field invariants a validator cannot express, such as a
   state machine or a ledger entry.
 
-## 6. The CAS race traced through every mergeMode
+## 4. The CAS race traced through every mergeMode
 
 ```
 base:   { _id: 1, v: 7, status: "draft" }
@@ -366,12 +300,12 @@ Per key, under today's differ:
 | `fieldDivergent` | `v` is 8 on both sides, convergent | merge -> `{_id: 1, v: 8, status: "review", owner: "bob"}`. Both writes landed, `v` records one increment, neither client was told. **The bug.** |
 | `documentDivergent` | both wrote, `ours != theirs` | CONFLICT |
 
-## 7. What the losing side sees
+## 5. What the losing side sees
 
 The modes decide *what is a conflict*. This section is what happens next,
 and it differs by how the divergence arose -- not by server mode.
 
-### 7.1 The CAS condition lives in the operation, not the document
+### 5.1 The CAS condition lives in the operation, not the document
 
 This is the whole reason a merge cannot answer a CAS.
 
@@ -402,14 +336,14 @@ Replaying the *operation* does recover it. Applied against a tip already at
 `version: 2`, the filter matches nothing and the CAS fails for exactly the
 reason MongoDB would fail it.
 
-### 7.2 Two kinds of divergence, two answers
+### 5.2 Two kinds of divergence, two answers
 
 | divergence | reconciliation | what the loser sees |
 |---|---|---|
 | two branches, each with committed history | **merge** -- the states are both real history and there is no operation left to replay | a conflict via `dumboConflicts`, resolvable as today; a human has context and should choose |
-| a session's uncommitted pending work | **rebase** -- replay the pending operations onto the tip | each operation re-evaluates on its own terms. A CAS whose filter no longer matches simply matches nothing, exactly as in section 7.1 |
+| a session's uncommitted pending work | **rebase** -- replay the pending operations onto the tip | each operation re-evaluates on its own terms. A CAS whose filter no longer matches simply matches nothing, exactly as in section 5.1 |
 
-The second row is the proposal to validate (section 7.3). It makes
+The second row is the proposal to validate (section 5.3). It makes
 `--session-isolation` *less* of a special case, not more: a session is a
 long-running transaction, its pending operations are replayed onto current
 state at commit, and each one succeeds or fails on its own merits just as it
@@ -422,11 +356,11 @@ transaction is to abort and retry the transaction, not to resolve anything.
 Treating the pending ack as provisional is the existing model, not a new
 concession.
 
-### 7.3 Rebase-on-commit: to validate
+### 5.3 Rebase-on-commit: to validate
 
 Stated as a requirement to test, not a settled design:
 
-- A session forks at `v: 1` and runs the CAS from section 7.1. Another session
+- A session forks at `v: 1` and runs the CAS from section 5.1. Another session
   commits
   `v: 2` first. On `dumboCommit` the pending operation is replayed against the
   new tip, matches nothing, and the session is told its CAS did not apply --
@@ -456,15 +390,15 @@ against the branch tip at write time: tip evaluation gives earlier feedback but
 abandons the isolation it exists to provide, whereas replay preserves
 isolation and still reaches the right answer.
 
-### 7.4 What the mergeModes deliver on their own
+### 5.4 What the mergeModes deliver on their own
 
 Independent of any of the above: the modes stop the loss being **silent**
 on the merge path. Under `fieldTouched`, two CAS results that collide on `v` do
 not quietly combine, on any merge path. That is worth having by itself, and it
 is what this document commits to. How the losing side is then told -- conflict
-for a branch merge, replay for a pending session -- is section 7.2.
+for a branch merge, replay for a pending session -- is section 5.2.
 
-## 8. Default and configuration
+## 6. Default and configuration
 
 **The default is `fieldTouched`**, because the compare-and-swap of section 1
 has to work without a collection opting into anything. `documentTouched` would
@@ -493,7 +427,7 @@ It is collection config, stored in the per-collection catalog document in
   `listCollections`, which mirrors MongoDB.
 - The wire value is always the name, never a number.
 
-## 9. Still to pin
+## 7. Still to pin
 
 **What counts as a field.** Today a top-level key, with subdocuments and arrays
 atomic. Full paths would let `a.b` and `a.c` be distinct, which a `fieldTouched`
@@ -514,14 +448,14 @@ order and encoding cannot make two equal documents look different.
 It is itself branch-versioned data. Destination wins, strictest wins, or the
 divergence is itself a conflict? `metaConflicts` in `merge_validation.go` gives
 this a home. Note "strictest wins" is undefined across `fieldTouched` and
-`documentDivergent`, which are incomparable (section 5).
+`documentDivergent`, which are incomparable (section 3).
 
 **Conflict legibility.** A `fieldTouched` conflict reached through `dumboMerge`
 can have identical `ours` and `theirs`, which reads as a bug unless the
 envelope says why -- likely a new `reason.code`, following
 `docs/design/unique-collision-conflict-representation.md`.
 
-## 10. Out of scope
+## 8. Out of scope
 
 - Test plan and implementation.
 - A per-invocation mode override on `dumboMerge`. The collection config is the
