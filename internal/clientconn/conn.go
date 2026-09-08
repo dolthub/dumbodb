@@ -605,7 +605,8 @@ func (c *conn) route(connCtx context.Context, reqHeader *wire.MsgHeader, reqBody
 func (c *conn) dispatchThroughSession(connCtx context.Context, msg *wire.OpMsg, name string, cmd *handler.Command) (*wire.OpMsg, error) {
 	reg := c.h.SessionRegistry()
 	if reg == nil {
-		return c.invokeHandler(connCtx, msg, name, cmd)
+		resMsg, err := c.invokeHandler(connCtx, msg, name, cmd)
+		return resMsg, c.autoCommitAfter(connCtx, err)
 	}
 
 	ci := conninfo.Get(connCtx)
@@ -664,7 +665,16 @@ func (c *conn) dispatchThroughSession(connCtx context.Context, msg *wire.OpMsg, 
 		var handlerErr error
 		resMsg, handlerErr = c.invokeHandler(connCtx, msg, name, cmd)
 		if !reconcileAtCommandEnd {
-			return handlerErr
+			if handlerErr != nil {
+				return handlerErr
+			}
+			// A write whose boundary comes later -- a client transaction, or
+			// --session-isolation -- leaves the branches it recorded pending.
+			// The command that publishes them is the one that commits them.
+			if writes {
+				return nil
+			}
+			return c.h.AutoCommitBoundary(connCtx)
 		}
 		if handlerErr != nil {
 			c.h.AbandonWriteBoundary(connCtx)
@@ -674,7 +684,7 @@ func (c *conn) dispatchThroughSession(connCtx context.Context, msg *wire.OpMsg, 
 			c.h.AbandonWriteBoundary(connCtx)
 			return err
 		}
-		return nil
+		return c.h.AutoCommitBoundary(connCtx)
 	})
 	if errors.Is(runErr, sqlctx.ErrShadowInvalidated) {
 		return nil, shadowGoneError(shadow)
@@ -705,12 +715,21 @@ func (c *conn) invokeHandler(connCtx context.Context, msg *wire.OpMsg, name stri
 			fmt.Sprintf("no such command: '%s'", name),
 		)
 	}
-	resMsg, err := cmd.Handler(connCtx, msg)
+	return cmd.Handler(connCtx, msg)
+}
 
-	if acErr := c.h.AutoCommitBoundary(connCtx); acErr != nil && err == nil {
-		err = acErr
+// autoCommitAfter runs the --auto-commit boundary once the command's writes
+// have reached the branch. A handler error wins over an auto-commit error.
+//
+// Ordering is load-bearing: a write accumulates in the session overlay, so
+// draining the recorded branches before the overlay publishes commits a branch
+// that has not received the write. The record is consumed either way, so the
+// commit is not merely late, it never happens.
+func (c *conn) autoCommitAfter(connCtx context.Context, handlerErr error) error {
+	if handlerErr != nil {
+		return handlerErr
 	}
-	return resMsg, err
+	return c.h.AutoCommitBoundary(connCtx)
 }
 
 // logResponse dumps the header+body at DEBUG (ERROR on closeConn) and
