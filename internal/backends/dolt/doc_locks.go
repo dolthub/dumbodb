@@ -23,6 +23,7 @@ import (
 	"github.com/dolthub/dolt/go/store/hash"
 
 	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
@@ -162,23 +163,40 @@ func (m *DocLockManager) heldLocked(collection string, ids []hash.Hash) bool {
 	return false
 }
 
-// Skipped in --session-isolation mode: conflicts are resolved at doltCommit
-// time via three-way merge rather than at write time via locks.
+// ownerForDocLocks reports the lock owner for a write inside a transaction the
+// client opened itself, and whether there is one. Distinct from ownerForTxn,
+// which asks whether any session transaction is live: every write forks, so
+// that answer is yes for an ordinary write too.
+func ownerForDocLocks(ctx context.Context) (string, bool) {
+	ci := conninfo.GetIfPresent(ctx)
+	if ci == nil {
+		return "", false
+	}
+	if ci.InTransaction() {
+		return ci.Owner(), true
+	}
+	return "", false
+}
+
+// Document locks belong to client transactions and to nothing else. A write in
+// one Acquires, and fails fast with a WriteConflict when another transaction
+// already holds the document, which is how MongoDB reports transaction
+// contention.
 //
-// In default mode: transactional callers Acquire (fail-fast WriteConflict on
-// contention); non-transactional callers WaitForRelease (block until any
-// holding transaction commits or aborts) so they observe MongoDB's
-// "non-txn write blocks behind open transaction" semantics.
+// An ordinary write takes no lock, in any mode. It pins a BASE, accumulates in
+// the session overlay, and reconciles at its boundary, where the collection's
+// merge mode decides whether two writes to one document agree. A lock would
+// decide that first, at write time, and the mode would never run.
+// --session-isolation changes when the boundary falls, not what happens at it.
 func (b *Backend) acquireTxnLocks(ctx context.Context, db, branch, collection string, ids []hash.Hash, kind LockKind) error {
-	if b.sessionIsolation || len(ids) == 0 {
+	if len(ids) == 0 {
 		return nil
 	}
-	mgr := b.docLockManager(db, branch)
-	owner, inTxn := ownerForTxn(ctx)
-	if !inTxn {
-		return mgr.WaitForRelease(ctx, collection, ids)
+	owner, inClientTxn := ownerForDocLocks(ctx)
+	if !inClientTxn {
+		return nil
 	}
-	if err := mgr.Acquire(owner, collection, ids, kind); err != nil {
+	if err := b.docLockManager(db, branch).Acquire(owner, collection, ids, kind); err != nil {
 		if errors.Is(err, ErrWriteConflict) {
 			return backends.NewError(backends.ErrorCodeWriteConflict, err)
 		}
@@ -216,9 +234,6 @@ func idsFromValues(idVals []any) ([]hash.Hash, error) {
 }
 
 func (c *collection) acquireInsertLocks(ctx context.Context, docs []*types.Document) error {
-	if c.db.backend.sessionIsolation {
-		return nil
-	}
 	ids, err := idsFromDocs(docs)
 	if err != nil {
 		return err
@@ -227,9 +242,6 @@ func (c *collection) acquireInsertLocks(ctx context.Context, docs []*types.Docum
 }
 
 func (c *collection) acquireUpdateLocks(ctx context.Context, docs []*types.Document) error {
-	if c.db.backend.sessionIsolation {
-		return nil
-	}
 	ids, err := idsFromDocs(docs)
 	if err != nil {
 		return err
@@ -238,9 +250,6 @@ func (c *collection) acquireUpdateLocks(ctx context.Context, docs []*types.Docum
 }
 
 func (c *collection) acquireDeleteLocks(ctx context.Context, idVals []any) error {
-	if c.db.backend.sessionIsolation {
-		return nil
-	}
 	ids, err := idsFromValues(idVals)
 	if err != nil {
 		return err
