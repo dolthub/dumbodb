@@ -46,6 +46,7 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		"validator",
 		"validationLevel",
 		"validationAction",
+		"mergeMode",
 		"indexOptionDefaults",
 		"viewOn",
 		"pipeline",
@@ -290,6 +291,14 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 				"create",
 			)
 		}
+	}
+
+	if mergeModeVal, _ := document.Get("mergeMode"); mergeModeVal != nil {
+		mode, err := parseMergeMode(mergeModeVal, "create")
+		if err != nil {
+			return nil, err
+		}
+		params.MergeMode = mode
 	}
 
 	if collectionName == "" {

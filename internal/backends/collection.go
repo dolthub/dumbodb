@@ -638,3 +638,42 @@ var (
 	_ Collection      = (*collectionContract)(nil)
 	_ DistinctScanner = (*collectionContract)(nil)
 )
+
+// Merge modes name what makes two branches' changes to the same document a
+// conflict. Touched means a side wrote it at all; Divergent means the two
+// sides wrote it differently. The unit is the whole document or a single
+// field. These are the wire values, and the only values a client may set.
+//
+// See docs/design/merge-strictness.md.
+const (
+	MergeModeDocumentTouched   = "documentTouched"
+	MergeModeFieldTouched      = "fieldTouched"
+	MergeModeFieldDivergent    = "fieldDivergent"
+	MergeModeDocumentDivergent = "documentDivergent"
+
+	// DefaultMergeModeName is what a collection gets when it declares
+	// nothing. The MongoDB compare-and-swap pattern has to work without
+	// opting in, and fieldTouched is the weakest mode under which it does.
+	DefaultMergeModeName = MergeModeFieldTouched
+)
+
+// MergeModeNames lists the settable merge modes in the order they are
+// documented, for error messages and for any surface that enumerates them.
+func MergeModeNames() []string {
+	return []string{
+		MergeModeDocumentTouched,
+		MergeModeFieldTouched,
+		MergeModeFieldDivergent,
+		MergeModeDocumentDivergent,
+	}
+}
+
+// ValidMergeMode reports whether name is a settable merge mode.
+func ValidMergeMode(name string) bool {
+	switch name {
+	case MergeModeDocumentTouched, MergeModeFieldTouched,
+		MergeModeFieldDivergent, MergeModeDocumentDivergent:
+		return true
+	}
+	return false
+}

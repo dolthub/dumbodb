@@ -24,6 +24,7 @@ import (
 	"github.com/dolthub/dolt/go/store/prolly/tree"
 	"github.com/dolthub/dolt/go/store/val"
 
+	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
@@ -34,25 +35,33 @@ import (
 // See docs/design/merge-strictness.md.
 type MergeMode string
 
+// The names are the wire values, so there is one source of truth for what a
+// client may set and what the merge acts on.
 const (
-	MergeModeDocumentTouched   MergeMode = "documentTouched"
-	MergeModeFieldTouched      MergeMode = "fieldTouched"
-	MergeModeFieldDivergent    MergeMode = "fieldDivergent"
-	MergeModeDocumentDivergent MergeMode = "documentDivergent"
+	MergeModeDocumentTouched   MergeMode = backends.MergeModeDocumentTouched
+	MergeModeFieldTouched      MergeMode = backends.MergeModeFieldTouched
+	MergeModeFieldDivergent    MergeMode = backends.MergeModeFieldDivergent
+	MergeModeDocumentDivergent MergeMode = backends.MergeModeDocumentDivergent
 )
 
 // DefaultMergeMode is what a collection gets when it declares nothing. The
 // MongoDB compare-and-swap pattern has to work without opting in, and
 // fieldTouched is the weakest mode under which it does.
-const DefaultMergeMode = MergeModeFieldTouched
+const DefaultMergeMode = MergeMode(backends.DefaultMergeModeName)
 
 func (m MergeMode) valid() bool {
-	switch m {
-	case MergeModeDocumentTouched, MergeModeFieldTouched,
-		MergeModeFieldDivergent, MergeModeDocumentDivergent:
-		return true
+	return backends.ValidMergeMode(string(m))
+}
+
+// mergeModeOrDefault resolves a collection's declared mode. An absent or
+// unrecognized value resolves to the default, which keeps catalogs written
+// before the field existed readable.
+func mergeModeOrDefault(declared string) MergeMode {
+	m := MergeMode(declared)
+	if !m.valid() {
+		return DefaultMergeMode
 	}
-	return false
+	return m
 }
 
 // changedFields reports the top-level keys where doc differs from base. A nil
