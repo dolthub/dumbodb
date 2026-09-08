@@ -1065,11 +1065,18 @@ func captureConflictsForCollection(
 	// the convergent ones the differ would otherwise resolve without asking,
 	// so tryMergeJSON now only runs where the mode defers.
 	//
-	// The catalog is exempt. It holds collection metadata rather than
-	// documents, its rows are not what a mode describes, and two sides that
-	// implicitly create the same collection each mint their own uuid -- which
-	// a Touched mode would read as a collision. Catalog conflicts keep their
-	// own handling.
+	// The catalog keeps the differ's existing field-divergent behaviour rather
+	// than taking a collection's mode. Its rows are derived from DDL, not
+	// written by users, and two sides that implicitly create the same
+	// collection produce an identical catalog document -- the uuid is derived
+	// from the database and collection names (catalogUUID), precisely so that
+	// case merges. A Touched mode conflicts on an identical add, which would
+	// make two clients writing to a not-yet-created collection collide over
+	// metadata neither of them chose.
+	//
+	// Genuine metadata divergence is still caught: two sides setting different
+	// validators conflict here and surface as a typed metadata conflict, which
+	// TestResolveConflict_MetadataByIDAlone covers.
 	var policy tree.RowMergePolicy
 	if collection != reservedCatalogName {
 		policy = rowMergePolicy(ns, DefaultMergeMode)
