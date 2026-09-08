@@ -16,6 +16,7 @@ package dolt
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 
 	"github.com/dolthub/go-mysql-server/sql"
@@ -176,17 +177,21 @@ func rowMergePolicy(ns tree.NodeStore, mode MergeMode) tree.RowMergePolicy {
 		if sqlCtx != nil {
 			ctx = sqlCtx
 		}
+		// Errors propagate. Deferring on a decode failure would silently fall
+		// back to comparing whole values, which is the behaviour the mode
+		// exists to replace: a merge would look clean and quietly keep one of
+		// two writes.
 		leftDoc, err := documentOrNil(ctx, ns, left)
 		if err != nil {
-			return nil, tree.RowMergeDefer, nil
+			return nil, tree.RowMergeDefer, fmt.Errorf("merge mode %s: reading ours: %w", mode, err)
 		}
 		rightDoc, err := documentOrNil(ctx, ns, right)
 		if err != nil {
-			return nil, tree.RowMergeDefer, nil
+			return nil, tree.RowMergeDefer, fmt.Errorf("merge mode %s: reading theirs: %w", mode, err)
 		}
 		baseDoc, err := documentOrNil(ctx, ns, base)
 		if err != nil {
-			return nil, tree.RowMergeDefer, nil
+			return nil, tree.RowMergeDefer, fmt.Errorf("merge mode %s: reading base: %w", mode, err)
 		}
 
 		if mode.conflicts(baseDoc, leftDoc, rightDoc) {
@@ -208,7 +213,7 @@ func rowMergePolicy(ns tree.NodeStore, mode MergeMode) tree.RowMergePolicy {
 		}
 		mergedVal, err := writeDocToValue(ctx, ns, merged)
 		if err != nil {
-			return nil, tree.RowMergeDefer, nil
+			return nil, tree.RowMergeDefer, fmt.Errorf("merge mode %s: writing merged document: %w", mode, err)
 		}
 		return mergedVal, tree.RowMergeResolved, nil
 	}
