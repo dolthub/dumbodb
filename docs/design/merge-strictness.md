@@ -423,8 +423,11 @@ It is collection config, stored in the per-collection catalog document in
 - `docToCollMeta` returns the zero value for an absent key, so old catalogs
   decode as unset. **Unset must resolve to the default.**
 - Settable at `create`, changeable with `collMod`, matching `validator`.
-- Reported by whichever dumbo-only surface lists collection config, never by
-  `listCollections`, which mirrors MongoDB.
+- Reported by `listCollections`, alongside `validator` and the validation
+  settings. A deliberate deviation from MongoDB, which has no such option:
+  reading configuration back matters more than matching a surface MongoDB has
+  no reason to carry. An unset mode is left unreported rather than
+  materialized, as the validation defaults are.
 - The wire value is always the name, never a number.
 
 ## 7. Still to pin

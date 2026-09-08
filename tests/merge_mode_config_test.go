@@ -148,25 +148,70 @@ func TestMergeMode_RejectsUnknownName(t *testing.T) {
 	require.Error(t, err, "a non-string mergeMode must be rejected")
 }
 
-// listCollections mirrors MongoDB, which has no such option.
-func TestMergeMode_AbsentFromListCollections(t *testing.T) {
+// mergeMode is reported with the rest of a collection's configuration, so a
+// client can read back what it set. It has no MongoDB counterpart, which is a
+// deliberate deviation: reading configuration back matters more here than
+// matching a surface MongoDB has no reason to carry.
+func TestMergeMode_ReportedByListCollections(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
 	db := env.Client.Database(fmt.Sprintf("mml_%d", rand.Int64N(1_000_000)))
+
 	require.NoError(t, db.RunCommand(ctx, bson.D{
-		{Key: "create", Value: "docs"},
+		{Key: "create", Value: "declared"},
 		{Key: "mergeMode", Value: "documentTouched"},
+	}).Err())
+	require.NoError(t, db.RunCommand(ctx, bson.D{
+		{Key: "create", Value: "unset"},
 	}).Err())
 
 	cur, err := db.ListCollections(ctx, bson.D{})
 	require.NoError(t, err)
 	var specs []bson.M
 	require.NoError(t, cur.All(ctx, &specs))
-	require.NotEmpty(t, specs)
+
+	byName := map[string]bson.M{}
 	for _, spec := range specs {
-		assert.NotContains(t, spec, "mergeMode", "listCollections must not expose mergeMode")
-		if opts, ok := spec["options"].(bson.M); ok {
-			assert.NotContains(t, opts, "mergeMode", "listCollections options must not expose mergeMode")
-		}
+		name, _ := spec["name"].(string)
+		byName[name] = spec
 	}
+	require.Contains(t, byName, "declared")
+	require.Contains(t, byName, "unset")
+
+	declaredOpts, ok := byName["declared"]["options"].(bson.M)
+	require.True(t, ok, "declared collection must report options")
+	assert.Equal(t, "documentTouched", declaredOpts["mergeMode"],
+		"a declared mergeMode must be reported alongside the other options")
+
+	// An unset mode is left unreported rather than materialized, the same way
+	// the validation defaults are.
+	if unsetOpts, ok := byName["unset"]["options"].(bson.M); ok {
+		assert.NotContains(t, unsetOpts, "mergeMode",
+			"an unset mergeMode must not be materialized")
+	}
+}
+
+// collMod's change is visible through listCollections.
+func TestMergeMode_CollModVisibleInListCollections(t *testing.T) {
+	env := startDumboDB(t)
+	ctx := context.Background()
+	db := env.Client.Database(fmt.Sprintf("mmv_%d", rand.Int64N(1_000_000)))
+
+	require.NoError(t, db.RunCommand(ctx, bson.D{
+		{Key: "create", Value: "docs"},
+		{Key: "mergeMode", Value: "fieldDivergent"},
+	}).Err())
+	require.NoError(t, db.RunCommand(ctx, bson.D{
+		{Key: "collMod", Value: "docs"},
+		{Key: "mergeMode", Value: "fieldTouched"},
+	}).Err())
+
+	cur, err := db.ListCollections(ctx, bson.D{{Key: "name", Value: "docs"}})
+	require.NoError(t, err)
+	var specs []bson.M
+	require.NoError(t, cur.All(ctx, &specs))
+	require.Len(t, specs, 1)
+	opts, ok := specs[0]["options"].(bson.M)
+	require.True(t, ok)
+	assert.Equal(t, "fieldTouched", opts["mergeMode"])
 }
