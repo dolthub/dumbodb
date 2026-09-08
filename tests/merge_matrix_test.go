@@ -390,7 +390,7 @@ func TestMergeMatrix_ConflictingAdds(t *testing.T) {
 	assert.Equal(t, "main", getDocField(t, col, 10, "v"), "ours resolution keeps main's value")
 }
 
-func TestMergeMatrix_ConvergentModify_NoConflict(t *testing.T) {
+func TestMergeMatrix_ConvergentModify_Conflicts(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
 	dbName := fmt.Sprintf("mm6_%d", rand.Int64N(1_000_000))
@@ -414,16 +414,20 @@ func TestMergeMatrix_ConvergentModify_NoConflict(t *testing.T) {
 	require.NoError(t, err)
 	dumboDBCommit(t, env, dbName+"@feature", "feature same", "bob")
 
-	// Merge: convergent edit -- no conflict.
-	var mergeRaw bson.M
-	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
+	// Both sides moved v from "orig" to "same", so the documents are identical
+	// and the differ would call this a convergent edit. Under the default
+	// mergeMode, fieldTouched, it is a conflict: both sides wrote v, and
+	// agreeing on the result does not make it safe to keep only one write.
+	// This is the compare-and-swap race -- two guarded updates from the same
+	// base converge by design, and merging them silently discards one.
+	mergeRaw := runCommandRaw(t, mainDB, bson.D{
 		{Key: "doltMerge", Value: int32(1)},
 		{Key: "mergeIn", Value: "feature"},
-	}).Decode(&mergeRaw), "convergent edits must not conflict")
-	assert.EqualValues(t, 1, mergeRaw["ok"])
-
-	col := mainDB.Collection("items")
-	assert.Equal(t, "same", getDocField(t, col, 1, "v"))
+	})
+	require.EqualValues(t, 0, mergeRaw["ok"],
+		"convergent edits must conflict under fieldTouched: %v", mergeRaw)
+	conflicts := getConflictsByCollection(t, mainDB)
+	assert.Len(t, conflicts["items"], 1, "expected one document conflict")
 }
 
 func TestMergeMatrix_MultiCollection_MixedConflicts(t *testing.T) {
