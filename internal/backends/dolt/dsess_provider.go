@@ -31,6 +31,7 @@ import (
 	"github.com/dolthub/dolt/go/libraries/doltcore/table/editor"
 	"github.com/dolthub/dolt/go/libraries/utils/filesys"
 	"github.com/dolthub/dolt/go/libraries/utils/keymutex"
+	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/types"
 
 	"github.com/dolthub/dumbodb/internal/sqlctx"
@@ -113,10 +114,44 @@ func (p *dumbodbProvider) CloneDatabaseFromRemote(_ *sql.Context, _, _, _, _ str
 	return fmt.Errorf("dumbodb provider: CloneDatabaseFromRemote not supported")
 }
 
+// canonicalBranchRev returns rev spelled the way the branch ref actually
+// spells it. A revision reaches dsess folded to lower case, and dsess keys
+// branch states by the revision string, so a mixed-case branch would resolve
+// to a state that was never created and every write to it would fail with
+// "branch not found".
+func (p *dumbodbProvider) canonicalBranchRev(ctx *sql.Context, baseName, rev string) (string, error) {
+	state, found := p.dbLookup(baseName)
+	if !found {
+		return rev, nil
+	}
+	if ds, err := state.datasDB.GetDataset(ctx, branchRefPrefix+rev); err == nil && ds.HasHead() {
+		return rev, nil
+	}
+	datasets, err := state.datasDB.Datasets(ctx)
+	if err != nil {
+		return "", fmt.Errorf("dumbodb provider: listing datasets for %q: %w", baseName, err)
+	}
+	canonical := rev
+	if err := datasets.IterAll(ctx, func(id string, _ hash.Hash) error {
+		candidate, isBranch := strings.CutPrefix(id, branchRefPrefix)
+		if isBranch && strings.EqualFold(candidate, rev) {
+			canonical = candidate
+		}
+		return nil
+	}); err != nil {
+		return "", fmt.Errorf("dumbodb provider: iterating datasets for %q: %w", baseName, err)
+	}
+	return canonical, nil
+}
+
 func (p *dumbodbProvider) SessionDatabase(ctx *sql.Context, name string) (dsess.SqlDatabase, bool, error) {
 	baseName, rev := doltdb.SplitRevisionDbName(name)
 	if rev == "" {
 		rev = defaultBranch
+	}
+	rev, err := p.canonicalBranchRev(ctx, baseName, rev)
+	if err != nil {
+		return nil, false, err
 	}
 	db, ok, err := p.getOrBuildSqleDatabase(ctx, baseName)
 	if err != nil {
