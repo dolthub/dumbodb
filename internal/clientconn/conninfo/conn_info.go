@@ -55,6 +55,7 @@ type ConnInfo struct {
 
 	inTransaction bool // protected by rw
 	forked        bool // protected by rw; a write command's transaction is live
+	writing       bool // protected by rw; a write command is executing right now
 	txnAborted    bool // protected by rw; set when server rejects a txn op, makes subsequent commitTransaction return NoSuchTransaction
 
 	metadataRecv bool // protected by rw
@@ -288,6 +289,23 @@ func (connInfo *ConnInfo) SetForked(v bool) {
 	connInfo.rw.Lock()
 	defer connInfo.rw.Unlock()
 	connInfo.forked = v
+}
+
+// Writing reports whether a write command is executing on this connection
+// right now. Distinct from Forked, which stays true for as long as the fork
+// lives -- across commands under --session-isolation. Only the command that
+// writes needs its reads pinned to the root it will merge against; a read
+// issued between writes should see the newest data.
+func (connInfo *ConnInfo) Writing() bool {
+	connInfo.rw.RLock()
+	defer connInfo.rw.RUnlock()
+	return connInfo.writing
+}
+
+func (connInfo *ConnInfo) SetWriting(v bool) {
+	connInfo.rw.Lock()
+	defer connInfo.rw.Unlock()
+	connInfo.writing = v
 }
 
 func (connInfo *ConnInfo) SetInTransaction(v bool) {

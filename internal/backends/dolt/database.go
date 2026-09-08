@@ -25,6 +25,7 @@ import (
 	"github.com/dolthub/dolt/go/store/prolly"
 
 	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/sqlctx"
 )
 
@@ -89,9 +90,20 @@ func latestBranchWS(ctx context.Context, state *dbState, branch string) (*doltdb
 	return state.loadCommittedWS(ctx, branch)
 }
 
-// txnVisibleWS returns the session's branchState only when DirtyBranch-
-// Revisions reports this (db, branch) as dirty; this gives read-your-own-
-// writes without pinning to a stale txn-start snapshot for clean reads.
+// txnVisibleWS returns the working set a command must read.
+//
+// A dirty branch means the session already has an overlay: read it, so a
+// connection sees its own writes. A write command with no overlay yet reads
+// the root its transaction pinned, so the whole command -- filter, read, and
+// write -- sees one root. Without that pin the read returns the latest state
+// on disk, and since a write replaces the whole document, another
+// connection's concurrent field write would be copied into this command's
+// overlay as though this command had made it.
+//
+// A read pins nothing and sees the latest state. That holds under
+// --session-isolation too, where the fork lives across commands: the fork
+// stops the root moving once you start writing, and until then a read should
+// see what other connections have committed.
 func txnVisibleWS(ctx context.Context, state *dbState, branch string) (*doltdb.WorkingSet, bool) {
 	sess := sessionFromContext(ctx)
 	if sess == nil {
@@ -100,17 +112,28 @@ func txnVisibleWS(ctx context.Context, state *dbState, branch string) (*doltdb.W
 	if !dbNameDsessFriendly(state.name) || alwaysAutoCommit(state.name) {
 		return nil, false
 	}
-	if !sess.IsBranchDirty(state.name, branch) {
+	writing := false
+	if ci := conninfo.GetIfPresent(ctx); ci != nil {
+		writing = ci.Writing()
+	}
+	if !writing && !sess.IsBranchDirty(state.name, branch) {
 		return nil, false
 	}
 	qualified := qualifiedDbName(state.name, branch)
 	sqlCtx := sqlctx.Wrap(ctx, sess)
 	sessState, ok, err := sess.LookupDbState(sqlCtx, qualified)
-	if err != nil || !ok {
+	if err == nil && ok {
+		if ws := sessState.WorkingSet(); ws != nil {
+			return ws, true
+		}
+	}
+	if !writing {
 		return nil, false
 	}
-	ws := sessState.WorkingSet()
-	if ws == nil {
+	// Deliberately not installed on the session: a read must not mark the
+	// branch dirty, or a read-only command would reconcile at its boundary.
+	ws, pinned, err := state.txnBaseWS(ctx, sess, branch)
+	if err != nil || !pinned {
 		return nil, false
 	}
 	return ws, true

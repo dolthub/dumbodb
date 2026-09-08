@@ -539,9 +539,19 @@ func (state *dbState) getOrInitBranchWS(ctx context.Context, branch string) (*do
 					return ws, nil
 				}
 			}
-			ws, err := state.loadCommittedWS(ctx, branch)
+			// Seed the overlay at the root the transaction pinned, the same
+			// root its reads come from. Seeding from the latest state instead
+			// would fold another connection's concurrent write into this
+			// transaction's changes.
+			ws, pinned, err := state.txnBaseWS(ctx, sess, branch)
 			if err != nil {
 				return nil, err
+			}
+			if !pinned {
+				ws, err = state.loadCommittedWS(ctx, branch)
+				if err != nil {
+					return nil, err
+				}
 			}
 			if err := sess.SetWorkingSet(sqlCtx, qualified, ws); err != nil {
 				return nil, fmt.Errorf("getOrInitBranchWS: SetWorkingSet for %q: %w", qualified, err)
@@ -589,23 +599,14 @@ func ownerForTxn(ctx context.Context) (string, bool) {
 // commitDirtyBranchesForSession three-way merges each dirty branch's
 // session overlay against the current ref and persists the result.
 // sess.CommitWorkingSet's merger walks tables via the standard RootValue
-// format and drops dumbodb's opaque-AM collection entries on the floor;
-// merge.MergeRoots with the sqle.Database resolver handles them.
+// format and drops dumbodb's opaque-AM collection entries on the floor, so
+// the merge goes through reconcileWorkingSets instead.
 // Caller must hold state.mu write lock.
 func (state *dbState) commitDirtyBranchesForSession(sqlCtx *sql.Context, sess *dsess.DoltSession, tx sql.Transaction) ([]string, error) {
 	dtx, ok := tx.(*dsess.DoltTransaction)
 	if !ok {
 		return nil, fmt.Errorf("commitTransaction: expected *dsess.DoltTransaction, got %T", tx)
 	}
-	sqlDB, sqlOk, err := state.backend.provider.getOrBuildSqleDatabase(sqlCtx, state.name)
-	if err != nil {
-		return nil, fmt.Errorf("commitTransaction: resolving sqle.Database for %q: %w", state.name, err)
-	}
-	if !sqlOk {
-		return nil, fmt.Errorf("commitTransaction: sqle.Database not found for %q", state.name)
-	}
-	resolver := sqlDB.GetTableResolver()
-
 	var branches []string
 	for _, dirtyBranch := range sess.DirtyBranches() {
 		base, branch := dirtyBranch.DbName, dirtyBranch.Branch
@@ -643,7 +644,7 @@ func (state *dbState) commitDirtyBranchesForSession(sqlCtx *sql.Context, sess *d
 			return branches, fmt.Errorf("commitTransaction: resolving theirs WS for %q: %w", branch, err)
 		}
 
-		merged, err := mergePendingIntoCommitted(sqlCtx, resolver, baseWS, ours, theirs)
+		merged, err := state.reconcileWorkingSets(sqlCtx, baseWS, ours, theirs)
 		if err != nil {
 			return branches, fmt.Errorf("commitTransaction: merging %q: %w", qualified, err)
 		}
