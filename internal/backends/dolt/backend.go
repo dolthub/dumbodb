@@ -710,6 +710,7 @@ func (b *Backend) DropDatabase(ctx context.Context, params *backends.DropDatabas
 		db.mu.Unlock()
 		delete(b.dbs, params.Name)
 	}
+	b.provider.forgetDatabase(params.Name)
 
 	// Soft delete: move (not remove) into the preserved-drops store so UndropDatabase can restore it.
 	dest, err := b.preservedDest(params.Name)

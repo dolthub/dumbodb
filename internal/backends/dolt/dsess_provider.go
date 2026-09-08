@@ -274,6 +274,16 @@ func (p *dumbodbProvider) getOrBuildSqleDatabase(ctx *sql.Context, baseName stri
 	return db, true, nil
 }
 
+// forgetDatabase drops the cached sqle.Database for name. The cache pins a
+// *doltdb.DoltDB, so a database dropped and recreated under the same name
+// would otherwise keep serving the closed store, and a read through it fails
+// with an empty file ID.
+func (p *dumbodbProvider) forgetDatabase(name string) {
+	p.dbCacheMu.Lock()
+	defer p.dbCacheMu.Unlock()
+	delete(p.dbCache, strings.ToLower(name))
+}
+
 // writer.NewWriteSession is required, not optional: dsess.addDB invokes the
 // WriteSessFunc when first materializing a branchState and nil-derefs without
 // it.
