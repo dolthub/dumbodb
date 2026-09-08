@@ -48,7 +48,7 @@ func (h *Handler) MsgCollMod(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 	}
 	common.Ignored(document, h.L, ignoredFields...)
 
-	allowed := append([]string{"validator", "validationLevel", "validationAction", "viewOn", "pipeline"}, ignoredFields...)
+	allowed := append([]string{"validator", "validationLevel", "validationAction", "mergeMode", "viewOn", "pipeline"}, ignoredFields...)
 	if err = common.RejectUnknownFields(document, allowed...); err != nil {
 		return nil, err
 	}
@@ -129,6 +129,14 @@ func (h *Handler) MsgCollMod(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 				"collMod",
 			)
 		}
+	}
+
+	if mergeModeVal, _ := document.Get("mergeMode"); mergeModeVal != nil {
+		mode, err := parseMergeMode(mergeModeVal, "collMod")
+		if err != nil {
+			return nil, err
+		}
+		params.MergeMode = mode
 	}
 
 	if viewOnVal, _ := document.Get("viewOn"); viewOnVal != nil {

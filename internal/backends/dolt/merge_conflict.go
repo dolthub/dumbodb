@@ -1024,6 +1024,7 @@ func captureConflictsForCollection(
 	theirHash hash.Hash,
 	applier *indexMergeApplier,
 	oursDesc, theirsDesc string,
+	mode MergeMode,
 ) (mergedMap prolly.Map, entries []*conflictEntry, err error) {
 	ns := baseMap.NodeStore()
 
@@ -1079,7 +1080,7 @@ func captureConflictsForCollection(
 	// TestResolveConflict_MetadataByIDAlone covers.
 	var policy tree.RowMergePolicy
 	if collection != reservedCatalogName {
-		policy = rowMergePolicy(ns, DefaultMergeMode)
+		policy = rowMergePolicy(ns, mode)
 	}
 	differ, err := tree.NewThreeWayDiffer[val.Tuple, val.Tuple, *val.TupleDesc](
 		ctx, ns,
@@ -1608,7 +1609,16 @@ func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, 
 		}
 		applier := &indexMergeApplier{state: state, survivors: survivors}
 
-		mergedMap, collConflicts, err := captureConflictsForCollection(ctx, name, intoMap, fromMap, baseMap, theirHash, applier, oursDesc, theirsDesc)
+		// The destination branch's declared mode governs the merge. Which
+		// side's mode should win when the two branches disagree about it is
+		// still open (see docs/design/merge-strictness.md); taking ours keeps
+		// the choice with the branch being merged into.
+		mode := DefaultMergeMode
+		if meta, metaErr := readCatalogDoc(ctx, state, intoAM, name); metaErr == nil && meta != nil {
+			mode = mergeModeOrDefault(meta.MergeMode)
+		}
+
+		mergedMap, collConflicts, err := captureConflictsForCollection(ctx, name, intoMap, fromMap, baseMap, theirHash, applier, oursDesc, theirsDesc, mode)
 		if err != nil {
 			return prolly.AddressMap{}, nil, nil, nil, fmt.Errorf("merging collection %q: %w", name, err)
 		}
