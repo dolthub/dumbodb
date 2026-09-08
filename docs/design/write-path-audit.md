@@ -40,14 +40,23 @@ merge.
 | conjunct | fails when | who lands there |
 |---|---|---|
 | `sess.GetTransaction() != nil` | nothing started a transaction | **every ordinary write.** Nothing starts one except an explicit `commitTransaction` flow or `--session-isolation` |
-| `dbNameDsessFriendly(name)` | the name contains `/` or `@` | **every branch-qualified write**, `db@branch`, even inside a transaction |
+| `dbNameDsessFriendly(name)` | the **base** name contains `/` or `@` | only a database literally named with `@` and an all-digit suffix (see below) |
 | `!alwaysAutoCommit(name)` | the name is `admin` | anything writing through the `admin` database |
 | `sess != nil` | no session on the context | background loops: capped-collection cleanup, GC |
 
-The first row is the one the compare-and-swap defect rides on. The second is
-the one most likely to surprise later: a write addressed to `db@feature`
-bypasses the merge path even when the client is in a transaction, because the
-`@` makes the name not dsess-friendly.
+The first row is the one the compare-and-swap defect rides on.
+
+The second row is narrower than it looks and needs stating carefully.
+`dbNameDsessFriendly` is applied to `state.name`, which is the **base**
+database name: `splitEncodedDBName` has already removed the rootish suffix, and
+`dbState.name` is documented as the directory name without it. So a write
+addressed to `mydb@feature` is checked as `mydb` and takes the session route
+normally. The check only fails when the base name itself contains `@` or `/`,
+which `splitEncodedDBName` produces deliberately for an all-digit suffix -- a
+database named `prefix@1775505756999075683` stays one name rather than being
+misparsed as a branch. That is a guard against dsess misreading a name, not a
+merge bypass, and the population it affects is databases whose names look like
+that.
 
 ## 3. Errors dropped or ignored
 
