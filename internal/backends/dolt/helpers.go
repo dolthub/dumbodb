@@ -662,6 +662,17 @@ func (state *dbState) commitDirtyBranchesForSession(sqlCtx *sql.Context, sess *d
 		}
 		branches = append(branches, branch)
 	}
+
+	// The transaction is over, so the session must hold no pending state for
+	// this database. SetWorkingSet above leaves the branch marked dirty, and
+	// txnVisibleWS serves every later read from the session while that flag is
+	// set -- so a subsequent non-transactional write, which publishes straight
+	// to disk, would be invisible to the connection that made it.
+	if len(branches) > 0 {
+		if err := sess.RemoveDbState(sqlCtx, state.name); err != nil {
+			return branches, fmt.Errorf("commitTransaction: clearing session state for %q: %w", state.name, err)
+		}
+	}
 	return branches, nil
 }
 
@@ -731,6 +742,16 @@ func (state *dbState) updateWorkingRoot(ctx context.Context, branch, commitMsg s
 	// dirty, because the deferred flusher walks every dirty session and
 	// would overwrite the latest writer's disk state with each idle
 	// session's stale per-session WS snapshot every tick.
+	// Auto-commit bookkeeping records that this database and branch were
+	// written. It is independent of how the write reaches disk, so it happens
+	// before the route fork -- a write kept on the session still has to produce
+	// a Dolt commit once the boundary publishes it.
+	if state.backend.autoCommit || alwaysAutoCommit(state.name) {
+		if ci := conninfo.GetIfPresent(ctx); ci != nil {
+			ci.RecordAutoCommit(state.name, branch, commitMsg)
+		}
+	}
+
 	sess := sessionFromContext(ctx)
 	if sess != nil && sess.GetTransaction() != nil && dbNameDsessFriendly(state.name) && !alwaysAutoCommit(state.name) {
 		sqlCtx := sqlctx.Wrap(ctx, sess)
@@ -754,11 +775,6 @@ func (state *dbState) updateWorkingRoot(ctx context.Context, branch, commitMsg s
 		return fmt.Errorf("updating working set: %w", err)
 	}
 
-	if state.backend.autoCommit || alwaysAutoCommit(state.name) {
-		if ci := conninfo.GetIfPresent(ctx); ci != nil {
-			ci.RecordAutoCommit(state.name, branch, commitMsg)
-		}
-	}
 	return nil
 }
 
