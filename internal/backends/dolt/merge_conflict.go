@@ -1060,10 +1060,25 @@ func captureConflictsForCollection(
 		return mergedVal, true, nil
 	}
 
+	// The merge mode decides what counts as a conflict for a user collection's
+	// documents. It is consulted for every three-way row decision, including
+	// the convergent ones the differ would otherwise resolve without asking,
+	// so tryMergeJSON now only runs where the mode defers.
+	//
+	// The catalog is exempt. It holds collection metadata rather than
+	// documents, its rows are not what a mode describes, and two sides that
+	// implicitly create the same collection each mint their own uuid -- which
+	// a Touched mode would read as a collision. Catalog conflicts keep their
+	// own handling.
+	var policy tree.RowMergePolicy
+	if collection != reservedCatalogName {
+		policy = rowMergePolicy(ns, DefaultMergeMode)
+	}
 	differ, err := tree.NewThreeWayDiffer[val.Tuple, val.Tuple, *val.TupleDesc](
 		ctx, ns,
 		intoMap.Tuples(), fromMap.Tuples(), baseMap.Tuples(),
 		tryMergeJSON,
+		policy,
 		false, // not keyless
 		tree.ThreeWayDiffInfo{},
 		intoMap.KeyDesc(),
