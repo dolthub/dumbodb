@@ -188,6 +188,7 @@ func (db *database) ListCollections(ctx context.Context, params *backends.ListCo
 			ci.TimeField = m.TimeField
 			ci.MetaField = m.MetaField
 			ci.Granularity = m.Granularity
+			ci.MergeMode = m.MergeMode
 		}
 		colls = append(colls, ci)
 		return nil
