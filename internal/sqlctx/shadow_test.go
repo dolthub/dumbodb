@@ -96,9 +96,9 @@ func TestShadow_Commit_OnInvalidatedShadow_ReturnsErrShadowInvalidated(t *testin
 	assert.False(t, called)
 }
 
-// External writeMu acquire must block until fn returns; this is what
-// the registry's invalidate paths rely on to fence a commit.
-func TestShadow_Commit_HoldsWriteMuForDurationOfFn(t *testing.T) {
+// An external command-latch acquire must block until fn returns; this is
+// what the registry's teardown path relies on to fence a live command.
+func TestShadow_Commit_HoldsCommandLatchForDurationOfFn(t *testing.T) {
 	s := newShadowForTest(t)
 
 	const fnDuration = 80 * time.Millisecond
@@ -117,9 +117,9 @@ func TestShadow_Commit_HoldsWriteMuForDurationOfFn(t *testing.T) {
 
 	<-commitStarted
 	acquireStarted := time.Now()
-	s.writeMu.Lock()
+	s.state.cmdMu.Lock()
 	acquired := time.Now()
-	s.writeMu.Unlock()
+	s.state.cmdMu.Unlock()
 
 	commitDoneAt := <-commitReturned
 
