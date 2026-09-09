@@ -25,12 +25,25 @@ import (
 type SessionFactory func(lsid string) (*dsess.DoltSession, error)
 
 type sessionEntry struct {
-	sess   *dsess.DoltSession
+	state  *sessionState
 	shadow atomic.Pointer[Shadow]
 }
 
-// Lock order is r.mu then shadow.writeMu. Shadow.Commit takes only
-// writeMu.
+// teardown ends the session under the command latch so SessionEnd never
+// lands on an outstanding command. Callers must have already detached the
+// entry from r.sessions, and must not hold r.mu.
+func (e *sessionEntry) teardown() {
+	e.state.cmdMu.Lock()
+	defer e.state.cmdMu.Unlock()
+
+	e.shadow.Load().purge()
+	e.state.sess.SessionEnd()
+}
+
+// Lock order is r.mu then sessionState.cmdMu, and the two are never held
+// together: a command can call back into End (endSessions dispatches
+// through Shadow.Use), so any path that waits on cmdMu releases r.mu
+// first. See detach / teardown.
 type SessionRegistry struct {
 	mu       sync.Mutex
 	sessions map[string]*sessionEntry
@@ -58,21 +71,18 @@ func (r *SessionRegistry) WithClock(now func() time.Time) *SessionRegistry {
 // Connect supersedes any existing shadow for lsid. The new shadow
 // carries forward lastUsed so reconnection does not reset the idle
 // window -- the first Use/Commit on the returned shadow records actual
-// activity.
+// activity. The new shadow shares the entry's session and command latch,
+// so its first command cannot overlap one still running on the shadow it
+// replaced.
 func (r *SessionRegistry) Connect(lsid string) (*Shadow, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	if entry, ok := r.sessions[lsid]; ok {
 		oldShadow := entry.shadow.Load()
-		oldShadow.writeMu.Lock()
 		oldShadow.invalidate()
-		carried := oldShadow.lastUsed.Load()
-		oldShadow.writeMu.Unlock()
 
-		newShadow := &Shadow{sess: entry.sess}
-		newShadow.lastUsed.Store(carried)
-		newShadow.active.Store(true)
+		newShadow := newShadow(entry.state, oldShadow.lastUsed.Load())
 		entry.shadow.Store(newShadow)
 		return newShadow, nil
 	}
@@ -82,35 +92,46 @@ func (r *SessionRegistry) Connect(lsid string) (*Shadow, error) {
 		return nil, err
 	}
 
-	shadow := NewShadow(sess, r.nowFn())
-	entry := &sessionEntry{sess: sess}
+	entry := &sessionEntry{state: &sessionState{sess: sess}}
+	shadow := newShadow(entry.state, r.nowFn().UnixNano())
 	entry.shadow.Store(shadow)
 	r.sessions[lsid] = entry
 	return shadow, nil
 }
 
-func (r *SessionRegistry) PurgeNow(lsid string) bool {
+// detach removes lsid from the registry and returns its entry. When
+// idleBefore is non-nil the entry is left in place unless its shadow is
+// still idle as of that instant, which closes the window between Sweep's
+// eligibility scan and this teardown.
+func (r *SessionRegistry) detach(lsid string, idleBefore *int64) (*sessionEntry, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	entry, ok := r.sessions[lsid]
 	if !ok {
+		return nil, false
+	}
+	if idleBefore != nil && entry.shadow.Load().lastUsed.Load() >= *idleBefore {
+		return nil, false
+	}
+
+	delete(r.sessions, lsid)
+	return entry, true
+}
+
+func (r *SessionRegistry) PurgeNow(lsid string) bool {
+	entry, ok := r.detach(lsid, nil)
+	if !ok {
 		return false
 	}
 
-	shadow := entry.shadow.Load()
-	shadow.writeMu.Lock()
-	shadow.purge()
-	shadow.writeMu.Unlock()
-
-	entry.sess.SessionEnd()
-	delete(r.sessions, lsid)
+	entry.teardown()
 	return true
 }
 
 // Sweep is two-phase: collect eligible lsids under r.mu, then drop the
-// lock before calling PurgeNow, which acquires shadow.writeMu and may
-// block on an in-flight Commit.
+// lock before tearing each one down, since teardown waits on the command
+// latch and may block on an in-flight command.
 func (r *SessionRegistry) Sweep(asOf time.Time) int {
 	cutoffNanos := asOf.Add(-r.timeout).UnixNano()
 
@@ -125,9 +146,12 @@ func (r *SessionRegistry) Sweep(asOf time.Time) int {
 
 	removed := 0
 	for _, lsid := range eligible {
-		if r.PurgeNow(lsid) {
-			removed++
+		entry, ok := r.detach(lsid, &cutoffNanos)
+		if !ok {
+			continue
 		}
+		entry.teardown()
+		removed++
 	}
 	return removed
 }

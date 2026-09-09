@@ -41,8 +41,9 @@ type Command struct {
 	// Help is shown in the `listCommands` command output. Empty means hidden.
 	Help string
 
-	// Durable routes through Shadow.Commit (writeMu fence) instead of
-	// Shadow.Use; a concurrent reconnect/sweep waits for fsync.
+	// Durable routes through Shadow.Commit instead of Shadow.Use. Both
+	// now hold the session's command latch, so this marks intent at a
+	// durability boundary rather than selecting a stronger fence.
 	Durable bool
 
 	// BlockedInTxn returns code 263 OperationNotSupportedInTransaction
@@ -160,7 +161,7 @@ func (h *Handler) initCommands() {
 	h.register(&Command{Handler: h.MsgDumboDBTag, Help: "Creates, lists, or deletes tags. Tags share the dolt tag refspec (refs/tags/<name>)."}, "doltTag", "dumboTag")
 	h.register(&Command{Handler: h.MsgDumboDBUndrop, Help: "Restores a soft-deleted database, or with no name lists databases available to undrop. Admin-only."}, "doltUndrop", "dumboUndrop")
 
-	// Durable boundaries: routed through Shadow.Commit (writeMu fence).
+	// Durable boundaries: routed through Shadow.Commit.
 	h.register(&Command{Handler: h.MsgDumboDBCommit, Durable: true, Help: "Commits the current working set on the branch encoded in the database name."}, "doltCommit", "dumboCommit")
 	h.register(&Command{Handler: h.MsgCommitTransaction, Durable: true, Help: "Commits a MongoDB transaction."}, "commitTransaction")
 	h.register(&Command{Handler: h.MsgDumboDBGC, Durable: true, Help: "Runs garbage collection on the database's chunk store. Optional mode: \"default\" or \"full\"."}, "doltGC", "dumboGC")
