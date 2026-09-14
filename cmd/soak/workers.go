@@ -319,7 +319,7 @@ func (w *workload) runVCSWorker(ctx context.Context, uri, collName string, worke
 
 		// Create + populate + commit on the feature branch.
 		branch := fmt.Sprintf("vcs-w%d-b%d", workerID, branchSeq.Add(1))
-		if err := runCmd(ctx, mainDB, 30*time.Second, bson.D{{"dumboBranch", 1}, {"branch", branch}}); err != nil {
+		if err := runCmd(ctx, mainDB, 30*time.Second, bson.D{{"dumboBranch", 1}, {"action", "add"}, {"branch", branch}}); err != nil {
 			w.errs.record("vcs-branch", err)
 		}
 		branchDB := client.Database("soak@" + branch)

@@ -62,6 +62,15 @@ jobs:
       - name: Install openssh-server
         run: sudo apt-get install -y openssh-server
 
+      # Caches the minio binary `make minio` downloads. MinIO is archived
+      # upstream, so the key is pinned to the version in the Makefile and only
+      # changes when that does. Keep the two in sync.
+      - name: Cache MinIO
+        uses: actions/cache@v6
+        with:
+          path: .runtime/bin/minio
+          key: minio-community-RELEASE.2025-09-07T16-13-09Z
+
       # bats-ci builds the remote-sync fixtures (remotesrv, minio, fake-gcs) so
       # their suites run rather than skip; require_infra turns any missing
       # fixture into a failure in CI (CI=true) instead of a green skip.
