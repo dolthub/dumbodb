@@ -31,9 +31,15 @@ var ErrShadowInvalidated = errors.New("session shadow invalidated by reconnect o
 // command: gcctx panics on a second CommandBegin, and on SessionEnd while
 // a command is open. Shadows for one lsid share the session across a
 // supersede, so the latch lives here and not on an individual Shadow.
+//
+// lastUsed is shared for the same reason. It is written under cmdMu by a
+// running command but read without it by Sweep, so a per-Shadow copy
+// handed across a supersede could be stale by the time it lands -- the
+// activity would be recorded only on the shadow Sweep no longer consults.
 type sessionState struct {
-	sess  *dsess.DoltSession
-	cmdMu sync.Mutex
+	sess     *dsess.DoltSession
+	lastUsed atomic.Int64
+	cmdMu    sync.Mutex
 }
 
 // Shadow is a connection's handle on a registry session. purged
@@ -42,26 +48,26 @@ type sessionState struct {
 // to wire codes 251 (NoSuchTransaction) and 225 (TransactionTooOld)
 // respectively.
 type Shadow struct {
-	state    *sessionState
-	lastUsed atomic.Int64
-	active   atomic.Bool
-	purged   atomic.Bool
+	state  *sessionState
+	active atomic.Bool
+	purged atomic.Bool
 }
 
 func NewShadow(sess *dsess.DoltSession, now time.Time) *Shadow {
-	return newShadow(&sessionState{sess: sess}, now.UnixNano())
+	state := &sessionState{sess: sess}
+	state.lastUsed.Store(now.UnixNano())
+	return newShadow(state)
 }
 
-func newShadow(state *sessionState, lastUsedNanos int64) *Shadow {
+func newShadow(state *sessionState) *Shadow {
 	s := &Shadow{state: state}
-	s.lastUsed.Store(lastUsedNanos)
 	s.active.Store(true)
 	return s
 }
 
 func (s *Shadow) Session() *dsess.DoltSession { return s.state.sess }
 
-func (s *Shadow) LastUsed() time.Time { return time.Unix(0, s.lastUsed.Load()) }
+func (s *Shadow) LastUsed() time.Time { return time.Unix(0, s.state.lastUsed.Load()) }
 
 func (s *Shadow) Active() bool { return s.active.Load() }
 
@@ -109,7 +115,7 @@ func (s *Shadow) run(now time.Time, fn func(*dsess.DoltSession) error) error {
 	if !s.active.Load() {
 		return ErrShadowInvalidated
 	}
-	s.lastUsed.Store(now.UnixNano())
+	s.state.lastUsed.Store(now.UnixNano())
 
 	if err := s.state.sess.CommandBegin(); err != nil {
 		return fmt.Errorf("Shadow.run: CommandBegin: %w", err)

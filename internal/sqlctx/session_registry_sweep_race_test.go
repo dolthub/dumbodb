@@ -169,3 +169,91 @@ func TestShadow_Use_RechecksActiveUnderCommandLatch(t *testing.T) {
 	require.ErrorIs(t, <-result, ErrShadowInvalidated)
 	assert.Empty(t, ran, "command ran against a session that was already ended")
 }
+
+// A teardown leaves a tombstone, so the lsid is never briefly absent. A
+// reconnect arriving mid-teardown must wait for SessionEnd and then get a
+// fresh session, rather than standing up a second DoltSession alongside
+// the one still running a command.
+func TestSessionRegistry_Connect_WaitsForTeardownInsteadOfDoublingSession(t *testing.T) {
+	r := NewSessionRegistry(time.Nanosecond, gcFactory(gcctx.NewGCSafepointController()))
+
+	first, err := r.Connect("lsid-A")
+	require.NoError(t, err)
+	firstSess := first.Session()
+
+	commandReturned := startInflightUse(t, first)
+
+	sweepDone := make(chan struct{})
+	go func() {
+		r.Sweep(time.Now().Add(time.Hour))
+		close(sweepDone)
+	}()
+
+	// Let the sweeper claim the entry and block on the command latch.
+	time.Sleep(20 * time.Millisecond)
+
+	// The lsid is claimed, so it is no longer usable through lookups.
+	_, live := r.Get("lsid-A")
+	assert.False(t, live, "a session being torn down is still handed out by Get")
+	assert.Equal(t, 0, r.Len())
+
+	reconnected := make(chan *Shadow, 1)
+	go func() {
+		s, cErr := r.Connect("lsid-A")
+		assert.NoError(t, cErr)
+		reconnected <- s
+	}()
+
+	select {
+	case <-reconnected:
+		t.Fatal("Connect returned a session while the lsid's teardown was still in flight")
+	case <-time.After(30 * time.Millisecond):
+	}
+
+	commandAt := <-commandReturned
+	<-sweepDone
+	second := <-reconnected
+
+	assert.NotSame(t, firstSess, second.Session(), "reconnect handed back the ended session")
+	assert.True(t, second.Active())
+	assert.GreaterOrEqual(t, time.Now().UnixNano(), commandAt.UnixNano())
+}
+
+// lastUsed lives on the shared session state, so activity recorded by
+// either shadow of an lsid is visible to the other. Per-shadow copies
+// taken at supersede could strand a command's timestamp on the shadow
+// Sweep no longer consults.
+func TestSessionRegistry_SupersededShadowsShareLastUsed(t *testing.T) {
+	r := NewSessionRegistry(time.Hour, gcFactory(gcctx.NewGCSafepointController()))
+
+	first, err := r.Connect("lsid-A")
+	require.NoError(t, err)
+	second, err := r.Connect("lsid-A")
+	require.NoError(t, err)
+
+	at := time.Now().Add(5 * time.Minute)
+	require.NoError(t, second.Use(at, func(*dsess.DoltSession) error { return nil }))
+
+	assert.Equal(t, at.UnixNano(), second.LastUsed().UnixNano())
+	assert.Equal(t, at.UnixNano(), first.LastUsed().UnixNano(),
+		"supersede left the shadows holding independent lastUsed copies")
+}
+
+// The sweep-facing consequence of the above: a command run after a
+// supersede keeps the session off the eligible list.
+func TestSessionRegistry_Sweep_HonorsActivityAfterSupersede(t *testing.T) {
+	r := NewSessionRegistry(10*time.Minute, gcFactory(gcctx.NewGCSafepointController()))
+	clock := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	r.WithClock(func() time.Time { return clock })
+
+	_, err := r.Connect("lsid-A")
+	require.NoError(t, err)
+	second, err := r.Connect("lsid-A")
+	require.NoError(t, err)
+
+	active := clock.Add(time.Hour)
+	require.NoError(t, second.Use(active, func(*dsess.DoltSession) error { return nil }))
+
+	assert.Equal(t, 0, r.Sweep(active.Add(time.Minute)))
+	assert.Equal(t, 1, r.Len())
+}
