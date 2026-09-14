@@ -6,7 +6,10 @@ REMOTESRV_BINARY := $(CURDIR)/.runtime/bin/remotesrv
 REMOTESRV_PKG := github.com/dolthub/dolt/go/utils/remotesrv
 MINIO_BINARY := $(CURDIR)/.runtime/bin/minio
 MINIO_VERSION := RELEASE.2025-09-07T16-13-09Z
-MINIO_URL := https://dl.min.io/server/minio/release/linux-amd64/archive/minio.$(MINIO_VERSION)
+# GitHub releases, not dl.min.io: MinIO archived the community server and now
+# serves 410 for every release on its own download site. The release assets are
+# the last remaining source, and are frozen at this version.
+MINIO_URL := https://github.com/minio/minio/releases/download/$(MINIO_VERSION)/minio.linux-amd64.$(MINIO_VERSION)
 FAKEGCS_BINARY := $(CURDIR)/.runtime/bin/fake-gcs-server
 FAKEGCS_VERSION := v1.52.2
 GIT_VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo unknown)
