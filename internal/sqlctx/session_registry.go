@@ -24,13 +24,20 @@ import (
 
 type SessionFactory func(lsid string) (*dsess.DoltSession, error)
 
+// A sessionEntry stays in the registry while it is being torn down, so
+// the lsid is never briefly absent. terminating is guarded by r.mu; done
+// closes once SessionEnd has returned and the entry has left the map.
 type sessionEntry struct {
-	sess   *dsess.DoltSession
-	shadow atomic.Pointer[Shadow]
+	state       *sessionState
+	shadow      atomic.Pointer[Shadow]
+	terminating bool
+	done        chan struct{}
 }
 
-// Lock order is r.mu then shadow.writeMu. Shadow.Commit takes only
-// writeMu.
+// Lock order is r.mu then sessionState.cmdMu, and the two are never held
+// together: a command can call back into End (endSessions dispatches
+// through Shadow.Use), so any path that waits on cmdMu releases r.mu
+// first. See beginTeardown / teardown.
 type SessionRegistry struct {
 	mu       sync.Mutex
 	sessions map[string]*sessionEntry
@@ -55,69 +62,111 @@ func (r *SessionRegistry) WithClock(now func() time.Time) *SessionRegistry {
 	return r
 }
 
-// Connect supersedes any existing shadow for lsid. The new shadow
-// carries forward lastUsed so reconnection does not reset the idle
-// window -- the first Use/Commit on the returned shadow records actual
-// activity.
+// Connect supersedes any existing shadow for lsid. The new shadow shares
+// the entry's session, command latch, and lastUsed, so reconnection does
+// not reset the idle window and the new shadow's first command cannot
+// overlap one still running on the shadow it replaced.
+//
+// An lsid whose teardown is in progress has no usable session, and
+// building a second one alongside it would defeat the per-lsid latch.
+// Connect instead waits for that teardown -- with r.mu released, since
+// teardown blocks on the command latch -- and then retries.
 func (r *SessionRegistry) Connect(lsid string) (*Shadow, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	for {
+		r.mu.Lock()
 
-	if entry, ok := r.sessions[lsid]; ok {
-		oldShadow := entry.shadow.Load()
-		oldShadow.writeMu.Lock()
-		oldShadow.invalidate()
-		carried := oldShadow.lastUsed.Load()
-		oldShadow.writeMu.Unlock()
+		entry, ok := r.sessions[lsid]
+		if !ok {
+			sess, err := r.factory(lsid)
+			if err != nil {
+				r.mu.Unlock()
+				return nil, err
+			}
 
-		newShadow := &Shadow{sess: entry.sess}
-		newShadow.lastUsed.Store(carried)
-		newShadow.active.Store(true)
-		entry.shadow.Store(newShadow)
-		return newShadow, nil
+			state := &sessionState{sess: sess}
+			state.lastUsed.Store(r.nowFn().UnixNano())
+			entry = &sessionEntry{state: state, done: make(chan struct{})}
+			entry.shadow.Store(newShadow(state))
+			r.sessions[lsid] = entry
+
+			shadow := entry.shadow.Load()
+			r.mu.Unlock()
+			return shadow, nil
+		}
+
+		if !entry.terminating {
+			entry.shadow.Load().invalidate()
+			newShadow := newShadow(entry.state)
+			entry.shadow.Store(newShadow)
+			r.mu.Unlock()
+			return newShadow, nil
+		}
+
+		done := entry.done
+		r.mu.Unlock()
+		<-done
 	}
-
-	sess, err := r.factory(lsid)
-	if err != nil {
-		return nil, err
-	}
-
-	shadow := NewShadow(sess, r.nowFn())
-	entry := &sessionEntry{sess: sess}
-	entry.shadow.Store(shadow)
-	r.sessions[lsid] = entry
-	return shadow, nil
 }
 
-func (r *SessionRegistry) PurgeNow(lsid string) bool {
+// beginTeardown claims lsid for teardown, leaving the entry in the map as
+// a tombstone. When idleBefore is non-nil the claim is refused unless the
+// session is still idle as of that instant, which closes the window
+// between Sweep's eligibility scan and this call.
+func (r *SessionRegistry) beginTeardown(lsid string, idleBefore *int64) (*sessionEntry, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	entry, ok := r.sessions[lsid]
+	if !ok || entry.terminating {
+		return nil, false
+	}
+	if idleBefore != nil && entry.state.lastUsed.Load() >= *idleBefore {
+		return nil, false
+	}
+
+	entry.terminating = true
+	return entry, true
+}
+
+// teardown ends the session under the command latch so SessionEnd never
+// lands on an outstanding command, then drops the tombstone. Callers must
+// hold the claim from beginTeardown and must not hold r.mu.
+func (r *SessionRegistry) teardown(lsid string, entry *sessionEntry) {
+	entry.state.cmdMu.Lock()
+	entry.shadow.Load().purge()
+	entry.state.sess.SessionEnd()
+	entry.state.cmdMu.Unlock()
+
+	r.mu.Lock()
+	delete(r.sessions, lsid)
+	r.mu.Unlock()
+
+	close(entry.done)
+}
+
+func (r *SessionRegistry) PurgeNow(lsid string) bool {
+	entry, ok := r.beginTeardown(lsid, nil)
 	if !ok {
 		return false
 	}
 
-	shadow := entry.shadow.Load()
-	shadow.writeMu.Lock()
-	shadow.purge()
-	shadow.writeMu.Unlock()
-
-	entry.sess.SessionEnd()
-	delete(r.sessions, lsid)
+	r.teardown(lsid, entry)
 	return true
 }
 
 // Sweep is two-phase: collect eligible lsids under r.mu, then drop the
-// lock before calling PurgeNow, which acquires shadow.writeMu and may
-// block on an in-flight Commit.
+// lock before tearing each one down, since teardown waits on the command
+// latch and may block on an in-flight command.
 func (r *SessionRegistry) Sweep(asOf time.Time) int {
 	cutoffNanos := asOf.Add(-r.timeout).UnixNano()
 
 	var eligible []string
 	r.mu.Lock()
 	for lsid, entry := range r.sessions {
-		if entry.shadow.Load().lastUsed.Load() < cutoffNanos {
+		if entry.terminating {
+			continue
+		}
+		if entry.state.lastUsed.Load() < cutoffNanos {
 			eligible = append(eligible, lsid)
 		}
 	}
@@ -125,9 +174,12 @@ func (r *SessionRegistry) Sweep(asOf time.Time) int {
 
 	removed := 0
 	for _, lsid := range eligible {
-		if r.PurgeNow(lsid) {
-			removed++
+		entry, ok := r.beginTeardown(lsid, &cutoffNanos)
+		if !ok {
+			continue
 		}
+		r.teardown(lsid, entry)
+		removed++
 	}
 	return removed
 }
@@ -139,10 +191,10 @@ func (r *SessionRegistry) End(lsid string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	entry, ok := r.sessions[lsid]
-	if !ok {
+	if !ok || entry.terminating {
 		return false
 	}
-	entry.shadow.Load().lastUsed.Store(0)
+	entry.state.lastUsed.Store(0)
 	return true
 }
 
@@ -150,16 +202,24 @@ func (r *SessionRegistry) Get(lsid string) (*Shadow, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	entry, ok := r.sessions[lsid]
-	if !ok {
+	if !ok || entry.terminating {
 		return nil, false
 	}
 	return entry.shadow.Load(), true
 }
 
+// Len counts live sessions; entries left as teardown tombstones are not
+// usable and are excluded.
 func (r *SessionRegistry) Len() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return len(r.sessions)
+	n := 0
+	for _, entry := range r.sessions {
+		if !entry.terminating {
+			n++
+		}
+	}
+	return n
 }
 
 // SessionInfo describes one cached logical session for enumeration
@@ -176,8 +236,10 @@ func (r *SessionRegistry) Snapshot() []SessionInfo {
 	defer r.mu.Unlock()
 	out := make([]SessionInfo, 0, len(r.sessions))
 	for lsid, entry := range r.sessions {
-		sh := entry.shadow.Load()
-		lu := sh.LastUsed()
+		if entry.terminating {
+			continue
+		}
+		lu := entry.shadow.Load().LastUsed()
 		if lu.UnixNano() == 0 {
 			continue
 		}
