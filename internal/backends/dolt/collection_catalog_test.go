@@ -91,6 +91,51 @@ func TestCollMetaDurableAcrossRestart(t *testing.T) {
 	}
 }
 
+func TestSourceUUIDSurvivesRenameAndPreventsAlias(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	backend, err := NewBackend(dir, slog.Default(), false, false, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	database, err := backend.Database("replicated")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.CreateCollection(ctx, &backends.CreateCollectionParams{Name: "before", SourceUUID: "source-uuid"}); err != nil {
+		t.Fatal(err)
+	}
+	before := collInfo(t, database, "before")
+	if before.SourceUUID != "source-uuid" {
+		t.Fatalf("source UUID = %q", before.SourceUUID)
+	}
+	if err := database.CreateCollection(ctx, &backends.CreateCollectionParams{Name: "alias", SourceUUID: "source-uuid"}); err == nil {
+		t.Fatal("CreateCollection accepted a duplicate source UUID")
+	}
+	if err := database.RenameCollection(ctx, &backends.RenameCollectionParams{OldName: "before", NewName: "after"}); err != nil {
+		t.Fatal(err)
+	}
+	after := collInfo(t, database, "after")
+	if after.SourceUUID != "source-uuid" || after.UUID != before.UUID {
+		t.Fatalf("renamed identity = %+v, before = %+v", after, before)
+	}
+	backend.Close()
+
+	reopened, err := NewBackend(dir, slog.Default(), false, false, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	reopenedDatabase, err := reopened.Database("replicated")
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered := collInfo(t, reopenedDatabase, "after")
+	if recovered.SourceUUID != "source-uuid" || recovered.UUID != before.UUID {
+		t.Fatalf("recovered identity = %+v", recovered)
+	}
+}
+
 func TestCatalogHiddenFromListCollections(t *testing.T) {
 	dir, err := os.MkdirTemp("", "dolt-catalog-hidden-*")
 	if err != nil {

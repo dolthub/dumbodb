@@ -91,6 +91,7 @@ type ListCollectionsResult struct {
 type CollectionInfo struct {
 	Name            string
 	UUID            string
+	SourceUUID      string
 	CappedSize      int64
 	CappedDocuments int64
 	// Validator is the schema validator expression (nil if none).
@@ -155,6 +156,7 @@ func (dbc *databaseContract) ListCollections(ctx context.Context, params *ListCo
 
 type CreateCollectionParams struct {
 	Name            string
+	SourceUUID      string
 	CappedSize      int64
 	CappedDocuments int64
 	// Validator is the schema validator expression (nil if none).

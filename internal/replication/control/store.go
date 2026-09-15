@@ -118,13 +118,14 @@ type CommitInterval struct {
 }
 
 type CollectionMapping struct {
-	SourceUUID   string `json:"source_uuid"`
-	Database     string `json:"database"`
-	Collection   string `json:"collection"`
-	LocalUUID    string `json:"local_uuid"`
-	CreateOpTime OpTime `json:"create_optime"`
-	Dropped      bool   `json:"dropped"`
-	DropOpTime   OpTime `json:"drop_optime"`
+	SourceUUID       string `json:"source_uuid"`
+	Database         string `json:"database"`
+	Collection       string `json:"collection"`
+	LocalUUID        string `json:"local_uuid"`
+	CreateOpTime     OpTime `json:"create_optime"`
+	LastUpdateOpTime OpTime `json:"last_update_optime"`
+	Dropped          bool   `json:"dropped"`
+	DropOpTime       OpTime `json:"drop_optime"`
 }
 
 type TransactionFragment struct {
@@ -372,10 +373,81 @@ func (s *Store) PutCollectionMapping(mapping CollectionMapping) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if existing, ok := s.state.CollectionMappings[mapping.SourceUUID]; ok && existing.CreateOpTime.Compare(mapping.CreateOpTime) != 0 {
-		return fmt.Errorf("collection mapping for source UUID %q changed creation optime", mapping.SourceUUID)
+	if mapping.LastUpdateOpTime == (OpTime{}) {
+		mapping.LastUpdateOpTime = mapping.CreateOpTime
+	}
+	if existing, ok := s.state.CollectionMappings[mapping.SourceUUID]; ok {
+		if existing == mapping {
+			return nil
+		}
+		return fmt.Errorf("collection mapping for source UUID %q already exists", mapping.SourceUUID)
+	}
+	for _, existing := range s.state.CollectionMappings {
+		if !existing.Dropped && existing.Database == mapping.Database && existing.Collection == mapping.Collection {
+			return fmt.Errorf("collection %q.%q is already mapped to source UUID %q", mapping.Database, mapping.Collection, existing.SourceUUID)
+		}
 	}
 	s.state.CollectionMappings[mapping.SourceUUID] = mapping
+	return s.persistLocked()
+}
+
+func (s *Store) RenameCollectionMapping(sourceUUID, oldDatabase, oldCollection, newDatabase, newCollection string, opTime OpTime) error {
+	if sourceUUID == "" || oldDatabase == "" || oldCollection == "" || newDatabase == "" || newCollection == "" {
+		return errors.New("source UUID and old/new namespaces are required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	mapping, ok := s.state.CollectionMappings[sourceUUID]
+	if !ok {
+		return fmt.Errorf("source UUID %q has no collection mapping", sourceUUID)
+	}
+	if mapping.Dropped {
+		return fmt.Errorf("source UUID %q was dropped at %v", sourceUUID, mapping.DropOpTime)
+	}
+	if mapping.Database == newDatabase && mapping.Collection == newCollection && mapping.LastUpdateOpTime == opTime {
+		return nil
+	}
+	if mapping.Database != oldDatabase || mapping.Collection != oldCollection {
+		return fmt.Errorf("source UUID %q maps to %q.%q, not %q.%q", sourceUUID, mapping.Database, mapping.Collection, oldDatabase, oldCollection)
+	}
+	if opTime.Compare(mapping.LastUpdateOpTime) <= 0 {
+		return fmt.Errorf("rename optime %v is not after mapping optime %v", opTime, mapping.LastUpdateOpTime)
+	}
+	for otherUUID, existing := range s.state.CollectionMappings {
+		if otherUUID != sourceUUID && !existing.Dropped && existing.Database == newDatabase && existing.Collection == newCollection {
+			return fmt.Errorf("rename target %q.%q is mapped to source UUID %q", newDatabase, newCollection, otherUUID)
+		}
+	}
+	mapping.Database = newDatabase
+	mapping.Collection = newCollection
+	mapping.LastUpdateOpTime = opTime
+	s.state.CollectionMappings[sourceUUID] = mapping
+	return s.persistLocked()
+}
+
+func (s *Store) DropCollectionMapping(sourceUUID string, opTime OpTime) error {
+	if sourceUUID == "" {
+		return errors.New("source UUID is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	mapping, ok := s.state.CollectionMappings[sourceUUID]
+	if !ok {
+		return fmt.Errorf("source UUID %q has no collection mapping", sourceUUID)
+	}
+	if mapping.Dropped {
+		if mapping.DropOpTime == opTime {
+			return nil
+		}
+		return fmt.Errorf("source UUID %q was already dropped at %v", sourceUUID, mapping.DropOpTime)
+	}
+	if opTime.Compare(mapping.LastUpdateOpTime) <= 0 {
+		return fmt.Errorf("drop optime %v is not after mapping optime %v", opTime, mapping.LastUpdateOpTime)
+	}
+	mapping.Dropped = true
+	mapping.DropOpTime = opTime
+	mapping.LastUpdateOpTime = opTime
+	s.state.CollectionMappings[sourceUUID] = mapping
 	return s.persistLocked()
 }
 
@@ -384,6 +456,11 @@ func (s *Store) CollectionMapping(sourceUUID string) (CollectionMapping, bool) {
 	defer s.mu.RUnlock()
 	mapping, ok := s.state.CollectionMappings[sourceUUID]
 	return mapping, ok
+}
+
+func (s *Store) ActiveCollectionMapping(sourceUUID string) (CollectionMapping, bool) {
+	mapping, ok := s.CollectionMapping(sourceUUID)
+	return mapping, ok && !mapping.Dropped
 }
 
 func (s *Store) PutTransactionFragment(fragment TransactionFragment) error {

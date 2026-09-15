@@ -40,6 +40,7 @@ const reservedCatalogName = backends.ReservedCatalogName
 
 type collMeta struct {
 	UUID             string
+	SourceUUID       string
 	Validator        *types.Document
 	Collation        *types.Document
 	ValidationLevel  string
@@ -62,6 +63,7 @@ func collMetaToDoc(collName string, m *collMeta) (*types.Document, error) {
 	return types.NewDocument(
 		"_id", collName,
 		"uuid", m.UUID,
+		"sourceUUID", m.SourceUUID,
 		"validator", validator,
 		"collation", collation,
 		"validationLevel", m.ValidationLevel,
@@ -84,6 +86,7 @@ func docToCollMeta(doc *types.Document) *collMeta {
 		return s
 	}
 	m.UUID = getStr("uuid")
+	m.SourceUUID = getStr("sourceUUID")
 	if v, err := doc.Get("validator"); err == nil {
 		if vd, ok := v.(*types.Document); ok {
 			m.Validator = vd

@@ -178,6 +178,7 @@ func (db *database) ListCollections(ctx context.Context, params *backends.ListCo
 		ci := backends.CollectionInfo{Name: name}
 		if m := catalog[name]; m != nil {
 			ci.UUID = m.UUID
+			ci.SourceUUID = m.SourceUUID
 			ci.Validator = m.Validator
 			ci.Collation = m.Collation
 			// listCollections must mirror MongoDB, which does NOT materialize the
@@ -224,6 +225,18 @@ func (db *database) CreateCollection(ctx context.Context, params *backends.Creat
 		return backends.NewError(backends.ErrorCodeCollectionAlreadyExists,
 			fmt.Errorf("collection %q already exists in %q", params.Name, db.name))
 	}
+	if params.SourceUUID != "" {
+		catalog, err := listCatalog(ctx, state, branchAM)
+		if err != nil {
+			return err
+		}
+		for name, metadata := range catalog {
+			if metadata.SourceUUID == params.SourceUUID {
+				return backends.NewError(backends.ErrorCodeCollectionAlreadyExists,
+					fmt.Errorf("source collection UUID %q is already assigned to %q.%q", params.SourceUUID, db.name, name))
+			}
+		}
+	}
 
 	if params.ViewOn != "" {
 		viewHash, err := writeViewChunk(ctx, state.ns, &viewMeta{
@@ -254,6 +267,7 @@ func (db *database) CreateCollection(ctx context.Context, params *backends.Creat
 	}
 	meta := &collMeta{
 		UUID:             collectionUUID(db.name, params.Name),
+		SourceUUID:       params.SourceUUID,
 		Validator:        params.Validator,
 		Collation:        params.Collation,
 		ValidationLevel:  params.ValidationLevel,

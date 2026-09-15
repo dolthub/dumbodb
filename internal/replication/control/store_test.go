@@ -54,11 +54,12 @@ func TestStorePersistsRecoveryState(t *testing.T) {
 		t.Fatal(err)
 	}
 	mapping := CollectionMapping{
-		SourceUUID:   "source-uuid",
-		Database:     "orders",
-		Collection:   "items",
-		LocalUUID:    "local-uuid",
-		CreateOpTime: opTime(8),
+		SourceUUID:       "source-uuid",
+		Database:         "orders",
+		Collection:       "items",
+		LocalUUID:        "local-uuid",
+		CreateOpTime:     opTime(8),
+		LastUpdateOpTime: opTime(8),
 	}
 	if err := store.PutCollectionMapping(mapping); err != nil {
 		t.Fatal(err)
@@ -100,6 +101,45 @@ func TestStorePersistsRecoveryState(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("state mode = %o, want 600", info.Mode().Perm())
+	}
+}
+
+func TestCollectionMappingRenameDropAndNameReuse(t *testing.T) {
+	store, err := Open(t.TempDir(), testConfiguration())
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := CollectionMapping{
+		SourceUUID: "source-one", Database: "orders", Collection: "items", LocalUUID: "local-one", CreateOpTime: opTime(1),
+	}
+	if err := store.PutCollectionMapping(first); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutCollectionMapping(CollectionMapping{
+		SourceUUID: "source-two", Database: "orders", Collection: "items", LocalUUID: "local-two", CreateOpTime: opTime(2),
+	}); err == nil {
+		t.Fatal("PutCollectionMapping accepted an active namespace collision")
+	}
+	if err := store.RenameCollectionMapping("source-one", "orders", "items", "orders", "renamed", opTime(3)); err != nil {
+		t.Fatal(err)
+	}
+	if mapping, ok := store.ActiveCollectionMapping("source-one"); !ok || mapping.Collection != "renamed" || mapping.LocalUUID != "local-one" {
+		t.Fatalf("renamed mapping = %+v, %v", mapping, ok)
+	}
+	if err := store.DropCollectionMapping("source-one", opTime(4)); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := store.ActiveCollectionMapping("source-one"); ok {
+		t.Fatal("dropped mapping remained active")
+	}
+	second := CollectionMapping{
+		SourceUUID: "source-two", Database: "orders", Collection: "renamed", LocalUUID: "local-two", CreateOpTime: opTime(5),
+	}
+	if err := store.PutCollectionMapping(second); err != nil {
+		t.Fatalf("name reuse after drop: %v", err)
+	}
+	if err := store.RenameCollectionMapping("source-one", "orders", "renamed", "orders", "wrong", opTime(6)); err == nil {
+		t.Fatal("RenameCollectionMapping revived a dropped UUID")
 	}
 }
 
