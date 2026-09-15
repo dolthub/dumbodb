@@ -26,6 +26,7 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"syscall"
 
@@ -35,6 +36,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/clientconn"
 	"github.com/dolthub/dumbodb/internal/handler/registry"
 	"github.com/dolthub/dumbodb/internal/metrics"
+	"github.com/dolthub/dumbodb/internal/replication/control"
 	"github.com/dolthub/dumbodb/internal/util/logging"
 	"github.com/dolthub/dumbodb/internal/util/state"
 	"github.com/dolthub/dumbodb/internal/version"
@@ -91,6 +93,8 @@ func run(logger *slog.Logger) error {
 	pprofAddr := fs.String("pprof-addr", "", "if non-empty, expose net/http/pprof on this address (e.g. 127.0.0.1:6060)")
 	noMetrics := fs.Bool("no-metrics", false, "disable anonymous daily usage metrics reported to DoltHub")
 	auth := fs.Bool("auth", false, "enable access control (forced login; an authenticated connection has full access)")
+	replSetName := fs.String("replSet", "", "replica set name for inbound MongoDB replication")
+	replicationBranch := fs.String("replication-branch", "", "DumboDB branch that receives replicated history")
 	fs.Parse(os.Args[1:])
 
 	if *autoCommit && *sessionIsolation {
@@ -134,13 +138,24 @@ func run(logger *slog.Logger) error {
 		}
 	}
 
+	replicationConfiguration, replicationEnabled, err := replicationControlConfiguration(*replSetName, *replicationBranch, *addr)
+	if err != nil {
+		return err
+	}
+	if replicationEnabled {
+		if _, err := control.Open(filepath.Join(*dataDir, "replication"), replicationConfiguration); err != nil {
+			return err
+		}
+		logger.Info("replication control state opened", "replSet", *replSetName, "branch", *replicationBranch)
+	}
+
 	stateProvider := state.NewProvider()
 
 	h, closeBackend, err := registry.NewHandler("dolt", &registry.NewHandlerOpts{
 		Logger:             logger,
 		StateProvider:      stateProvider,
 		TCPHost:            *addr,
-		ReplSetName:        "",
+		ReplSetName:        *replSetName,
 		DoltDataDir:        *dataDir,
 		AutoCommit:         *autoCommit,
 		SessionIsolation:   *sessionIsolation,
@@ -179,6 +194,20 @@ func run(logger *slog.Logger) error {
 
 	listener.Run(ctx)
 	return nil
+}
+
+func replicationControlConfiguration(replSetName, branch, memberHost string) (control.Configuration, bool, error) {
+	if replSetName == "" && branch == "" {
+		return control.Configuration{}, false, nil
+	}
+	if replSetName == "" || branch == "" {
+		return control.Configuration{}, false, fmt.Errorf("--replSet and --replication-branch must be provided together")
+	}
+	return control.Configuration{
+		SetName:    replSetName,
+		Branch:     branch,
+		MemberHost: memberHost,
+	}, true, nil
 }
 
 // envDisablesMetrics reports whether DUMBODB_NO_METRICS is set to a truthy value.
