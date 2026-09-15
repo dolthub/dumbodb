@@ -19,6 +19,7 @@ import (
 	"errors"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -26,6 +27,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends/dolt"
 	"github.com/dolthub/dumbodb/internal/replication/catalog"
 	"github.com/dolthub/dumbodb/internal/replication/control"
+	replicationspecial "github.com/dolthub/dumbodb/internal/replication/special"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/must"
@@ -82,6 +84,155 @@ func TestApplierCRUDBySourceUUID(t *testing.T) {
 		t.Fatalf("idempotent delete: %v", err)
 	}
 	assertCollectionCount(t, ctx, backend, "orders", "items", 0)
+}
+
+func TestApplierRoutesReplicatedAuthAndInvalidatesGeneration(t *testing.T) {
+	ctx := context.Background()
+	bumps := 0
+	backend, err := dolt.NewBackend(t.TempDir(), slog.Default(), false, false, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backend.Close()
+	store, err := control.Open(t.TempDir(), control.Configuration{SetName: "rs0", MemberHost: "dumbo:27017"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	applier, err := NewApplierWithAuthGeneration(backend, store, func() { bumps++ })
+	if err != nil {
+		t.Fatal(err)
+	}
+	user := replicatedAuthUser()
+	if err := applier.Apply(ctx, makeOplogEntry(t, 1, "i", replicationspecial.UsersNamespace, "", user, nil)); err != nil {
+		t.Fatal(err)
+	}
+	diff := must.NotFail(types.NewDocument("i", must.NotFail(types.NewDocument(
+		"customData", must.NotFail(types.NewDocument("team", "storage")),
+	))))
+	update := must.NotFail(types.NewDocument("$v", int32(2), "diff", diff))
+	key := must.NotFail(types.NewDocument("_id", "sales.ada"))
+	if err := applier.Apply(ctx, makeOplogEntry(t, 2, "u", replicationspecial.UsersNamespace, "", update, key)); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := applier.special.AuthDocument(ctx, replicationspecial.UsersNamespace, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if customData, _ := stored.Get("customData"); customData == nil {
+		t.Fatal("auth update was not routed to the replicated identity")
+	}
+	if err := applier.Apply(ctx, makeOplogEntry(t, 3, "d", replicationspecial.UsersNamespace, "", key, nil)); err != nil {
+		t.Fatal(err)
+	}
+	if bumps != 3 {
+		t.Fatalf("auth generation bumps = %d, want 3", bumps)
+	}
+	if ownership, ok := store.AuthOwnershipFor(replicationspecial.UsersNamespace, "sales.ada"); !ok || !ownership.Dropped {
+		t.Fatalf("deleted auth ownership = %+v, %v", ownership, ok)
+	}
+}
+
+func TestApplierStoresConfigMetadataWithoutCreatingConfigDatabase(t *testing.T) {
+	ctx := context.Background()
+	backend, applier, _ := newTestApplier(t)
+	transaction := replicatedTransactionRecord()
+	if err := applier.Apply(ctx, makeOplogEntry(t, 1, "i", replicationspecial.TransactionsNamespace, "", transaction, nil)); err != nil {
+		t.Fatal(err)
+	}
+	transactionKey := must.NotFail(types.NewDocument("_id", must.NotFail(transaction.Get("_id"))))
+	stateDiff := must.NotFail(types.NewDocument("u", must.NotFail(types.NewDocument("state", "aborted"))))
+	update := must.NotFail(types.NewDocument("$v", int32(2), "diff", stateDiff))
+	if err := applier.Apply(ctx, makeOplogEntry(t, 2, "u", replicationspecial.TransactionsNamespace, "", update, transactionKey)); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := applier.special.MetadataDocument(replicationspecial.TransactionsNamespace, transactionKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state, _ := stored.Get("state"); state != "aborted" {
+		t.Fatalf("transaction state = %v, want aborted", state)
+	}
+
+	retryImage := replicatedRetryImageRecord()
+	if err := applier.Apply(ctx, makeOplogEntry(t, 3, "i", replicationspecial.RetryImagesNamespace, "", retryImage, nil)); err != nil {
+		t.Fatal(err)
+	}
+	databases, err := backend.ListDatabases(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, database := range databases.Databases {
+		if database.Name == "config" {
+			t.Fatal("replication metadata materialized the reserved config database")
+		}
+	}
+	if err := applier.Apply(ctx, makeOplogEntry(t, 4, "i", replicationspecial.ChangeStreamPreimagesNamespace, "", retryImage, nil)); err == nil {
+		t.Fatal("unsupported change-stream pre-image was silently applied")
+	}
+	reservedCommand := must.NotFail(types.NewDocument("dropDatabase", int32(1)))
+	if err := applier.Apply(ctx, makeOplogEntry(t, 5, "c", "config.$cmd", "", reservedCommand, nil)); !errors.Is(err, replicationspecial.ErrUnsupportedSpecialNamespace) {
+		t.Fatalf("reserved config command error = %v", err)
+	}
+}
+
+func TestApplierSpecialStateContinuesAcrossRestart(t *testing.T) {
+	ctx := context.Background()
+	dataDirectory := t.TempDir()
+	controlDirectory := t.TempDir()
+	configuration := control.Configuration{SetName: "rs0", MemberHost: "dumbo:27017"}
+	backend, err := dolt.NewBackend(dataDirectory, slog.Default(), false, false, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := control.Open(controlDirectory, configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	applier, err := NewApplier(backend, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := applier.Apply(ctx, makeOplogEntry(t, 1, "i", replicationspecial.UsersNamespace, "", replicatedAuthUser(), nil)); err != nil {
+		t.Fatal(err)
+	}
+	transaction := replicatedTransactionRecord()
+	if err := applier.Apply(ctx, makeOplogEntry(t, 2, "i", replicationspecial.TransactionsNamespace, "", transaction, nil)); err != nil {
+		t.Fatal(err)
+	}
+	backend.Close()
+
+	reopenedBackend, err := dolt.NewBackend(dataDirectory, slog.Default(), false, false, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopenedBackend.Close()
+	reopenedStore, err := control.Open(controlDirectory, configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := NewApplier(reopenedBackend, reopenedStore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	userKey := must.NotFail(types.NewDocument("_id", "sales.ada"))
+	userDiff := must.NotFail(types.NewDocument("i", must.NotFail(types.NewDocument(
+		"customData", must.NotFail(types.NewDocument("restart", true)),
+	))))
+	if err := reopened.Apply(ctx, makeOplogEntry(t, 3, "u", replicationspecial.UsersNamespace, "",
+		must.NotFail(types.NewDocument("$v", int32(2), "diff", userDiff)), userKey)); err != nil {
+		t.Fatal(err)
+	}
+	user, err := reopened.special.AuthDocument(ctx, replicationspecial.UsersNamespace, userKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if customData, _ := user.Get("customData"); customData == nil {
+		t.Fatal("restarted applier did not recover auth ownership")
+	}
+	transactionKey := must.NotFail(types.NewDocument("_id", must.NotFail(transaction.Get("_id"))))
+	if _, err := reopened.special.MetadataDocument(replicationspecial.TransactionsNamespace, transactionKey); err != nil {
+		t.Fatalf("restarted applier did not recover transaction metadata: %v", err)
+	}
 }
 
 func TestApplierCatalogCommands(t *testing.T) {
@@ -424,6 +575,42 @@ func insertTestDocuments(t *testing.T, ctx context.Context, backend backends.Bac
 
 func uuidBinary(value uuid.UUID) types.Binary {
 	return types.Binary{Subtype: types.BinaryUUID, B: value[:]}
+}
+
+func replicatedAuthUser() *types.Document {
+	credential := must.NotFail(types.NewDocument(
+		"iterationCount", int32(15000), "salt", "c2FsdA==", "storedKey", "c3RvcmVk", "serverKey", "c2VydmVy",
+	))
+	return must.NotFail(types.NewDocument(
+		"_id", "sales.ada", "userId", uuidBinary(uuid.MustParse("12345678-1234-4234-9234-123456789abc")),
+		"user", "ada", "db", "sales", "credentials", must.NotFail(types.NewDocument("SCRAM-SHA-256", credential)),
+		"roles", must.NotFail(types.NewArray(must.NotFail(types.NewDocument("role", "readWrite", "db", "sales")))),
+	))
+}
+
+func replicatedTransactionRecord() *types.Document {
+	return must.NotFail(types.NewDocument(
+		"_id", replicatedSessionID(),
+		"txnNum", int64(7),
+		"lastWriteOpTime", must.NotFail(types.NewDocument("ts", types.Timestamp(uint64(100)<<32|2), "t", int64(8))),
+		"lastWriteDate", time.Unix(100, 0).UTC(),
+		"state", "committed",
+	))
+}
+
+func replicatedRetryImageRecord() *types.Document {
+	return must.NotFail(types.NewDocument(
+		"_id", replicatedSessionID(),
+		"txnNum", int64(7), "ts", types.Timestamp(uint64(100)<<32|3), "imageKind", "postImage",
+		"image", must.NotFail(types.NewDocument("_id", int32(1), "value", "after")), "invalidated", false,
+	))
+}
+
+func replicatedSessionID() *types.Document {
+	return must.NotFail(types.NewDocument(
+		"id", uuidBinary(uuid.MustParse("87654321-4321-4321-8321-cba987654321")),
+		"uid", types.Binary{Subtype: types.BinaryGeneric, B: make([]byte, 32)},
+	))
 }
 
 func applierOpTime(increment uint32) control.OpTime {

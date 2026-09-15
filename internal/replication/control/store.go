@@ -134,6 +134,30 @@ type TransactionFragment struct {
 	Payload []byte `json:"payload"`
 }
 
+type AuthOwnership struct {
+	Namespace        string `json:"namespace"`
+	Identity         string `json:"identity"`
+	Owner            string `json:"owner"`
+	LastUpdateOpTime OpTime `json:"last_update_optime"`
+	Dropped          bool   `json:"dropped"`
+}
+
+type MetadataKind string
+
+const (
+	MetadataTransaction MetadataKind = "transaction"
+	MetadataRetryImage  MetadataKind = "retry_image"
+)
+
+type ReplicationMetadataRecord struct {
+	Kind             MetadataKind `json:"kind"`
+	Namespace        string       `json:"namespace"`
+	Key              string       `json:"key"`
+	Document         []byte       `json:"document,omitempty"`
+	LastUpdateOpTime OpTime       `json:"last_update_optime"`
+	Deleted          bool         `json:"deleted"`
+}
+
 type InitialSyncAttempt struct {
 	ID                  string `json:"id"`
 	Source              string `json:"source"`
@@ -145,18 +169,20 @@ type InitialSyncAttempt struct {
 }
 
 type State struct {
-	Configuration      Configuration                  `json:"configuration"`
-	Lifecycle          Lifecycle                      `json:"lifecycle"`
-	Identity           *Identity                      `json:"identity,omitempty"`
-	ReplicaConfig      *ReplicaConfiguration          `json:"replica_configuration,omitempty"`
-	CurrentSource      string                         `json:"current_source"`
-	CurrentRBID        int64                          `json:"current_rbid"`
-	InitialSyncPhase   InitialSyncPhase               `json:"initial_sync_phase"`
-	InitialSyncAttempt *InitialSyncAttempt            `json:"initial_sync_attempt,omitempty"`
-	Checkpoint         Checkpoint                     `json:"checkpoint"`
-	CommitIntervals    []CommitInterval               `json:"commit_intervals"`
-	CollectionMappings map[string]CollectionMapping   `json:"collection_mappings"`
-	TransactionParts   map[string]TransactionFragment `json:"transaction_parts"`
+	Configuration       Configuration                        `json:"configuration"`
+	Lifecycle           Lifecycle                            `json:"lifecycle"`
+	Identity            *Identity                            `json:"identity,omitempty"`
+	ReplicaConfig       *ReplicaConfiguration                `json:"replica_configuration,omitempty"`
+	CurrentSource       string                               `json:"current_source"`
+	CurrentRBID         int64                                `json:"current_rbid"`
+	InitialSyncPhase    InitialSyncPhase                     `json:"initial_sync_phase"`
+	InitialSyncAttempt  *InitialSyncAttempt                  `json:"initial_sync_attempt,omitempty"`
+	Checkpoint          Checkpoint                           `json:"checkpoint"`
+	CommitIntervals     []CommitInterval                     `json:"commit_intervals"`
+	CollectionMappings  map[string]CollectionMapping         `json:"collection_mappings"`
+	TransactionParts    map[string]TransactionFragment       `json:"transaction_parts"`
+	AuthOwnership       map[string]AuthOwnership             `json:"auth_ownership"`
+	ReplicationMetadata map[string]ReplicationMetadataRecord `json:"replication_metadata"`
 }
 
 type Store struct {
@@ -396,6 +422,8 @@ func (s *Store) ResetInitialSync(attemptID string) error {
 	s.state.CommitIntervals = nil
 	s.state.CollectionMappings = make(map[string]CollectionMapping)
 	s.state.TransactionParts = make(map[string]TransactionFragment)
+	s.state.AuthOwnership = make(map[string]AuthOwnership)
+	s.state.ReplicationMetadata = make(map[string]ReplicationMetadataRecord)
 	return s.persistLocked()
 }
 
@@ -634,11 +662,13 @@ func compareConfiguration(left, right Identity) int {
 
 func newState(configuration Configuration) State {
 	return State{
-		Configuration:      configuration,
-		Lifecycle:          LifecycleActive,
-		InitialSyncPhase:   InitialSyncNotStarted,
-		CollectionMappings: make(map[string]CollectionMapping),
-		TransactionParts:   make(map[string]TransactionFragment),
+		Configuration:       configuration,
+		Lifecycle:           LifecycleActive,
+		InitialSyncPhase:    InitialSyncNotStarted,
+		CollectionMappings:  make(map[string]CollectionMapping),
+		TransactionParts:    make(map[string]TransactionFragment),
+		AuthOwnership:       make(map[string]AuthOwnership),
+		ReplicationMetadata: make(map[string]ReplicationMetadataRecord),
 	}
 }
 
@@ -654,6 +684,12 @@ func normalizeState(state *State) {
 	}
 	if state.TransactionParts == nil {
 		state.TransactionParts = make(map[string]TransactionFragment)
+	}
+	if state.AuthOwnership == nil {
+		state.AuthOwnership = make(map[string]AuthOwnership)
+	}
+	if state.ReplicationMetadata == nil {
+		state.ReplicationMetadata = make(map[string]ReplicationMetadataRecord)
 	}
 }
 

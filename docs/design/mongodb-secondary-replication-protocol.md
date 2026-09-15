@@ -129,6 +129,14 @@ and unsupported feature named; privileges must never be silently broadened or
 dropped. DumboDB-local administrative identities occupy a reserved ownership domain
 and cannot be overwritten by a same-named source identity. **DESIGN**
 
+Replication ownership is persisted outside `admin.system.users` and
+`admin.system.roles`, keyed by namespace and identity. The supported MongoDB
+document remains usable by DumboDB authentication and RBAC without a private field
+that could leak through `usersInfo` or `rolesInfo`. Initial sync and oplog
+application reject a source identity that collides with an unowned local identity,
+and every successful replicated identity mutation invalidates cached authorization.
+**DESIGN**
+
 ### Logical cluster time
 
 `$clusterTime` is vector-clock metadata, not incidental framing. A sustained
@@ -202,6 +210,13 @@ The reads of `config.transactions`, `config.image_collection`, and
 operations. DumboDB's reserved `config` database is not materialized as an ordinary
 user database. Required transaction fragments and image records are translated into
 typed records in the replication control store. **DESIGN**
+
+The initial profile validates and stores `config.transactions` and
+`config.image_collection` records by logical-session identity and source optime. It
+ignores the source session cache in `config.system.sessions`, which is not replicated
+application state. `config.system.preimages` is rejected while change-stream
+pre-images remain unsupported. None of these paths creates a user-visible DumboDB
+`config` database. **DESIGN**
 
 ## Heartbeats and topology
 

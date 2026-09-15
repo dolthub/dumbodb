@@ -32,6 +32,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/replication/catalog"
 	"github.com/dolthub/dumbodb/internal/replication/control"
+	"github.com/dolthub/dumbodb/internal/replication/special"
 	"github.com/dolthub/dumbodb/internal/sqlctx"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
@@ -44,11 +45,17 @@ var ErrUnsupportedOplogOperation = errors.New("unsupported oplog operation")
 type Applier struct {
 	backend backends.Backend
 	catalog *catalog.Applier
+	special *special.Applier
 	store   *control.Store
 }
 
 // NewApplier binds oplog application to a backend and its replication control state.
 func NewApplier(backend backends.Backend, store *control.Store) (*Applier, error) {
+	return NewApplierWithAuthGeneration(backend, store, nil)
+}
+
+// NewApplierWithAuthGeneration invalidates cached authorization after replicated identity changes.
+func NewApplierWithAuthGeneration(backend backends.Backend, store *control.Store, bumpAuthGeneration func()) (*Applier, error) {
 	if backend == nil || store == nil {
 		return nil, errors.New("oplog applier requires backend and control store")
 	}
@@ -56,7 +63,11 @@ func NewApplier(backend backends.Backend, store *control.Store) (*Applier, error
 	if err != nil {
 		return nil, err
 	}
-	return &Applier{backend: backend, catalog: catalogApplier, store: store}, nil
+	specialApplier, err := special.NewApplier(backend, store, bumpAuthGeneration)
+	if err != nil {
+		return nil, err
+	}
+	return &Applier{backend: backend, catalog: catalogApplier, special: specialApplier, store: store}, nil
 }
 
 // Apply applies one fetched oplog entry or durably stages its transaction fragment.
@@ -139,6 +150,9 @@ func parseSourceUUID(document *types.Document) (string, error) {
 }
 
 func (a *Applier) applyOperation(ctx context.Context, operation operation, opTime control.OpTime) error {
+	if special.IsSpecialNamespace(operation.Namespace) {
+		return a.applySpecialOperation(ctx, operation, opTime)
+	}
 	switch operation.Kind {
 	case "n":
 		return nil
@@ -165,6 +179,45 @@ func (a *Applier) applyOperation(ctx context.Context, operation operation, opTim
 	}
 }
 
+func (a *Applier) applySpecialOperation(ctx context.Context, operation operation, opTime control.OpTime) error {
+	if operation.Namespace == special.ChangeStreamPreimagesNamespace {
+		return fmt.Errorf("%w %q: change-stream pre-images are not supported", special.ErrUnsupportedSpecialNamespace, operation.Namespace)
+	}
+	switch operation.Kind {
+	case "i":
+		if special.IsAuthNamespace(operation.Namespace) {
+			return a.special.InsertAuthDocument(ctx, operation.Namespace, operation.Object, opTime)
+		}
+		return a.special.PutMetadataDocument(operation.Namespace, operation.Object, opTime)
+	case "u":
+		var existing *types.Document
+		var err error
+		if special.IsAuthNamespace(operation.Namespace) {
+			existing, err = a.special.AuthDocument(ctx, operation.Namespace, operation.Object2)
+		} else {
+			existing, err = a.special.MetadataDocument(operation.Namespace, operation.Object2)
+		}
+		if err != nil {
+			return err
+		}
+		postImage, err := updatedDocument(existing, operation.Object, operation.Object2)
+		if err != nil {
+			return err
+		}
+		if special.IsAuthNamespace(operation.Namespace) {
+			return a.special.ReplaceAuthDocument(ctx, operation.Namespace, postImage, opTime)
+		}
+		return a.special.PutMetadataDocument(operation.Namespace, postImage, opTime)
+	case "d":
+		if special.IsAuthNamespace(operation.Namespace) {
+			return a.special.DeleteAuthDocument(ctx, operation.Namespace, operation.Object, opTime)
+		}
+		return a.special.DeleteMetadataDocument(operation.Namespace, operation.Object, opTime)
+	default:
+		return fmt.Errorf("%w %q at %q", ErrUnsupportedOplogOperation, operation.Kind, operation.Namespace)
+	}
+}
+
 func (a *Applier) applyCommand(ctx context.Context, operation operation, opTime control.OpTime) error {
 	databaseName, collectionName, err := splitNamespace(operation.Namespace)
 	if err != nil {
@@ -172,6 +225,9 @@ func (a *Applier) applyCommand(ctx context.Context, operation operation, opTime 
 	}
 	if collectionName != "$cmd" {
 		return fmt.Errorf("command oplog namespace %q does not end in .$cmd", operation.Namespace)
+	}
+	if databaseName == "admin" || databaseName == "config" {
+		return fmt.Errorf("%w command at reserved database %q", special.ErrUnsupportedSpecialNamespace, databaseName)
 	}
 	commandName, commandValue, err := firstField(operation.Object)
 	if err != nil {
@@ -409,6 +465,10 @@ func (a *Applier) applyTransactionOperations(ctx context.Context, entries [][]by
 			if operation.Kind == "c" {
 				iter.Close()
 				return errors.New("catalog commands inside replicated transactions are not supported")
+			}
+			if special.IsSpecialNamespace(operation.Namespace) {
+				iter.Close()
+				return errors.New("special namespace operations inside replicated transactions are not supported")
 			}
 			operations = append(operations, operation)
 		}
@@ -676,25 +736,9 @@ func applyUpdate(ctx context.Context, collection backends.Collection, update, cr
 	if !found {
 		return fmt.Errorf("update oplog target _id %v does not exist", id)
 	}
-	postImage := update
-	if versionValue, versionErr := update.Get("$v"); versionErr == nil {
-		version, err := entryInteger(versionValue)
-		if err != nil || version != 2 {
-			return fmt.Errorf("unsupported oplog update version %v", versionValue)
-		}
-		diffValue, diffErr := update.Get("diff")
-		diff, valid := diffValue.(*types.Document)
-		if diffErr != nil || !valid {
-			return fmt.Errorf("version 2 update diff has type %T, want document", diffValue)
-		}
-		postImage, err = ApplyV2Diff(existing, diff)
-		if err != nil {
-			return err
-		}
-	}
-	postID, postIDErr := postImage.Get("_id")
-	if postIDErr != nil || types.Compare(id, postID) != types.Equal {
-		return errors.New("update oplog post-image changes or omits _id")
+	postImage, err := updatedDocument(existing, update, criteria)
+	if err != nil {
+		return err
 	}
 	if types.Compare(existing, postImage) == types.Equal {
 		return nil
@@ -707,6 +751,37 @@ func applyUpdate(ctx context.Context, collection backends.Collection, update, cr
 		return fmt.Errorf("update oplog target _id %v matched %d documents", id, result.Updated)
 	}
 	return nil
+}
+
+func updatedDocument(existing, update, criteria *types.Document) (*types.Document, error) {
+	if criteria == nil {
+		return nil, errors.New("update oplog entry has no o2 document key")
+	}
+	id, getErr := criteria.Get("_id")
+	if getErr != nil {
+		return nil, errors.New("update oplog document key has no _id")
+	}
+	postImage := update
+	if versionValue, versionErr := update.Get("$v"); versionErr == nil {
+		version, err := entryInteger(versionValue)
+		if err != nil || version != 2 {
+			return nil, fmt.Errorf("unsupported oplog update version %v", versionValue)
+		}
+		diffValue, diffErr := update.Get("diff")
+		diff, valid := diffValue.(*types.Document)
+		if diffErr != nil || !valid {
+			return nil, fmt.Errorf("version 2 update diff has type %T, want document", diffValue)
+		}
+		postImage, err = ApplyV2Diff(existing, diff)
+		if err != nil {
+			return nil, err
+		}
+	}
+	postID, postIDErr := postImage.Get("_id")
+	if postIDErr != nil || types.Compare(id, postID) != types.Equal {
+		return nil, errors.New("update oplog post-image changes or omits _id")
+	}
+	return postImage, nil
 }
 
 func applyDelete(ctx context.Context, collection backends.Collection, documentKey *types.Document) error {
