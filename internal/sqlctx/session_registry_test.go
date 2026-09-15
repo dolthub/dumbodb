@@ -18,7 +18,6 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -47,7 +46,10 @@ func TestSessionRegistry_Connect_CreatesAndCaches(t *testing.T) {
 	assert.Same(t, first, got)
 }
 
-func TestSessionRegistry_Connect_InvalidatesPriorShadow(t *testing.T) {
+// A second connection presenting an lsid must not cost the first its session.
+// Drivers pool logical sessions independently of connections, so one lsid
+// reaches several connections as a matter of course.
+func TestSessionRegistry_Connect_KeepsPriorShadowUsable(t *testing.T) {
 	r := NewSessionRegistry(time.Hour, stubFactory())
 
 	first, err := r.Connect("lsid-A")
@@ -56,10 +58,9 @@ func TestSessionRegistry_Connect_InvalidatesPriorShadow(t *testing.T) {
 
 	second, err := r.Connect("lsid-A")
 	require.NoError(t, err)
-	require.True(t, second.Active())
 
-	assert.NotSame(t, first, second)
-	assert.False(t, first.Active())
+	assert.Same(t, first, second, "one lsid is one session, however many connections hold it")
+	assert.True(t, first.Active(), "the first connection keeps its session")
 	assert.Equal(t, 1, r.Len())
 }
 
@@ -113,36 +114,33 @@ func TestSessionRegistry_Race_UseVsConnect(t *testing.T) {
 	first, err := r.Connect("lsid-A")
 	require.NoError(t, err)
 
-	supersedeReady := make(chan struct{})
-	supersedeDone := make(chan struct{})
+	connectsReady := make(chan struct{})
+	connectsDone := make(chan struct{})
 
 	go func() {
-		<-supersedeReady
-		_, _ = r.Connect("lsid-A")
-		close(supersedeDone)
+		<-connectsReady
+		for i := 0; i < 200; i++ {
+			_, _ = r.Connect("lsid-A")
+		}
+		close(connectsDone)
 	}()
 
-	var preSupersedeUses, postSupersedeErrs int32
-	close(supersedeReady)
-
+	// Another connection arriving on this lsid must never interrupt a command
+	// already using it, before or after.
+	var uses int
+	close(connectsReady)
 	for i := 0; i < 200; i++ {
-		err := first.Use(time.Now(), func(*dsess.DoltSession) error { return nil })
-		if err == nil {
-			atomic.AddInt32(&preSupersedeUses, 1)
-		}
-		if errors.Is(err, ErrShadowInvalidated) {
-			atomic.AddInt32(&postSupersedeErrs, 1)
-		}
+		require.NoError(t, first.Use(time.Now(), func(*dsess.DoltSession) error { return nil }))
+		uses++
 	}
 
-	<-supersedeDone
+	<-connectsDone
 
 	for i := 0; i < 50; i++ {
-		err := first.Use(time.Now(), func(*dsess.DoltSession) error { return nil })
-		require.ErrorIs(t, err, ErrShadowInvalidated)
+		require.NoError(t, first.Use(time.Now(), func(*dsess.DoltSession) error { return nil }))
+		uses++
 	}
-
-	t.Logf("pre-supersede Use successes: %d, post-supersede errors: %d", preSupersedeUses, postSupersedeErrs)
+	assert.Equal(t, 250, uses)
 }
 
 func TestSessionRegistry_Concurrent_Connect_SameLsid(t *testing.T) {
@@ -175,8 +173,9 @@ func TestSessionRegistry_Concurrent_Connect_SameLsid(t *testing.T) {
 		if s.Active() {
 			active++
 		}
+		assert.Same(t, shadows[0], s, "every connection on one lsid shares its session")
 	}
-	assert.Equal(t, 1, active)
+	assert.Equal(t, workers, active, "no connection is evicted by another arriving")
 	assert.Equal(t, 1, r.Len())
 }
 

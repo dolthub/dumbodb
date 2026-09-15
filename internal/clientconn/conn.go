@@ -639,6 +639,9 @@ func (c *conn) dispatchThroughSession(connCtx context.Context, msg *wire.OpMsg, 
 	ci.EnsureLSID()
 	sessKey := ci.Owner()
 
+	// An inactive shadow now means one thing only: the session was torn down
+	// by Sweep or End. Another connection arriving on this lsid no longer
+	// evicts this one, so there is no supersede to distinguish.
 	shadow, cachedKey := ci.CachedShadow()
 	staleReap := shadow != nil && cachedKey == sessKey && !shadow.Active() &&
 		shadow.Purged() && !c.h.SessionIsolation() && !ci.InTransaction()

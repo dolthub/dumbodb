@@ -62,10 +62,14 @@ func (r *SessionRegistry) WithClock(now func() time.Time) *SessionRegistry {
 	return r
 }
 
-// Connect supersedes any existing shadow for lsid. The new shadow shares
-// the entry's session, command latch, and lastUsed, so reconnection does
-// not reset the idle window and the new shadow's first command cannot
-// overlap one still running on the shadow it replaced.
+// Connect returns the shadow for lsid, creating the session on first use.
+// It does NOT supersede a shadow already in use: several connections may
+// hold the same lsid at once, they share one session, command latch and
+// idle clock, and the latch serializes their commands.
+//
+// A shadow therefore goes inactive only on teardown, so a caller that
+// finds one inactive is looking at a reaped session (wire code 251), not
+// at a connection that lost a race.
 //
 // An lsid whose teardown is in progress has no usable session, and
 // building a second one alongside it would defeat the per-lsid latch.
@@ -95,11 +99,16 @@ func (r *SessionRegistry) Connect(lsid string) (*Shadow, error) {
 		}
 
 		if !entry.terminating {
-			entry.shadow.Load().invalidate()
-			newShadow := newShadow(entry.state)
-			entry.shadow.Store(newShadow)
+			// The live shadow is handed back as it is. An lsid reaching a
+			// second connection is ordinary -- drivers pool logical sessions
+			// independently of connections -- so it must not cost the first
+			// connection its session. Every shadow for an lsid shares one
+			// sessionState, so the command latch already keeps the two
+			// connections' commands from overlapping, which is the only
+			// thing dsess requires.
+			shadow := entry.shadow.Load()
 			r.mu.Unlock()
-			return newShadow, nil
+			return shadow, nil
 		}
 
 		done := entry.done
