@@ -39,13 +39,25 @@ func (h *Handler) MsgHello(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMs
 	if err != nil {
 		return nil, lazyerrors.Error(err)
 	}
+	if h.ReplSetName != "" {
+		if err := validateExhaustHello(msg, doc); err != nil {
+			return nil, err
+		}
+	}
 
 	resp, err := h.hello(connCtx, doc, h.TCPHost, h.ReplSetName)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
 	}
 
-	return documentOpMsg(resp)
+	message, err := documentOpMsg(resp)
+	if err != nil {
+		return nil, err
+	}
+	if h.ReplSetName != "" && msg.Flags.FlagSet(wire.OpMsgExhaustAllowed) {
+		message.Flags = wire.OpMsgFlags(wire.OpMsgMoreToCome)
+	}
+	return message, nil
 }
 
 // hello checks client metadata and returns hello's document fields.
@@ -54,18 +66,24 @@ func (h *Handler) hello(ctx context.Context, doc *types.Document, tcpHost, name 
 	if err := checkClientMetadata(ctx, doc); err != nil {
 		return nil, lazyerrors.Error(err)
 	}
+	if name != "" {
+		if err := h.awaitTopologyVersion(ctx, doc); err != nil {
+			return nil, err
+		}
+	}
 
 	res := must.NotFail(types.NewDocument())
+	isSecondary := name != ""
 
 	switch doc.Command() {
 	case "hello":
-		res.Set("isWritablePrimary", true)
+		res.Set("isWritablePrimary", !isSecondary)
 	case "isMaster", "ismaster":
 		if helloOk, _ := doc.Get("helloOk"); helloOk != nil {
 			res.Set("helloOk", true)
 		}
 
-		res.Set("ismaster", true)
+		res.Set("ismaster", !isSecondary)
 	default:
 		panic(fmt.Sprintf("unexpected command: %q", doc.Command()))
 	}
@@ -100,6 +118,9 @@ func (h *Handler) hello(ctx context.Context, doc *types.Document, tcpHost, name 
 
 		res.Set("setName", name)
 		res.Set("hosts", must.NotFail(types.NewArray(tcpHost)))
+		res.Set("me", tcpHost)
+		res.Set("secondary", true)
+		res.Set("topologyVersion", h.topologyVersionDocument())
 	}
 
 	res.Set("maxBsonObjectSize", int32(h.MaxBsonObjectSizeBytes))
@@ -111,16 +132,9 @@ func (h *Handler) hello(ctx context.Context, doc *types.Document, tcpHost, name 
 	res.Set("minWireVersion", common.MinWireVersion)
 	res.Set("maxWireVersion", common.MaxWireVersion)
 	res.Set("readOnly", false)
-	// topologyVersion is deliberately omitted. Emitting it advertises
-	// awaitable ("streaming") hello monitoring (maxWireVersion >= 9):
-	// drivers then send an awaitable hello carrying maxAwaitTimeMS +
-	// exhaustAllowed and expect the server to hold the request open.
-	// This handler does not await, so a streaming monitor gets an
-	// instant non-exhaust reply, judges the connection broken, drops it
-	// every heartbeat, cycles the server to Unknown, and clears the
-	// client connection pool (observed with MongoDB Compass). Without
-	// topologyVersion, drivers fall back to polling monitoring, which
-	// this handler serves correctly.
+	// Outside replica-set mode topologyVersion remains absent so regular
+	// DumboDB clients continue to use polling monitoring. Replica-set mode
+	// implements the awaitable and exhaust forms before advertising it.
 
 	if resSupportedMechs != nil && resSupportedMechs.Len() != 0 {
 		res.Set("saslSupportedMechs", resSupportedMechs)

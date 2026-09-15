@@ -62,11 +62,14 @@ type Handler struct {
 
 	b backends.Backend
 
-	cursors    *cursor.Registry
-	commands   map[string]*Command
-	paramStore *parameterStore
-	wg         sync.WaitGroup
-	processID  types.ObjectID
+	cursors         *cursor.Registry
+	commands        map[string]*Command
+	paramStore      *parameterStore
+	wg              sync.WaitGroup
+	processID       types.ObjectID
+	topologyMu      sync.Mutex
+	topologyCounter int64
+	topologyChanged chan struct{}
 
 	bootstrapLatch atomic.Bool
 
@@ -126,10 +129,11 @@ func New(opts *NewOpts) (*Handler, error) {
 	b := oplog.NewBackend(opts.Backend, logging.WithName(opts.L, "oplog"))
 
 	h := &Handler{
-		b:         b,
-		NewOpts:   opts,
-		cursors:   cursor.NewRegistry(logging.WithName(opts.L, "cursors")),
-		processID: types.NewObjectID(),
+		b:               b,
+		NewOpts:         opts,
+		cursors:         cursor.NewRegistry(logging.WithName(opts.L, "cursors")),
+		processID:       types.NewObjectID(),
+		topologyChanged: make(chan struct{}),
 
 		cappedCleanupStop: make(chan struct{}),
 	}

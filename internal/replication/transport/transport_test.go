@@ -23,6 +23,7 @@ import (
 	"net"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/FerretDB/wire"
 	"github.com/FerretDB/wire/wirebson"
@@ -351,6 +352,45 @@ func TestLiveMongoHello(t *testing.T) {
 	}
 	if _, err := connection.Request(context.Background(), wire.MustOpMsg("ping", int32(1), "$db", "admin")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestLiveDumboAwaitableHello(t *testing.T) {
+	address := os.Getenv("DUMBODB_ADDRESS")
+	if address == "" {
+		t.Skip("set DUMBODB_ADDRESS to run against DumboDB in replica-set mode")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	connection, err := Dial(ctx, address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	initial, err := connection.Hello(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	topologyVersion := initial.Get("topologyVersion")
+	if topologyVersion == nil {
+		t.Fatal("replica-set hello omitted topologyVersion")
+	}
+	request := wire.MustOpMsg(
+		"hello", int32(1),
+		"topologyVersion", topologyVersion,
+		"maxAwaitTimeMS", int64(25),
+		"$db", "admin",
+	)
+	request.Flags = wire.OpMsgFlags(wire.OpMsgExhaustAllowed)
+	responses := 0
+	if err := connection.Exhaust(ctx, request, func(response *wire.OpMsg) (bool, error) {
+		responses++
+		return responses < 2, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if responses != 2 {
+		t.Fatalf("awaitable hello responses = %d, want 2", responses)
 	}
 }
 
