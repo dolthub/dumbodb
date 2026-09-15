@@ -130,6 +130,13 @@ func (bc *backendContract) EnsureReplicationBranch(ctx context.Context, database
 	return errors.New("backend does not support replication branches")
 }
 
+func (bc *backendContract) ResetReplicationBranch(ctx context.Context, database, branch string) error {
+	if backend, ok := bc.b.(ReplicationBranchBackend); ok {
+		return backend.ResetReplicationBranch(ctx, database, branch)
+	}
+	return errors.New("backend does not support replication branches")
+}
+
 func (bc *backendContract) ReplicationBranchExists(ctx context.Context, database, branch string) (bool, error) {
 	if backend, ok := bc.b.(ReplicationBranchBackend); ok {
 		return backend.ReplicationBranchExists(ctx, database, branch)

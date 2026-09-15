@@ -21,6 +21,10 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/dolthub/dolt/go/store/datas"
+	"github.com/dolthub/dolt/go/store/hash"
+	dolttypes "github.com/dolthub/dolt/go/store/types"
+
 	"github.com/dolthub/dumbodb/internal/backends"
 )
 
@@ -44,10 +48,69 @@ func (b *Backend) EnsureReplicationBranch(ctx context.Context, database, branch 
 	if dataset.HasHead() {
 		return nil
 	}
+	initialCommit, err := initialCommitHash(ctx, state)
+	if err != nil {
+		return err
+	}
 	_, err = dumboDBBranchCreate(ctx, state, &backends.BranchParams{
-		DBName: database, Action: "add", From: defaultBranch, Name: branch,
+		DBName: database, Action: "add", From: initialCommit.String(), Name: branch,
 	})
 	return err
+}
+
+func (b *Backend) ResetReplicationBranch(ctx context.Context, database, branch string) error {
+	if database == "" || branch == "" {
+		return fmt.Errorf("replication database and branch are required")
+	}
+	if branch == defaultBranch {
+		return fmt.Errorf("replication branch cannot be %q", defaultBranch)
+	}
+	state, err := b.getOrOpenDB(ctx, database, true)
+	if err != nil {
+		return err
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	initialCommit, err := initialCommitHash(ctx, state)
+	if err != nil {
+		return err
+	}
+	dataset, err := state.datasDB.GetDataset(ctx, branchRefPrefix+branch)
+	if err != nil {
+		return err
+	}
+	if dataset.HasHead() {
+		if _, err := dumboDBBranchDelete(ctx, state, &backends.BranchParams{
+			DBName: database, From: defaultBranch, Name: branch, Force: true,
+		}); err != nil {
+			return err
+		}
+	}
+	_, err = dumboDBBranchCreate(ctx, state, &backends.BranchParams{
+		DBName: database, Action: "add", From: initialCommit.String(), Name: branch,
+	})
+	return err
+}
+
+func initialCommitHash(ctx context.Context, state *dbState) (hash.Hash, error) {
+	current, err := resolveRootishToCommitHash(ctx, state, defaultBranch)
+	if err != nil {
+		return hash.Hash{}, fmt.Errorf("resolving replication branch base: %w", err)
+	}
+	for {
+		commit, err := datas.LoadCommitAddr(ctx, state.vs, current)
+		if err != nil {
+			return hash.Hash{}, fmt.Errorf("loading replication branch ancestor: %w", err)
+		}
+		parents, err := dolttypes.SerialCommitParentAddrs(dolttypes.Format_DOLT, commit.NomsValue().(dolttypes.SerialMessage))
+		if err != nil {
+			return hash.Hash{}, fmt.Errorf("reading replication branch ancestors: %w", err)
+		}
+		if len(parents) == 0 {
+			return current, nil
+		}
+		current = parents[0]
+	}
 }
 
 func (b *Backend) ReplicationBranchExists(ctx context.Context, database, branch string) (bool, error) {

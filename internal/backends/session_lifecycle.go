@@ -37,6 +37,7 @@ type AutoCommitBackend interface {
 // ReplicationBranchBackend manages the isolated branch owned by a replica-set member.
 type ReplicationBranchBackend interface {
 	EnsureReplicationBranch(context.Context, string, string) error
+	ResetReplicationBranch(context.Context, string, string) error
 	ReplicationBranchExists(context.Context, string, string) (bool, error)
 	ListReplicationDatabases(context.Context) ([]string, error)
 }
