@@ -135,6 +135,16 @@ type TransactionFragment struct {
 	Payload []byte `json:"payload"`
 }
 
+type InitialSyncAttempt struct {
+	ID                  string `json:"id"`
+	Source              string `json:"source"`
+	SourceRBID          int64  `json:"source_rbid"`
+	SourceInitialSyncID string `json:"source_initial_sync_id,omitempty"`
+	BeginFetch          OpTime `json:"begin_fetch"`
+	BeginApply          OpTime `json:"begin_apply"`
+	Stop                OpTime `json:"stop"`
+}
+
 type State struct {
 	Configuration      Configuration                  `json:"configuration"`
 	Lifecycle          Lifecycle                      `json:"lifecycle"`
@@ -143,6 +153,7 @@ type State struct {
 	CurrentSource      string                         `json:"current_source"`
 	CurrentRBID        int64                          `json:"current_rbid"`
 	InitialSyncPhase   InitialSyncPhase               `json:"initial_sync_phase"`
+	InitialSyncAttempt *InitialSyncAttempt            `json:"initial_sync_attempt,omitempty"`
 	Checkpoint         Checkpoint                     `json:"checkpoint"`
 	CommitIntervals    []CommitInterval               `json:"commit_intervals"`
 	CollectionMappings map[string]CollectionMapping   `json:"collection_mappings"`
@@ -308,9 +319,88 @@ func (s *Store) SetInitialSyncPhase(phase InitialSyncPhase) error {
 	return s.persistLocked()
 }
 
+func (s *Store) BeginInitialSync(attempt InitialSyncAttempt) error {
+	if attempt.ID == "" || attempt.Source == "" || attempt.SourceRBID < 0 {
+		return errors.New("initial sync attempt ID, source, and non-negative rollback ID are required")
+	}
+	if attempt.BeginFetch == (OpTime{}) || attempt.BeginApply == (OpTime{}) {
+		return errors.New("initial sync begin-fetch and begin-apply positions are required")
+	}
+	if attempt.BeginApply.Compare(attempt.BeginFetch) < 0 {
+		return errors.New("initial sync begin-apply position precedes begin-fetch position")
+	}
+	if attempt.Stop != (OpTime{}) {
+		return errors.New("initial sync stop position must not be set when cloning begins")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	copy := attempt
+	s.state.InitialSyncAttempt = &copy
+	s.state.InitialSyncPhase = InitialSyncCloning
+	return s.persistLocked()
+}
+
+func (s *Store) SetInitialSyncStop(attemptID string, stop OpTime) error {
+	if attemptID == "" || stop == (OpTime{}) {
+		return errors.New("initial sync attempt ID and stop position are required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state.InitialSyncAttempt == nil || s.state.InitialSyncAttempt.ID != attemptID {
+		return fmt.Errorf("initial sync attempt %q is not active", attemptID)
+	}
+	if stop.Compare(s.state.InitialSyncAttempt.BeginApply) < 0 {
+		return errors.New("initial sync stop position precedes begin-apply position")
+	}
+	s.state.InitialSyncAttempt.Stop = stop
+	s.state.InitialSyncPhase = InitialSyncApplying
+	return s.persistLocked()
+}
+
+func (s *Store) CompleteInitialSync(attemptID string, checkpoint Checkpoint, finalRBID int64) error {
+	if attemptID == "" || finalRBID < 0 {
+		return errors.New("initial sync attempt ID and non-negative final rollback ID are required")
+	}
+	if err := validateCheckpoint(checkpoint); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	attempt := s.state.InitialSyncAttempt
+	if attempt == nil || attempt.ID != attemptID {
+		return fmt.Errorf("initial sync attempt %q is not active", attemptID)
+	}
+	if attempt.Stop == (OpTime{}) {
+		return errors.New("initial sync attempt has no stop position")
+	}
+	if finalRBID != attempt.SourceRBID {
+		return fmt.Errorf("initial sync source rollback ID changed from %d to %d", attempt.SourceRBID, finalRBID)
+	}
+	if checkpoint.Applied != attempt.Stop || checkpoint.Durable != attempt.Stop || checkpoint.Written != attempt.Stop {
+		return fmt.Errorf("initial sync checkpoint does not reach stop position %v", attempt.Stop)
+	}
+	s.state.Checkpoint = checkpoint
+	s.state.CurrentSource = attempt.Source
+	s.state.CurrentRBID = finalRBID
+	s.state.InitialSyncPhase = InitialSyncComplete
+	return s.persistLocked()
+}
+
+func (s *Store) ResetInitialSync(attemptID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state.InitialSyncAttempt != nil && attemptID != "" && s.state.InitialSyncAttempt.ID != attemptID {
+		return fmt.Errorf("initial sync attempt %q is not active", attemptID)
+	}
+	s.state.InitialSyncAttempt = nil
+	s.state.InitialSyncPhase = InitialSyncNotStarted
+	s.state.Checkpoint = Checkpoint{}
+	return s.persistLocked()
+}
+
 func (s *Store) SetCheckpoint(checkpoint Checkpoint) error {
-	if checkpoint.Buffered.Compare(checkpoint.Fetched) > 0 || checkpoint.Written.Compare(checkpoint.Buffered) > 0 || checkpoint.Durable.Compare(checkpoint.Written) > 0 || checkpoint.Applied.Compare(checkpoint.Durable) > 0 {
-		return errors.New("replication checkpoint positions are not ordered")
+	if err := validateCheckpoint(checkpoint); err != nil {
+		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -319,6 +409,13 @@ func (s *Store) SetCheckpoint(checkpoint Checkpoint) error {
 	}
 	s.state.Checkpoint = checkpoint
 	return s.persistLocked()
+}
+
+func validateCheckpoint(checkpoint Checkpoint) error {
+	if checkpoint.Buffered.Compare(checkpoint.Fetched) > 0 || checkpoint.Written.Compare(checkpoint.Buffered) > 0 || checkpoint.Durable.Compare(checkpoint.Written) > 0 || checkpoint.Applied.Compare(checkpoint.Durable) > 0 {
+		return errors.New("replication checkpoint positions are not ordered")
+	}
+	return nil
 }
 
 func (s *Store) ResetFetchProgress() (Checkpoint, error) {

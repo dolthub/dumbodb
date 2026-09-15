@@ -104,6 +104,87 @@ func TestStorePersistsRecoveryState(t *testing.T) {
 	}
 }
 
+func TestInitialSyncAttemptLifecycleIsAtomicAndPersistent(t *testing.T) {
+	dir := t.TempDir()
+	configuration := testConfiguration()
+	store, err := Open(dir, configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beginFetch := OpTime{Seconds: 100, Increment: 3, Term: 8}
+	beginApply := OpTime{Seconds: 100, Increment: 5, Term: 8}
+	attempt := InitialSyncAttempt{
+		ID: "attempt-one", Source: "mongo.example:27017", SourceRBID: 11,
+		SourceInitialSyncID: "source-generation", BeginFetch: beginFetch, BeginApply: beginApply,
+	}
+	if err := store.BeginInitialSync(attempt); err != nil {
+		t.Fatal(err)
+	}
+	stop := OpTime{Seconds: 101, Increment: 9, Term: 8}
+	if err := store.SetInitialSyncStop(attempt.ID, stop); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := Open(dir, configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := reopened.Snapshot()
+	wantAttempt := InitialSyncAttempt{
+		ID: "attempt-one", Source: "mongo.example:27017", SourceRBID: 11,
+		SourceInitialSyncID: "source-generation", BeginFetch: beginFetch, BeginApply: beginApply, Stop: stop,
+	}
+	if state.InitialSyncPhase != InitialSyncApplying || state.InitialSyncAttempt == nil || *state.InitialSyncAttempt != wantAttempt {
+		t.Fatalf("reopened initial sync state = %+v", state)
+	}
+	checkpoint := Checkpoint{Fetched: stop, Buffered: stop, Written: stop, Durable: stop, Applied: stop}
+	if err := reopened.CompleteInitialSync(attempt.ID, checkpoint, 12); err == nil {
+		t.Fatal("completion accepted a changed source rollback ID")
+	}
+	if reopened.Snapshot().InitialSyncPhase != InitialSyncApplying {
+		t.Fatal("failed completion changed initial sync phase")
+	}
+	if err := reopened.CompleteInitialSync(attempt.ID, checkpoint, 11); err != nil {
+		t.Fatal(err)
+	}
+	completed := reopened.Snapshot()
+	if completed.InitialSyncPhase != InitialSyncComplete || completed.Checkpoint != checkpoint || completed.CurrentRBID != 11 || completed.CurrentSource != attempt.Source {
+		t.Fatalf("completed initial sync state = %+v", completed)
+	}
+}
+
+func TestInitialSyncAttemptRejectsInvalidBoundaries(t *testing.T) {
+	store, err := Open(t.TempDir(), testConfiguration())
+	if err != nil {
+		t.Fatal(err)
+	}
+	later := OpTime{Seconds: 100, Increment: 5, Term: 8}
+	earlier := OpTime{Seconds: 100, Increment: 3, Term: 8}
+	if err := store.BeginInitialSync(InitialSyncAttempt{
+		ID: "bad", Source: "mongo.example:27017", SourceRBID: 1, BeginFetch: later, BeginApply: earlier,
+	}); err == nil {
+		t.Fatal("accepted begin-apply before begin-fetch")
+	}
+	if err := store.BeginInitialSync(InitialSyncAttempt{
+		ID: "good", Source: "mongo.example:27017", SourceRBID: 1, BeginFetch: earlier, BeginApply: later,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetInitialSyncStop("good", earlier); err == nil {
+		t.Fatal("accepted stop before begin-apply")
+	}
+	if err := store.ResetInitialSync("other"); err == nil {
+		t.Fatal("reset a different initial sync attempt")
+	}
+	if err := store.ResetInitialSync("good"); err != nil {
+		t.Fatal(err)
+	}
+	state := store.Snapshot()
+	if state.InitialSyncPhase != InitialSyncNotStarted || state.InitialSyncAttempt != nil {
+		t.Fatalf("reset initial sync state = %+v", state)
+	}
+}
+
 func TestCollectionMappingRenameDropAndNameReuse(t *testing.T) {
 	store, err := Open(t.TempDir(), testConfiguration())
 	if err != nil {
