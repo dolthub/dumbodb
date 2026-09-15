@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/replication/catalog"
 	"github.com/dolthub/dumbodb/internal/replication/control"
 	"github.com/dolthub/dumbodb/internal/replication/oplog"
@@ -56,6 +57,7 @@ type CoordinatorOptions struct {
 	Manager       *topology.Manager
 	Fetcher       initialSyncFetcher
 	Buffer        *oplog.Buffer
+	Branches      backends.ReplicationBranchBackend
 	Catalog       *catalog.Applier
 	Applier       oplogEntryApplier
 	Publisher     CompletionPublisher
@@ -79,14 +81,42 @@ type InitialSyncResult struct {
 
 func NewCoordinator(options CoordinatorOptions) (*Coordinator, error) {
 	if options.Source == "" || options.Client == nil || options.Store == nil || options.Manager == nil ||
-		options.Fetcher == nil || options.Buffer == nil || options.Catalog == nil || options.Applier == nil || options.Publisher == nil {
-		return nil, errors.New("initial sync coordinator requires source, client, store, manager, fetcher, buffer, catalog, applier, and publisher")
+		options.Fetcher == nil || options.Buffer == nil || options.Branches == nil || options.Catalog == nil ||
+		options.Applier == nil || options.Publisher == nil {
+		return nil, errors.New("initial sync coordinator requires source, client, store, manager, fetcher, buffer, branch backend, catalog, applier, and publisher")
 	}
 	if options.LoaderLimits.Documents <= 0 || options.LoaderLimits.Bytes <= 0 ||
 		options.CatchUpLimits.Entries <= 0 || options.CatchUpLimits.Bytes <= 0 {
 		return nil, errors.New("initial sync coordinator requires positive loader and catch-up limits")
 	}
 	return &Coordinator{options: options}, nil
+}
+
+// Reset discards branch and control state from an incomplete or obsolete attempt.
+func (c *Coordinator) Reset(ctx context.Context) error {
+	state := c.options.Store.Snapshot()
+	databases, err := c.options.Branches.ListReplicationDatabases(ctx)
+	if err != nil {
+		return fmt.Errorf("listing replication databases for initial sync reset: %w", err)
+	}
+	for _, database := range databases {
+		exists, err := c.options.Branches.ReplicationBranchExists(ctx, database, state.Configuration.Branch)
+		if err != nil {
+			return fmt.Errorf("checking %s replication branch for initial sync reset: %w", database, err)
+		}
+		if !exists {
+			continue
+		}
+		if err := c.options.Branches.ResetReplicationBranch(ctx, database, state.Configuration.Branch); err != nil {
+			return fmt.Errorf("resetting %s replication branch: %w", database, err)
+		}
+	}
+	c.options.Buffer.Reset()
+	attemptID := ""
+	if state.InitialSyncAttempt != nil {
+		attemptID = state.InitialSyncAttempt.ID
+	}
+	return c.options.Manager.ResetInitialSync(attemptID)
 }
 
 // Run executes one disposable initial-sync attempt.

@@ -120,6 +120,32 @@ func TestBufferWaitForData(t *testing.T) {
 	}
 }
 
+func TestBufferResetDiscardsEntriesAndWakesProducer(t *testing.T) {
+	buffer, err := NewBuffer(BufferLimits{Entries: 1, Bytes: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := buffer.TryAppend(testEntry(1, 3)); err != nil {
+		t.Fatal(err)
+	}
+	waited := make(chan error, 1)
+	go func() { waited <- buffer.WaitForSpace(context.Background(), 1) }()
+	select {
+	case err := <-waited:
+		t.Fatalf("WaitForSpace returned before reset: %v", err)
+	case <-time.After(10 * time.Millisecond):
+	}
+	if removed := buffer.Reset(); removed.Entries != 1 || removed.Bytes != 3 {
+		t.Fatalf("removed stats = %+v", removed)
+	}
+	if err := <-waited; err != nil {
+		t.Fatal(err)
+	}
+	if stats := buffer.Stats(); stats != (BufferStats{}) {
+		t.Fatalf("reset stats = %+v", stats)
+	}
+}
+
 func testEntry(increment uint32, size int) Entry {
 	return Entry{OpTime: control.OpTime{Seconds: 100, Increment: increment, Term: 8}, RawBSON: make([]byte, size)}
 }

@@ -352,6 +352,24 @@ func (m *Manager) CompleteInitialSync(attemptID string, checkpoint control.Check
 	return nil
 }
 
+// ResetInitialSync clears failed-attempt progress and returns the member to STARTUP2.
+func (m *Manager) ResetInitialSync(attemptID string) error {
+	if err := m.store.ResetInitialSync(attemptID); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	previous := cloneSnapshot(m.state)
+	m.state.Checkpoint = control.Checkpoint{}
+	m.state.RBID = 0
+	m.state.State = StateStartup2
+	listener := m.changeListenerLocked(previous)
+	m.mu.Unlock()
+	if listener != nil {
+		listener()
+	}
+	return nil
+}
+
 func (m *Manager) MarkMemberDown(memberID int) error {
 	m.mu.Lock()
 	previous := cloneSnapshot(m.state)

@@ -155,6 +155,18 @@ func (b *Buffer) Stats() BufferStats {
 	return BufferStats{Entries: len(b.entries), Bytes: b.bytes}
 }
 
+// Reset discards buffered entries and wakes blocked producers.
+func (b *Buffer) Reset() BufferStats {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	removed := BufferStats{Entries: len(b.entries), Bytes: b.bytes}
+	b.entries = nil
+	b.bytes = 0
+	close(b.space)
+	b.space = make(chan struct{})
+	return removed
+}
+
 func (b *Buffer) Tail() (control.OpTime, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()

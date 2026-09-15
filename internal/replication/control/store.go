@@ -395,6 +395,10 @@ func (s *Store) ResetInitialSync(attemptID string) error {
 	s.state.InitialSyncAttempt = nil
 	s.state.InitialSyncPhase = InitialSyncNotStarted
 	s.state.Checkpoint = Checkpoint{}
+	s.state.CurrentRBID = 0
+	s.state.CommitIntervals = nil
+	s.state.CollectionMappings = make(map[string]CollectionMapping)
+	s.state.TransactionParts = make(map[string]TransactionFragment)
 	return s.persistLocked()
 }
 

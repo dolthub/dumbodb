@@ -23,6 +23,7 @@ import (
 	"github.com/FerretDB/wire"
 	"github.com/google/uuid"
 
+	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/backends/dolt"
 	"github.com/dolthub/dumbodb/internal/replication/catalog"
 	"github.com/dolthub/dumbodb/internal/replication/control"
@@ -78,7 +79,8 @@ func TestCoordinatorRunsCloneAndConcurrentCatchUpThroughStop(t *testing.T) {
 	}}
 	coordinator, err := NewCoordinator(CoordinatorOptions{
 		Source: "primary.example:27017", Client: client, Store: store, Manager: manager,
-		Fetcher: fetcher, Buffer: buffer, Catalog: catalogApplier, Applier: entryApplier, Publisher: publisher,
+		Fetcher: fetcher, Buffer: buffer, Branches: backend.(backends.ReplicationBranchBackend),
+		Catalog: catalogApplier, Applier: entryApplier, Publisher: publisher,
 		LoaderLimits: LoaderLimits{Documents: 10, Bytes: 4096}, CatchUpLimits: CatchUpLimits{Entries: 2, Bytes: 4096},
 	})
 	if err != nil {
@@ -105,6 +107,28 @@ func TestCoordinatorRunsCloneAndConcurrentCatchUpThroughStop(t *testing.T) {
 		t.Fatalf("publications = %+v", publisher.publications)
 	}
 	assertBranchCollectionCount(t, ctx, backend, "orders", "items", 1)
+	if err := coordinator.Reset(ctx); err != nil {
+		t.Fatal(err)
+	}
+	resetState := store.Snapshot()
+	if resetState.InitialSyncPhase != control.InitialSyncNotStarted || resetState.InitialSyncAttempt != nil ||
+		len(resetState.CollectionMappings) != 0 || resetState.Checkpoint != (control.Checkpoint{}) {
+		t.Fatalf("reset control state = %+v", resetState)
+	}
+	if manager.Snapshot().State != topology.StateStartup2 {
+		t.Fatalf("member state after reset = %s", manager.Snapshot().State)
+	}
+	resetDatabase, err := backend.Database("orders@mongo-history")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resetCollections, err := resetDatabase.ListCollections(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resetCollections.Collections) != 0 {
+		t.Fatalf("reset replication collections = %+v", resetCollections.Collections)
+	}
 }
 
 type recordingInitialSyncPublisher struct {

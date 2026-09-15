@@ -176,11 +176,29 @@ func TestInitialSyncAttemptRejectsInvalidBoundaries(t *testing.T) {
 	if err := store.ResetInitialSync("other"); err == nil {
 		t.Fatal("reset a different initial sync attempt")
 	}
+	if err := store.SetSource("mongo.example:27017", 9); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetCheckpoint(Checkpoint{Fetched: later, Buffered: later}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordCommit(CommitInterval{First: earlier, Last: later, CommitID: "partial"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutCollectionMapping(CollectionMapping{
+		SourceUUID: "source", Database: "orders", Collection: "items", LocalUUID: "local", CreateOpTime: earlier,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutTransactionFragment(TransactionFragment{Key: "transaction", First: earlier, Last: later, Payload: []byte("partial")}); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.ResetInitialSync("good"); err != nil {
 		t.Fatal(err)
 	}
 	state := store.Snapshot()
-	if state.InitialSyncPhase != InitialSyncNotStarted || state.InitialSyncAttempt != nil {
+	if state.InitialSyncPhase != InitialSyncNotStarted || state.InitialSyncAttempt != nil || state.Checkpoint != (Checkpoint{}) ||
+		state.CurrentRBID != 0 || len(state.CommitIntervals) != 0 || len(state.CollectionMappings) != 0 || len(state.TransactionParts) != 0 {
 		t.Fatalf("reset initial sync state = %+v", state)
 	}
 }
