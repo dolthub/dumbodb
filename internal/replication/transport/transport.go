@@ -231,14 +231,16 @@ func (c *Connection) Exhaust(ctx context.Context, message *wire.OpMsg, consume f
 	if err := c.writeMessage(ctx, identifier, message); err != nil {
 		return err
 	}
+	expectedResponseTo := identifier
 	for {
 		header, response, err := c.readMessage(ctx)
 		if err != nil {
 			return err
 		}
-		if header.ResponseTo != identifier {
-			return fmt.Errorf("exhaust response correlation mismatch: got %d, want %d", header.ResponseTo, identifier)
+		if header.ResponseTo != expectedResponseTo {
+			return fmt.Errorf("exhaust response correlation mismatch: got %d, want %d", header.ResponseTo, expectedResponseTo)
 		}
+		expectedResponseTo = header.RequestID
 		keepGoing, err := consume(response)
 		if err != nil {
 			return err
