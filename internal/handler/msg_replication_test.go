@@ -63,6 +63,19 @@ func TestReplicationInspectionCommands(t *testing.T) {
 	if id := responseValue(isSelfDocument, "id"); id != handler.processID {
 		t.Fatalf("_isSelf id = %v, want %v", id, handler.processID)
 	}
+
+	statusResponse, err := handler.MsgReplSetGetStatus(context.Background(), wire.MustOpMsg("replSetGetStatus", int32(1), "$db", "admin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	statusDocument, err := opMsgDocument(statusResponse)
+	if err != nil {
+		t.Fatal(err)
+	}
+	members, ok := responseValue(statusDocument, "members").(*types.Array)
+	if !ok || members.Len() != 2 {
+		t.Fatalf("status members = %T %v", responseValue(statusDocument, "members"), responseValue(statusDocument, "members"))
+	}
 }
 
 func TestReplicationHeartbeatReturnsNewerConfigAndTracksPrimary(t *testing.T) {

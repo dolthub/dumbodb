@@ -29,6 +29,7 @@ type dialFunc func(context.Context, string) (net.Conn, error)
 type Connector struct {
 	mu          sync.Mutex
 	address     string
+	hostInfo    string
 	compressors []string
 	dial        dialFunc
 	connection  *Connection
@@ -36,10 +37,16 @@ type Connector struct {
 }
 
 func NewConnector(address string, compressors []string) *Connector {
+	return NewMemberConnector(address, "", compressors)
+}
+
+func NewMemberConnector(address, hostInfo string, compressors []string) *Connector {
 	dialer := &net.Dialer{}
-	return newConnector(address, compressors, func(ctx context.Context, address string) (net.Conn, error) {
+	connector := newConnector(address, compressors, func(ctx context.Context, address string) (net.Conn, error) {
 		return dialer.DialContext(ctx, "tcp", address)
 	})
+	connector.hostInfo = hostInfo
+	return connector
 }
 
 func newConnector(address string, compressors []string, dial dialFunc) *Connector {
@@ -101,7 +108,7 @@ func (c *Connector) connectLocked(ctx context.Context) (*Connection, error) {
 		return nil, fmt.Errorf("dial MongoDB member %q: %w", c.address, err)
 	}
 	connection := New(networkConnection)
-	if _, err := connection.Hello(ctx, c.compressors); err != nil {
+	if _, err := connection.MemberHello(ctx, c.hostInfo, c.compressors); err != nil {
 		_ = connection.Close()
 		return nil, fmt.Errorf("handshake with MongoDB member %q: %w", c.address, err)
 	}

@@ -88,6 +88,8 @@ func TestHelloSelectsMutualCompressor(t *testing.T) {
 		}
 		writeTestMessage(t, server, 77, header.RequestID, wire.MustOpMsg(
 			"ok", float64(1),
+			"minWireVersion", int32(6),
+			"maxWireVersion", int32(25),
 			"compression", wirebson.MustArray("zstd", "snappy"),
 		))
 	}()
@@ -98,6 +100,87 @@ func TestHelloSelectsMutualCompressor(t *testing.T) {
 	}
 	if connection.compressor != CompressorSnappy {
 		t.Fatalf("compressor = %s, want snappy", connection.compressor)
+	}
+}
+
+func TestMemberHelloAdvertisesInternalClient(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	go func() {
+		reader := bufio.NewReader(server)
+		header, err := readHeader(reader)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		body := make([]byte, int(header.MessageLength)-wire.MsgHeaderLen)
+		if _, err := io.ReadFull(reader, body); err != nil {
+			t.Error(err)
+			return
+		}
+		var request wire.OpMsg
+		if err := request.UnmarshalBinaryNocopy(body); err != nil {
+			t.Error(err)
+			return
+		}
+		raw, err := request.RawDocument()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		document, err := raw.Decode()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		if document.Get("internalClient") == nil {
+			t.Error("member hello omitted internalClient")
+		}
+		if document.Get("client") == nil {
+			t.Error("member hello omitted client metadata")
+		}
+		if hostInfo := document.Get("hostInfo"); hostInfo != "dumbo.example:27017" {
+			t.Errorf("member hello hostInfo = %v", hostInfo)
+		}
+		writeTestMessage(t, server, 77, header.RequestID, wire.MustOpMsg(
+			"ok", float64(1),
+			"minWireVersion", int32(6),
+			"maxWireVersion", int32(25),
+		))
+	}()
+
+	connection := New(client)
+	if _, err := connection.MemberHello(context.Background(), "dumbo.example:27017", nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMemberHelloRejectsIncompatibleWireRange(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+	go func() {
+		reader := bufio.NewReader(server)
+		header, err := readHeader(reader)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		if _, err := io.CopyN(io.Discard, reader, int64(header.MessageLength-wire.MsgHeaderLen)); err != nil {
+			t.Error(err)
+			return
+		}
+		writeTestMessage(t, server, 77, header.RequestID, wire.MustOpMsg(
+			"ok", float64(1),
+			"minWireVersion", int32(26),
+			"maxWireVersion", int32(27),
+		))
+	}()
+	connection := New(client)
+	if _, err := connection.MemberHello(context.Background(), "dumbo.example:27017", nil); err == nil {
+		t.Fatal("MemberHello accepted incompatible wire range")
 	}
 }
 

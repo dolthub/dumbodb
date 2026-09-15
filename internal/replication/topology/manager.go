@@ -131,6 +131,7 @@ func New(store *control.Store) *Manager {
 	if persisted.ReplicaConfig != nil {
 		configuration := *persisted.ReplicaConfig
 		configuration.Members = append([]control.MemberConfiguration(nil), persisted.ReplicaConfig.Members...)
+		configuration.RawBSON = append([]byte(nil), persisted.ReplicaConfig.RawBSON...)
 		state.Configuration = &configuration
 		state.State = StateStartup2
 		if persisted.InitialSyncPhase == control.InitialSyncComplete {
@@ -189,12 +190,21 @@ func (m *Manager) InstallConfiguration(configuration control.ReplicaConfiguratio
 	previous := cloneSnapshot(m.state)
 	m.state.Configuration = cloneConfiguration(&configuration)
 	m.state.Term = max(m.state.Term, term)
+	configuredMembers := make(map[int]MemberStatus, len(configuration.Members))
 	for _, member := range configuration.Members {
 		if member.Host == m.state.MemberHost {
 			m.state.MemberID = member.MemberID
-			break
+			continue
 		}
+		status, exists := m.state.Members[member.MemberID]
+		status.MemberID = member.MemberID
+		status.Host = member.Host
+		if !exists {
+			status.State = StateUnknown
+		}
+		configuredMembers[member.MemberID] = status
 	}
+	m.state.Members = configuredMembers
 	if m.state.State == StateStartup {
 		m.state.State = StateStartup2
 	}
@@ -417,6 +427,7 @@ func cloneConfiguration(configuration *control.ReplicaConfiguration) *control.Re
 	}
 	clone := *configuration
 	clone.Members = append([]control.MemberConfiguration(nil), configuration.Members...)
+	clone.RawBSON = append([]byte(nil), configuration.RawBSON...)
 	return &clone
 }
 

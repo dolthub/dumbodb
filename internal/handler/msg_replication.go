@@ -16,12 +16,15 @@ package handler
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"sort"
 	"time"
 
 	"github.com/FerretDB/wire"
+	"github.com/FerretDB/wire/wirebson"
 
+	"github.com/dolthub/dumbodb/internal/bson"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/replication/control"
 	"github.com/dolthub/dumbodb/internal/replication/topology"
@@ -183,6 +186,9 @@ func (h *Handler) replicationState() (topology.Snapshot, error) {
 }
 
 func replicaConfigurationDocument(configuration control.ReplicaConfiguration) *types.Document {
+	if len(configuration.RawBSON) != 0 {
+		return must.NotFail(bson.ToDocument(wirebson.RawDocument(configuration.RawBSON)))
+	}
 	members := types.MakeArray(len(configuration.Members))
 	for _, member := range configuration.Members {
 		memberDocument := must.NotFail(types.NewDocument(
@@ -196,7 +202,13 @@ func replicaConfigurationDocument(configuration control.ReplicaConfiguration) *t
 		}
 		members.Append(memberDocument)
 	}
-	settings := must.NotFail(types.NewDocument("replicaSetId", configuration.ReplicaSetID))
+	replicaSetID := any(configuration.ReplicaSetID)
+	if decoded, err := hex.DecodeString(configuration.ReplicaSetID); err == nil && len(decoded) == types.ObjectIDLen {
+		var objectID types.ObjectID
+		copy(objectID[:], decoded)
+		replicaSetID = objectID
+	}
+	settings := must.NotFail(types.NewDocument("replicaSetId", replicaSetID))
 	return must.NotFail(types.NewDocument(
 		"_id", configuration.SetName,
 		"version", configuration.Version,

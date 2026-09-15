@@ -26,6 +26,7 @@ import (
 	"hash/crc32"
 	"io"
 	"net"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -34,9 +35,16 @@ import (
 	"github.com/FerretDB/wire/wirebson"
 	"github.com/golang/snappy"
 	"github.com/klauspost/compress/zstd"
+
+	"github.com/dolthub/dumbodb/internal/version"
 )
 
 const compressedHeaderLength = 9
+
+const (
+	minimumMemberWireVersion = int32(6)
+	maximumMemberWireVersion = int32(25)
+)
 
 var uncompressedCommands = map[string]struct{}{
 	"hello":           {},
@@ -126,6 +134,10 @@ func (c *Connection) Close() error {
 // Hello performs the unauthenticated member handshake. The response-selected
 // compressor is used only after this request has completed.
 func (c *Connection) Hello(ctx context.Context, compressors []string) (*wirebson.Document, error) {
+	return c.MemberHello(ctx, "", compressors)
+}
+
+func (c *Connection) MemberHello(ctx context.Context, hostInfo string, compressors []string) (*wirebson.Document, error) {
 	names := wirebson.MakeArray(len(compressors))
 	for _, name := range compressors {
 		if _, known := compressorFromName(name); !known {
@@ -136,12 +148,47 @@ func (c *Connection) Hello(ctx context.Context, compressors []string) (*wirebson
 		}
 	}
 
-	message := wire.MustOpMsg(
+	driver := wirebson.MakeDocument(2)
+	if err := driver.Add("name", "NetworkInterfaceTL-ReplNetwork"); err != nil {
+		return nil, err
+	}
+	if err := driver.Add("version", version.MongoDBVersion); err != nil {
+		return nil, err
+	}
+	operatingSystem := wirebson.MakeDocument(2)
+	if err := operatingSystem.Add("type", runtime.GOOS); err != nil {
+		return nil, err
+	}
+	if err := operatingSystem.Add("architecture", runtime.GOARCH); err != nil {
+		return nil, err
+	}
+	client := wirebson.MakeDocument(2)
+	if err := client.Add("driver", driver); err != nil {
+		return nil, err
+	}
+	if err := client.Add("os", operatingSystem); err != nil {
+		return nil, err
+	}
+	internalClient := wirebson.MakeDocument(2)
+	if err := internalClient.Add("minWireVersion", minimumMemberWireVersion); err != nil {
+		return nil, err
+	}
+	if err := internalClient.Add("maxWireVersion", maximumMemberWireVersion); err != nil {
+		return nil, err
+	}
+	arguments := []any{
 		"hello", int32(1),
-		"helloOk", true,
+		"client", client,
 		"compression", names,
+		"internalClient", internalClient,
+		"hangUpOnStepDown", false,
+		"saslSupportedMechs", "local.__system",
 		"$db", "admin",
-	)
+	}
+	if hostInfo != "" {
+		arguments = append(arguments[:len(arguments)-2], "hostInfo", hostInfo, "$db", "admin")
+	}
+	message := wire.MustOpMsg(arguments...)
 	response, err := c.Request(ctx, message)
 	if err != nil {
 		return nil, err
@@ -156,6 +203,11 @@ func (c *Connection) Hello(ctx context.Context, compressors []string) (*wirebson
 	}
 	if ok, _ := decoded.Get("ok").(float64); ok != 1 {
 		return nil, fmt.Errorf("MongoDB member hello failed: %v", decoded.Get("errmsg"))
+	}
+	peerMinimum, _ := decoded.Get("minWireVersion").(int32)
+	peerMaximum, _ := decoded.Get("maxWireVersion").(int32)
+	if peerMinimum > maximumMemberWireVersion || peerMaximum < minimumMemberWireVersion {
+		return nil, fmt.Errorf("MongoDB member wire range %d-%d does not overlap supported range %d-%d", peerMinimum, peerMaximum, minimumMemberWireVersion, maximumMemberWireVersion)
 	}
 	offered, err := compressionArray(decoded.Get("compression"))
 	if err != nil {

@@ -196,6 +196,9 @@ func run(logger *slog.Logger) error {
 		logger.Info("anonymous usage metrics disabled")
 	}
 	go metrics.RunReporter(ctx, logger, version.Get().Version, metricsEnabled)
+	if replicationTopology != nil {
+		go topology.NewHeartbeatMesh(replicationTopology, logger).Run(ctx)
+	}
 
 	listener.Run(ctx)
 	return nil

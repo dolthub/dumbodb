@@ -72,6 +72,7 @@ type ReplicaConfiguration struct {
 	ProtocolVersion int64                 `json:"protocol_version"`
 	ReplicaSetID    string                `json:"replica_set_id"`
 	Members         []MemberConfiguration `json:"members"`
+	RawBSON         []byte                `json:"raw_bson,omitempty"`
 }
 
 type OpTime struct {
@@ -266,6 +267,7 @@ func (s *Store) InstallReplicaConfiguration(configuration ReplicaConfiguration, 
 		}
 	}
 	configuration.Members = append([]MemberConfiguration(nil), configuration.Members...)
+	configuration.RawBSON = append([]byte(nil), configuration.RawBSON...)
 	s.state.Identity = &identity
 	s.state.ReplicaConfig = &configuration
 	return s.persistLocked()
