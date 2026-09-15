@@ -54,6 +54,23 @@ func (a *Applier) Resolve(ctx context.Context, sourceUUID string) (Location, err
 	return ResolveOnBranch(ctx, a.backend, sourceUUID, a.branch)
 }
 
+// ResolveCollection opens the UUID-identified collection on the replication branch.
+func (a *Applier) ResolveCollection(ctx context.Context, sourceUUID string) (Location, backends.Collection, error) {
+	location, err := a.Resolve(ctx, sourceUUID)
+	if err != nil {
+		return Location{}, nil, err
+	}
+	database, err := a.backend.Database(databaseOnBranch(location.Database, a.branch))
+	if err != nil {
+		return Location{}, nil, err
+	}
+	collection, err := database.Collection(location.Collection)
+	if err != nil {
+		return Location{}, nil, err
+	}
+	return location, collection, nil
+}
+
 func Resolve(ctx context.Context, backend backends.Backend, sourceUUID string) (Location, error) {
 	return ResolveOnBranch(ctx, backend, sourceUUID, "main")
 }

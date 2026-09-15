@@ -146,15 +146,7 @@ func (a *Applier) applyOperation(ctx context.Context, operation operation, opTim
 		if operation.SourceUUID == "" {
 			return fmt.Errorf("%s operation for %q has no collection UUID", operation.Kind, operation.Namespace)
 		}
-		location, err := a.catalog.Resolve(ctx, operation.SourceUUID)
-		if err != nil {
-			return err
-		}
-		database, err := a.backend.Database(replicationDatabaseName(location.Database, a.store.Snapshot().Configuration.Branch))
-		if err != nil {
-			return err
-		}
-		collection, err := database.Collection(location.Collection)
+		_, collection, err := a.catalog.ResolveCollection(ctx, operation.SourceUUID)
 		if err != nil {
 			return err
 		}
@@ -767,11 +759,4 @@ func splitNamespace(namespace string) (string, string, error) {
 		return "", "", fmt.Errorf("invalid namespace %q", namespace)
 	}
 	return namespace[:dot], namespace[dot+1:], nil
-}
-
-func replicationDatabaseName(database, branch string) string {
-	if branch == "main" {
-		return database
-	}
-	return database + "@" + branch
 }

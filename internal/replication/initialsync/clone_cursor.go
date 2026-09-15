@@ -36,6 +36,21 @@ type CloneCursor struct {
 
 // CloneDocuments scans a source collection in natural order and returns its final resume token.
 func CloneDocuments(ctx context.Context, client requestClient, cursor CloneCursor, consume func(*types.Document) error) (*types.Document, error) {
+	if consume == nil {
+		return nil, errors.New("collection clone requires a consumer")
+	}
+	return CloneDocumentBatches(ctx, client, cursor, func(documents []*types.Document, _ *types.Document) error {
+		for _, document := range documents {
+			if err := consume(document); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// CloneDocumentBatches advances its resume token only after a complete batch is consumed.
+func CloneDocumentBatches(ctx context.Context, client requestClient, cursor CloneCursor, consume func([]*types.Document, *types.Document) error) (*types.Document, error) {
 	if client == nil || cursor.Database == "" || cursor.SourceUUID.Subtype != types.BinaryUUID || len(cursor.SourceUUID.B) != 16 || consume == nil {
 		return nil, errors.New("collection clone requires client, database, UUID, and consumer")
 	}
@@ -53,15 +68,17 @@ func CloneDocuments(ctx context.Context, client requestClient, cursor CloneCurso
 		if err != nil {
 			return lastToken, err
 		}
+		documents := make([]*types.Document, 0, batch.Len())
 		for index := 0; index < batch.Len(); index++ {
 			value, _ := batch.Get(index)
 			document, ok := value.(*types.Document)
 			if !ok {
 				return lastToken, fmt.Errorf("clone cursor document has type %T, want document", value)
 			}
-			if err := consume(document); err != nil {
-				return lastToken, err
-			}
+			documents = append(documents, document)
+		}
+		if err := consume(documents, token); err != nil {
+			return lastToken, err
 		}
 		if token != nil {
 			lastToken = token
