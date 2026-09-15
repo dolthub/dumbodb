@@ -147,6 +147,13 @@ func TestStoreRejectsCheckpointAndCommitRegression(t *testing.T) {
 	if err := store.SetCheckpoint(Checkpoint{Fetched: opTime(3), Buffered: opTime(3), Written: opTime(2), Durable: opTime(1), Applied: opTime(1)}); err == nil {
 		t.Fatal("SetCheckpoint accepted a regression")
 	}
+	checkpoint, err := store.ResetFetchProgress()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if checkpoint.Fetched != opTime(2) || checkpoint.Buffered != opTime(2) || checkpoint.Written != opTime(2) || checkpoint.Durable != opTime(1) {
+		t.Fatalf("reset checkpoint = %+v", checkpoint)
+	}
 	if err := store.RecordCommit(CommitInterval{First: opTime(1), Last: opTime(3), CommitID: "one"}); err != nil {
 		t.Fatal(err)
 	}

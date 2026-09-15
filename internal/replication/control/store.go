@@ -320,6 +320,17 @@ func (s *Store) SetCheckpoint(checkpoint Checkpoint) error {
 	return s.persistLocked()
 }
 
+func (s *Store) ResetFetchProgress() (Checkpoint, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.state.Checkpoint.Fetched = s.state.Checkpoint.Written
+	s.state.Checkpoint.Buffered = s.state.Checkpoint.Written
+	if err := s.persistLocked(); err != nil {
+		return Checkpoint{}, err
+	}
+	return s.state.Checkpoint, nil
+}
+
 func (s *Store) RecordCommit(interval CommitInterval) error {
 	if interval.CommitID == "" {
 		return errors.New("commit ID is required")

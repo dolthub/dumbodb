@@ -24,6 +24,8 @@ import (
 	"github.com/dolthub/dumbodb/internal/replication/control"
 )
 
+var ErrSourceRollbackIDChanged = errors.New("sync source rollback ID changed")
+
 type MemberState int32
 
 const (
@@ -256,7 +258,8 @@ func (m *Manager) ObserveHeartbeat(host string, heartbeat Heartbeat) error {
 	}
 	m.state.SyncSource = m.selectSourceLocked()
 	if m.state.SyncSource != previous.SyncSource {
-		if err := m.store.SetSource(m.state.SyncSource, m.state.RBID); err != nil {
+		m.state.RBID = 0
+		if err := m.store.SetSource(m.state.SyncSource, 0); err != nil {
 			m.state = previous
 			m.mu.Unlock()
 			return err
@@ -297,7 +300,8 @@ func (m *Manager) ObserveMemberContact(host string, memberID int, term int64, pr
 	}
 	m.state.SyncSource = m.selectSourceLocked()
 	if m.state.SyncSource != previous.SyncSource {
-		if err := m.store.SetSource(m.state.SyncSource, m.state.RBID); err != nil {
+		m.state.RBID = 0
+		if err := m.store.SetSource(m.state.SyncSource, 0); err != nil {
 			m.state = previous
 			m.mu.Unlock()
 			return err
@@ -347,11 +351,79 @@ func (m *Manager) MarkMemberDown(memberID int) error {
 	}
 	m.state.SyncSource = m.selectSourceLocked()
 	if m.state.SyncSource != previous.SyncSource {
-		if err := m.store.SetSource(m.state.SyncSource, m.state.RBID); err != nil {
+		m.state.RBID = 0
+		if err := m.store.SetSource(m.state.SyncSource, 0); err != nil {
 			m.state = previous
 			m.mu.Unlock()
 			return err
 		}
+	}
+	listener := m.changeListenerLocked(previous)
+	m.mu.Unlock()
+	if listener != nil {
+		listener()
+	}
+	return nil
+}
+
+func (m *Manager) ObserveSourceRBID(host string, rbid int64) error {
+	if rbid < 0 {
+		return errors.New("sync source rollback ID cannot be negative")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if host != m.state.SyncSource {
+		return fmt.Errorf("rollback ID came from %q, current sync source is %q", host, m.state.SyncSource)
+	}
+	if m.state.RBID != 0 && m.state.RBID != rbid {
+		return fmt.Errorf("%w for %q: got %d, expected %d", ErrSourceRollbackIDChanged, host, rbid, m.state.RBID)
+	}
+	if m.state.RBID == rbid {
+		return nil
+	}
+	if err := m.store.SetSource(host, rbid); err != nil {
+		return err
+	}
+	m.state.RBID = rbid
+	return nil
+}
+
+func (m *Manager) AdvanceFetched(fetched, buffered control.OpTime) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	checkpoint := m.state.Checkpoint
+	checkpoint.Fetched = fetched
+	checkpoint.Buffered = buffered
+	if err := m.store.SetCheckpoint(checkpoint); err != nil {
+		return err
+	}
+	m.state.Checkpoint = checkpoint
+	return nil
+}
+
+func (m *Manager) ResetFetchProgress() error {
+	checkpoint, err := m.store.ResetFetchProgress()
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	m.state.Checkpoint = checkpoint
+	m.mu.Unlock()
+	return nil
+}
+
+func (m *Manager) MarkContinuityLost(tooStale bool) error {
+	if tooStale {
+		if err := m.store.SetInitialSyncPhase(control.InitialSyncNotStarted); err != nil {
+			return err
+		}
+	}
+	m.mu.Lock()
+	previous := cloneSnapshot(m.state)
+	if tooStale {
+		m.state.State = StateStartup2
+	} else {
+		m.state.State = StateRecovering
 	}
 	listener := m.changeListenerLocked(previous)
 	m.mu.Unlock()

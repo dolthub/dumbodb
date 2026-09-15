@@ -15,6 +15,7 @@
 package topology
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -80,12 +81,21 @@ func TestManagerTracksPrimaryAndReplacesSource(t *testing.T) {
 	if state.PrimaryHost != "primary.example:27017" || state.SyncSource != "primary.example:27017" || state.Term != 9 {
 		t.Fatalf("primary state = %+v", state)
 	}
+	if err := manager.ObserveSourceRBID("primary.example:27017", 12); err != nil {
+		t.Fatal(err)
+	}
 	if err := manager.MarkMemberDown(1); err != nil {
 		t.Fatal(err)
 	}
 	state = manager.Snapshot()
-	if state.PrimaryID != -1 || state.PrimaryHost != "" || state.SyncSource != "secondary.example:27017" {
+	if state.PrimaryID != -1 || state.PrimaryHost != "" || state.SyncSource != "secondary.example:27017" || state.RBID != 0 {
 		t.Fatalf("replacement state = %+v", state)
+	}
+	if err := manager.ObserveSourceRBID("secondary.example:27017", 7); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.ObserveSourceRBID("secondary.example:27017", 8); !errors.Is(err, ErrSourceRollbackIDChanged) {
+		t.Fatalf("rollback ID change error = %v", err)
 	}
 	if persisted := store.Snapshot(); persisted.CurrentSource != "secondary.example:27017" {
 		t.Fatalf("persisted source = %q", persisted.CurrentSource)
