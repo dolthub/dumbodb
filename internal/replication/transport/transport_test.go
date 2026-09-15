@@ -248,7 +248,7 @@ func TestExhaustConsumesAllResponses(t *testing.T) {
 		more := wire.MustOpMsg("n", int32(1), "ok", float64(1))
 		more.Flags = wire.OpMsgFlags(wire.OpMsgMoreToCome)
 		writeTestMessage(t, server, 88, header.RequestID, more)
-		writeTestMessage(t, server, 89, header.RequestID, wire.MustOpMsg("n", int32(2), "ok", float64(1)))
+		writeTestMessage(t, server, 89, 88, wire.MustOpMsg("n", int32(2), "ok", float64(1)))
 	}()
 
 	connection := New(client)
