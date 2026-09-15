@@ -1,0 +1,167 @@
+// Copyright 2026 Dolthub, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package topology
+
+import (
+	"testing"
+	"time"
+
+	"github.com/dolthub/dumbodb/internal/replication/control"
+)
+
+func TestManagerInstallsConfigurationAndRecoversState(t *testing.T) {
+	dir := t.TempDir()
+	store := openControlStore(t, dir)
+	manager := New(store)
+	changes := 0
+	manager.SetChangeListener(func() { changes++ })
+	configuration := testReplicaConfiguration()
+	if err := manager.InstallConfiguration(configuration, 8); err != nil {
+		t.Fatal(err)
+	}
+	state := manager.Snapshot()
+	if state.State != StateStartup2 || state.MemberID != 3 || state.Term != 8 || state.Configuration.Version != 4 {
+		t.Fatalf("installed state = %+v", state)
+	}
+	if changes != 1 {
+		t.Fatalf("topology changes = %d, want 1", changes)
+	}
+
+	reopened := openControlStore(t, dir)
+	recovered := New(reopened).Snapshot()
+	if recovered.State != StateStartup2 || recovered.MemberID != 3 || recovered.Configuration == nil || recovered.Configuration.ReplicaSetID != "set-id" {
+		t.Fatalf("recovered state = %+v", recovered)
+	}
+}
+
+func TestManagerTracksPrimaryAndReplacesSource(t *testing.T) {
+	store := openControlStore(t, t.TempDir())
+	manager := New(store)
+	configuration := testReplicaConfiguration()
+	if err := manager.InstallConfiguration(configuration, 8); err != nil {
+		t.Fatal(err)
+	}
+	observedAt := time.Unix(100, 0)
+	if err := manager.ObserveHeartbeat("secondary.example:27017", Heartbeat{
+		SetName:    "rs0",
+		MemberID:   2,
+		State:      StateSecondary,
+		Term:       8,
+		PrimaryID:  -1,
+		Applied:    testOpTime(20),
+		ObservedAt: observedAt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.ObserveHeartbeat("primary.example:27017", Heartbeat{
+		SetName:    "rs0",
+		MemberID:   1,
+		State:      StatePrimary,
+		Term:       9,
+		PrimaryID:  1,
+		Applied:    testOpTime(22),
+		ObservedAt: observedAt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	state := manager.Snapshot()
+	if state.PrimaryHost != "primary.example:27017" || state.SyncSource != "primary.example:27017" || state.Term != 9 {
+		t.Fatalf("primary state = %+v", state)
+	}
+	if err := manager.MarkMemberDown(1); err != nil {
+		t.Fatal(err)
+	}
+	state = manager.Snapshot()
+	if state.PrimaryID != -1 || state.PrimaryHost != "" || state.SyncSource != "secondary.example:27017" {
+		t.Fatalf("replacement state = %+v", state)
+	}
+	if persisted := store.Snapshot(); persisted.CurrentSource != "secondary.example:27017" {
+		t.Fatalf("persisted source = %q", persisted.CurrentSource)
+	}
+}
+
+func TestManagerTransitionsToSecondaryAfterInitialSync(t *testing.T) {
+	dir := t.TempDir()
+	store := openControlStore(t, dir)
+	manager := New(store)
+	if err := manager.InstallConfiguration(testReplicaConfiguration(), 8); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint := control.Checkpoint{
+		Fetched:  testOpTime(10),
+		Buffered: testOpTime(10),
+		Written:  testOpTime(10),
+		Durable:  testOpTime(10),
+		Applied:  testOpTime(10),
+	}
+	if err := manager.MarkInitialSyncComplete(checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	if state := manager.Snapshot(); state.State != StateSecondary || state.Checkpoint != checkpoint {
+		t.Fatalf("secondary state = %+v", state)
+	}
+	if recovered := New(openControlStore(t, dir)).Snapshot(); recovered.State != StateSecondary || recovered.Checkpoint != checkpoint {
+		t.Fatalf("recovered secondary state = %+v", recovered)
+	}
+}
+
+func TestManagerRejectsStaleOrConflictingConfiguration(t *testing.T) {
+	manager := New(openControlStore(t, t.TempDir()))
+	configuration := testReplicaConfiguration()
+	if err := manager.InstallConfiguration(configuration, 8); err != nil {
+		t.Fatal(err)
+	}
+	stale := configuration
+	stale.Version--
+	if err := manager.InstallConfiguration(stale, 8); err == nil {
+		t.Fatal("InstallConfiguration accepted a stale version")
+	}
+	conflicting := configuration
+	conflicting.ReplicaSetID = "different-set-id"
+	if err := manager.InstallConfiguration(conflicting, 8); err == nil {
+		t.Fatal("InstallConfiguration accepted a conflicting replica set ID")
+	}
+	if err := manager.InstallConfiguration(configuration, 8); err != nil {
+		t.Fatalf("InstallConfiguration rejected an unchanged configuration: %v", err)
+	}
+}
+
+func openControlStore(t *testing.T, dir string) *control.Store {
+	t.Helper()
+	store, err := control.Open(dir, control.Configuration{SetName: "rs0", Branch: "mongo", MemberHost: "dumbo.example:27017"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store
+}
+
+func testReplicaConfiguration() control.ReplicaConfiguration {
+	return control.ReplicaConfiguration{
+		SetName:         "rs0",
+		Version:         4,
+		Term:            3,
+		ProtocolVersion: 1,
+		ReplicaSetID:    "set-id",
+		Members: []control.MemberConfiguration{
+			{MemberID: 1, Host: "primary.example:27017", Priority: 1, Votes: 1},
+			{MemberID: 2, Host: "secondary.example:27017", Priority: 1, Votes: 1},
+			{MemberID: 3, Host: "dumbo.example:27017", Hidden: true, Priority: 0, Votes: 0},
+		},
+	}
+}
+
+func testOpTime(increment uint32) control.OpTime {
+	return control.OpTime{Seconds: 100, Increment: increment, Term: 8}
+}

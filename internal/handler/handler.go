@@ -31,6 +31,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/clientconn/cursor"
 	"github.com/dolthub/dumbodb/internal/handler/users"
+	"github.com/dolthub/dumbodb/internal/replication/topology"
 	"github.com/dolthub/dumbodb/internal/sqlctx"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/ctxutil"
@@ -84,9 +85,10 @@ func (h *Handler) BumpAuthGeneration() { h.authGen.Add(1) }
 //
 //nolint:vet // for readability
 type NewOpts struct {
-	Backend     backends.Backend
-	TCPHost     string
-	ReplSetName string
+	Backend             backends.Backend
+	TCPHost             string
+	ReplSetName         string
+	ReplicationTopology *topology.Manager
 
 	SetupDatabase string
 	SetupUsername string
@@ -136,6 +138,9 @@ func New(opts *NewOpts) (*Handler, error) {
 		topologyChanged: make(chan struct{}),
 
 		cappedCleanupStop: make(chan struct{}),
+	}
+	if h.ReplicationTopology != nil {
+		h.ReplicationTopology.SetChangeListener(h.BumpTopologyVersion)
 	}
 
 	if err := h.setup(); err != nil {

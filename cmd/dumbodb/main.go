@@ -37,6 +37,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/handler/registry"
 	"github.com/dolthub/dumbodb/internal/metrics"
 	"github.com/dolthub/dumbodb/internal/replication/control"
+	"github.com/dolthub/dumbodb/internal/replication/topology"
 	"github.com/dolthub/dumbodb/internal/util/logging"
 	"github.com/dolthub/dumbodb/internal/util/state"
 	"github.com/dolthub/dumbodb/internal/version"
@@ -142,25 +143,29 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	var replicationTopology *topology.Manager
 	if replicationEnabled {
-		if _, err := control.Open(filepath.Join(*dataDir, "replication"), replicationConfiguration); err != nil {
+		controlStore, err := control.Open(filepath.Join(*dataDir, "replication"), replicationConfiguration)
+		if err != nil {
 			return err
 		}
+		replicationTopology = topology.New(controlStore)
 		logger.Info("replication control state opened", "replSet", *replSetName, "branch", *replicationBranch)
 	}
 
 	stateProvider := state.NewProvider()
 
 	h, closeBackend, err := registry.NewHandler("dolt", &registry.NewHandlerOpts{
-		Logger:             logger,
-		StateProvider:      stateProvider,
-		TCPHost:            *addr,
-		ReplSetName:        *replSetName,
-		DoltDataDir:        *dataDir,
-		AutoCommit:         *autoCommit,
-		SessionIsolation:   *sessionIsolation,
-		SessionTimeout:     *sessionTimeout,
-		SessionSweepPeriod: *sessionSweepPeriod,
+		Logger:              logger,
+		StateProvider:       stateProvider,
+		TCPHost:             *addr,
+		ReplSetName:         *replSetName,
+		ReplicationTopology: replicationTopology,
+		DoltDataDir:         *dataDir,
+		AutoCommit:          *autoCommit,
+		SessionIsolation:    *sessionIsolation,
+		SessionTimeout:      *sessionTimeout,
+		SessionSweepPeriod:  *sessionSweepPeriod,
 		TestOpts: registry.TestOpts{
 			EnableNewAuth: *auth,
 		},

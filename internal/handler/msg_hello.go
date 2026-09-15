@@ -25,6 +25,7 @@ import (
 
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/replication/topology"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
@@ -74,6 +75,9 @@ func (h *Handler) hello(ctx context.Context, doc *types.Document, tcpHost, name 
 
 	res := must.NotFail(types.NewDocument())
 	isSecondary := name != ""
+	if h.ReplicationTopology != nil {
+		isSecondary = h.ReplicationTopology.Snapshot().State == topology.StateSecondary
+	}
 
 	switch doc.Command() {
 	case "hello":
@@ -117,9 +121,13 @@ func (h *Handler) hello(ctx context.Context, doc *types.Document, tcpHost, name 
 		}
 
 		res.Set("setName", name)
-		res.Set("hosts", must.NotFail(types.NewArray(tcpHost)))
 		res.Set("me", tcpHost)
-		res.Set("secondary", true)
+		res.Set("secondary", isSecondary)
+		if h.ReplicationTopology == nil {
+			res.Set("hosts", must.NotFail(types.NewArray(tcpHost)))
+		} else {
+			appendReplicaSetHello(res, h.ReplicationTopology.Snapshot())
+		}
 		res.Set("topologyVersion", h.topologyVersionDocument())
 	}
 
@@ -161,6 +169,22 @@ func (h *Handler) hello(ctx context.Context, doc *types.Document, tcpHost, name 
 	res.Set("ok", float64(1))
 
 	return res, nil
+}
+
+func appendReplicaSetHello(response *types.Document, state topology.Snapshot) {
+	if state.Configuration != nil {
+		hosts := types.MakeArray(len(state.Configuration.Members))
+		for _, member := range state.Configuration.Members {
+			if !member.Hidden {
+				hosts.Append(member.Host)
+			}
+		}
+		response.Set("hosts", hosts)
+		response.Set("setVersion", state.Configuration.Version)
+	}
+	if state.PrimaryHost != "" {
+		response.Set("primary", state.PrimaryHost)
+	}
 }
 
 // getUserSupportedMechs returns supported mechanisms for the given user.

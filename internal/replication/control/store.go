@@ -65,6 +65,15 @@ type MemberConfiguration struct {
 	Votes    int     `json:"votes"`
 }
 
+type ReplicaConfiguration struct {
+	SetName         string                `json:"set_name"`
+	Version         int64                 `json:"version"`
+	Term            int64                 `json:"term"`
+	ProtocolVersion int64                 `json:"protocol_version"`
+	ReplicaSetID    string                `json:"replica_set_id"`
+	Members         []MemberConfiguration `json:"members"`
+}
+
 type OpTime struct {
 	Seconds   uint32 `json:"seconds"`
 	Increment uint32 `json:"increment"`
@@ -128,6 +137,7 @@ type State struct {
 	Configuration      Configuration                  `json:"configuration"`
 	Lifecycle          Lifecycle                      `json:"lifecycle"`
 	Identity           *Identity                      `json:"identity,omitempty"`
+	ReplicaConfig      *ReplicaConfiguration          `json:"replica_configuration,omitempty"`
 	CurrentSource      string                         `json:"current_source"`
 	CurrentRBID        int64                          `json:"current_rbid"`
 	InitialSyncPhase   InitialSyncPhase               `json:"initial_sync_phase"`
@@ -209,6 +219,55 @@ func (s *Store) InstallMember(identity Identity, member MemberConfiguration) err
 		}
 	}
 	s.state.Identity = &identity
+	return s.persistLocked()
+}
+
+func (s *Store) InstallReplicaConfiguration(configuration ReplicaConfiguration, currentTerm int64) error {
+	if configuration.SetName == "" || configuration.ReplicaSetID == "" || len(configuration.Members) == 0 {
+		return errors.New("replica configuration set name, replica set ID, and members are required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if configuration.SetName != s.state.Configuration.SetName {
+		return fmt.Errorf("replica configuration set %q does not match %q", configuration.SetName, s.state.Configuration.SetName)
+	}
+	var ownMember *MemberConfiguration
+	for i := range configuration.Members {
+		if configuration.Members[i].Host == s.state.Configuration.MemberHost {
+			ownMember = &configuration.Members[i]
+			break
+		}
+	}
+	if ownMember == nil {
+		return fmt.Errorf("replica configuration does not contain member %q", s.state.Configuration.MemberHost)
+	}
+	identity := Identity{
+		ReplicaSetID:  configuration.ReplicaSetID,
+		MemberID:      ownMember.MemberID,
+		ConfigVersion: configuration.Version,
+		ConfigTerm:    configuration.Term,
+		Term:          currentTerm,
+	}
+	if err := validateMember(s.state.Configuration, identity, *ownMember); err != nil {
+		return err
+	}
+	if s.state.Identity != nil {
+		if s.state.Identity.ReplicaSetID != identity.ReplicaSetID {
+			return fmt.Errorf("replica set ID changed from %q to %q", s.state.Identity.ReplicaSetID, identity.ReplicaSetID)
+		}
+		if s.state.Identity.MemberID != identity.MemberID {
+			return fmt.Errorf("member ID changed from %d to %d", s.state.Identity.MemberID, identity.MemberID)
+		}
+		if compareConfiguration(identity, *s.state.Identity) < 0 {
+			return fmt.Errorf("refusing stale replica configuration term %d version %d", identity.ConfigTerm, identity.ConfigVersion)
+		}
+		if identity.Term < s.state.Identity.Term {
+			identity.Term = s.state.Identity.Term
+		}
+	}
+	configuration.Members = append([]MemberConfiguration(nil), configuration.Members...)
+	s.state.Identity = &identity
+	s.state.ReplicaConfig = &configuration
 	return s.persistLocked()
 }
 

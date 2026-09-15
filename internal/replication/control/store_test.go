@@ -168,6 +168,63 @@ func TestOpenRejectsDifferentLifecycleConfiguration(t *testing.T) {
 	}
 }
 
+func TestStorePersistsInstalledReplicaConfiguration(t *testing.T) {
+	dir := t.TempDir()
+	configuration := testConfiguration()
+	store, err := Open(dir, configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replicaConfiguration := ReplicaConfiguration{
+		SetName:         "rs0",
+		Version:         9,
+		Term:            4,
+		ProtocolVersion: 1,
+		ReplicaSetID:    "set-id",
+		Members: []MemberConfiguration{
+			{MemberID: 1, Host: "primary.example:27017", Priority: 1, Votes: 1},
+			{MemberID: 3, Host: configuration.MemberHost, Hidden: true, Priority: 0, Votes: 0},
+		},
+	}
+	if err := store.InstallReplicaConfiguration(replicaConfiguration, 11); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(dir, configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := reopened.Snapshot()
+	if state.ReplicaConfig == nil || state.ReplicaConfig.Version != 9 || len(state.ReplicaConfig.Members) != 2 {
+		t.Fatalf("replica configuration = %+v", state.ReplicaConfig)
+	}
+	if state.Identity == nil || state.Identity.MemberID != 3 || state.Identity.Term != 11 {
+		t.Fatalf("identity = %+v", state.Identity)
+	}
+}
+
+func TestStoreRejectsReplicaConfigurationWithoutSafeMember(t *testing.T) {
+	store, err := Open(t.TempDir(), testConfiguration())
+	if err != nil {
+		t.Fatal(err)
+	}
+	configuration := ReplicaConfiguration{
+		SetName:      "rs0",
+		Version:      1,
+		Term:         1,
+		ReplicaSetID: "set-id",
+		Members: []MemberConfiguration{
+			{MemberID: 3, Host: "dumbo.example:27017", Hidden: true, Priority: 1, Votes: 0},
+		},
+	}
+	if err := store.InstallReplicaConfiguration(configuration, 1); err == nil {
+		t.Fatal("InstallReplicaConfiguration accepted an electable member")
+	}
+	configuration.Members[0] = MemberConfiguration{MemberID: 4, Host: "other.example:27017", Hidden: true}
+	if err := store.InstallReplicaConfiguration(configuration, 1); err == nil {
+		t.Fatal("InstallReplicaConfiguration accepted a configuration without this member")
+	}
+}
+
 func testConfiguration() Configuration {
 	return Configuration{SetName: "rs0", Branch: "mongo", MemberHost: "dumbo.example:27017"}
 }

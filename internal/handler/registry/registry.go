@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/dolthub/dumbodb/internal/handler"
+	"github.com/dolthub/dumbodb/internal/replication/topology"
 	"github.com/dolthub/dumbodb/internal/util/password"
 	"github.com/dolthub/dumbodb/internal/util/state"
 )
@@ -38,14 +39,15 @@ var registry = map[string]newHandlerFunc{}
 // NewHandlerOpts represents configuration for constructing handlers.
 type NewHandlerOpts struct {
 	// for all backends
-	Logger        *slog.Logger
-	StateProvider *state.Provider
-	TCPHost       string
-	ReplSetName   string
-	SetupDatabase string
-	SetupUsername string
-	SetupPassword password.Password
-	SetupTimeout  time.Duration
+	Logger              *slog.Logger
+	StateProvider       *state.Provider
+	TCPHost             string
+	ReplSetName         string
+	ReplicationTopology *topology.Manager
+	SetupDatabase       string
+	SetupUsername       string
+	SetupPassword       password.Password
+	SetupTimeout        time.Duration
 
 	// DoltDataDir is the directory where dolt backend stores its data.
 	// Used only by the "dolt" handler.
@@ -103,4 +105,3 @@ func NewHandler(name string, opts *NewHandlerOpts) (*handler.Handler, CloseBacke
 
 	return newHandler(opts)
 }
-

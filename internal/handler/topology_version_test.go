@@ -22,6 +22,8 @@ import (
 	"github.com/FerretDB/wire"
 
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/replication/control"
+	repltopology "github.com/dolthub/dumbodb/internal/replication/topology"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
@@ -104,6 +106,50 @@ func TestExhaustHelloRequiresAwaitableFields(t *testing.T) {
 	request := must.NotFail(types.NewDocument("hello", int32(1), "$db", "admin"))
 	if err := validateExhaustHello(message, request); err == nil {
 		t.Fatal("exhaust hello without awaitable fields succeeded")
+	}
+}
+
+func TestReplicaSetHelloDoesNotReportSecondaryBeforeInitialSync(t *testing.T) {
+	controlStore, err := control.Open(t.TempDir(), control.Configuration{
+		SetName: "rs0", Branch: "mongo", MemberHost: "dumbo.example:27017",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := repltopology.New(controlStore)
+	handler := testTopologyHandler()
+	handler.ReplicationTopology = manager
+	configuration := control.ReplicaConfiguration{
+		SetName: "rs0", Version: 4, Term: 3, ProtocolVersion: 1, ReplicaSetID: "set-id",
+		Members: []control.MemberConfiguration{
+			{MemberID: 1, Host: "primary.example:27017", Priority: 1, Votes: 1},
+			{MemberID: 3, Host: "dumbo.example:27017", Hidden: true, Priority: 0, Votes: 0},
+		},
+	}
+	if err := manager.InstallConfiguration(configuration, 3); err != nil {
+		t.Fatal(err)
+	}
+	request := must.NotFail(types.NewDocument("hello", int32(1), "$db", "admin"))
+	response, err := handler.hello(context.Background(), request, "dumbo.example:27017", "rs0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if responseValue(response, "secondary") != false {
+		t.Fatalf("secondary before initial sync = %v", responseValue(response, "secondary"))
+	}
+	if responseValue(response, "setVersion") != int64(4) {
+		t.Fatalf("setVersion = %v", responseValue(response, "setVersion"))
+	}
+	checkpoint := control.Checkpoint{}
+	if err := manager.MarkInitialSyncComplete(checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	response, err = handler.hello(context.Background(), request, "dumbo.example:27017", "rs0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if responseValue(response, "secondary") != true {
+		t.Fatalf("secondary after initial sync = %v", responseValue(response, "secondary"))
 	}
 }
 
