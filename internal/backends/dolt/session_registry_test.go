@@ -92,7 +92,9 @@ func TestBackend_RegistryReusesSessionOnReconnect(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Same(t, first.Session(), second.Session())
-	assert.False(t, first.Active())
+	// Both connections keep a usable handle: an lsid reaching a second
+	// connection is ordinary driver session pooling, not a takeover.
+	assert.True(t, first.Active())
 	assert.True(t, second.Active())
 }
 
