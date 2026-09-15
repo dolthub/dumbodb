@@ -179,6 +179,37 @@ func TestAuthenticationCommandsAreNotCompressed(t *testing.T) {
 	}
 }
 
+func TestRequestWritesChecksum(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	go func() {
+		reader := bufio.NewReader(server)
+		header, err := readHeader(reader)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		body := make([]byte, int(header.MessageLength)-wire.MsgHeaderLen)
+		if _, err := io.ReadFull(reader, body); err != nil {
+			t.Error(err)
+			return
+		}
+		if err := validateChecksum(header, body); err != nil {
+			t.Error(err)
+			return
+		}
+		writeTestMessage(t, server, 77, header.RequestID, wire.MustOpMsg("ok", float64(1)))
+	}()
+
+	connection := New(client)
+	connection.checksums = true
+	if _, err := connection.Request(context.Background(), wire.MustOpMsg("find", "orders", "$db", "shop")); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCommandCompressionExclusions(t *testing.T) {
 	for command := range uncompressedCommands {
 		compressible, err := commandCanCompress(wire.MustOpMsg(command, int32(1), "$db", "admin"))
@@ -317,6 +348,9 @@ func TestLiveMongoHello(t *testing.T) {
 	}
 	if response.Get("ok") != float64(1) {
 		t.Fatalf("hello response = %v", response)
+	}
+	if _, err := connection.Request(context.Background(), wire.MustOpMsg("ping", int32(1), "$db", "admin")); err != nil {
+		t.Fatal(err)
 	}
 }
 
