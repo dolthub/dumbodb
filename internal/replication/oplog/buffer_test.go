@@ -78,6 +78,48 @@ func TestBufferRejectsOversizedAndOutOfOrderEntries(t *testing.T) {
 	}
 }
 
+func TestBufferDrainThroughPreservesEntriesAfterStop(t *testing.T) {
+	buffer, err := NewBuffer(BufferLimits{Entries: 5, Bytes: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for increment := uint32(1); increment <= 4; increment++ {
+		if err := buffer.TryAppend(testEntry(increment, 1)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	drained := buffer.DrainThrough(control.OpTime{Seconds: 100, Increment: 2, Term: 8}, 5, 20)
+	if len(drained) != 2 || drained[0].OpTime.Increment != 1 || drained[1].OpTime.Increment != 2 {
+		t.Fatalf("drained = %+v", drained)
+	}
+	if stats := buffer.Stats(); stats.Entries != 2 || stats.Bytes != 2 {
+		t.Fatalf("remaining stats = %+v", stats)
+	}
+	if tail, ok := buffer.Tail(); !ok || tail.Increment != 4 {
+		t.Fatalf("remaining tail = %+v, %t", tail, ok)
+	}
+}
+
+func TestBufferWaitForData(t *testing.T) {
+	buffer, err := NewBuffer(BufferLimits{Entries: 2, Bytes: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waited := make(chan error, 1)
+	go func() { waited <- buffer.WaitForData(context.Background()) }()
+	select {
+	case err := <-waited:
+		t.Fatalf("WaitForData returned before append: %v", err)
+	case <-time.After(10 * time.Millisecond):
+	}
+	if err := buffer.TryAppend(testEntry(1, 1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-waited; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func testEntry(increment uint32, size int) Entry {
 	return Entry{OpTime: control.OpTime{Seconds: 100, Increment: increment, Term: 8}, RawBSON: make([]byte, size)}
 }

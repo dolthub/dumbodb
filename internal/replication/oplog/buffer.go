@@ -44,13 +44,14 @@ type Buffer struct {
 	entries []Entry
 	bytes   int64
 	space   chan struct{}
+	data    chan struct{}
 }
 
 func NewBuffer(limits BufferLimits) (*Buffer, error) {
 	if limits.Entries <= 0 || limits.Bytes <= 0 {
 		return nil, errors.New("oplog buffer entry and byte limits must be positive")
 	}
-	return &Buffer{limits: limits, space: make(chan struct{})}, nil
+	return &Buffer{limits: limits, space: make(chan struct{}), data: make(chan struct{})}, nil
 }
 
 func (b *Buffer) TryAppend(entry Entry) error {
@@ -69,10 +70,21 @@ func (b *Buffer) TryAppend(entry Entry) error {
 	entry.RawBSON = append([]byte(nil), entry.RawBSON...)
 	b.entries = append(b.entries, entry)
 	b.bytes += size
+	close(b.data)
+	b.data = make(chan struct{})
 	return nil
 }
 
 func (b *Buffer) Drain(maxEntries int, maxBytes int64) []Entry {
+	return b.drain(maxEntries, maxBytes, nil)
+}
+
+// DrainThrough removes a bounded prefix whose entries do not follow stop.
+func (b *Buffer) DrainThrough(stop control.OpTime, maxEntries int, maxBytes int64) []Entry {
+	return b.drain(maxEntries, maxBytes, &stop)
+}
+
+func (b *Buffer) drain(maxEntries int, maxBytes int64, stop *control.OpTime) []Entry {
 	if maxEntries <= 0 || maxBytes <= 0 {
 		return nil
 	}
@@ -81,6 +93,9 @@ func (b *Buffer) Drain(maxEntries int, maxBytes int64) []Entry {
 	count := 0
 	var bytes int64
 	for count < len(b.entries) && count < maxEntries {
+		if stop != nil && b.entries[count].OpTime.Compare(*stop) > 0 {
+			break
+		}
 		size := int64(len(b.entries[count].RawBSON))
 		if count != 0 && bytes+size > maxBytes {
 			break
@@ -97,6 +112,24 @@ func (b *Buffer) Drain(maxEntries int, maxBytes int64) []Entry {
 	close(b.space)
 	b.space = make(chan struct{})
 	return result
+}
+
+// WaitForData blocks until the buffer contains at least one entry.
+func (b *Buffer) WaitForData(ctx context.Context) error {
+	for {
+		b.mu.Lock()
+		if len(b.entries) != 0 {
+			b.mu.Unlock()
+			return nil
+		}
+		data := b.data
+		b.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-data:
+		}
+	}
 }
 
 func (b *Buffer) WaitForSpace(ctx context.Context, bytes int64) error {
