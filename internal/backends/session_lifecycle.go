@@ -33,3 +33,10 @@ type SessionAwareBackend interface {
 type AutoCommitBackend interface {
 	AutoCommit(ctx context.Context, dbName, branch, message, author string) (bool, error)
 }
+
+// ReplicationBranchBackend manages the isolated branch owned by a replica-set member.
+type ReplicationBranchBackend interface {
+	EnsureReplicationBranch(context.Context, string, string) error
+	ReplicationBranchExists(context.Context, string, string) (bool, error)
+	ListReplicationDatabases(context.Context) ([]string, error)
+}

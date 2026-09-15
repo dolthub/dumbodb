@@ -17,6 +17,7 @@ package backends
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 
@@ -120,6 +121,27 @@ func (bc *backendContract) AutoCommit(ctx context.Context, dbName, branch, messa
 		return ac.AutoCommit(ctx, dbName, branch, message, author)
 	}
 	return false, nil
+}
+
+func (bc *backendContract) EnsureReplicationBranch(ctx context.Context, database, branch string) error {
+	if backend, ok := bc.b.(ReplicationBranchBackend); ok {
+		return backend.EnsureReplicationBranch(ctx, database, branch)
+	}
+	return errors.New("backend does not support replication branches")
+}
+
+func (bc *backendContract) ReplicationBranchExists(ctx context.Context, database, branch string) (bool, error) {
+	if backend, ok := bc.b.(ReplicationBranchBackend); ok {
+		return backend.ReplicationBranchExists(ctx, database, branch)
+	}
+	return false, errors.New("backend does not support replication branches")
+}
+
+func (bc *backendContract) ListReplicationDatabases(ctx context.Context) ([]string, error) {
+	if backend, ok := bc.b.(ReplicationBranchBackend); ok {
+		return backend.ListReplicationDatabases(ctx)
+	}
+	return nil, errors.New("backend does not support replication branches")
 }
 
 type StatusParams struct{}

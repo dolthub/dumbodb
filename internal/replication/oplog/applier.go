@@ -150,7 +150,7 @@ func (a *Applier) applyOperation(ctx context.Context, operation operation, opTim
 		if err != nil {
 			return err
 		}
-		database, err := a.backend.Database(location.Database)
+		database, err := a.backend.Database(replicationDatabaseName(location.Database, a.store.Snapshot().Configuration.Branch))
 		if err != nil {
 			return err
 		}
@@ -284,7 +284,7 @@ func (a *Applier) applyCommand(ctx context.Context, operation operation, opTime 
 		}
 		return a.catalog.CollMod(ctx, operation.SourceUUID, params)
 	case "dropDatabase":
-		return a.dropDatabase(ctx, databaseName)
+		return a.catalog.DropDatabase(ctx, databaseName, opTime)
 	default:
 		return fmt.Errorf("%w command %q at %q", ErrUnsupportedOplogOperation, commandName, operation.Namespace)
 	}
@@ -569,17 +569,6 @@ func decodeTransactionPayload(payload []byte) ([][]byte, error) {
 	return entries, nil
 }
 
-func (a *Applier) dropDatabase(ctx context.Context, databaseName string) error {
-	listed, err := a.backend.ListDatabases(ctx, &backends.ListDatabasesParams{Name: databaseName})
-	if err != nil {
-		return err
-	}
-	if len(listed.Databases) == 0 {
-		return nil
-	}
-	return a.backend.DropDatabase(ctx, &backends.DropDatabaseParams{Name: databaseName})
-}
-
 func parseCollMod(document *types.Document, name string) (backends.CollModParams, error) {
 	params := backends.CollModParams{Name: name}
 	iter := document.Iterator()
@@ -778,4 +767,11 @@ func splitNamespace(namespace string) (string, string, error) {
 		return "", "", fmt.Errorf("invalid namespace %q", namespace)
 	}
 	return namespace[:dot], namespace[dot+1:], nil
+}
+
+func replicationDatabaseName(database, branch string) string {
+	if branch == "main" {
+		return database
+	}
+	return database + "@" + branch
 }

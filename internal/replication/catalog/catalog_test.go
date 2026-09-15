@@ -223,7 +223,7 @@ func TestCatalogApplierRepairsCompletedRootMutation(t *testing.T) {
 func testCatalogStore(t *testing.T) *control.Store {
 	t.Helper()
 	store, err := control.Open(t.TempDir(), control.Configuration{
-		SetName: "rs0", Branch: "mongo", MemberHost: "dumbo.example:27017",
+		SetName: "rs0", Branch: "main", MemberHost: "dumbo.example:27017",
 	})
 	if err != nil {
 		t.Fatal(err)
