@@ -495,6 +495,17 @@ func (c *conn) route(connCtx context.Context, reqHeader *wire.MsgHeader, reqBody
 		command = doc.Command()
 		cmd := c.h.Commands()[command]
 
+		// A command may not repeat a field, at any depth. See
+		// findDuplicateField for why reading one is unsafe.
+		if err == nil {
+			if dup, dupOK := commandDuplicateField(typedDoc); dupOK {
+				err = handlererrors.NewCommandErrorMsg(
+					handlererrors.ErrFailedToParse,
+					fmt.Sprintf("BSON field '%s' is a duplicate field", dup),
+				)
+			}
+		}
+
 		var startedTxn bool
 		if err == nil {
 			extractAndSetLSID(connCtx, typedDoc)
