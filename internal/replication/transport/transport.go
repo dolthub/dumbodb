@@ -100,6 +100,7 @@ type Connection struct {
 	writer     *bufio.Writer
 	mu         sync.Mutex
 	compressor Compressor
+	checksums  bool
 }
 
 func Dial(ctx context.Context, address string) (*Connection, error) {
@@ -173,6 +174,9 @@ func (c *Connection) Hello(ctx context.Context, compressors []string) (*wirebson
 				break
 			}
 		}
+	}
+	if maxWireVersion, _ := decoded.Get("maxWireVersion").(int32); maxWireVersion >= 8 {
+		c.checksums = true
 	}
 	return decoded, nil
 }
@@ -254,6 +258,16 @@ func (c *Connection) writeMessage(ctx context.Context, identifier int32, message
 	if err != nil {
 		return fmt.Errorf("encoding OP_MSG: %w", err)
 	}
+	originalHeader := wire.MsgHeader{
+		RequestID: identifier,
+		OpCode:    wire.OpCodeMsg,
+	}
+	if c.checksums {
+		body, err = appendChecksum(originalHeader, body)
+		if err != nil {
+			return err
+		}
+	}
 	opcode := wire.OpCodeMsg
 	payload := body
 	compressible, err := commandCanCompress(message)
@@ -290,6 +304,26 @@ func (c *Connection) writeMessage(ctx context.Context, identifier int32, message
 		return fmt.Errorf("flushing MongoDB member message: %w", err)
 	}
 	return nil
+}
+
+func appendChecksum(header wire.MsgHeader, body []byte) ([]byte, error) {
+	if len(body) < 4 {
+		return nil, errors.New("OP_MSG is shorter than its flags")
+	}
+	flags := wire.OpMsgFlags(binary.LittleEndian.Uint32(body[:4]))
+	if flags.FlagSet(wire.OpMsgChecksumPresent) {
+		return nil, errors.New("OP_MSG already contains a checksum")
+	}
+	body = append(body, 0, 0, 0, 0)
+	binary.LittleEndian.PutUint32(body[:4], uint32(flags|wire.OpMsgFlags(wire.OpMsgChecksumPresent)))
+	header.MessageLength = int32(wire.MsgHeaderLen + len(body))
+	headerBytes, err := header.MarshalBinary()
+	if err != nil {
+		return nil, fmt.Errorf("encoding OP_MSG checksum header: %w", err)
+	}
+	checksum := crc32.Checksum(append(headerBytes, body[:len(body)-4]...), crc32.MakeTable(crc32.Castagnoli))
+	binary.LittleEndian.PutUint32(body[len(body)-4:], checksum)
+	return body, nil
 }
 
 func commandCanCompress(message *wire.OpMsg) (bool, error) {
