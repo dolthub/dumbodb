@@ -145,6 +145,105 @@ func TestRequestUsesNegotiatedCompression(t *testing.T) {
 	}
 }
 
+func TestAuthenticationCommandsAreNotCompressed(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	go func() {
+		reader := bufio.NewReader(server)
+		for range 2 {
+			header, err := readHeader(reader)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			if header.OpCode != wire.OpCodeMsg {
+				t.Errorf("authentication request opcode = %s, want OP_MSG", header.OpCode)
+				return
+			}
+			if _, err := io.CopyN(io.Discard, reader, int64(header.MessageLength-wire.MsgHeaderLen)); err != nil {
+				t.Error(err)
+				return
+			}
+			writeTestMessage(t, server, header.RequestID+1, header.RequestID, wire.MustOpMsg("ok", float64(1)))
+		}
+	}()
+
+	connection := New(client)
+	connection.compressor = CompressorSnappy
+	for _, command := range []string{"saslStart", "saslContinue"} {
+		if _, err := connection.Request(context.Background(), wire.MustOpMsg(command, int32(1), "$db", "admin")); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestCommandCompressionExclusions(t *testing.T) {
+	for command := range uncompressedCommands {
+		compressible, err := commandCanCompress(wire.MustOpMsg(command, int32(1), "$db", "admin"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if compressible {
+			t.Fatalf("%s is compressible", command)
+		}
+	}
+	compressible, err := commandCanCompress(wire.MustOpMsg("find", "orders", "$db", "shop"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !compressible {
+		t.Fatal("find is not compressible")
+	}
+}
+
+func TestExhaustConsumesAllResponses(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	go func() {
+		reader := bufio.NewReader(server)
+		header, err := readHeader(reader)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		if _, err := io.CopyN(io.Discard, reader, int64(header.MessageLength-wire.MsgHeaderLen)); err != nil {
+			t.Error(err)
+			return
+		}
+		more := wire.MustOpMsg("n", int32(1), "ok", float64(1))
+		more.Flags = wire.OpMsgFlags(wire.OpMsgMoreToCome)
+		writeTestMessage(t, server, 88, header.RequestID, more)
+		writeTestMessage(t, server, 89, header.RequestID, wire.MustOpMsg("n", int32(2), "ok", float64(1)))
+	}()
+
+	connection := New(client)
+	request := wire.MustOpMsg("hello", int32(1), "$db", "admin")
+	request.Flags = wire.OpMsgFlags(wire.OpMsgExhaustAllowed)
+	var values []int32
+	err := connection.Exhaust(context.Background(), request, func(response *wire.OpMsg) (bool, error) {
+		raw, err := response.RawDocument()
+		if err != nil {
+			return false, err
+		}
+		document, err := raw.Decode()
+		if err != nil {
+			return false, err
+		}
+		values = append(values, document.Get("n").(int32))
+		return true, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(values) != 2 || values[0] != 1 || values[1] != 2 {
+		t.Fatalf("exhaust values = %v", values)
+	}
+}
+
 func TestCompressedPayloadsRoundTrip(t *testing.T) {
 	body := []byte("a MongoDB member message that is long enough to compress more than once")
 	for _, compressor := range []Compressor{CompressorSnappy, CompressorZlib, CompressorZstd} {
