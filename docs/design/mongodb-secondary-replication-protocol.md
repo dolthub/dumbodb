@@ -468,6 +468,21 @@ optime. A transaction must become visible atomically in DumboDB even when its so
 representation spans multiple entries. Wall time is metadata only and must never
 drive ordering or deduplication.
 
+### Document field-order deviation
+
+MongoDB preserves BSON document field order. DumboDB deliberately canonicalizes
+stored documents by sorting object keys lexicographically at every level, except
+within the top-level `_id` value where order participates in identity. Canonical
+ordering is required for deterministic Prolly diffs and merges, but it means the
+replica does not preserve the source document's BSON bytes or presentation order.
+
+This deviation can affect behavior, not only presentation. MongoDB compares whole
+embedded documents in field order, so equality, range, sort, grouping, distinct,
+and index behavior involving embedded-document values may differ after
+canonicalization. Differential tests must measure those cases explicitly. State
+comparison may ignore object field order, but must remain exact for field names,
+values, BSON types, arrays, and `_id`. **DESIGN**
+
 ### Version 2 update diffs
 
 MongoDB 8.0 normally records modifier updates as a version 2 diff rather than a
@@ -807,6 +822,9 @@ integrated system.
 - Accept only overlapping wire-version ranges and supported compression/auth modes.
 - Treat unknown required oplog operations or transaction forms as fatal to forward
   progress, never as skippable events.
+- Treat document field-order canonicalization as the explicit storage deviation
+  described above. It does not permit silent loss, coercion, or omission of any
+  other supported document or catalog state.
 - Preserve unknown optional fields in diagnostic capture where safe, but do not
   infer semantics.
 - Run the full lab against every MongoDB patch claimed as supported and against
