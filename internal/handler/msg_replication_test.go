@@ -17,6 +17,7 @@ package handler
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/FerretDB/wire"
 
@@ -80,6 +81,16 @@ func TestReplicationInspectionCommands(t *testing.T) {
 
 func TestReplicationHeartbeatReturnsNewerConfigAndTracksPrimary(t *testing.T) {
 	handler := configuredReplicationHandler(t)
+	checkpoint := control.Checkpoint{
+		Fetched:  control.OpTime{Seconds: 19, Increment: 5, Term: 9},
+		Buffered: control.OpTime{Seconds: 19, Increment: 5, Term: 9},
+		Written:  control.OpTime{Seconds: 17, Increment: 4, Term: 9},
+		Durable:  control.OpTime{Seconds: 13, Increment: 3, Term: 9},
+		Applied:  control.OpTime{Seconds: 11, Increment: 2, Term: 9},
+	}
+	if err := handler.ReplicationTopology.MarkInitialSyncComplete(checkpoint); err != nil {
+		t.Fatal(err)
+	}
 	request := wire.MustOpMsg(
 		"replSetHeartbeat", "rs0",
 		"configVersion", int64(3),
@@ -100,6 +111,26 @@ func TestReplicationHeartbeatReturnsNewerConfigAndTracksPrimary(t *testing.T) {
 	}
 	if _, ok := responseValue(document, "config").(*types.Document); !ok {
 		t.Fatalf("heartbeat config = %T", responseValue(document, "config"))
+	}
+	wallTimes := map[string]uint32{
+		"wallTime":        checkpoint.Applied.Seconds,
+		"writtenWallTime": checkpoint.Written.Seconds,
+		"durableWallTime": checkpoint.Durable.Seconds,
+	}
+	for field, expectedSeconds := range wallTimes {
+		value, ok := responseValue(document, field).(time.Time)
+		if !ok {
+			t.Fatalf("heartbeat %s = %T, want BSON UTC datetime", field, responseValue(document, field))
+		}
+		if value.Unix() != int64(expectedSeconds) {
+			t.Fatalf("heartbeat %s = %v, want Unix %d", field, value, expectedSeconds)
+		}
+	}
+	if _, ok := responseValue(document, "opTime").(*types.Document); !ok {
+		t.Fatalf("heartbeat opTime = %T, want document", responseValue(document, "opTime"))
+	}
+	if responseValue(document, "appliedOpTime") != nil || responseValue(document, "appliedWallTime") != nil {
+		t.Fatal("heartbeat used non-protocol applied optime field names")
 	}
 	state := handler.ReplicationTopology.Snapshot()
 	if state.Term != 9 || state.PrimaryID != 1 || state.PrimaryHost != "primary.example:27017" {

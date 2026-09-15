@@ -214,7 +214,8 @@ An 8.0.28 heartbeat response may include:
 
 - `state`, `term`, config `v`, `configTerm`, and set name;
 - `primaryId`, `electable`, and the member's time;
-- applied, written, and durable optimes and wall times;
+- applied (`opTime`/`wallTime`), written (`writtenOpTime`/`writtenWallTime`),
+  and durable (`durableOpTime`/`durableWallTime`) positions;
 - a newer full `config` when the requester is behind;
 - `$replData` response metadata.
 

@@ -151,9 +151,12 @@ func (h *Handler) MsgReplSetHeartbeat(_ context.Context, msg *wire.OpMsg) (*wire
 		"configTerm", configurationTerm(state.Configuration),
 		"primaryId", int32(state.PrimaryID),
 		"time", time.Now().Unix(),
-		"appliedOpTime", opTimeDocument(state.Checkpoint.Applied),
+		"opTime", opTimeDocument(state.Checkpoint.Applied),
+		"wallTime", opTimeDate(state.Checkpoint.Applied),
 		"writtenOpTime", opTimeDocument(state.Checkpoint.Written),
+		"writtenWallTime", opTimeDate(state.Checkpoint.Written),
 		"durableOpTime", opTimeDocument(state.Checkpoint.Durable),
+		"durableWallTime", opTimeDate(state.Checkpoint.Durable),
 		"ok", float64(1),
 	))
 	if state.SyncSource != "" {
@@ -228,7 +231,7 @@ func replicaStatusMember(memberID int, host string, state topology.MemberState, 
 		"stateStr", state.String(),
 		"uptime", int64(0),
 		"optime", opTimeDocument(applied),
-		"optimeDate", time.Unix(int64(applied.Seconds), 0),
+		"optimeDate", opTimeDate(applied),
 	))
 	if self {
 		document.Set("self", true)
@@ -241,6 +244,10 @@ func replicaStatusMember(memberID int, host string, state topology.MemberState, 
 func opTimeDocument(opTime control.OpTime) *types.Document {
 	timestamp := types.Timestamp(uint64(opTime.Seconds)<<32 | uint64(opTime.Increment))
 	return must.NotFail(types.NewDocument("ts", timestamp, "t", opTime.Term))
+}
+
+func opTimeDate(opTime control.OpTime) time.Time {
+	return time.Unix(int64(opTime.Seconds), 0).UTC()
 }
 
 func memberIDForHost(state topology.Snapshot, host string) int32 {
