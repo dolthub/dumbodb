@@ -38,6 +38,21 @@ import (
 
 const compressedHeaderLength = 9
 
+var uncompressedCommands = map[string]struct{}{
+	"hello":           {},
+	"isMaster":        {},
+	"ismaster":        {},
+	"saslStart":       {},
+	"saslContinue":    {},
+	"authenticate":    {},
+	"getnonce":        {},
+	"createUser":      {},
+	"updateUser":      {},
+	"copydbSaslStart": {},
+	"copydbgetnonce":  {},
+	"copydb":          {},
+}
+
 var requestID atomic.Int32
 
 type Compressor byte
@@ -199,6 +214,41 @@ func (c *Connection) Request(ctx context.Context, message *wire.OpMsg) (*wire.Op
 	return response, nil
 }
 
+// Exhaust sends an exhaust-enabled command and passes each response to consume.
+// The callback returns false to stop consuming and close the connection; doing
+// so is required because an exhaust stream owns the connection until completion.
+func (c *Connection) Exhaust(ctx context.Context, message *wire.OpMsg, consume func(*wire.OpMsg) (bool, error)) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !message.Flags.FlagSet(wire.OpMsgExhaustAllowed) {
+		return errors.New("exhaust command must set OP_MSG exhaustAllowed")
+	}
+	identifier := requestID.Add(1)
+	if err := c.writeMessage(ctx, identifier, message); err != nil {
+		return err
+	}
+	for {
+		header, response, err := c.readMessage(ctx)
+		if err != nil {
+			return err
+		}
+		if header.ResponseTo != identifier {
+			return fmt.Errorf("exhaust response correlation mismatch: got %d, want %d", header.ResponseTo, identifier)
+		}
+		keepGoing, err := consume(response)
+		if err != nil {
+			return err
+		}
+		if !keepGoing && response.Flags.FlagSet(wire.OpMsgMoreToCome) {
+			_ = c.Close()
+			return nil
+		}
+		if !response.Flags.FlagSet(wire.OpMsgMoreToCome) {
+			return nil
+		}
+	}
+}
+
 func (c *Connection) writeMessage(ctx context.Context, identifier int32, message *wire.OpMsg) error {
 	body, err := message.MarshalBinary()
 	if err != nil {
@@ -206,7 +256,11 @@ func (c *Connection) writeMessage(ctx context.Context, identifier int32, message
 	}
 	opcode := wire.OpCodeMsg
 	payload := body
-	if c.compressor != CompressorNoop {
+	compressible, err := commandCanCompress(message)
+	if err != nil {
+		return err
+	}
+	if c.compressor != CompressorNoop && compressible {
 		compressed, err := compress(c.compressor, body)
 		if err != nil {
 			return err
@@ -236,6 +290,15 @@ func (c *Connection) writeMessage(ctx context.Context, identifier int32, message
 		return fmt.Errorf("flushing MongoDB member message: %w", err)
 	}
 	return nil
+}
+
+func commandCanCompress(message *wire.OpMsg) (bool, error) {
+	document, err := message.RawSection0().Decode()
+	if err != nil {
+		return false, fmt.Errorf("decoding MongoDB command for compression: %w", err)
+	}
+	_, excluded := uncompressedCommands[document.Command()]
+	return !excluded, nil
 }
 
 func (c *Connection) readMessage(ctx context.Context) (wire.MsgHeader, *wire.OpMsg, error) {
