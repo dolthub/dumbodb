@@ -92,6 +92,25 @@ func TestManagerTracksPrimaryAndReplacesSource(t *testing.T) {
 	}
 }
 
+func TestManagerTracksInboundMemberContact(t *testing.T) {
+	store := openControlStore(t, t.TempDir())
+	manager := New(store)
+	if err := manager.InstallConfiguration(testReplicaConfiguration(), 8); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.ObserveMemberContact("secondary.example:27017", 2, 9, 1); err != nil {
+		t.Fatal(err)
+	}
+	state := manager.Snapshot()
+	member := state.Members[2]
+	if !member.Healthy || member.State != StateUnknown || member.Host != "secondary.example:27017" {
+		t.Fatalf("member contact = %+v", member)
+	}
+	if state.Term != 9 || state.PrimaryID != 1 || state.PrimaryHost != "primary.example:27017" {
+		t.Fatalf("topology after contact = %+v", state)
+	}
+}
+
 func TestManagerTransitionsToSecondaryAfterInitialSync(t *testing.T) {
 	dir := t.TempDir()
 	store := openControlStore(t, dir)

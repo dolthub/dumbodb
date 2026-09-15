@@ -260,6 +260,47 @@ func (m *Manager) ObserveHeartbeat(host string, heartbeat Heartbeat) error {
 	return nil
 }
 
+func (m *Manager) ObserveMemberContact(host string, memberID int, term int64, primaryID int) error {
+	m.mu.RLock()
+	hasConfiguration := m.state.Configuration != nil
+	m.mu.RUnlock()
+	if hasConfiguration {
+		if err := m.store.ObserveTerm(term); err != nil {
+			return err
+		}
+	}
+	m.mu.Lock()
+	previous := cloneSnapshot(m.state)
+	m.state.Term = max(m.state.Term, term)
+	status, exists := m.state.Members[memberID]
+	status.MemberID = memberID
+	status.Host = host
+	status.Healthy = true
+	status.LastHeartbeat = time.Now()
+	if !exists {
+		status.State = StateUnknown
+	}
+	m.state.Members[memberID] = status
+	if primaryID >= 0 {
+		m.state.PrimaryID = primaryID
+		m.state.PrimaryHost = m.memberHostLocked(primaryID)
+	}
+	m.state.SyncSource = m.selectSourceLocked()
+	if m.state.SyncSource != previous.SyncSource {
+		if err := m.store.SetSource(m.state.SyncSource, m.state.RBID); err != nil {
+			m.state = previous
+			m.mu.Unlock()
+			return err
+		}
+	}
+	listener := m.changeListenerLocked(previous)
+	m.mu.Unlock()
+	if listener != nil {
+		listener()
+	}
+	return nil
+}
+
 func (m *Manager) MarkInitialSyncComplete(checkpoint control.Checkpoint) error {
 	if err := m.store.SetCheckpoint(checkpoint); err != nil {
 		return err

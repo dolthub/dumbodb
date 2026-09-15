@@ -46,6 +46,9 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 	if err != nil {
 		return nil, err
 	}
+	if h.ReplicationTopology != nil && params.DB == "local" && params.Collection == "oplog.rs" {
+		return nil, downstreamReplicationUnsupportedError()
+	}
 
 	// Validate rootish before backend access so invalid forms (HEAD, reflog, range)
 	// return OperationFailed (96) rather than silently succeeding or returning

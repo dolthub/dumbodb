@@ -68,6 +68,7 @@ func (h *Handler) initCommands() {
 		// Single-name commands. Aliased and flag-bearing commands are
 		// registered below via h.register(...). Keep this map sorted
 		// alphabetically.
+		"_isSelf":                  {Handler: h.MsgIsSelf, anonymous: true},
 		"aggregate":                {Handler: h.MsgAggregate, Help: "Returns aggregated data."},
 		"autoCompact":              {Handler: h.MsgAutoCompact, Help: "Enables or disables background compaction (MongoDB 8.0+)."},
 		"bulkWrite":                {Handler: h.MsgBulkWrite, Help: "Performs multiple write operations across collections in a single command."},
@@ -108,6 +109,11 @@ func (h *Handler) initCommands() {
 		"abortTransaction":         {Handler: h.MsgAbortTransaction, Help: "Aborts a MongoDB transaction."},
 		"endSessions":              {Handler: h.MsgEndSessions, anonymous: true, Help: "Ends server sessions."},
 		"ping":                     {Handler: h.MsgPing, anonymous: true, Help: "Returns a pong response."},
+		"replSetGetConfig":         {Handler: h.MsgReplSetGetConfig, anonymous: true},
+		"replSetGetRBID":           {Handler: h.MsgReplSetGetRBID, anonymous: true},
+		"replSetGetStatus":         {Handler: h.MsgReplSetGetStatus, anonymous: true},
+		"replSetHeartbeat":         {Handler: h.MsgReplSetHeartbeat, anonymous: true},
+		"replSetUpdatePosition":    {Handler: h.MsgReplSetUpdatePositionUnsupported, anonymous: true},
 		"saslStart":                {Handler: h.MsgSASLStart, anonymous: true},
 		"saslContinue":             {Handler: h.MsgSASLContinue, anonymous: true},
 		"serverStatus":             {Handler: h.MsgServerStatus, Help: "Returns an overview of the databases state."},
