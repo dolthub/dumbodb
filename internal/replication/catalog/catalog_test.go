@@ -49,6 +49,16 @@ func TestCatalogApplierPreservesIdentityAcrossLifecycle(t *testing.T) {
 	if created.LocalUUID == "" || created.SourceUUID != "source-one" {
 		t.Fatalf("created location = %+v", created)
 	}
+	indexes, err := PreflightIndexes("orders", "items", []*types.Document{
+		must.NotFail(types.NewDocument("v", int32(2), "name", "_id_", "key", must.NotFail(types.NewDocument("_id", int32(1))))),
+		must.NotFail(types.NewDocument("v", int32(2), "name", "account_1", "key", must.NotFail(types.NewDocument("account", int32(1))), "unique", true, "sparse", true)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := applier.CreateIndexes(ctx, "source-one", indexes); err != nil {
+		t.Fatal(err)
+	}
 	if err := applier.Rename(ctx, "source-one", "orders", "renamed", catalogOpTime(2)); err != nil {
 		t.Fatal(err)
 	}
@@ -58,6 +68,24 @@ func TestCatalogApplierPreservesIdentityAcrossLifecycle(t *testing.T) {
 	}
 	if renamed.Collection != "renamed" || renamed.LocalUUID != created.LocalUUID {
 		t.Fatalf("renamed location = %+v", renamed)
+	}
+	database, err := backend.Database("orders")
+	if err != nil {
+		t.Fatal(err)
+	}
+	collection, err := database.Collection("renamed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed, err := collection.ListIndexes(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Indexes) != 2 || listed.Indexes[1].Name != "account_1" || !listed.Indexes[1].Unique || !listed.Indexes[1].Sparse {
+		t.Fatalf("replicated indexes = %+v", listed.Indexes)
+	}
+	if err := applier.DropIndexes(ctx, "source-one", []string{"account_1"}); err != nil {
+		t.Fatal(err)
 	}
 	if err := applier.CollMod(ctx, "source-one", backends.CollModParams{
 		ValidationAction: "warn",

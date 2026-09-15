@@ -22,6 +22,7 @@ import (
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/replication/control"
+	"github.com/dolthub/dumbodb/internal/types"
 )
 
 var (
@@ -218,10 +219,92 @@ func (a *Applier) CollMod(ctx context.Context, sourceUUID string, params backend
 	return database.CollMod(ctx, &params)
 }
 
+func (a *Applier) CreateIndexes(ctx context.Context, sourceUUID string, indexes []backends.IndexInfo) error {
+	location, err := a.Resolve(ctx, sourceUUID)
+	if err != nil {
+		return err
+	}
+	database, err := a.backend.Database(location.Database)
+	if err != nil {
+		return err
+	}
+	collection, err := database.Collection(location.Collection)
+	if err != nil {
+		return err
+	}
+	existing, err := collection.ListIndexes(ctx, nil)
+	if err != nil {
+		return err
+	}
+	existingByName := make(map[string]backends.IndexInfo, len(existing.Indexes))
+	for _, index := range existing.Indexes {
+		existingByName[index.Name] = index
+	}
+	toCreate := make([]backends.IndexInfo, 0, len(indexes))
+	seen := make(map[string]struct{}, len(indexes))
+	for _, index := range indexes {
+		if _, ok := seen[index.Name]; ok {
+			return fmt.Errorf("replicated index list repeats name %q", index.Name)
+		}
+		seen[index.Name] = struct{}{}
+		if current, ok := existingByName[index.Name]; ok {
+			if !sameIndex(current, index) {
+				return fmt.Errorf("replicated index %q conflicts with existing definition", index.Name)
+			}
+			continue
+		}
+		toCreate = append(toCreate, index)
+	}
+	if len(toCreate) == 0 {
+		return nil
+	}
+	_, err = collection.CreateIndexes(ctx, &backends.CreateIndexesParams{Indexes: toCreate})
+	return err
+}
+
+func (a *Applier) DropIndexes(ctx context.Context, sourceUUID string, indexNames []string) error {
+	location, err := a.Resolve(ctx, sourceUUID)
+	if err != nil {
+		return err
+	}
+	database, err := a.backend.Database(location.Database)
+	if err != nil {
+		return err
+	}
+	collection, err := database.Collection(location.Collection)
+	if err != nil {
+		return err
+	}
+	_, err = collection.DropIndexes(ctx, &backends.DropIndexesParams{Indexes: indexNames})
+	return err
+}
+
 func (a *Applier) recordCreate(location Location, opTime control.OpTime) error {
 	return a.store.PutCollectionMapping(control.CollectionMapping{
 		SourceUUID: location.SourceUUID, Database: location.Database,
 		Collection: location.Collection, LocalUUID: location.LocalUUID,
 		CreateOpTime: opTime, LastUpdateOpTime: opTime,
 	})
+}
+
+func sameIndex(left, right backends.IndexInfo) bool {
+	if left.Name != right.Name || left.Unique != right.Unique || left.Sparse != right.Sparse || left.Hidden != right.Hidden || len(left.Key) != len(right.Key) {
+		return false
+	}
+	for index := range left.Key {
+		if left.Key[index] != right.Key[index] {
+			return false
+		}
+	}
+	if !sameDocument(left.PartialFilterExpression, right.PartialFilterExpression) {
+		return false
+	}
+	return sameDocument(left.Collation, right.Collation)
+}
+
+func sameDocument(left, right *types.Document) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return types.Compare(left, right) == types.Equal
 }
