@@ -334,6 +334,24 @@ func (m *Manager) MarkInitialSyncComplete(checkpoint control.Checkpoint) error {
 	return nil
 }
 
+// CompleteInitialSync atomically validates the attempt and publishes its durable stop position.
+func (m *Manager) CompleteInitialSync(attemptID string, checkpoint control.Checkpoint, finalRBID int64) error {
+	if err := m.store.CompleteInitialSync(attemptID, checkpoint, finalRBID); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	previous := cloneSnapshot(m.state)
+	m.state.Checkpoint = checkpoint
+	m.state.RBID = finalRBID
+	m.state.State = StateSecondary
+	listener := m.changeListenerLocked(previous)
+	m.mu.Unlock()
+	if listener != nil {
+		listener()
+	}
+	return nil
+}
+
 func (m *Manager) MarkMemberDown(memberID int) error {
 	m.mu.Lock()
 	previous := cloneSnapshot(m.state)

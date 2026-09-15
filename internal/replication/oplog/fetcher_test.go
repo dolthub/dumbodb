@@ -51,6 +51,23 @@ func TestFetcherProvesInclusiveContinuityAndSkipsDuplicate(t *testing.T) {
 	}
 }
 
+func TestFetcherFetchFromUsesExplicitInitialSyncPosition(t *testing.T) {
+	manager := configuredFetcherManager(t, testFetchOpTime(1))
+	buffer := must.NotFail(NewBuffer(BufferLimits{Entries: 10, Bytes: 1024 * 1024}))
+	client := &fakeFetchClient{responses: []*wire.OpMsg{
+		wire.MustOpMsg("rbid", int32(5), "ok", float64(1)),
+		testOplogResponse(t, 0, 5, testOplogDocument(5, 8), testOplogDocument(6, 8)),
+	}}
+	fetcher := testFetcher(t, manager, buffer, client)
+	if err := fetcher.FetchFrom(context.Background(), testFetchOpTime(5)); !errors.Is(err, io.EOF) {
+		t.Fatalf("FetchFrom error = %v, want EOF", err)
+	}
+	entries := buffer.Drain(10, 1024*1024)
+	if len(entries) != 1 || entries[0].OpTime != testFetchOpTime(6) {
+		t.Fatalf("buffered entries = %+v", entries)
+	}
+}
+
 func TestFetcherClassifiesTruncatedAndDivergentContinuity(t *testing.T) {
 	tests := []struct {
 		name     string

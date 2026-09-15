@@ -147,6 +147,19 @@ func (f *Fetcher) Run(ctx context.Context) error {
 
 func (f *Fetcher) Fetch(ctx context.Context) error {
 	state := f.manager.Snapshot()
+	position := state.Checkpoint.Written
+	return f.fetchFrom(ctx, state, position)
+}
+
+// FetchFrom fetches inclusively from an explicit initial-sync continuity position.
+func (f *Fetcher) FetchFrom(ctx context.Context, position control.OpTime) error {
+	if position == (control.OpTime{}) {
+		return errors.New("explicit oplog fetch position is required")
+	}
+	return f.fetchFrom(ctx, f.manager.Snapshot(), position)
+}
+
+func (f *Fetcher) fetchFrom(ctx context.Context, state topology.Snapshot, position control.OpTime) error {
 	source := state.SyncSource
 	if source == "" {
 		return errors.New("no eligible oplog sync source")
@@ -160,8 +173,7 @@ func (f *Fetcher) Fetch(ctx context.Context) error {
 	if err := f.manager.ObserveSourceRBID(source, rbid); err != nil {
 		return err
 	}
-	position := state.Checkpoint.Written
-	if tail, ok := f.buffer.Tail(); ok {
+	if tail, ok := f.buffer.Tail(); ok && tail.Compare(position) > 0 {
 		position = tail
 	}
 	response, err := client.Request(ctx, oplogFindRequest(position, state.Term))
