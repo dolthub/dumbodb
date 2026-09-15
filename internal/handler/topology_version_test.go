@@ -111,7 +111,7 @@ func TestExhaustHelloRequiresAwaitableFields(t *testing.T) {
 
 func TestReplicaSetHelloDoesNotReportSecondaryBeforeInitialSync(t *testing.T) {
 	controlStore, err := control.Open(t.TempDir(), control.Configuration{
-		SetName: "rs0", Branch: "mongo", MemberHost: "dumbo.example:27017",
+		SetName: "rs0", MemberHost: "dumbo.example:27017",
 	})
 	if err != nil {
 		t.Fatal(err)

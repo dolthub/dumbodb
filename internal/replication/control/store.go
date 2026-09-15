@@ -45,7 +45,6 @@ const (
 
 type Configuration struct {
 	SetName    string `json:"set_name"`
-	Branch     string `json:"branch"`
 	MemberHost string `json:"member_host"`
 }
 
@@ -191,12 +190,10 @@ func Open(dir string, configuration Configuration) (*Store, error) {
 	}
 	normalizeState(&store.state)
 	if store.state.Configuration != configuration {
-		return nil, fmt.Errorf("replication control state belongs to set %q branch %q member %q, not set %q branch %q member %q",
+		return nil, fmt.Errorf("replication control state belongs to set %q member %q, not set %q member %q",
 			store.state.Configuration.SetName,
-			store.state.Configuration.Branch,
 			store.state.Configuration.MemberHost,
 			configuration.SetName,
-			configuration.Branch,
 			configuration.MemberHost)
 	}
 	return store, nil
@@ -600,8 +597,8 @@ func (s *Store) Activate() error {
 }
 
 func validateConfiguration(configuration Configuration) error {
-	if configuration.SetName == "" || configuration.Branch == "" || configuration.MemberHost == "" {
-		return errors.New("replica set name, replication branch, and member host are required")
+	if configuration.SetName == "" || configuration.MemberHost == "" {
+		return errors.New("replica set name and member host are required")
 	}
 	return nil
 }

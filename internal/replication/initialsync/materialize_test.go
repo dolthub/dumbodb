@@ -32,14 +32,14 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-func TestMaterializeCollectionLoadsAndIndexesReplicationBranch(t *testing.T) {
+func TestMaterializeCollectionLoadsAndIndexesMain(t *testing.T) {
 	ctx := context.Background()
 	backend, err := dolt.NewBackend(t.TempDir(), slog.Default(), false, false, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer backend.Close()
-	store, err := control.Open(t.TempDir(), control.Configuration{SetName: "rs0", Branch: "mongo-history", MemberHost: "dumbo:27017"})
+	store, err := control.Open(t.TempDir(), control.Configuration{SetName: "rs0", MemberHost: "dumbo:27017"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,32 +76,21 @@ func TestMaterializeCollectionLoadsAndIndexesReplicationBranch(t *testing.T) {
 	if types.Compare(result.ResumeToken, finalToken) != types.Equal {
 		t.Fatalf("resume token = %v", result.ResumeToken)
 	}
-	branchDatabase, err := backend.Database("orders@mongo-history")
+	mainDatabase, err := backend.Database("orders")
 	if err != nil {
 		t.Fatal(err)
 	}
-	branchCollection, err := branchDatabase.Collection("items")
+	mainCollection, err := mainDatabase.Collection("items")
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertDocumentCount(t, ctx, branchCollection, 3)
-	listed, err := branchCollection.ListIndexes(ctx, nil)
+	assertDocumentCount(t, ctx, mainCollection, 3)
+	listed, err := mainCollection.ListIndexes(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(listed.Indexes) != 2 || listed.Indexes[1].Name != "account_1" || !listed.Indexes[1].Unique {
 		t.Fatalf("materialized indexes = %+v", listed.Indexes)
-	}
-	mainDatabase, err := backend.Database("orders")
-	if err != nil {
-		t.Fatal(err)
-	}
-	mainCollections, err := mainDatabase.ListCollections(ctx, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(mainCollections.Collections) != 0 {
-		t.Fatalf("main collections = %+v", mainCollections.Collections)
 	}
 }
 

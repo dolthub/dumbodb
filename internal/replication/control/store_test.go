@@ -309,7 +309,7 @@ func TestOpenRejectsDifferentLifecycleConfiguration(t *testing.T) {
 	if _, err := Open(dir, testConfiguration()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Open(dir, Configuration{SetName: "other", Branch: "mongo", MemberHost: "dumbo.example:27017"}); err == nil {
+	if _, err := Open(dir, Configuration{SetName: "other", MemberHost: "dumbo.example:27017"}); err == nil {
 		t.Fatal("Open accepted a different replica set name")
 	}
 }
@@ -372,7 +372,7 @@ func TestStoreRejectsReplicaConfigurationWithoutSafeMember(t *testing.T) {
 }
 
 func testConfiguration() Configuration {
-	return Configuration{SetName: "rs0", Branch: "mongo", MemberHost: "dumbo.example:27017"}
+	return Configuration{SetName: "rs0", MemberHost: "dumbo.example:27017"}
 }
 
 func opTime(increment uint32) OpTime {

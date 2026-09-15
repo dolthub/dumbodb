@@ -40,27 +40,26 @@ type Location struct {
 type Applier struct {
 	backend backends.Backend
 	store   *control.Store
-	branch  string
 }
 
 func NewApplier(backend backends.Backend, store *control.Store) (*Applier, error) {
 	if backend == nil || store == nil {
 		return nil, errors.New("catalog applier requires backend and control store")
 	}
-	return &Applier{backend: backend, store: store, branch: store.Snapshot().Configuration.Branch}, nil
+	return &Applier{backend: backend, store: store}, nil
 }
 
 func (a *Applier) Resolve(ctx context.Context, sourceUUID string) (Location, error) {
-	return ResolveOnBranch(ctx, a.backend, sourceUUID, a.branch)
+	return Resolve(ctx, a.backend, sourceUUID)
 }
 
-// ResolveCollection opens the UUID-identified collection on the replication branch.
+// ResolveCollection opens the UUID-identified collection.
 func (a *Applier) ResolveCollection(ctx context.Context, sourceUUID string) (Location, backends.Collection, error) {
 	location, err := a.Resolve(ctx, sourceUUID)
 	if err != nil {
 		return Location{}, nil, err
 	}
-	database, err := a.backend.Database(databaseOnBranch(location.Database, a.branch))
+	database, err := a.backend.Database(location.Database)
 	if err != nil {
 		return Location{}, nil, err
 	}
@@ -72,34 +71,16 @@ func (a *Applier) ResolveCollection(ctx context.Context, sourceUUID string) (Loc
 }
 
 func Resolve(ctx context.Context, backend backends.Backend, sourceUUID string) (Location, error) {
-	return ResolveOnBranch(ctx, backend, sourceUUID, "main")
-}
-
-func ResolveOnBranch(ctx context.Context, backend backends.Backend, sourceUUID, branch string) (Location, error) {
 	if sourceUUID == "" {
 		return Location{}, errors.New("source collection UUID is required")
 	}
-	if branch == "" {
-		return Location{}, errors.New("replication branch is required")
-	}
-	branchBackend, ok := backend.(backends.ReplicationBranchBackend)
-	if !ok {
-		return Location{}, errors.New("backend does not support replication branches")
-	}
-	databases, err := branchBackend.ListReplicationDatabases(ctx)
+	databases, err := backend.ListDatabases(ctx, nil)
 	if err != nil {
 		return Location{}, err
 	}
 	var result Location
-	for _, databaseName := range databases {
-		exists, err := branchBackend.ReplicationBranchExists(ctx, databaseName, branch)
-		if err != nil {
-			return Location{}, err
-		}
-		if !exists {
-			continue
-		}
-		database, err := backend.Database(databaseOnBranch(databaseName, branch))
+	for _, databaseInfo := range databases.Databases {
+		database, err := backend.Database(databaseInfo.Name)
 		if err != nil {
 			return Location{}, err
 		}
@@ -112,10 +93,10 @@ func ResolveOnBranch(ctx context.Context, backend backends.Backend, sourceUUID, 
 				continue
 			}
 			if result.SourceUUID != "" {
-				return Location{}, fmt.Errorf("%w: %q is present at both %q.%q and %q.%q", ErrSourceUUIDAmbiguous, sourceUUID, result.Database, result.Collection, databaseName, collection.Name)
+				return Location{}, fmt.Errorf("%w: %q is present at both %q.%q and %q.%q", ErrSourceUUIDAmbiguous, sourceUUID, result.Database, result.Collection, databaseInfo.Name, collection.Name)
 			}
 			result = Location{
-				Database: databaseName, Collection: collection.Name,
+				Database: databaseInfo.Name, Collection: collection.Name,
 				LocalUUID: collection.UUID, SourceUUID: collection.SourceUUID,
 			}
 		}
@@ -141,10 +122,7 @@ func (a *Applier) Create(ctx context.Context, databaseName string, params backen
 	} else if !errors.Is(err, ErrSourceUUIDNotFound) {
 		return Location{}, err
 	}
-	if err := a.ensureBranch(ctx, databaseName); err != nil {
-		return Location{}, err
-	}
-	database, err := a.backend.Database(databaseOnBranch(databaseName, a.branch))
+	database, err := a.backend.Database(databaseName)
 	if err != nil {
 		return Location{}, err
 	}
@@ -167,10 +145,7 @@ func (a *Applier) CreateView(ctx context.Context, databaseName string, params ba
 		return errors.New("replicated view requires viewOn")
 	}
 	params.SourceUUID = ""
-	if err := a.ensureBranch(ctx, databaseName); err != nil {
-		return err
-	}
-	database, err := a.backend.Database(databaseOnBranch(databaseName, a.branch))
+	database, err := a.backend.Database(databaseName)
 	if err != nil {
 		return err
 	}
@@ -181,7 +156,7 @@ func (a *Applier) CollModView(ctx context.Context, databaseName string, params b
 	if params.Name == "" || !params.SetView {
 		return errors.New("replicated view collMod requires name and view definition")
 	}
-	database, err := a.backend.Database(databaseOnBranch(databaseName, a.branch))
+	database, err := a.backend.Database(databaseName)
 	if err != nil {
 		return err
 	}
@@ -192,7 +167,7 @@ func (a *Applier) DropView(ctx context.Context, databaseName, viewName string) e
 	if viewName == "" {
 		return errors.New("replicated view name is required")
 	}
-	database, err := a.backend.Database(databaseOnBranch(databaseName, a.branch))
+	database, err := a.backend.Database(databaseName)
 	if err != nil {
 		return err
 	}
@@ -200,15 +175,14 @@ func (a *Applier) DropView(ctx context.Context, databaseName, viewName string) e
 }
 
 func (a *Applier) DropDatabase(ctx context.Context, databaseName string, opTime control.OpTime) error {
-	branchBackend, ok := a.backend.(backends.ReplicationBranchBackend)
-	if !ok {
-		return errors.New("backend does not support replication branches")
-	}
-	exists, err := branchBackend.ReplicationBranchExists(ctx, databaseName, a.branch)
-	if err != nil || !exists {
+	databases, err := a.backend.ListDatabases(ctx, &backends.ListDatabasesParams{Name: databaseName})
+	if err != nil {
 		return err
 	}
-	database, err := a.backend.Database(databaseOnBranch(databaseName, a.branch))
+	if len(databases.Databases) == 0 {
+		return nil
+	}
+	database, err := a.backend.Database(databaseName)
 	if err != nil {
 		return err
 	}
@@ -248,7 +222,7 @@ func (a *Applier) Rename(ctx context.Context, sourceUUID, newDatabase, newCollec
 	if location.Database != newDatabase {
 		return errors.New("cross-database replicated rename is not supported")
 	}
-	database, err := a.backend.Database(databaseOnBranch(location.Database, a.branch))
+	database, err := a.backend.Database(location.Database)
 	if err != nil {
 		return err
 	}
@@ -266,7 +240,7 @@ func (a *Applier) Drop(ctx context.Context, sourceUUID string, opTime control.Op
 	if err != nil {
 		return err
 	}
-	database, err := a.backend.Database(databaseOnBranch(location.Database, a.branch))
+	database, err := a.backend.Database(location.Database)
 	if err != nil {
 		return err
 	}
@@ -285,7 +259,7 @@ func (a *Applier) CollMod(ctx context.Context, sourceUUID string, params backend
 		return fmt.Errorf("collMod name %q does not match source UUID location %q", params.Name, location.Collection)
 	}
 	params.Name = location.Collection
-	database, err := a.backend.Database(databaseOnBranch(location.Database, a.branch))
+	database, err := a.backend.Database(location.Database)
 	if err != nil {
 		return err
 	}
@@ -297,7 +271,7 @@ func (a *Applier) CreateIndexes(ctx context.Context, sourceUUID string, indexes 
 	if err != nil {
 		return err
 	}
-	database, err := a.backend.Database(databaseOnBranch(location.Database, a.branch))
+	database, err := a.backend.Database(location.Database)
 	if err != nil {
 		return err
 	}
@@ -340,7 +314,7 @@ func (a *Applier) DropIndexes(ctx context.Context, sourceUUID string, indexNames
 	if err != nil {
 		return err
 	}
-	database, err := a.backend.Database(databaseOnBranch(location.Database, a.branch))
+	database, err := a.backend.Database(location.Database)
 	if err != nil {
 		return err
 	}
@@ -358,21 +332,6 @@ func (a *Applier) recordCreate(location Location, opTime control.OpTime) error {
 		Collection: location.Collection, LocalUUID: location.LocalUUID,
 		CreateOpTime: opTime, LastUpdateOpTime: opTime,
 	})
-}
-
-func (a *Applier) ensureBranch(ctx context.Context, database string) error {
-	backend, ok := a.backend.(backends.ReplicationBranchBackend)
-	if !ok {
-		return errors.New("backend does not support replication branches")
-	}
-	return backend.EnsureReplicationBranch(ctx, database, a.branch)
-}
-
-func databaseOnBranch(database, branch string) string {
-	if branch == "main" {
-		return database
-	}
-	return database + "@" + branch
 }
 
 func sameIndex(left, right backends.IndexInfo) bool {

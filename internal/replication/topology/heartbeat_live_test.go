@@ -97,7 +97,7 @@ func TestLiveMongoHeartbeatConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store, err := control.Open(t.TempDir(), control.Configuration{SetName: "rs0", Branch: "mongo", MemberHost: dumboAddress})
+	store, err := control.Open(t.TempDir(), control.Configuration{SetName: "rs0", MemberHost: dumboAddress})
 	if err != nil {
 		t.Fatal(err)
 	}

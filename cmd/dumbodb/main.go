@@ -95,7 +95,6 @@ func run(logger *slog.Logger) error {
 	noMetrics := fs.Bool("no-metrics", false, "disable anonymous daily usage metrics reported to DoltHub")
 	auth := fs.Bool("auth", false, "enable access control (forced login; an authenticated connection has full access)")
 	replSetName := fs.String("replSet", "", "replica set name for inbound MongoDB replication")
-	replicationBranch := fs.String("replication-branch", "", "DumboDB branch that receives replicated history")
 	fs.Parse(os.Args[1:])
 
 	if *autoCommit && *sessionIsolation {
@@ -139,18 +138,16 @@ func run(logger *slog.Logger) error {
 		}
 	}
 
-	replicationConfiguration, replicationEnabled, err := replicationControlConfiguration(*replSetName, *replicationBranch, *addr)
-	if err != nil {
-		return err
-	}
+	replicationConfiguration, replicationEnabled := replicationControlConfiguration(*replSetName, *addr)
 	var replicationTopology *topology.Manager
 	if replicationEnabled {
-		controlStore, err := control.Open(filepath.Join(*dataDir, "replication"), replicationConfiguration)
+		controlDirectory := filepath.Join(*dataDir, ".replication")
+		controlStore, err := control.Open(controlDirectory, replicationConfiguration)
 		if err != nil {
 			return err
 		}
 		replicationTopology = topology.New(controlStore)
-		logger.Info("replication control state opened", "replSet", *replSetName, "branch", *replicationBranch)
+		logger.Info("replication control state opened", "replSet", *replSetName)
 	}
 
 	stateProvider := state.NewProvider()
@@ -204,18 +201,14 @@ func run(logger *slog.Logger) error {
 	return nil
 }
 
-func replicationControlConfiguration(replSetName, branch, memberHost string) (control.Configuration, bool, error) {
-	if replSetName == "" && branch == "" {
-		return control.Configuration{}, false, nil
-	}
-	if replSetName == "" || branch == "" {
-		return control.Configuration{}, false, fmt.Errorf("--replSet and --replication-branch must be provided together")
+func replicationControlConfiguration(replSetName, memberHost string) (control.Configuration, bool) {
+	if replSetName == "" {
+		return control.Configuration{}, false
 	}
 	return control.Configuration{
 		SetName:    replSetName,
-		Branch:     branch,
 		MemberHost: memberHost,
-	}, true, nil
+	}, true
 }
 
 // envDisablesMetrics reports whether DUMBODB_NO_METRICS is set to a truthy value.

@@ -60,8 +60,8 @@ func TestMaterializeOrdinaryCatalogClonesMultipleDatabasesAndReportsSpecialDatab
 	if result.SpecialDatabases[0].Name != "admin" || result.SpecialDatabases[1].Name != "config" {
 		t.Fatalf("special databases = %+v", result.SpecialDatabases)
 	}
-	assertBranchCollectionCount(t, ctx, backend, "accounts", "customers", 1)
-	assertBranchCollectionCount(t, ctx, backend, "orders", "items", 1)
+	assertMainCollectionCount(t, ctx, backend, "accounts", "customers", 1)
+	assertMainCollectionCount(t, ctx, backend, "orders", "items", 1)
 	if len(client.requests) != 2 {
 		t.Fatalf("clone request count = %d, want 2", len(client.requests))
 	}
@@ -83,13 +83,14 @@ func TestMaterializeOrdinaryCatalogPreflightsBeforeMutation(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected unsupported catalog error")
 	}
-	branchBackend := backend.(backends.ReplicationBranchBackend)
-	exists, branchErr := branchBackend.ReplicationBranchExists(ctx, "accounts", "mongo-history")
-	if branchErr != nil {
-		t.Fatal(branchErr)
+	databases, listErr := backend.ListDatabases(ctx, nil)
+	if listErr != nil {
+		t.Fatal(listErr)
 	}
-	if exists {
-		t.Fatal("preflight failure created the first database branch")
+	for _, database := range databases.Databases {
+		if database.Name == "accounts" || database.Name == "logs" {
+			t.Fatalf("preflight failure created database %q", database.Name)
+		}
 	}
 }
 
@@ -100,7 +101,7 @@ func newMaterializeCatalogTestApplier(t *testing.T) (backends.Backend, *catalog.
 		t.Fatal(err)
 	}
 	t.Cleanup(backend.Close)
-	store, err := control.Open(t.TempDir(), control.Configuration{SetName: "rs0", Branch: "mongo-history", MemberHost: "dumbo:27017"})
+	store, err := control.Open(t.TempDir(), control.Configuration{SetName: "rs0", MemberHost: "dumbo:27017"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,9 +122,9 @@ func cloneTestCollection(name string, sourceUUID uuid.UUID) Collection {
 	}
 }
 
-func assertBranchCollectionCount(t *testing.T, ctx context.Context, backend backends.Backend, databaseName, collectionName string, want int) {
+func assertMainCollectionCount(t *testing.T, ctx context.Context, backend backends.Backend, databaseName, collectionName string, want int) {
 	t.Helper()
-	database, err := backend.Database(databaseName + "@mongo-history")
+	database, err := backend.Database(databaseName)
 	if err != nil {
 		t.Fatal(err)
 	}

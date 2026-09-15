@@ -18,33 +18,20 @@ import "testing"
 
 func TestReplicationControlConfiguration(t *testing.T) {
 	tests := []struct {
-		name      string
-		replSet   string
-		branch    string
-		wantOn    bool
-		wantError bool
+		name    string
+		replSet string
+		wantOn  bool
 	}{
 		{name: "disabled"},
-		{name: "enabled", replSet: "rs0", branch: "mongo", wantOn: true},
-		{name: "missing branch", replSet: "rs0", wantError: true},
-		{name: "missing set", branch: "mongo", wantError: true},
+		{name: "enabled", replSet: "rs0", wantOn: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			configuration, enabled, err := replicationControlConfiguration(test.replSet, test.branch, "dumbo.example:27017")
-			if test.wantError {
-				if err == nil {
-					t.Fatal("replicationControlConfiguration succeeded")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
+			configuration, enabled := replicationControlConfiguration(test.replSet, "dumbo.example:27017")
 			if enabled != test.wantOn {
 				t.Fatalf("enabled = %v, want %v", enabled, test.wantOn)
 			}
-			if enabled && (configuration.SetName != test.replSet || configuration.Branch != test.branch || configuration.MemberHost != "dumbo.example:27017") {
+			if enabled && (configuration.SetName != test.replSet || configuration.MemberHost != "dumbo.example:27017") {
 				t.Fatalf("configuration = %+v", configuration)
 			}
 		})

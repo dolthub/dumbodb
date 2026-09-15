@@ -126,7 +126,7 @@ func TestLiveMongoInclusiveOplogFetch(t *testing.T) {
 func liveFetcherManager(t *testing.T, source string, checkpoint control.OpTime) *topology.Manager {
 	t.Helper()
 	store, err := control.Open(t.TempDir(), control.Configuration{
-		SetName: "rs0", Branch: "mongo", MemberHost: "dumbo.example:27017",
+		SetName: "rs0", MemberHost: "dumbo.example:27017",
 	})
 	if err != nil {
 		t.Fatal(err)

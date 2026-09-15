@@ -169,7 +169,7 @@ func TestManagerRejectsStaleOrConflictingConfiguration(t *testing.T) {
 
 func openControlStore(t *testing.T, dir string) *control.Store {
 	t.Helper()
-	store, err := control.Open(dir, control.Configuration{SetName: "rs0", Branch: "mongo", MemberHost: "dumbo.example:27017"})
+	store, err := control.Open(dir, control.Configuration{SetName: "rs0", MemberHost: "dumbo.example:27017"})
 	if err != nil {
 		t.Fatal(err)
 	}

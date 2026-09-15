@@ -40,8 +40,15 @@ func TestCoordinatorRunsCloneAndConcurrentCatchUpThroughStop(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer backend.Close()
+	existingDatabase, err := backend.Database("orders")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := existingDatabase.CreateCollection(ctx, &backends.CreateCollectionParams{Name: "standalone_data"}); err != nil {
+		t.Fatal(err)
+	}
 	store, err := control.Open(t.TempDir(), control.Configuration{
-		SetName: "rs0", Branch: "mongo-history", MemberHost: "dumbo.example:27017",
+		SetName: "rs0", MemberHost: "dumbo.example:27017",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -79,7 +86,7 @@ func TestCoordinatorRunsCloneAndConcurrentCatchUpThroughStop(t *testing.T) {
 	}}
 	coordinator, err := NewCoordinator(CoordinatorOptions{
 		Source: "primary.example:27017", Client: client, Store: store, Manager: manager,
-		Fetcher: fetcher, Buffer: buffer, Branches: backend.(backends.ReplicationBranchBackend),
+		Fetcher: fetcher, Buffer: buffer, Resetter: backend.(backends.InitialSyncResetter),
 		Catalog: catalogApplier, Applier: entryApplier, Publisher: publisher,
 		LoaderLimits: LoaderLimits{Documents: 10, Bytes: 4096}, CatchUpLimits: CatchUpLimits{Entries: 2, Bytes: 4096},
 	})
@@ -106,7 +113,14 @@ func TestCoordinatorRunsCloneAndConcurrentCatchUpThroughStop(t *testing.T) {
 	if len(publisher.publications) != 1 || publisher.publications[0].Checkpoint.Applied != catchUpOpTime(4) {
 		t.Fatalf("publications = %+v", publisher.publications)
 	}
-	assertBranchCollectionCount(t, ctx, backend, "orders", "items", 1)
+	assertMainCollectionCount(t, ctx, backend, "orders", "items", 1)
+	collections, err := existingDatabase.ListCollections(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(collections.Collections) != 1 || collections.Collections[0].Name != "items" {
+		t.Fatalf("initial sync collections = %+v, want only items", collections.Collections)
+	}
 	if err := coordinator.Reset(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +132,7 @@ func TestCoordinatorRunsCloneAndConcurrentCatchUpThroughStop(t *testing.T) {
 	if manager.Snapshot().State != topology.StateStartup2 {
 		t.Fatalf("member state after reset = %s", manager.Snapshot().State)
 	}
-	resetDatabase, err := backend.Database("orders@mongo-history")
+	resetDatabase, err := backend.Database("orders")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,8 +141,59 @@ func TestCoordinatorRunsCloneAndConcurrentCatchUpThroughStop(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(resetCollections.Collections) != 0 {
-		t.Fatalf("reset replication collections = %+v", resetCollections.Collections)
+		t.Fatalf("reset replica collections = %+v", resetCollections.Collections)
 	}
+}
+
+func TestCoordinatorPreservesDataUntilSourceIsValidated(t *testing.T) {
+	ctx := context.Background()
+	backend, err := dolt.NewBackend(t.TempDir(), slog.Default(), false, false, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backend.Close()
+	database, err := backend.Database("orders")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.CreateCollection(ctx, &backends.CreateCollectionParams{Name: "standalone_data"}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := control.Open(t.TempDir(), control.Configuration{SetName: "rs0", MemberHost: "dumbo.example:27017"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalogApplier, err := catalog.NewApplier(backend, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buffer := must.NotFail(oplog.NewBuffer(oplog.BufferLimits{Entries: 10, Bytes: 4096}))
+	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Source: "primary.example:27017", Client: failingInitialSyncClient{}, Store: store,
+		Manager: initialSyncTestManager(t, store), Fetcher: &coordinatorFetcher{}, Buffer: buffer,
+		Resetter: backend.(backends.InitialSyncResetter), Catalog: catalogApplier,
+		Applier: &recordingEntryApplier{}, Publisher: &recordingInitialSyncPublisher{},
+		LoaderLimits: LoaderLimits{Documents: 10, Bytes: 4096}, CatchUpLimits: CatchUpLimits{Entries: 2, Bytes: 4096},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := coordinator.Run(ctx); err == nil {
+		t.Fatal("initial sync accepted an invalid source")
+	}
+	collections, err := database.ListCollections(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(collections.Collections) != 1 || collections.Collections[0].Name != "standalone_data" {
+		t.Fatalf("failed source validation changed main: %+v", collections.Collections)
+	}
+}
+
+type failingInitialSyncClient struct{}
+
+func (failingInitialSyncClient) Request(context.Context, *wire.OpMsg) (*wire.OpMsg, error) {
+	return nil, errors.New("source unavailable")
 }
 
 type recordingInitialSyncPublisher struct {

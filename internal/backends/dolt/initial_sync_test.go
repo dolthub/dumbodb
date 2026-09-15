@@ -24,7 +24,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-func TestReplicationBranchStartsAndResetsAtInitialCommit(t *testing.T) {
+func TestResetInitialSyncDataResetsMainToInitialCommit(t *testing.T) {
 	ctx := context.Background()
 	directory := t.TempDir()
 	backend, err := NewBackend(directory, slog.Default(), false, false, 0, 0)
@@ -35,42 +35,37 @@ func TestReplicationBranchStartsAndResetsAtInitialCommit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := database.CreateCollection(ctx, &backends.CreateCollectionParams{Name: "main_only"}); err != nil {
+	if err := database.CreateCollection(ctx, &backends.CreateCollectionParams{Name: "partial_clone"}); err != nil {
 		t.Fatal(err)
 	}
-	collection, err := database.Collection("main_only")
+	collection, err := database.Collection("partial_clone")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := collection.InsertAll(ctx, &backends.InsertAllParams{Docs: []*types.Document{
-		must.NotFail(types.NewDocument("_id", int32(1), "source", "dumbodb")),
+		must.NotFail(types.NewDocument("_id", int32(1), "source", "mongodb")),
 	}}); err != nil {
 		t.Fatal(err)
 	}
 	versioning := backend.(backends.VersioningBackend)
 	if _, err := versioning.DumboDBCommit(ctx, &backends.CommitParams{
-		DBName: "orders", Branch: "main", Message: "main data", Author: "test",
+		DBName: "orders", Branch: "main", Message: "partial initial sync", Author: "test",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	replication := backend.(backends.ReplicationBranchBackend)
-	if err := replication.EnsureReplicationBranch(ctx, "orders", "mongo-history"); err != nil {
-		t.Fatal(err)
-	}
-	assertCollectionNames(t, ctx, backend, "orders@mongo-history")
-
-	replicationDatabase, err := backend.Database("orders@mongo-history")
+	customers, err := backend.Database("customers")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := replicationDatabase.CreateCollection(ctx, &backends.CreateCollectionParams{Name: "partial_clone"}); err != nil {
+	if err := customers.CreateCollection(ctx, &backends.CreateCollectionParams{Name: "uncommitted_clone"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := replication.ResetReplicationBranch(ctx, "orders", "mongo-history"); err != nil {
+	resetter := backend.(backends.InitialSyncResetter)
+	if err := resetter.ResetInitialSyncData(ctx); err != nil {
 		t.Fatal(err)
 	}
-	assertCollectionNames(t, ctx, backend, "orders@mongo-history")
-	assertCollectionNames(t, ctx, backend, "orders", "main_only")
+	assertCollectionNames(t, ctx, backend, "orders")
+	assertCollectionNames(t, ctx, backend, "customers")
 	backend.Close()
 
 	reopened, err := NewBackend(directory, slog.Default(), false, false, 0, 0)
@@ -78,8 +73,8 @@ func TestReplicationBranchStartsAndResetsAtInitialCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reopened.Close()
-	assertCollectionNames(t, ctx, reopened, "orders@mongo-history")
-	assertCollectionNames(t, ctx, reopened, "orders", "main_only")
+	assertCollectionNames(t, ctx, reopened, "orders")
+	assertCollectionNames(t, ctx, reopened, "customers")
 }
 
 func assertCollectionNames(t *testing.T, ctx context.Context, backend backends.Backend, databaseName string, want ...string) {

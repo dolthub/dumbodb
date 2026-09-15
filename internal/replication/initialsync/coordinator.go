@@ -34,7 +34,7 @@ type initialSyncFetcher interface {
 	FetchFrom(context.Context, control.OpTime) error
 }
 
-// CompletionPublisher durably publishes reconciled branch state before progress is reported.
+// CompletionPublisher durably publishes reconciled replica state before progress is reported.
 type CompletionPublisher interface {
 	PublishInitialSync(context.Context, InitialSyncPublication) error
 }
@@ -57,7 +57,7 @@ type CoordinatorOptions struct {
 	Manager       *topology.Manager
 	Fetcher       initialSyncFetcher
 	Buffer        *oplog.Buffer
-	Branches      backends.ReplicationBranchBackend
+	Resetter      backends.InitialSyncResetter
 	Catalog       *catalog.Applier
 	Applier       oplogEntryApplier
 	Publisher     CompletionPublisher
@@ -81,9 +81,9 @@ type InitialSyncResult struct {
 
 func NewCoordinator(options CoordinatorOptions) (*Coordinator, error) {
 	if options.Source == "" || options.Client == nil || options.Store == nil || options.Manager == nil ||
-		options.Fetcher == nil || options.Buffer == nil || options.Branches == nil || options.Catalog == nil ||
+		options.Fetcher == nil || options.Buffer == nil || options.Resetter == nil || options.Catalog == nil ||
 		options.Applier == nil || options.Publisher == nil {
-		return nil, errors.New("initial sync coordinator requires source, client, store, manager, fetcher, buffer, branch backend, catalog, applier, and publisher")
+		return nil, errors.New("initial sync coordinator requires source, client, store, manager, fetcher, buffer, resetter, catalog, applier, and publisher")
 	}
 	if options.LoaderLimits.Documents <= 0 || options.LoaderLimits.Bytes <= 0 ||
 		options.CatchUpLimits.Entries <= 0 || options.CatchUpLimits.Bytes <= 0 {
@@ -92,24 +92,11 @@ func NewCoordinator(options CoordinatorOptions) (*Coordinator, error) {
 	return &Coordinator{options: options}, nil
 }
 
-// Reset discards branch and control state from an incomplete or obsolete attempt.
+// Reset discards replica and control state from an incomplete or obsolete attempt.
 func (c *Coordinator) Reset(ctx context.Context) error {
 	state := c.options.Store.Snapshot()
-	databases, err := c.options.Branches.ListReplicationDatabases(ctx)
-	if err != nil {
-		return fmt.Errorf("listing replication databases for initial sync reset: %w", err)
-	}
-	for _, database := range databases {
-		exists, err := c.options.Branches.ReplicationBranchExists(ctx, database, state.Configuration.Branch)
-		if err != nil {
-			return fmt.Errorf("checking %s replication branch for initial sync reset: %w", database, err)
-		}
-		if !exists {
-			continue
-		}
-		if err := c.options.Branches.ResetReplicationBranch(ctx, database, state.Configuration.Branch); err != nil {
-			return fmt.Errorf("resetting %s replication branch: %w", database, err)
-		}
+	if err := c.options.Resetter.ResetInitialSyncData(ctx); err != nil {
+		return fmt.Errorf("resetting initial sync data: %w", err)
 	}
 	c.options.Buffer.Reset()
 	attemptID := ""
@@ -128,6 +115,10 @@ func (c *Coordinator) Run(ctx context.Context) (result InitialSyncResult, err er
 	if err != nil {
 		return InitialSyncResult{}, err
 	}
+	if err := c.options.Resetter.ResetInitialSyncData(ctx); err != nil {
+		return InitialSyncResult{}, fmt.Errorf("clearing data for initial sync: %w", err)
+	}
+	c.options.Buffer.Reset()
 	if err := c.options.Store.BeginInitialSync(attempt); err != nil {
 		return InitialSyncResult{}, err
 	}

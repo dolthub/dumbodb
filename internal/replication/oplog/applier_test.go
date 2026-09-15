@@ -212,11 +212,11 @@ func TestApplierRollsBackFailedApplyOps(t *testing.T) {
 	assertStoredDocument(t, ctx, backend, "orders", "items", must.NotFail(types.NewDocument("_id", int32(1), "value", int32(0))))
 }
 
-func TestApplierUsesConfiguredReplicationBranchAcrossRestart(t *testing.T) {
+func TestApplierUsesMainAcrossRestart(t *testing.T) {
 	ctx := context.Background()
 	dataDir := t.TempDir()
 	controlDir := t.TempDir()
-	configuration := control.Configuration{SetName: "rs0", Branch: "mongo-history", MemberHost: "dumbo:27017"}
+	configuration := control.Configuration{SetName: "rs0", MemberHost: "dumbo:27017"}
 	backend, err := dolt.NewBackend(dataDir, slog.Default(), false, false, 0, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -235,36 +235,14 @@ func TestApplierUsesConfiguredReplicationBranchAcrossRestart(t *testing.T) {
 	if err := applier.Apply(ctx, makeOplogEntry(t, 2, "i", "orders.items", sourceUUID, document, nil)); err != nil {
 		t.Fatal(err)
 	}
-	assertStoredDocument(t, ctx, backend, "orders@mongo-history", "items", document)
+	assertStoredDocument(t, ctx, backend, "orders", "items", document)
 	secondUUID := "87654321-4321-4321-8321-cba987654321"
 	createTestCollection(t, ctx, backend, applier, secondUUID, "customers", "profiles")
 	secondDocument := must.NotFail(types.NewDocument("_id", int32(2), "value", "second database"))
 	if err := applier.Apply(ctx, makeOplogEntry(t, 3, "i", "customers.profiles", secondUUID, secondDocument, nil)); err != nil {
 		t.Fatal(err)
 	}
-	assertStoredDocument(t, ctx, backend, "customers@mongo-history", "profiles", secondDocument)
-	mainDatabase, err := backend.Database("orders")
-	if err != nil {
-		t.Fatal(err)
-	}
-	mainCollections, err := mainDatabase.ListCollections(ctx, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(mainCollections.Collections) != 0 {
-		t.Fatalf("main collections = %+v, want none", mainCollections.Collections)
-	}
-	mainCustomers, err := backend.Database("customers")
-	if err != nil {
-		t.Fatal(err)
-	}
-	mainCustomerCollections, err := mainCustomers.ListCollections(ctx, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(mainCustomerCollections.Collections) != 0 {
-		t.Fatalf("customer main collections = %+v, want none", mainCustomerCollections.Collections)
-	}
+	assertStoredDocument(t, ctx, backend, "customers", "profiles", secondDocument)
 	backend.Close()
 
 	reopenedBackend, err := dolt.NewBackend(dataDir, slog.Default(), false, false, 0, 0)
@@ -287,7 +265,7 @@ func TestApplierUsesConfiguredReplicationBranchAcrossRestart(t *testing.T) {
 	if location.Database != "orders" || location.Collection != "items" {
 		t.Fatalf("reopened location = %+v", location)
 	}
-	assertStoredDocument(t, ctx, reopenedBackend, "orders@mongo-history", "items", document)
+	assertStoredDocument(t, ctx, reopenedBackend, "orders", "items", document)
 	secondLocation, err := reopened.catalog.Resolve(ctx, secondUUID)
 	if err != nil {
 		t.Fatal(err)
@@ -295,23 +273,23 @@ func TestApplierUsesConfiguredReplicationBranchAcrossRestart(t *testing.T) {
 	if secondLocation.Database != "customers" || secondLocation.Collection != "profiles" {
 		t.Fatalf("reopened second location = %+v", secondLocation)
 	}
-	assertStoredDocument(t, ctx, reopenedBackend, "customers@mongo-history", "profiles", secondDocument)
+	assertStoredDocument(t, ctx, reopenedBackend, "customers", "profiles", secondDocument)
 	dropDatabase := must.NotFail(types.NewDocument("dropDatabase", int32(1)))
 	if err := reopened.Apply(ctx, makeOplogEntry(t, 4, "c", "orders.$cmd", "", dropDatabase, nil)); err != nil {
 		t.Fatal(err)
 	}
-	historyDatabase, err := reopenedBackend.Database("orders@mongo-history")
+	mainDatabase, err := reopenedBackend.Database("orders")
 	if err != nil {
 		t.Fatal(err)
 	}
-	historyCollections, err := historyDatabase.ListCollections(ctx, nil)
+	mainCollections, err := mainDatabase.ListCollections(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(historyCollections.Collections) != 0 {
-		t.Fatalf("replication branch survived dropDatabase: %+v", historyCollections.Collections)
+	if len(mainCollections.Collections) != 0 {
+		t.Fatalf("replicated database survived dropDatabase: %+v", mainCollections.Collections)
 	}
-	assertStoredDocument(t, ctx, reopenedBackend, "customers@mongo-history", "profiles", secondDocument)
+	assertStoredDocument(t, ctx, reopenedBackend, "customers", "profiles", secondDocument)
 }
 
 func newTestApplier(t *testing.T) (backends.Backend, *Applier, string) {
@@ -321,7 +299,7 @@ func newTestApplier(t *testing.T) (backends.Backend, *Applier, string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(backend.Close)
-	store, err := control.Open(t.TempDir(), control.Configuration{SetName: "rs0", Branch: "main", MemberHost: "dumbo:27017"})
+	store, err := control.Open(t.TempDir(), control.Configuration{SetName: "rs0", MemberHost: "dumbo:27017"})
 	if err != nil {
 		t.Fatal(err)
 	}

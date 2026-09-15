@@ -185,11 +185,11 @@ configured, heartbeats contained the subject's address and member ID. **WIRE**
 The heartbeat parser retains compatibility for older senders that omit some newer
 fields, including `primaryId`. **SRC**
 
-The configured member must be exactly one branch of replica state in DumboDB. The
-initial sync creates that branch from DumboDB's repository initial commit. Ongoing
-replicated commits continue on the same branch. There are not per-database snapshot
-branches. Database partitioning is an apply/storage concern, not a stock MongoDB
-replication boundary. **DESIGN**
+The configured member owns one replica data set. DumboDB stores that data set on
+each database repository's `main` branch; operators do not configure a replication
+branch. Initial sync starts from the repository initial commit, and ongoing
+replicated commits continue on `main`. Database partitioning is an apply/storage
+concern, not a stock MongoDB replication boundary. **DESIGN**
 
 Stock logical initial sync enumerates every non-`local` database. A member does not
 ask MongoDB to initial-sync only selected databases. DumboDB may later filter or
@@ -329,11 +329,19 @@ that implementation caused a global failed lock and is being removed. A dedicate
 replication control store must atomically record attempt identity, source, RBID,
 fetch/apply boundaries, and completion state.
 
-The snapshot branch starts at DumboDB's repository initial commit. The clone is
-materialized above it while fetched operations accumulate. Only after buffered
-operations through the selected stop optime have been applied is the branch a valid
-secondary image. No independently generated change-log branch needs to be rebased.
+Initial sync materializes the clone on `main` while fetched operations accumulate.
+Only after buffered operations through the selected stop optime have been applied
+may the member report a valid secondary image. Failed attempts reset `main` to the
+repository initial commit before retrying. Incomplete data is hidden by MongoDB
+member state, as it is on a stock secondary, rather than by a DumboDB branch.
 **DESIGN**
+
+Like a stock secondary, DumboDB selects and validates a sync source before clearing
+existing replicated data for initial sync. It resets each database's `main` to the
+repository initial commit rather than requiring an empty data directory. Starting
+with `--replSet` therefore authorizes initial sync to replace existing `main` data.
+Other DumboDB branches are outside the MongoDB replica data set and are not used by
+replication. **SRC/DESIGN**
 
 ## Ongoing oplog fetch
 
@@ -577,8 +585,8 @@ closed/replaced its replication connection, and resumed fetching from node 3.
 
 **DESIGN:** source replacement must not create a new DumboDB history. The candidate
 must return the exact last fetched entry at the inclusive continuity check. Only
-then may the existing branch advance. A source change without continuity enters
-rollback/recovery handling.
+then may the existing `main` history advance. A source change without continuity
+enters rollback/recovery handling.
 
 ## Rollback, stale history, and recovery
 
@@ -594,15 +602,14 @@ of the source oplog, the member is too stale and requires initial sync. Startup
 recovery also replays durable oplog state so applied data catches up consistently.
 **SRC** [Replication internals][repl-readme]
 
-DumboDB has a useful advantage: commit history can represent abandoned source
-history without destroying it. That does not permit exposing both histories as one
-MongoDB state. **DESIGN:** on divergence, preserve the old head for audit, find the
-last common source `OpTime`, create or reset the active replication lineage at that
-commit using a recoverable branch operation, and apply the winning history. Never
-silently continue a linear branch after mismatched continuity. If no retained
-common optime exists, perform a fresh initial sync from the repository initial
-commit on a replacement active branch, preserving the obsolete branch as audit
-data.
+DumboDB commit history can identify the abandoned source history during recovery,
+but it must expose only one MongoDB state. **DESIGN:** on divergence, find the last
+common source `OpTime`, reset `main` to that commit, and apply the winning history.
+Never silently continue a linear history after mismatched continuity. If no retained
+common optime exists, reset `main` to the repository initial commit and perform a
+fresh initial sync. Preserving abandoned commits under an optional DumboDB ref is an
+internal audit policy, not part of replication configuration or visible replica
+state.
 
 The replication control store must survive process restart and independently
 record:
@@ -640,12 +647,12 @@ source optime can be reported as applied. Drop tombstones the mapping at the dro
 optime so a later reuse of the same name cannot receive operations for the old
 source UUID. **DESIGN**
 
-The active replication branch is single-writer and replication-owned. Concurrent
-ordinary writes and history-mutating `dumboReset`, `dumboRevert`, `dumboMerge`, or
-`dumboCherryPick` operations against it are unsupported during this milestone.
-General branch permissions and replication out of DumboDB are not prerequisites;
-operators fork the replicated history for independent work. Enforcement beyond
-this operating contract is deferred to operational hardening. On a user fork, the
+While the member is attached, replication owns `main`. Concurrent ordinary writes
+and history-mutating `dumboReset`, `dumboRevert`, `dumboMerge`, or `dumboCherryPick`
+operations against `main` are unsupported during this milestone. General branch
+permissions and replication out of DumboDB are not prerequisites; operators may
+fork the replicated history for independent work. Enforcement beyond this operating
+contract is deferred to operational hardening. On a user fork, the
 source UUID is provenance only. If a user-created collection collides by name with
 a later replicated collection during a merge, the catalog merge must surface a
 conflict rather than choose either identity silently. **DESIGN**
@@ -688,18 +695,18 @@ at the preceding applied optime.
 ## Operator surface and observability
 
 Replication is an explicit server mode, configured at startup with the compatible
-MongoDB `--replSet <name>` and `--keyFile <path>` settings plus a DumboDB replication
-branch name. The branch name and installed member/config identity are persisted in
-the control store. The process waits for an authenticated peer heartbeat carrying a
+MongoDB `--replSet <name>` and `--keyFile <path>` settings. The installed
+member/config identity is persisted in the control store. The process waits for an
+authenticated peer heartbeat carrying a
 configuration that contains its advertised address; no separate seed list is needed
 for normal `rs.add` setup. It refuses to begin unless its member is `hidden: true`,
 `priority: 0`, and `votes: 0`. A restart resumes from persisted state and revalidates
 the current configuration before fetching. **DESIGN**
 
 Removing the member from the replica-set configuration stops fetching and enters a
-detached state without deleting branch history. An administrative
+detached state without deleting `main` history. An administrative
 `dumboReplicationDetach` operation may then clear active replication ownership while
-preserving the branch and its source-optime provenance. Reattaching to a different
+preserving the history and its source-optime provenance. Reattaching to a different
 replica-set ID requires a new initial sync; identities cannot be spliced. **DESIGN**
 
 `replSetGetStatus` will provide MongoDB-compatible member and operator inspection.
@@ -784,7 +791,7 @@ The protocol-facing implementation divides into these components:
 6. **Progress reporter:** honest written/durable/applied positions and forwarded
    member positions.
 7. **Recovery controller:** restart recovery, source rollback, common-point search,
-   branch lineage, too-stale reinitialization, and audit preservation.
+   `main` history repair, too-stale reinitialization, and audit preservation.
 8. **Control store:** replication metadata outside user database transactions.
 
 Each component needs golden message fixtures from sanitized live captures and
