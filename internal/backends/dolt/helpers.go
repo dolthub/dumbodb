@@ -509,7 +509,6 @@ func amFromWorkingRoot(ctx context.Context, rv doltdb.RootValue, ns tree.NodeSto
 // getOrInitBranchWS returns the WorkingSet a write should build on.
 // In-txn: from the session's branchState; non-txn: from cache/disk
 // because the session can lag side-channel writes (merge, reset).
-// Caller must hold state.mu (write lock).
 func (state *dbState) getOrInitBranchWS(ctx context.Context, branch string) (*doltdb.WorkingSet, error) {
 	if rootishIsSnapshot(ctx, state, branch) {
 		return nil, backends.NewError(
@@ -598,10 +597,14 @@ func ownerForTxn(ctx context.Context) (string, bool) {
 
 // commitDirtyBranchesForSession three-way merges each dirty branch's
 // session overlay against the current ref and persists the result.
+//
+// Safe to run concurrently with other writers. Each publish compare-and-swaps
+// against the working set it reconciled against, so a writer whose branch
+// moved underneath it is refused and replays; no caller-held lock is required
+// or wanted.
 // sess.CommitWorkingSet's merger walks tables via the standard RootValue
 // format and drops dumbodb's opaque-AM collection entries on the floor, so
 // the merge goes through reconcileWorkingSets instead.
-// Caller must hold state.mu write lock.
 func (state *dbState) commitDirtyBranchesForSession(sqlCtx *sql.Context, sess *dsess.DoltSession, tx sql.Transaction) ([]string, error) {
 	dtx, ok := tx.(*dsess.DoltTransaction)
 	if !ok {
@@ -648,7 +651,7 @@ func (state *dbState) commitDirtyBranchesForSession(sqlCtx *sql.Context, sess *d
 // reached from -- the end of a command, commitTransaction, or dumboCommit --
 // never what happens once it is. On a refusal the unresolved conflicts come
 // back alongside the error, so a caller able to offer resolution can install
-// them. Caller must hold state.mu write lock.
+// them.
 func (state *dbState) reconcileBranchForSession(
 	sqlCtx *sql.Context,
 	sess *dsess.DoltSession,
@@ -718,7 +721,10 @@ func (state *dbState) reconcileBranchForSession(
 // nothing left to publish, because the command boundary already did it; under
 // --session-isolation this is where the whole fork lands. A refusal installs
 // the conflicts so the client can resolve them and commit again, instead of
-// throwing the fork's work away. Caller must hold state.mu write lock.
+// throwing the fork's work away.
+//
+// dumboCommit still takes state.mu, because it also reads and clears
+// mergeState; the reconcile it calls does not need it.
 func (state *dbState) publishSessionOverlay(ctx context.Context, branch string) error {
 	if !dbNameDsessFriendly(state.name) || alwaysAutoCommit(state.name) {
 		return nil
