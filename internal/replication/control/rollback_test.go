@@ -16,9 +16,9 @@ package control
 
 import "testing"
 
-func TestRollbackTruncatesCommitJournalAndSurvivesRestart(t *testing.T) {
+func TestRollbackReplacesProvenanceAndSurvivesRestart(t *testing.T) {
 	directory := t.TempDir()
-	store, err := Open(directory, testConfiguration())
+	store, err := openTestStore(t, directory, testConfiguration())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,8 +75,11 @@ func TestRollbackTruncatesCommitJournalAndSurvivesRestart(t *testing.T) {
 	if _, ok := store.CollectionMapping("abandoned"); ok {
 		t.Fatal("mapping created after common point was retained")
 	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
 
-	reopened, err := Open(directory, testConfiguration())
+	reopened, err := openTestStore(t, directory, testConfiguration())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +89,7 @@ func TestRollbackTruncatesCommitJournalAndSurvivesRestart(t *testing.T) {
 }
 
 func TestRollbackSafetyRejectsControlStateChangedAfterCommonPoint(t *testing.T) {
-	store, err := Open(t.TempDir(), testConfiguration())
+	store, err := openTestStore(t, t.TempDir(), testConfiguration())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,63 +105,5 @@ func TestRollbackSafetyRejectsControlStateChangedAfterCommonPoint(t *testing.T) 
 	}
 	if !store.CanRollbackTo(opTime(3)) {
 		t.Fatal("rollback rejected current collection mapping state")
-	}
-}
-
-func TestRollbackResumesAfterJournalTruncationBeforeStateUpdate(t *testing.T) {
-	directory := t.TempDir()
-	store, err := Open(directory, testConfiguration())
-	if err != nil {
-		t.Fatal(err)
-	}
-	intervals := []CommitInterval{
-		{First: opTime(1), Last: opTime(1), CommitID: "publication-one", Commits: []DatabaseCommit{{Database: "db", CommitID: "db-one"}}},
-		{First: opTime(2), Last: opTime(2), CommitID: "publication-two", Commits: []DatabaseCommit{{Database: "db", CommitID: "db-two"}}},
-		{First: opTime(3), Last: opTime(3), CommitID: "publication-three", Commits: []DatabaseCommit{{Database: "db", CommitID: "db-three"}}},
-	}
-	for _, interval := range intervals {
-		checkpoint := Checkpoint{
-			Fetched: interval.Last, Buffered: interval.Last, Written: interval.Last,
-			Durable: interval.Last, Applied: interval.Last,
-		}
-		if err := store.PublishCommit(interval, checkpoint); err != nil {
-			t.Fatal(err)
-		}
-	}
-	attempt := RollbackAttempt{
-		ID: "rollback-interrupted", Source: "source.example:27017", SourceRBID: 7,
-		CommitID: intervals[1].CommitID, OpTime: intervals[1].Last, AuditBranch: "mongo-rollback-interrupted",
-		Databases: []RollbackDatabase{{Database: "db", CommitID: "db-two"}},
-	}
-	if err := store.BeginRollback(attempt); err != nil {
-		t.Fatal(err)
-	}
-	rollbackCheckpoint := Checkpoint{
-		Fetched: attempt.OpTime, Buffered: attempt.OpTime, Written: attempt.OpTime,
-		Durable: attempt.OpTime, Applied: attempt.OpTime,
-	}
-	store.mu.Lock()
-	err = store.replaceCommitLogWithCheckpointLocked(store.state.CommitLogGeneration, intervals[:2], rollbackCheckpoint)
-	store.mu.Unlock()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	reopened, err := Open(directory, testConfiguration())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if pending, ok := reopened.PendingRollback(); !ok || pending.ID != attempt.ID {
-		t.Fatalf("pending rollback after interrupted publication = %+v, %v", pending, ok)
-	}
-	if len(reopened.CommitIntervals()) != 2 {
-		t.Fatalf("reopened intervals = %+v, want two", reopened.CommitIntervals())
-	}
-	checkpoint, err := reopened.RollbackTo(attempt.CommitID, attempt.Source, attempt.SourceRBID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if checkpoint != rollbackCheckpoint {
-		t.Fatalf("completed checkpoint = %+v, want %+v", checkpoint, rollbackCheckpoint)
 	}
 }

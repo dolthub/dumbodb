@@ -15,15 +15,13 @@
 package control
 
 import (
-	"os"
-	"path/filepath"
 	"reflect"
 	"testing"
 )
 
 func TestPendingPublicationSurvivesRestartAndCompletes(t *testing.T) {
 	dir := t.TempDir()
-	store, err := Open(dir, testConfiguration())
+	store, err := openTestStore(t, dir, testConfiguration())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,8 +40,11 @@ func TestPendingPublicationSurvivesRestartAndCompletes(t *testing.T) {
 	if err := store.RecordPublicationCommit(pending.ID, "accounts", "accounts-five"); err != nil {
 		t.Fatal(err)
 	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
 
-	reopened, err := Open(dir, testConfiguration())
+	reopened, err := openTestStore(t, dir, testConfiguration())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,11 +53,6 @@ func TestPendingPublicationSurvivesRestartAndCompletes(t *testing.T) {
 		t.Fatalf("recovered pending publication = %+v, %v", recovered, ok)
 	}
 	if err := reopened.RecordPublicationCommit(pending.ID, "orders", "orders-five"); err != nil {
-		t.Fatal(err)
-	}
-	statePath := filepath.Join(dir, stateFileName)
-	stateBeforeFinalJournal, err := os.ReadFile(statePath)
-	if err != nil {
 		t.Fatal(err)
 	}
 	interval := CommitInterval{
@@ -72,23 +68,23 @@ func TestPendingPublicationSurvivesRestartAndCompletes(t *testing.T) {
 	if got, ok := reopened.CommitForDatabaseCommit("orders", "orders-five"); !ok || !equalCommitInterval(got, interval) {
 		t.Fatalf("database commit provenance = %+v, %v", got, ok)
 	}
-	if err := os.WriteFile(statePath, stateBeforeFinalJournal, 0o600); err != nil {
+	if err := reopened.Close(); err != nil {
 		t.Fatal(err)
 	}
-	afterCrash, err := Open(dir, testConfiguration())
+	afterCrash, err := openTestStore(t, dir, testConfiguration())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := afterCrash.PendingPublication(); ok {
-		t.Fatal("journal recovery retained a completed pending publication")
+		t.Fatal("storage recovery retained a completed pending publication")
 	}
 	if afterCrash.Snapshot().Checkpoint != checkpoint {
-		t.Fatalf("journal recovery checkpoint = %+v, want %+v", afterCrash.Snapshot().Checkpoint, checkpoint)
+		t.Fatalf("storage recovery checkpoint = %+v, want %+v", afterCrash.Snapshot().Checkpoint, checkpoint)
 	}
 }
 
 func TestPendingPublicationPreservesConcurrentFetchProgress(t *testing.T) {
-	store, err := Open(t.TempDir(), testConfiguration())
+	store, err := openTestStore(t, t.TempDir(), testConfiguration())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +135,7 @@ func TestPendingPublicationPreservesConcurrentFetchProgress(t *testing.T) {
 }
 
 func TestPendingPublicationRejectsIncompleteOrDifferentCompletion(t *testing.T) {
-	store, err := Open(t.TempDir(), testConfiguration())
+	store, err := openTestStore(t, t.TempDir(), testConfiguration())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +160,7 @@ func TestPendingPublicationRejectsIncompleteOrDifferentCompletion(t *testing.T) 
 }
 
 func TestApplyingPublicationCanAbortButReadyPublicationCannot(t *testing.T) {
-	store, err := Open(t.TempDir(), testConfiguration())
+	store, err := openTestStore(t, t.TempDir(), testConfiguration())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +193,7 @@ func TestApplyingPublicationCanAbortButReadyPublicationCannot(t *testing.T) {
 func TestAbortingPublicationRestoresPreApplyControlStateAfterRestart(t *testing.T) {
 	directory := t.TempDir()
 	configuration := testConfiguration()
-	store, err := Open(directory, configuration)
+	store, err := openTestStore(t, directory, configuration)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,8 +250,11 @@ func TestAbortingPublicationRestoresPreApplyControlStateAfterRestart(t *testing.
 	if err := store.DeleteReplicationMetadata(metadata.Kind, metadata.Key, position); err != nil {
 		t.Fatal(err)
 	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
 
-	reopened, err := Open(directory, configuration)
+	reopened, err := openTestStore(t, directory, configuration)
 	if err != nil {
 		t.Fatal(err)
 	}

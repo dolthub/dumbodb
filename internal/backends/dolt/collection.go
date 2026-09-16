@@ -43,8 +43,16 @@ import (
 )
 
 type collection struct {
-	db   *database
-	name string
+	db                    *database
+	name                  string
+	allowReplicationWrite bool
+}
+
+func (c *collection) rejectReplicationControlWrite() error {
+	if c.allowReplicationWrite || !c.db.isReplicationControlCollection(c.name) {
+		return nil
+	}
+	return replicationControlReadOnlyError()
 }
 
 // getMap returns the prolly.Map for this collection.
@@ -1590,6 +1598,9 @@ func indexDupKey(doc *types.Document, idx backends.IndexInfo) *types.Document {
 }
 
 func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllParams) (*backends.InsertAllResult, error) {
+	if err := c.rejectReplicationControlWrite(); err != nil {
+		return nil, err
+	}
 	state, err := c.db.backend.getOrOpenDB(ctx, c.db.name, true)
 	if err != nil {
 		return nil, err
@@ -1823,6 +1834,9 @@ func (i *initialSyncTupleIter) Next(context.Context) (val.Tuple, val.Tuple) {
 }
 
 func (c *collection) BulkLoadInitialSync(ctx context.Context, documents []*types.Document) error {
+	if err := c.rejectReplicationControlWrite(); err != nil {
+		return err
+	}
 	if len(documents) == 0 {
 		return nil
 	}
@@ -1913,6 +1927,9 @@ func existsID(ctx context.Context, m prolly.Map, h [20]byte) (bool, error) {
 }
 
 func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllParams) (*backends.UpdateAllResult, error) {
+	if err := c.rejectReplicationControlWrite(); err != nil {
+		return nil, err
+	}
 	if len(params.Docs) == 0 {
 		return &backends.UpdateAllResult{}, nil
 	}
@@ -2093,6 +2110,9 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 }
 
 func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllParams) (*backends.DeleteAllResult, error) {
+	if err := c.rejectReplicationControlWrite(); err != nil {
+		return nil, err
+	}
 	state, err := c.db.backend.getOrOpenDB(ctx, c.db.name, false)
 	if err != nil {
 		return nil, err
@@ -2455,6 +2475,9 @@ func (c *collection) Stats(ctx context.Context, params *backends.CollectionStats
 }
 
 func (c *collection) Compact(ctx context.Context, params *backends.CompactParams) (*backends.CompactResult, error) {
+	if err := c.rejectReplicationControlWrite(); err != nil {
+		return nil, err
+	}
 	return &backends.CompactResult{}, nil
 }
 
@@ -2730,6 +2753,9 @@ func (c *collection) ListIndexes(ctx context.Context, params *backends.ListIndex
 }
 
 func (c *collection) CreateIndexes(ctx context.Context, params *backends.CreateIndexesParams) (*backends.CreateIndexesResult, error) {
+	if err := c.rejectReplicationControlWrite(); err != nil {
+		return nil, err
+	}
 	state, err := c.db.backend.getOrOpenDB(ctx, c.db.name, true)
 	if err != nil {
 		return nil, err
@@ -3128,6 +3154,9 @@ func expandMultiKeyValues(fieldVals []any) [][]any {
 }
 
 func (c *collection) DropIndexes(ctx context.Context, params *backends.DropIndexesParams) (*backends.DropIndexesResult, error) {
+	if err := c.rejectReplicationControlWrite(); err != nil {
+		return nil, err
+	}
 	if len(params.Indexes) == 0 {
 		return &backends.DropIndexesResult{}, nil
 	}

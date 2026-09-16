@@ -35,6 +35,17 @@ type database struct {
 	rootish string // rootish from encoded name (branch, commit hash, tag, or ancestor expression)
 }
 
+func (db *database) isReplicationControlCollection(name string) bool {
+	return db.name == "admin" && name == backends.ReservedReplicationControlName
+}
+
+func replicationControlReadOnlyError() error {
+	return backends.NewError(
+		backends.ErrorCodeReadOnlyCollection,
+		fmt.Errorf("collection admin.%s is read-only", backends.ReservedReplicationControlName),
+	)
+}
+
 // isReadOnly reports whether the database's rootish resolves to a read-only
 // snapshot (commit hash, ancestor expression, caret, or tag).
 func (db *database) isReadOnly(ctx context.Context, state *dbState) bool {
@@ -204,6 +215,9 @@ func (db *database) ListCollections(ctx context.Context, params *backends.ListCo
 }
 
 func (db *database) CreateCollection(ctx context.Context, params *backends.CreateCollectionParams) error {
+	if db.isReplicationControlCollection(params.Name) {
+		return replicationControlReadOnlyError()
+	}
 	state, err := db.backend.getOrOpenDB(ctx, db.name, true)
 	if err != nil {
 		return err
@@ -294,6 +308,9 @@ func (db *database) CreateCollection(ctx context.Context, params *backends.Creat
 }
 
 func (db *database) DropCollection(ctx context.Context, params *backends.DropCollectionParams) error {
+	if db.isReplicationControlCollection(params.Name) {
+		return replicationControlReadOnlyError()
+	}
 	state, err := db.backend.getOrOpenDB(ctx, db.name, false)
 	if err != nil {
 		return err
@@ -334,6 +351,9 @@ func (db *database) DropCollection(ctx context.Context, params *backends.DropCol
 }
 
 func (db *database) RenameCollection(ctx context.Context, params *backends.RenameCollectionParams) error {
+	if db.isReplicationControlCollection(params.OldName) || db.isReplicationControlCollection(params.NewName) {
+		return replicationControlReadOnlyError()
+	}
 	state, err := db.backend.getOrOpenDB(ctx, db.name, false)
 	if err != nil {
 		return err
@@ -395,6 +415,9 @@ func (db *database) RenameCollection(ctx context.Context, params *backends.Renam
 }
 
 func (db *database) CollMod(ctx context.Context, params *backends.CollModParams) error {
+	if db.isReplicationControlCollection(params.Name) {
+		return replicationControlReadOnlyError()
+	}
 	state, err := db.backend.getOrOpenDB(ctx, db.name, false)
 	if err != nil {
 		return err

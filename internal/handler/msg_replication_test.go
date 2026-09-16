@@ -23,6 +23,7 @@ import (
 
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/replication/control"
+	"github.com/dolthub/dumbodb/internal/replication/testutil"
 	"github.com/dolthub/dumbodb/internal/replication/topology"
 	"github.com/dolthub/dumbodb/internal/types"
 )
@@ -298,12 +299,9 @@ func TestReplSetUpdatePositionIsExplicitlyUnsupported(t *testing.T) {
 
 func configuredReplicationHandler(t *testing.T) *Handler {
 	t.Helper()
-	store, err := control.Open(t.TempDir(), control.Configuration{
+	_, store := testutil.NewControlStore(t, control.Configuration{
 		SetName: "rs0", MemberHost: "dumbo.example:27017",
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	manager := topology.New(store)
 	configuration := control.ReplicaConfiguration{
 		SetName: "rs0", Version: 4, Term: 3, ProtocolVersion: 1, ReplicaSetID: "set-id",

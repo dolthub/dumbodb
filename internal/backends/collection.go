@@ -40,6 +40,9 @@ const ReservedMetadataIndexName = "__dumbo_metadata__"
 // version-control walks, and rejected as a user collection name.
 const ReservedCatalogName = "__dumbo_catalog__"
 
+// ReservedReplicationControlName stores local replica-member control state.
+const ReservedReplicationControlName = "system.dumbodb.replication"
+
 // Collection is a generic interface for all backends for accessing collection.
 //
 // Collection object should be stateless and temporary;

@@ -94,7 +94,7 @@ func TestApplierRoutesReplicatedAuthAndInvalidatesGeneration(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer backend.Close()
-	store, err := control.Open(t.TempDir(), control.Configuration{SetName: "rs0", MemberHost: "dumbo:27017"})
+	store, err := control.Open(backend, control.Configuration{SetName: "rs0", MemberHost: "dumbo:27017"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,13 +196,12 @@ func TestApplierStoresConfigMetadataWithoutCreatingConfigDatabase(t *testing.T) 
 func TestApplierSpecialStateContinuesAcrossRestart(t *testing.T) {
 	ctx := context.Background()
 	dataDirectory := t.TempDir()
-	controlDirectory := t.TempDir()
 	configuration := control.Configuration{SetName: "rs0", MemberHost: "dumbo:27017"}
 	backend, err := dolt.NewBackend(dataDirectory, slog.Default(), false, false, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := control.Open(controlDirectory, configuration)
+	store, err := control.Open(backend, configuration)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,13 +217,16 @@ func TestApplierSpecialStateContinuesAcrossRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	backend.Close()
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	reopenedBackend, err := dolt.NewBackend(dataDirectory, slog.Default(), false, false, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer reopenedBackend.Close()
-	reopenedStore, err := control.Open(controlDirectory, configuration)
+	reopenedStore, err := control.Open(reopenedBackend, configuration)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -422,13 +424,12 @@ func TestApplierRollsBackFailedApplyOps(t *testing.T) {
 func TestApplierUsesMainAcrossRestart(t *testing.T) {
 	ctx := context.Background()
 	dataDir := t.TempDir()
-	controlDir := t.TempDir()
 	configuration := control.Configuration{SetName: "rs0", MemberHost: "dumbo:27017"}
 	backend, err := dolt.NewBackend(dataDir, slog.Default(), false, false, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := control.Open(controlDir, configuration)
+	store, err := control.Open(backend, configuration)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -451,13 +452,16 @@ func TestApplierUsesMainAcrossRestart(t *testing.T) {
 	}
 	assertStoredDocument(t, ctx, backend, "customers", "profiles", secondDocument)
 	backend.Close()
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	reopenedBackend, err := dolt.NewBackend(dataDir, slog.Default(), false, false, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer reopenedBackend.Close()
-	reopenedStore, err := control.Open(controlDir, configuration)
+	reopenedStore, err := control.Open(reopenedBackend, configuration)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -506,7 +510,7 @@ func newTestApplier(t *testing.T) (backends.Backend, *Applier, string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(backend.Close)
-	store, err := control.Open(t.TempDir(), control.Configuration{SetName: "rs0", MemberHost: "dumbo:27017"})
+	store, err := control.Open(backend, control.Configuration{SetName: "rs0", MemberHost: "dumbo:27017"})
 	if err != nil {
 		t.Fatal(err)
 	}

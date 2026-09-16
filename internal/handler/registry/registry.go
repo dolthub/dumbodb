@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/handler"
 	"github.com/dolthub/dumbodb/internal/replication/topology"
 	"github.com/dolthub/dumbodb/internal/util/password"
@@ -39,6 +40,7 @@ var registry = map[string]newHandlerFunc{}
 // NewHandlerOpts represents configuration for constructing handlers.
 type NewHandlerOpts struct {
 	// for all backends
+	Backend             backends.Backend
 	Logger              *slog.Logger
 	StateProvider       *state.Provider
 	TCPHost             string

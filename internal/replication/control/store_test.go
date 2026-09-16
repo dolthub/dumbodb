@@ -15,18 +15,20 @@
 package control
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/types"
 )
 
 func TestStorePersistsRecoveryState(t *testing.T) {
 	dir := t.TempDir()
 	configuration := testConfiguration()
-	store, err := Open(dir, configuration)
+	store, err := openTestStore(t, dir, configuration)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,8 +76,11 @@ func TestStorePersistsRecoveryState(t *testing.T) {
 	if err := store.Detach(); err != nil {
 		t.Fatal(err)
 	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
 
-	reopened, err := Open(dir, configuration)
+	reopened, err := openTestStore(t, dir, configuration)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,19 +103,12 @@ func TestStorePersistsRecoveryState(t *testing.T) {
 	if got := state.TransactionParts[fragment.Key]; string(got.Payload) != "applyOps" || got.First != fragment.First || got.Last != fragment.Last {
 		t.Fatalf("transaction fragment = %+v", got)
 	}
-	info, err := os.Stat(filepath.Join(dir, stateFileName))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("state mode = %o, want 600", info.Mode().Perm())
-	}
 }
 
 func TestInitialSyncAttemptLifecycleIsAtomicAndPersistent(t *testing.T) {
 	dir := t.TempDir()
 	configuration := testConfiguration()
-	store, err := Open(dir, configuration)
+	store, err := openTestStore(t, dir, configuration)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,8 +125,11 @@ func TestInitialSyncAttemptLifecycleIsAtomicAndPersistent(t *testing.T) {
 	if err := store.SetInitialSyncStop(attempt.ID, stop); err != nil {
 		t.Fatal(err)
 	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
 
-	reopened, err := Open(dir, configuration)
+	reopened, err := openTestStore(t, dir, configuration)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +159,7 @@ func TestInitialSyncAttemptLifecycleIsAtomicAndPersistent(t *testing.T) {
 
 func TestInitialSyncFailurePersistsUntilReset(t *testing.T) {
 	dir := t.TempDir()
-	store, err := Open(dir, testConfiguration())
+	store, err := openTestStore(t, dir, testConfiguration())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +178,10 @@ func TestInitialSyncFailurePersistsUntilReset(t *testing.T) {
 	if err := store.RecordInitialSyncFailure(failure); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := Open(dir, testConfiguration())
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := openTestStore(t, dir, testConfiguration())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +200,7 @@ func TestInitialSyncFailurePersistsUntilReset(t *testing.T) {
 }
 
 func TestInitialSyncAttemptRejectsInvalidBoundaries(t *testing.T) {
-	store, err := Open(t.TempDir(), testConfiguration())
+	store, err := openTestStore(t, t.TempDir(), testConfiguration())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +232,6 @@ func TestInitialSyncAttemptRejectsInvalidBoundaries(t *testing.T) {
 		t.Fatal(err)
 	}
 	oldCommitLogGeneration := store.Snapshot().CommitLogGeneration
-	oldCommitLogPath := store.commitLogPath(oldCommitLogGeneration)
 	if err := store.PutCollectionMapping(CollectionMapping{
 		SourceUUID: "source", Database: "orders", Collection: "items", LocalUUID: "local", CreateOpTime: earlier,
 	}); err != nil {
@@ -248,16 +251,10 @@ func TestInitialSyncAttemptRejectsInvalidBoundaries(t *testing.T) {
 	if state.CommitLogGeneration != oldCommitLogGeneration+1 {
 		t.Fatalf("reset commit log generation = %d, want %d", state.CommitLogGeneration, oldCommitLogGeneration+1)
 	}
-	if _, err := os.Stat(oldCommitLogPath); !os.IsNotExist(err) {
-		t.Fatalf("old commit log remains after reset: %v", err)
-	}
-	if _, err := os.Stat(store.commitLogPath(state.CommitLogGeneration)); err != nil {
-		t.Fatalf("new commit log after reset: %v", err)
-	}
 }
 
 func TestCollectionMappingRenameDropAndNameReuse(t *testing.T) {
-	store, err := Open(t.TempDir(), testConfiguration())
+	store, err := openTestStore(t, t.TempDir(), testConfiguration())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -296,7 +293,7 @@ func TestCollectionMappingRenameDropAndNameReuse(t *testing.T) {
 }
 
 func TestStoreRejectsWrongIdentityAndMemberConfiguration(t *testing.T) {
-	store, err := Open(t.TempDir(), testConfiguration())
+	store, err := openTestStore(t, t.TempDir(), testConfiguration())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -326,7 +323,7 @@ func TestStoreRejectsWrongIdentityAndMemberConfiguration(t *testing.T) {
 }
 
 func TestStoreRejectsCheckpointAndCommitRegression(t *testing.T) {
-	store, err := Open(t.TempDir(), testConfiguration())
+	store, err := openTestStore(t, t.TempDir(), testConfiguration())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -363,14 +360,9 @@ func TestStoreRejectsCheckpointAndCommitRegression(t *testing.T) {
 	}
 }
 
-func TestCommitIntervalsUseAppendOnlyJournal(t *testing.T) {
+func TestCommitIntervalsUseAdminCollection(t *testing.T) {
 	dir := t.TempDir()
-	store, err := Open(dir, testConfiguration())
-	if err != nil {
-		t.Fatal(err)
-	}
-	statePath := filepath.Join(dir, stateFileName)
-	stateBefore, err := os.ReadFile(statePath)
+	store, err := openTestStore(t, dir, testConfiguration())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -384,30 +376,31 @@ func TestCommitIntervalsUseAppendOnlyJournal(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	stateAfter, err := os.ReadFile(statePath)
+	data, exists, err := store.storage.load(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(stateAfter, stateBefore) {
-		t.Fatal("recording commits rewrote the bounded control state")
+	if !exists {
+		t.Fatal("admin control document does not exist")
 	}
-	journalPath := store.commitLogPath(store.Snapshot().CommitLogGeneration)
-	journalBeforeReplay, err := os.Stat(journalPath)
-	if err != nil {
+	var persisted State
+	if err := json.Unmarshal(data, &persisted); err != nil {
 		t.Fatal(err)
+	}
+	if len(persisted.CommitIntervals) != len(intervals) {
+		t.Fatalf("persisted commit intervals = %+v", persisted.CommitIntervals)
 	}
 	if err := store.RecordCommit(intervals[1]); err != nil {
 		t.Fatal(err)
 	}
-	journalAfterReplay, err := os.Stat(journalPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if journalAfterReplay.Size() != journalBeforeReplay.Size() {
-		t.Fatal("idempotent replay appended another commit interval")
+	if len(store.CommitIntervals()) != len(intervals) {
+		t.Fatal("idempotent replay duplicated a commit interval")
 	}
 
-	reopened, err := Open(dir, testConfiguration())
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := openTestStore(t, dir, testConfiguration())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -419,45 +412,144 @@ func TestCommitIntervalsUseAppendOnlyJournal(t *testing.T) {
 	}
 }
 
-func TestOpenMigratesLegacyCommitIntervals(t *testing.T) {
-	dir := t.TempDir()
-	configuration := testConfiguration()
-	legacy := newState(configuration)
-	legacy.CommitLogGeneration = 0
-	legacy.CommitIntervals = []CommitInterval{
-		{First: opTime(1), Last: opTime(2), CommitID: "legacy-one"},
-		{First: opTime(3), Last: opTime(4), CommitID: "legacy-two"},
-	}
-	data, err := json.Marshal(legacy)
+func TestControlStateUsesOnlyReservedAdminCollection(t *testing.T) {
+	directory := t.TempDir()
+	backend := testBackend(t, directory)
+	store, err := Open(backend, testConfiguration())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, stateFileName), data, 0o600); err != nil {
+	if _, err := os.Stat(filepath.Join(directory, ".replication")); !os.IsNotExist(err) {
+		t.Fatalf("unexpected replication directory: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(directory, "state.json")); !os.IsNotExist(err) {
+		t.Fatalf("unexpected replication state file: %v", err)
+	}
+	admin, err := backend.Database("admin")
+	if err != nil {
 		t.Fatal(err)
+	}
+	collection, err := admin.Collection(backends.ReservedReplicationControlName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	collections, err := admin.ListCollections(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, collection := range collections.Collections {
+		if collection.Name == backends.ReservedReplicationControlName {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("replication control collection is not listed")
 	}
 
-	store, err := Open(dir, configuration)
-	if err != nil {
+	if state := readPublicControlState(t, collection); state.InitialSyncPhase != InitialSyncNotStarted {
+		t.Fatalf("initial sync phase = %q, want %q", state.InitialSyncPhase, InitialSyncNotStarted)
+	}
+
+	document := mustDocument(t, "_id", controlDocumentID, "state", "tampered")
+	writes := []struct {
+		name  string
+		write func() error
+	}{
+		{"insert", func() error {
+			_, err := collection.InsertAll(t.Context(), &backends.InsertAllParams{Docs: []*types.Document{mustDocument(t, "_id", "other")}})
+			return err
+		}},
+		{"update", func() error {
+			_, err := collection.UpdateAll(t.Context(), &backends.UpdateAllParams{Docs: []*types.Document{document}})
+			return err
+		}},
+		{"delete", func() error {
+			_, err := collection.DeleteAll(t.Context(), &backends.DeleteAllParams{IDs: []any{controlDocumentID}})
+			return err
+		}},
+		{"compact", func() error {
+			_, err := collection.Compact(t.Context(), new(backends.CompactParams))
+			return err
+		}},
+		{"create indexes", func() error {
+			_, err := collection.CreateIndexes(t.Context(), new(backends.CreateIndexesParams))
+			return err
+		}},
+		{"drop indexes", func() error {
+			_, err := collection.DropIndexes(t.Context(), new(backends.DropIndexesParams))
+			return err
+		}},
+		{"create collection", func() error {
+			return admin.CreateCollection(t.Context(), &backends.CreateCollectionParams{Name: backends.ReservedReplicationControlName})
+		}},
+		{"drop collection", func() error {
+			return admin.DropCollection(t.Context(), &backends.DropCollectionParams{Name: backends.ReservedReplicationControlName})
+		}},
+		{"rename collection", func() error {
+			return admin.RenameCollection(t.Context(), &backends.RenameCollectionParams{OldName: backends.ReservedReplicationControlName, NewName: "other"})
+		}},
+		{"rename to collection", func() error {
+			return admin.RenameCollection(t.Context(), &backends.RenameCollectionParams{OldName: "other", NewName: backends.ReservedReplicationControlName})
+		}},
+		{"collMod", func() error {
+			return admin.CollMod(t.Context(), &backends.CollModParams{Name: backends.ReservedReplicationControlName})
+		}},
+	}
+	for _, test := range writes {
+		t.Run(test.name, func(t *testing.T) {
+			if err := test.write(); !backends.ErrorCodeIs(err, backends.ErrorCodeReadOnlyCollection) {
+				t.Fatalf("error = %v, want read-only collection", err)
+			}
+		})
+	}
+
+	if err := store.SetInitialSyncPhase(InitialSyncCloning); err != nil {
 		t.Fatal(err)
 	}
-	if got, ok := store.CommitFor(opTime(4)); !ok || got.CommitID != "legacy-two" {
-		t.Fatalf("migrated CommitFor = %+v, %v", got, ok)
-	}
-	persistedState, err := os.ReadFile(filepath.Join(dir, stateFileName))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if bytes.Contains(persistedState, []byte("commit_intervals")) {
-		t.Fatal("migrated state retained inline commit intervals")
-	}
-	if _, err := Open(dir, configuration); err != nil {
-		t.Fatalf("opening migrated store again: %v", err)
+	if state := readPublicControlState(t, collection); state.InitialSyncPhase != InitialSyncCloning {
+		t.Fatalf("initial sync phase = %q, want %q", state.InitialSyncPhase, InitialSyncCloning)
 	}
 }
 
-func TestOpenDiscardsIncompleteCommitLogTail(t *testing.T) {
+func readPublicControlState(t *testing.T, collection backends.Collection) State {
+	t.Helper()
+	result, err := collection.Query(t.Context(), new(backends.QueryParams))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer result.Iter.Close()
+	_, document, err := result.Iter.Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := document.Get("state")
+	if err != nil {
+		t.Fatal(err)
+	}
+	binary, ok := value.(types.Binary)
+	if !ok {
+		t.Fatalf("state type = %T, want types.Binary", value)
+	}
+	var state State
+	if err := json.Unmarshal(binary.B, &state); err != nil {
+		t.Fatal(err)
+	}
+	return state
+}
+
+func mustDocument(t *testing.T, pairs ...any) *types.Document {
+	t.Helper()
+	document, err := types.NewDocument(pairs...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return document
+}
+
+func TestCommitIntervalsSurviveStorageReopen(t *testing.T) {
 	dir := t.TempDir()
-	store, err := Open(dir, testConfiguration())
+	store, err := openTestStore(t, dir, testConfiguration())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -465,52 +557,67 @@ func TestOpenDiscardsIncompleteCommitLogTail(t *testing.T) {
 	if err := store.RecordCommit(interval); err != nil {
 		t.Fatal(err)
 	}
-	journalPath := store.commitLogPath(store.Snapshot().CommitLogGeneration)
-	completeInfo, err := os.Stat(journalPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	journal, err := os.OpenFile(journalPath, os.O_WRONLY|os.O_APPEND, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := journal.Write([]byte("{\"first\":")); err != nil {
-		journal.Close()
-		t.Fatal(err)
-	}
-	if err := journal.Close(); err != nil {
+	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	reopened, err := Open(dir, testConfiguration())
+	reopened, err := openTestStore(t, dir, testConfiguration())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got, ok := reopened.CommitFor(opTime(1)); !ok || !equalCommitInterval(got, interval) {
-		t.Fatalf("CommitFor after tail repair = %+v, %v", got, ok)
-	}
-	repairedInfo, err := os.Stat(journalPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if repairedInfo.Size() != completeInfo.Size() {
-		t.Fatalf("repaired journal size = %d, want %d", repairedInfo.Size(), completeInfo.Size())
+		t.Fatalf("CommitFor after storage reopen = %+v, %v", got, ok)
 	}
 }
 
-func TestPublishCommitRecoversCheckpointFromJournal(t *testing.T) {
+func TestCommitIntervalsAllowFetchProgressResetAcrossRestart(t *testing.T) {
 	dir := t.TempDir()
-	store, err := Open(dir, testConfiguration())
+	store, err := openTestStore(t, dir, testConfiguration())
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := CommitInterval{First: opTime(1), Last: opTime(5), CommitID: "first"}
+	ahead := opTime(10)
+	firstCheckpoint := Checkpoint{
+		Fetched: ahead, Buffered: ahead, Written: first.Last, Durable: first.Last, Applied: first.Last,
+	}
+	if err := store.PublishCommit(first, firstCheckpoint); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ResetFetchProgress(); err != nil {
+		t.Fatal(err)
+	}
+	second := CommitInterval{First: opTime(6), Last: opTime(6), CommitID: "second"}
+	secondCheckpoint := Checkpoint{
+		Fetched: second.Last, Buffered: second.Last, Written: second.Last, Durable: second.Last, Applied: second.Last,
+	}
+	if err := store.PublishCommit(second, secondCheckpoint); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := openTestStore(t, dir, testConfiguration())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reopened.Snapshot().Checkpoint; got != secondCheckpoint {
+		t.Fatalf("checkpoint after fetch reset = %+v, want %+v", got, secondCheckpoint)
+	}
+	if intervals := reopened.CommitIntervals(); len(intervals) != 2 || intervals[1].CommitID != second.CommitID {
+		t.Fatalf("commit intervals after fetch reset = %+v", intervals)
+	}
+}
+
+func TestPublishCommitRecoversCheckpointFromStorage(t *testing.T) {
+	dir := t.TempDir()
+	store, err := openTestStore(t, dir, testConfiguration())
 	if err != nil {
 		t.Fatal(err)
 	}
 	fetched := opTime(9)
 	if err := store.SetCheckpoint(Checkpoint{Fetched: fetched, Buffered: fetched}); err != nil {
-		t.Fatal(err)
-	}
-	statePath := filepath.Join(dir, stateFileName)
-	stateBeforePublication, err := os.ReadFile(statePath)
-	if err != nil {
 		t.Fatal(err)
 	}
 	interval := CommitInterval{
@@ -530,15 +637,15 @@ func TestPublishCommitRecoversCheckpointFromJournal(t *testing.T) {
 		t.Fatalf("CommitForDatabaseCommit = %+v, %v; want %+v, true", got, ok, interval)
 	}
 
-	if err := os.WriteFile(statePath, stateBeforePublication, 0o600); err != nil {
+	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := Open(dir, testConfiguration())
+	reopened, err := openTestStore(t, dir, testConfiguration())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := reopened.Snapshot().Checkpoint; got != checkpoint {
-		t.Fatalf("checkpoint recovered from journal = %+v, want %+v", got, checkpoint)
+		t.Fatalf("checkpoint recovered from storage = %+v, want %+v", got, checkpoint)
 	}
 	if got, ok := reopened.CommitForID(interval.CommitID); !ok || !equalCommitInterval(got, interval) {
 		t.Fatalf("reopened CommitForID = %+v, %v; want %+v, true", got, ok, interval)
@@ -556,10 +663,14 @@ func TestPublishCommitRecoversCheckpointFromJournal(t *testing.T) {
 
 func TestOpenRejectsDifferentLifecycleConfiguration(t *testing.T) {
 	dir := t.TempDir()
-	if _, err := Open(dir, testConfiguration()); err != nil {
+	store, err := openTestStore(t, dir, testConfiguration())
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Open(dir, Configuration{SetName: "other", MemberHost: "dumbo.example:27017"}); err == nil {
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := openTestStore(t, dir, Configuration{SetName: "other", MemberHost: "dumbo.example:27017"}); err == nil {
 		t.Fatal("Open accepted a different replica set name")
 	}
 }
@@ -567,7 +678,7 @@ func TestOpenRejectsDifferentLifecycleConfiguration(t *testing.T) {
 func TestStorePersistsInstalledReplicaConfiguration(t *testing.T) {
 	dir := t.TempDir()
 	configuration := testConfiguration()
-	store, err := Open(dir, configuration)
+	store, err := openTestStore(t, dir, configuration)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -585,7 +696,10 @@ func TestStorePersistsInstalledReplicaConfiguration(t *testing.T) {
 	if err := store.InstallReplicaConfiguration(replicaConfiguration, 11); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := Open(dir, configuration)
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := openTestStore(t, dir, configuration)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -599,7 +713,7 @@ func TestStorePersistsInstalledReplicaConfiguration(t *testing.T) {
 }
 
 func TestStoreRejectsReplicaConfigurationWithoutSafeMember(t *testing.T) {
-	store, err := Open(t.TempDir(), testConfiguration())
+	store, err := openTestStore(t, t.TempDir(), testConfiguration())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -632,7 +746,7 @@ func opTime(increment uint32) OpTime {
 func BenchmarkRecordCommitAppend(b *testing.B) {
 	for _, historyLength := range []int{0, 1_000, 100_000} {
 		b.Run(fmt.Sprintf("history_%d", historyLength), func(b *testing.B) {
-			store, err := Open(b.TempDir(), testConfiguration())
+			store, err := openTestStore(b, b.TempDir(), testConfiguration())
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -642,12 +756,8 @@ func BenchmarkRecordCommitAppend(b *testing.B) {
 				intervals[index] = CommitInterval{First: opTime(position), Last: opTime(position), CommitID: fmt.Sprintf("seed-%d", index)}
 			}
 			store.state.CommitIntervals = intervals
-			if err := store.replaceCommitLogLocked(store.state.CommitLogGeneration, intervals); err != nil {
-				b.Fatal(err)
-			}
-			journalPath := store.commitLogPath(store.state.CommitLogGeneration)
-			before, err := os.Stat(journalPath)
-			if err != nil {
+			store.rebuildCommitIndexLocked()
+			if err := store.persistLocked(); err != nil {
 				b.Fatal(err)
 			}
 			b.ReportAllocs()
@@ -660,12 +770,6 @@ func BenchmarkRecordCommitAppend(b *testing.B) {
 					b.Fatal(err)
 				}
 			}
-			b.StopTimer()
-			after, err := os.Stat(journalPath)
-			if err != nil {
-				b.Fatal(err)
-			}
-			b.ReportMetric(float64(after.Size()-before.Size())/float64(b.N), "journal-B/op")
 		})
 	}
 }

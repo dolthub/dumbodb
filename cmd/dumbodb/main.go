@@ -26,13 +26,14 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strconv"
 	"syscall"
 
 	doltevents "github.com/dolthub/dolt/go/libraries/events"
 	eventsapi "github.com/dolthub/eventsapi_schema/dolt/services/eventsapi/v1alpha1"
 
+	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/backends/dolt"
 	"github.com/dolthub/dumbodb/internal/clientconn"
 	"github.com/dolthub/dumbodb/internal/handler/registry"
 	"github.com/dolthub/dumbodb/internal/metrics"
@@ -142,13 +143,20 @@ func run(logger *slog.Logger) error {
 	replicationConfiguration, replicationEnabled := replicationControlConfiguration(*replSetName, *addr)
 	var replicationTopology *topology.Manager
 	var replicationControlStore *control.Store
+	var handlerBackend backends.Backend
+	var err error
 	if replicationEnabled {
-		controlDirectory := filepath.Join(*dataDir, ".replication")
-		controlStore, err := control.Open(controlDirectory, replicationConfiguration)
+		handlerBackend, err = dolt.NewBackend(*dataDir, logger, *autoCommit, *sessionIsolation, *sessionTimeout, *sessionSweepPeriod)
 		if err != nil {
 			return err
 		}
+		controlStore, err := control.Open(handlerBackend, replicationConfiguration)
+		if err != nil {
+			handlerBackend.Close()
+			return err
+		}
 		replicationControlStore = controlStore
+		defer replicationControlStore.Close()
 		replicationTopology = topology.New(controlStore)
 		logger.Info("replication control state opened", "replSet", *replSetName)
 	}
@@ -156,6 +164,7 @@ func run(logger *slog.Logger) error {
 	stateProvider := state.NewProvider()
 
 	h, closeBackend, err := registry.NewHandler("dolt", &registry.NewHandlerOpts{
+		Backend:             handlerBackend,
 		Logger:              logger,
 		StateProvider:       stateProvider,
 		TCPHost:             *addr,

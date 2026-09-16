@@ -655,9 +655,9 @@ the member persists the source, source RBID, common source `OpTime`, target comm
 every database, and a unique audit-branch name. It first creates that audit branch
 from every current `main` head, then hard-resets each `main` to its mapped common
 commit. A restart with this manifest still pending reports `RECOVERING` and repeats
-both operations idempotently. Only after all resets succeed does the member truncate
-the active provenance journal to the common interval, publish the rolled-back
-checkpoint, and return to `SECONDARY`.
+both operations idempotently. Only after all resets succeed does the member move the
+active provenance head to the common interval, publish the rolled-back checkpoint,
+and return to `SECONDARY`.
 
 Common-point search walks retained commit intervals newest first and accepts only an
 interval whose final `OpTime` is still present in the source oplog. A point is unsafe
@@ -682,17 +682,22 @@ record:
 These records must not be rolled back merely because an application transaction or
 DumboDB work session fails. **DESIGN**
 
-Commit-interval provenance is retained for the lifetime of the attached replica-set
-identity. It is stored in a generation-named append-only journal rather than in the
-bounded mutable control-state file. Recording the normal next interval appends and
-syncs one record in constant work with respect to retained history; in-memory lookup
-by source optime is binary. Startup validates and indexes the journal once. A fresh
-initial sync atomically publishes a new empty journal generation with its reset
-control state, after which the old generation can be removed. This makes growth
-linear in the number of DumboDB commits, not source operations, and preserves the
-complete optime-to-commit mapping required for rollback and historical inspection.
-The replication benchmark must report bytes per interval and lookup/startup cost at
-the selected batch size before production batching defaults are fixed. **DESIGN**
+Replication control state and commit-interval provenance are stored in the reserved
+`admin.system.dumbodb.replication` collection. The control document contains the
+bounded mutable state and all intervals retained for the attached replica-set
+identity. Updating it is one normal collection mutation, so the Prolly storage layer
+owns atomicity, durability, and crash recovery. DumboDB does not create replication
+state files or implement journal writes, torn-record recovery, or filesystem
+durability. In-memory lookup by source optime is binary. A fresh initial sync clears
+the retained interval list in the same collection update that resets mutable control
+state. The replication benchmark must measure document growth, publication cost, and
+lookup/startup cost at the selected batch size before production batching defaults
+are fixed. If retained provenance needs a segmented representation, that
+representation must remain documents in this collection and use normal collection
+mutation semantics. The collection is visible through `listCollections` and normal
+queries so operators and tests can inspect it. Ordinary clients cannot insert,
+update, delete, rename, drop, modify, compact, or change indexes on it; only the
+replication-control backend can mutate it. **DESIGN**
 
 Publishing a source interval uses a durable manifest identified by a hash of its
 source boundaries and sorted database set. The manifest is written before any
@@ -703,11 +708,10 @@ manifest durably changes to `ready`; recovery can then finish publication withou
 reapplying it. The manifest records each resulting `main` commit ID. Every database commit
 uses the manifest ID in its commit message. After a crash or ambiguous commit
 result, recovery compares each database HEAD with that message, records an already
-completed commit, and commits only the remaining working roots. The final journal
-record contains the complete sorted database-to-commit mapping and the written,
-durable, and applied checkpoint. Only that journal append makes the positions
-reportable; a lagging mutable state snapshot is repaired from the journal on open.
-**DESIGN**
+completed commit, and commits only the remaining working roots. The final control
+document update contains the complete sorted database-to-commit mapping and the
+written, durable, and applied checkpoint. Only that collection update makes the
+positions reportable. **DESIGN**
 
 ## Collection identity
 

@@ -15,6 +15,7 @@
 package registry
 
 import (
+	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/backends/dolt"
 	"github.com/dolthub/dumbodb/internal/handler"
 )
@@ -29,9 +30,15 @@ func newDoltHandler(opts *NewHandlerOpts) (*handler.Handler, CloseBackendFunc, e
 		dataDir = "data"
 	}
 
-	b, err := dolt.NewBackend(dataDir, opts.Logger, opts.AutoCommit, opts.SessionIsolation, opts.SessionTimeout, opts.SessionSweepPeriod)
-	if err != nil {
-		return nil, nil, err
+	var b backends.Backend
+	var err error
+	if opts.Backend != nil {
+		b = opts.Backend
+	} else {
+		b, err = dolt.NewBackend(dataDir, opts.Logger, opts.AutoCommit, opts.SessionIsolation, opts.SessionTimeout, opts.SessionSweepPeriod)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 
 	h, err := handler.New(&handler.NewOpts{

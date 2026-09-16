@@ -25,6 +25,7 @@ import (
 
 	"github.com/dolthub/dumbodb/internal/bson"
 	"github.com/dolthub/dumbodb/internal/replication/control"
+	"github.com/dolthub/dumbodb/internal/replication/testutil"
 	"github.com/dolthub/dumbodb/internal/replication/topology"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
@@ -236,12 +237,9 @@ func testFetcher(t *testing.T, manager *topology.Manager, buffer *Buffer, client
 
 func configuredFetcherManager(t *testing.T, checkpoint control.OpTime) *topology.Manager {
 	t.Helper()
-	store, err := control.Open(t.TempDir(), control.Configuration{
+	_, store := testutil.NewControlStore(t, control.Configuration{
 		SetName: "rs0", MemberHost: "dumbo.example:27017",
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	manager := topology.New(store)
 	configuration := control.ReplicaConfiguration{
 		SetName: "rs0", Version: 4, Term: 3, ProtocolVersion: 1, ReplicaSetID: "0102030405060708090a0b0c",

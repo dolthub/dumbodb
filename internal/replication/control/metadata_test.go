@@ -19,7 +19,7 @@ import "testing"
 func TestSpecialReplicationStateSurvivesRestartAndReset(t *testing.T) {
 	directory := t.TempDir()
 	configuration := testConfiguration()
-	store, err := Open(directory, configuration)
+	store, err := openTestStore(t, directory, configuration)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,8 +36,11 @@ func TestSpecialReplicationStateSurvivesRestartAndReset(t *testing.T) {
 	if err := store.PutReplicationMetadata(metadata); err != nil {
 		t.Fatal(err)
 	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
 
-	reopened, err := Open(directory, configuration)
+	reopened, err := openTestStore(t, directory, configuration)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +67,7 @@ func TestSpecialReplicationStateSurvivesRestartAndReset(t *testing.T) {
 }
 
 func TestSpecialReplicationStateRejectsOwnerAndHistoryConflicts(t *testing.T) {
-	store, err := Open(t.TempDir(), testConfiguration())
+	store, err := openTestStore(t, t.TempDir(), testConfiguration())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +91,7 @@ func TestSpecialReplicationStateRejectsOwnerAndHistoryConflicts(t *testing.T) {
 }
 
 func TestSpecialReplicationDeletesCreateTombstonesForInitialSyncRaces(t *testing.T) {
-	store, err := Open(t.TempDir(), testConfiguration())
+	store, err := openTestStore(t, t.TempDir(), testConfiguration())
 	if err != nil {
 		t.Fatal(err)
 	}

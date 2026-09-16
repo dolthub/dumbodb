@@ -120,7 +120,7 @@ func newRecoveryRuntime(t *testing.T) (*Runtime, backends.Backend, *control.Stor
 		t.Fatal(err)
 	}
 	t.Cleanup(backend.Close)
-	store, err := control.Open(t.TempDir(), control.Configuration{SetName: "rs0", MemberHost: "dumbo.example:27017"})
+	store, err := control.Open(backend, control.Configuration{SetName: "rs0", MemberHost: "dumbo.example:27017"})
 	if err != nil {
 		t.Fatal(err)
 	}

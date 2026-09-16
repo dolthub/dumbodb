@@ -172,11 +172,8 @@ func (h *Handler) updateDocument(ctx context.Context, params *common.UpdateParam
 
 		result, err := common.UpdateDocument(ctx, c, "update", iter, &u, params.SkipDurableSync)
 		if err != nil {
-			if backends.ErrorCodeIs(err, backends.ErrorCodeReadOnlyDatabase) {
-				return 0, 0, nil, handlererrors.NewCommandErrorMsg(
-					handlererrors.ErrOperationFailed,
-					"cannot write to a read-only database snapshot",
-				)
+			if backends.ErrorCodeIs(err, backends.ErrorCodeReadOnlyDatabase, backends.ErrorCodeReadOnlyCollection) {
+				return 0, 0, nil, common.TranslateBackendWriteError(err)
 			}
 			if backends.ErrorCodeIs(err, backends.ErrorCodeWriteConflict) {
 				return 0, 0, nil, common.TranslateBackendWriteError(err)

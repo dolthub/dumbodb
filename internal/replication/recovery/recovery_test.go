@@ -121,7 +121,7 @@ func TestRecoveryWithoutCommonPointRequiresFreshInitialSync(t *testing.T) {
 
 func TestRecoveryResumesPendingRollbackAfterRestart(t *testing.T) {
 	ctx := context.Background()
-	backend, store, _, intervals, controlDirectory := recoveryFixture(t, ctx)
+	backend, store, _, intervals, _ := recoveryFixture(t, ctx)
 	recoveryManager := topology.New(store)
 	recovery, err := New(backend, store, recoveryManager)
 	if err != nil {
@@ -146,8 +146,11 @@ func TestRecoveryResumesPendingRollbackAfterRestart(t *testing.T) {
 			}
 		}
 	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
 
-	reopened, err := control.Open(controlDirectory, replicationConfiguration())
+	reopened, err := control.Open(backend, replicationConfiguration())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,8 +181,7 @@ func recoveryFixture(t *testing.T, ctx context.Context) (backends.Backend, *cont
 		t.Fatal(err)
 	}
 	t.Cleanup(backend.Close)
-	controlDirectory := t.TempDir()
-	store, err := control.Open(controlDirectory, replicationConfiguration())
+	store, err := control.Open(backend, replicationConfiguration())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,7 +239,7 @@ func recoveryFixture(t *testing.T, ctx context.Context) (backends.Backend, *cont
 	if err := manager.MarkInitialSyncComplete(store.Snapshot().Checkpoint); err != nil {
 		t.Fatal(err)
 	}
-	return backend, store, manager, intervals, controlDirectory
+	return backend, store, manager, intervals, ""
 }
 
 func replicationConfiguration() control.Configuration {

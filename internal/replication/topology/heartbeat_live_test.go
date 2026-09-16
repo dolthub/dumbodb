@@ -29,6 +29,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"github.com/dolthub/dumbodb/internal/replication/control"
+	"github.com/dolthub/dumbodb/internal/replication/testutil"
 )
 
 func TestLiveMongoHeartbeatConfiguration(t *testing.T) {
@@ -97,10 +98,7 @@ func TestLiveMongoHeartbeatConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store, err := control.Open(t.TempDir(), control.Configuration{SetName: "rs0", MemberHost: dumboAddress})
-	if err != nil {
-		t.Fatal(err)
-	}
+	_, store := testutil.NewControlStore(t, control.Configuration{SetName: "rs0", MemberHost: dumboAddress})
 	manager := New(store)
 	if err := manager.ObserveMemberContact(mongoAddress, 0, 0, 0); err != nil {
 		t.Fatal(err)

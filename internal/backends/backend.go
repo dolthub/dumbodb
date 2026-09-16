@@ -51,6 +51,10 @@ type Backend interface {
 	// There is no interface method to create a database; see package documentation.
 }
 
+type ReplicationControlBackend interface {
+	ReplicationControlCollection() (Collection, error)
+}
+
 // backendContract implements Backend interface.
 type backendContract struct {
 	b     Backend
@@ -128,6 +132,14 @@ func (bc *backendContract) ResetInitialSyncData(ctx context.Context) error {
 		return backend.ResetInitialSyncData(ctx)
 	}
 	return errors.New("backend does not support initial sync reset")
+}
+
+func (bc *backendContract) ReplicationControlCollection() (Collection, error) {
+	backend, ok := bc.b.(ReplicationControlBackend)
+	if !ok {
+		return nil, errors.New("backend does not support replication control storage")
+	}
+	return backend.ReplicationControlCollection()
 }
 
 type StatusParams struct{}

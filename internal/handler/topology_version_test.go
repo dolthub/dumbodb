@@ -23,6 +23,7 @@ import (
 
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/replication/control"
+	"github.com/dolthub/dumbodb/internal/replication/testutil"
 	repltopology "github.com/dolthub/dumbodb/internal/replication/topology"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
@@ -110,12 +111,9 @@ func TestExhaustHelloRequiresAwaitableFields(t *testing.T) {
 }
 
 func TestReplicaSetHelloDoesNotReportSecondaryBeforeInitialSync(t *testing.T) {
-	controlStore, err := control.Open(t.TempDir(), control.Configuration{
+	_, controlStore := testutil.NewControlStore(t, control.Configuration{
 		SetName: "rs0", MemberHost: "dumbo.example:27017",
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	manager := repltopology.New(controlStore)
 	handler := testTopologyHandler()
 	handler.ReplicationTopology = manager

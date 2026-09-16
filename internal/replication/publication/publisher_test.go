@@ -22,12 +22,12 @@ import (
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/replication/control"
+	"github.com/dolthub/dumbodb/internal/replication/testutil"
 	"github.com/dolthub/dumbodb/internal/replication/topology"
 )
 
 func TestPublisherResumesPartialMultiDatabasePublication(t *testing.T) {
-	dir := t.TempDir()
-	store := openPublicationStore(t, dir)
+	storageBackend, store := testutil.NewControlStore(t, control.Configuration{SetName: "rs0", MemberHost: "dumbo.example:27017"})
 	manager := topology.New(store)
 	backend := newFakeCommitBackend()
 	backend.failDatabase = "orders"
@@ -43,8 +43,14 @@ func TestPublisherResumesPartialMultiDatabasePublication(t *testing.T) {
 	if !ok || pending.Commits["accounts"] == "" || pending.Commits["orders"] != "" {
 		t.Fatalf("partial publication = %+v, %v", pending, ok)
 	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
 
-	reopened := openPublicationStore(t, dir)
+	reopened, err := control.Open(storageBackend, control.Configuration{SetName: "rs0", MemberHost: "dumbo.example:27017"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	recoveredManager := topology.New(reopened)
 	backend.failDatabase = ""
 	recoveredPublisher, err := NewPublisher(backend, reopened, recoveredManager)
@@ -70,7 +76,7 @@ func TestPublisherResumesPartialMultiDatabasePublication(t *testing.T) {
 }
 
 func TestPublisherRecoversAmbiguousCommitResultFromHead(t *testing.T) {
-	store := openPublicationStore(t, t.TempDir())
+	_, store := testutil.NewControlStore(t, control.Configuration{SetName: "rs0", MemberHost: "dumbo.example:27017"})
 	manager := topology.New(store)
 	backend := newFakeCommitBackend()
 	backend.ambiguousDatabase = "orders"
@@ -98,15 +104,6 @@ func publicationPositions() (control.OpTime, control.OpTime, control.Checkpoint)
 	return first, last, control.Checkpoint{
 		Fetched: fetched, Buffered: fetched, Written: last, Durable: last, Applied: last,
 	}
-}
-
-func openPublicationStore(t *testing.T, dir string) *control.Store {
-	t.Helper()
-	store, err := control.Open(dir, control.Configuration{SetName: "rs0", MemberHost: "dumbo.example:27017"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return store
 }
 
 type fakeCommitBackend struct {

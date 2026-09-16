@@ -97,15 +97,15 @@ func TestAuthApplierPersistsOwnershipAndInvalidatesAuthGeneration(t *testing.T) 
 func TestMetadataApplierValidatesAndSurvivesControlStoreRestart(t *testing.T) {
 	directory := t.TempDir()
 	configuration := control.Configuration{SetName: "rs0", MemberHost: "dumbo:27017"}
-	store, err := control.Open(directory, configuration)
-	if err != nil {
-		t.Fatal(err)
-	}
-	backend, err := dolt.NewBackend(t.TempDir(), slog.Default(), false, false, 0, 0)
+	backend, err := dolt.NewBackend(directory, slog.Default(), false, false, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer backend.Close()
+	store, err := control.Open(backend, configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
 	applier, err := NewApplier(backend, store, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -118,8 +118,11 @@ func TestMetadataApplierValidatesAndSurvivesControlStoreRestart(t *testing.T) {
 	if err := applier.PutMetadataDocument(RetryImagesNamespace, retryImage, specialOpTime(5)); err != nil {
 		t.Fatal(err)
 	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
 
-	reopened, err := control.Open(directory, configuration)
+	reopened, err := control.Open(backend, configuration)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +163,7 @@ func newSpecialTestApplier(t *testing.T, bump func()) (backends.Backend, *contro
 		t.Fatal(err)
 	}
 	t.Cleanup(backend.Close)
-	store, err := control.Open(t.TempDir(), control.Configuration{SetName: "rs0", MemberHost: "dumbo:27017"})
+	store, err := control.Open(backend, control.Configuration{SetName: "rs0", MemberHost: "dumbo:27017"})
 	if err != nil {
 		t.Fatal(err)
 	}

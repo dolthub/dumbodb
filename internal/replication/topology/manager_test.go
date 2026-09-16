@@ -16,12 +16,22 @@ package topology
 
 import (
 	"errors"
+	"io"
+	"log/slog"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/backends/dolt"
 	"github.com/dolthub/dumbodb/internal/replication/control"
 )
+
+var topologyControlBackends = struct {
+	sync.Mutex
+	byDirectory map[string]backends.Backend
+}{byDirectory: make(map[string]backends.Backend)}
 
 func TestManagerInstallsConfigurationAndRecoversState(t *testing.T) {
 	dir := t.TempDir()
@@ -39,6 +49,9 @@ func TestManagerInstallsConfigurationAndRecoversState(t *testing.T) {
 	}
 	if changes != 1 {
 		t.Fatalf("topology changes = %d, want 1", changes)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
 	}
 
 	reopened := openControlStore(t, dir)
@@ -152,6 +165,9 @@ func TestManagerTransitionsToSecondaryAfterInitialSync(t *testing.T) {
 	if state := manager.Snapshot(); state.State != StateSecondary {
 		t.Fatalf("restored steady state = %+v", state)
 	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if recovered := New(openControlStore(t, dir)).Snapshot(); recovered.State != StateSecondary || recovered.Checkpoint != checkpoint {
 		t.Fatalf("recovered secondary state = %+v", recovered)
 	}
@@ -179,6 +195,9 @@ func TestManagerPersistsTerminalInitialSyncFailure(t *testing.T) {
 	state.InitialSyncFailure.Message = "changed"
 	if manager.Snapshot().InitialSyncFailure.Message != failure.Message {
 		t.Fatal("Snapshot returned mutable initial-sync failure state")
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
 	}
 	recovered := New(openControlStore(t, dir)).Snapshot()
 	if recovered.State != StateRecovering || recovered.InitialSyncFailure == nil || *recovered.InitialSyncFailure != failure {
@@ -213,6 +232,9 @@ func TestManagerPublishesCommitBeforeNotifyingProgress(t *testing.T) {
 	}
 	if state := manager.Snapshot(); state.Checkpoint != checkpoint {
 		t.Fatalf("manager checkpoint = %+v, want %+v", state.Checkpoint, checkpoint)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
 	}
 	if recovered := New(openControlStore(t, dir)).Snapshot(); recovered.Checkpoint != checkpoint {
 		t.Fatalf("recovered checkpoint = %+v, want %+v", recovered.Checkpoint, checkpoint)
@@ -267,7 +289,25 @@ func TestManagerRejectsStaleOrConflictingConfiguration(t *testing.T) {
 
 func openControlStore(t *testing.T, dir string) *control.Store {
 	t.Helper()
-	store, err := control.Open(dir, control.Configuration{SetName: "rs0", MemberHost: "dumbo.example:27017"})
+	topologyControlBackends.Lock()
+	backend := topologyControlBackends.byDirectory[dir]
+	if backend == nil {
+		var err error
+		backend, err = dolt.NewBackend(dir, slog.New(slog.NewTextHandler(io.Discard, nil)), false, false, 0, 0)
+		if err != nil {
+			topologyControlBackends.Unlock()
+			t.Fatal(err)
+		}
+		topologyControlBackends.byDirectory[dir] = backend
+		t.Cleanup(func() {
+			topologyControlBackends.Lock()
+			delete(topologyControlBackends.byDirectory, dir)
+			topologyControlBackends.Unlock()
+			backend.Close()
+		})
+	}
+	topologyControlBackends.Unlock()
+	store, err := control.Open(backend, control.Configuration{SetName: "rs0", MemberHost: "dumbo.example:27017"})
 	if err != nil {
 		t.Fatal(err)
 	}

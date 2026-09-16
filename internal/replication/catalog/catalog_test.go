@@ -34,7 +34,7 @@ func TestCatalogApplierPreservesIdentityAcrossLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := testCatalogStore(t)
+	store := testCatalogStore(t, backend)
 	applier, err := NewApplier(backend, store)
 	if err != nil {
 		t.Fatal(err)
@@ -131,7 +131,7 @@ func TestCatalogCollModMaterializesDefaultValidationAction(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer backend.Close()
-	applier, err := NewApplier(backend, testCatalogStore(t))
+	applier, err := NewApplier(backend, testCatalogStore(t, backend))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +181,7 @@ func TestCatalogApplierAppliesViewLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer backend.Close()
-	applier, err := NewApplier(backend, testCatalogStore(t))
+	applier, err := NewApplier(backend, testCatalogStore(t, backend))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +220,7 @@ func TestCatalogApplierRepairsCompletedRootMutation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer backend.Close()
-	store := testCatalogStore(t)
+	store := testCatalogStore(t, backend)
 	applier, err := NewApplier(backend, store)
 	if err != nil {
 		t.Fatal(err)
@@ -250,9 +250,9 @@ func TestCatalogApplierRepairsCompletedRootMutation(t *testing.T) {
 	}
 }
 
-func testCatalogStore(t *testing.T) *control.Store {
+func testCatalogStore(t *testing.T, backend backends.Backend) *control.Store {
 	t.Helper()
-	store, err := control.Open(t.TempDir(), control.Configuration{
+	store, err := control.Open(backend, control.Configuration{
 		SetName: "rs0", MemberHost: "dumbo.example:27017",
 	})
 	if err != nil {

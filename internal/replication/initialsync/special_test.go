@@ -38,7 +38,7 @@ func TestMaterializeSpecialDatabasesTranslatesAuthAndMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer backend.Close()
-	store, err := control.Open(t.TempDir(), control.Configuration{SetName: "rs0", MemberHost: "dumbo:27017"})
+	store, err := control.Open(backend, control.Configuration{SetName: "rs0", MemberHost: "dumbo:27017"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +128,7 @@ func TestMaterializeSpecialDatabasesPreflightsUnsupportedNamespace(t *testing.T)
 		t.Fatal(err)
 	}
 	defer backend.Close()
-	store, err := control.Open(t.TempDir(), control.Configuration{SetName: "rs0", MemberHost: "dumbo:27017"})
+	store, err := control.Open(backend, control.Configuration{SetName: "rs0", MemberHost: "dumbo:27017"})
 	if err != nil {
 		t.Fatal(err)
 	}

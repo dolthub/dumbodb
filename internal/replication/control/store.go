@@ -16,18 +16,17 @@
 package control
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
 	"sync"
-)
 
-const stateFileName = "state.json"
+	"github.com/dolthub/dumbodb/internal/backends"
+)
 
 type Lifecycle string
 
@@ -238,39 +237,35 @@ type State struct {
 
 type Store struct {
 	mu         sync.RWMutex
-	path       string
 	state      State
 	commitByID map[string]int
+	storage    *collectionStorage
 }
 
-func Open(dir string, configuration Configuration) (*Store, error) {
+func Open(backend backends.Backend, configuration Configuration) (*Store, error) {
 	if err := validateConfiguration(configuration); err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, fmt.Errorf("creating replication control directory: %w", err)
+	storage, err := openCollectionStorage(backend)
+	if err != nil {
+		return nil, err
 	}
-
-	store := &Store{path: filepath.Join(dir, stateFileName)}
-	data, err := os.ReadFile(store.path)
-	if errors.Is(err, os.ErrNotExist) {
+	store := &Store{storage: storage}
+	data, exists, err := storage.load(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
 		store.state = newState(configuration)
 		store.commitByID = make(map[string]int)
-		if err := store.replaceCommitLogLocked(store.state.CommitLogGeneration, nil); err != nil {
-			return nil, err
-		}
 		if err := store.persistLocked(); err != nil {
 			return nil, err
 		}
 		return store, nil
 	}
-	if err != nil {
-		return nil, fmt.Errorf("reading replication control state: %w", err)
-	}
 	if err := json.Unmarshal(data, &store.state); err != nil {
 		return nil, fmt.Errorf("decoding replication control state: %w", err)
 	}
-	legacyIntervals := append([]CommitInterval(nil), store.state.CommitIntervals...)
 	normalizeState(&store.state)
 	if store.state.Configuration != configuration {
 		return nil, fmt.Errorf("replication control state belongs to set %q member %q, not set %q member %q",
@@ -281,39 +276,16 @@ func Open(dir string, configuration Configuration) (*Store, error) {
 	}
 	if store.state.CommitLogGeneration == 0 {
 		store.state.CommitLogGeneration = 1
-		if err := validateCommitIntervals(legacyIntervals); err != nil {
-			return nil, fmt.Errorf("validating legacy commit intervals: %w", err)
-		}
-		if err := store.replaceCommitLogLocked(store.state.CommitLogGeneration, legacyIntervals); err != nil {
-			return nil, err
-		}
-		store.state.CommitIntervals = legacyIntervals
-		store.rebuildCommitIndexLocked()
-		if err := store.persistLocked(); err != nil {
-			return nil, err
-		}
-		return store, nil
 	}
-	intervals, publishedCheckpoint, err := store.loadCommitLogLocked(store.state.CommitLogGeneration)
-	if err != nil {
-		return nil, err
+	if err := validateCommitIntervals(store.state.CommitIntervals); err != nil {
+		return nil, fmt.Errorf("validating commit intervals: %w", err)
 	}
-	store.state.CommitIntervals = intervals
 	store.rebuildCommitIndexLocked()
-	if publishedCheckpoint != nil && publishedCheckpoint.Applied.Compare(store.state.Checkpoint.Applied) > 0 {
-		store.state.Checkpoint = *publishedCheckpoint
-	}
-	if store.state.PendingPublication != nil {
-		if _, ok := store.commitByID[store.state.PendingPublication.ID]; ok {
-			store.state.PendingPublication = nil
-		}
-	}
-	if publishedCheckpoint != nil && publishedCheckpoint.Applied.Compare(store.state.Checkpoint.Applied) >= 0 {
-		if err := store.persistLocked(); err != nil {
-			return nil, err
-		}
-	}
 	return store, nil
+}
+
+func (s *Store) Close() error {
+	return nil
 }
 
 func (s *Store) Snapshot() State {
@@ -532,9 +504,6 @@ func (s *Store) ResetInitialSync(attemptID string) error {
 	if newGeneration == 0 {
 		return errors.New("commit interval log generation exhausted")
 	}
-	if err := s.replaceCommitLogLocked(newGeneration, nil); err != nil {
-		return err
-	}
 	s.state.InitialSyncAttempt = nil
 	s.state.InitialSyncPhase = InitialSyncNotStarted
 	s.state.InitialSyncFailure = nil
@@ -551,9 +520,9 @@ func (s *Store) ResetInitialSync(attemptID string) error {
 	s.state.ReplicationMetadata = make(map[string]ReplicationMetadataRecord)
 	if err := s.persistLocked(); err != nil {
 		s.state = previousState
+		s.rebuildCommitIndexLocked()
 		return err
 	}
-	s.removeCommitLogLocked(previousState.CommitLogGeneration)
 	return nil
 }
 
@@ -598,11 +567,13 @@ func (s *Store) RecordCommit(interval CommitInterval) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(s.state.CommitIntervals) == 0 || interval.First.Compare(s.state.CommitIntervals[len(s.state.CommitIntervals)-1].Last) > 0 {
-		if err := s.appendCommitIntervalLocked(interval, nil); err != nil {
+		s.state.CommitIntervals = append(s.state.CommitIntervals, cloneCommitInterval(interval))
+		s.commitByID[interval.CommitID] = len(s.state.CommitIntervals) - 1
+		if err := s.persistLocked(); err != nil {
+			s.state.CommitIntervals = s.state.CommitIntervals[:len(s.state.CommitIntervals)-1]
+			delete(s.commitByID, interval.CommitID)
 			return err
 		}
-		s.state.CommitIntervals = append(s.state.CommitIntervals, interval)
-		s.commitByID[interval.CommitID] = len(s.state.CommitIntervals) - 1
 		return nil
 	}
 	index := sort.Search(len(s.state.CommitIntervals), func(i int) bool {
@@ -661,16 +632,19 @@ func (s *Store) PublishCommit(interval CommitInterval, checkpoint Checkpoint) er
 			return fmt.Errorf("commit interval %v does not follow commit %q", interval, last.CommitID)
 		}
 	}
-	if err := s.appendCommitIntervalLocked(interval, &checkpoint); err != nil {
-		return err
-	}
-	s.state.CommitIntervals = append(s.state.CommitIntervals, interval)
+	previousState := cloneState(s.state)
+	s.state.CommitIntervals = append(s.state.CommitIntervals, cloneCommitInterval(interval))
 	s.commitByID[interval.CommitID] = len(s.state.CommitIntervals) - 1
 	s.state.Checkpoint = checkpoint
 	if s.state.PendingPublication != nil && s.state.PendingPublication.ID == interval.CommitID {
 		s.state.PendingPublication = nil
 	}
-	return s.persistLocked()
+	if err := s.persistLocked(); err != nil {
+		s.state = previousState
+		s.rebuildCommitIndexLocked()
+		return err
+	}
+	return nil
 }
 
 func (s *Store) CommitFor(opTime OpTime) (CommitInterval, bool) {
@@ -782,11 +756,6 @@ func (s *Store) RollbackTo(commitID, source string, rbid int64) (Checkpoint, err
 		Durable: interval.Last, Applied: interval.Last,
 	}
 	retained := append([]CommitInterval(nil), s.state.CommitIntervals[:index+1]...)
-	if err := s.replaceCommitLogWithCheckpointLocked(s.state.CommitLogGeneration, retained, checkpoint); err != nil {
-		s.state = previousState
-		s.rebuildCommitIndexLocked()
-		return Checkpoint{}, err
-	}
 	s.state.CommitIntervals = retained
 	s.commitByID = make(map[string]int, len(retained))
 	for retainedIndex, retainedInterval := range retained {
@@ -1061,44 +1030,5 @@ func cloneState(state State) State {
 }
 
 func (s *Store) persistLocked() error {
-	persistedState := s.state
-	persistedState.CommitIntervals = nil
-	data, err := json.Marshal(persistedState)
-	if err != nil {
-		return fmt.Errorf("encoding replication control state: %w", err)
-	}
-	dir := filepath.Dir(s.path)
-	temporary, err := os.CreateTemp(dir, ".state-*")
-	if err != nil {
-		return fmt.Errorf("creating replication control state: %w", err)
-	}
-	temporaryName := temporary.Name()
-	defer os.Remove(temporaryName)
-	if _, err := temporary.Write(data); err != nil {
-		temporary.Close()
-		return fmt.Errorf("writing replication control state: %w", err)
-	}
-	if err := temporary.Chmod(0o600); err != nil {
-		temporary.Close()
-		return fmt.Errorf("securing replication control state: %w", err)
-	}
-	if err := temporary.Sync(); err != nil {
-		temporary.Close()
-		return fmt.Errorf("syncing replication control state: %w", err)
-	}
-	if err := temporary.Close(); err != nil {
-		return fmt.Errorf("closing replication control state: %w", err)
-	}
-	if err := os.Rename(temporaryName, s.path); err != nil {
-		return fmt.Errorf("publishing replication control state: %w", err)
-	}
-	directory, err := os.Open(dir)
-	if err != nil {
-		return fmt.Errorf("opening replication control directory: %w", err)
-	}
-	defer directory.Close()
-	if err := directory.Sync(); err != nil {
-		return fmt.Errorf("syncing replication control directory: %w", err)
-	}
-	return nil
+	return s.storage.save(context.Background(), cloneState(s.state))
 }

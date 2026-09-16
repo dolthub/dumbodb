@@ -117,14 +117,14 @@ func TestLiveRuntimeInitialSyncSteadyApplyAndRestart(t *testing.T) {
 	waitForRuntimeDocuments(t, ctx, reopenedBackend, 3)
 }
 
-func newLiveRuntime(t *testing.T, dataDirectory, controlDirectory, source string) (backends.Backend, *topology.Manager, *Runtime) {
+func newLiveRuntime(t *testing.T, dataDirectory, _ string, source string) (backends.Backend, *topology.Manager, *Runtime) {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	backend, err := dolt.NewBackend(dataDirectory, logger, false, false, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := control.Open(controlDirectory, control.Configuration{SetName: "rs0", MemberHost: "dumbo.example:27017"})
+	store, err := control.Open(backend, control.Configuration{SetName: "rs0", MemberHost: "dumbo.example:27017"})
 	if err != nil {
 		backend.Close()
 		t.Fatal(err)

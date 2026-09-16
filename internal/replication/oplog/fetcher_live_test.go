@@ -30,6 +30,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"github.com/dolthub/dumbodb/internal/replication/control"
+	"github.com/dolthub/dumbodb/internal/replication/testutil"
 	"github.com/dolthub/dumbodb/internal/replication/topology"
 )
 
@@ -125,12 +126,9 @@ func TestLiveMongoInclusiveOplogFetch(t *testing.T) {
 
 func liveFetcherManager(t *testing.T, source string, checkpoint control.OpTime) *topology.Manager {
 	t.Helper()
-	store, err := control.Open(t.TempDir(), control.Configuration{
+	_, store := testutil.NewControlStore(t, control.Configuration{
 		SetName: "rs0", MemberHost: "dumbo.example:27017",
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	manager := topology.New(store)
 	if err := manager.InstallConfiguration(control.ReplicaConfiguration{
 		SetName: "rs0", Version: 1, Term: checkpoint.Term, ProtocolVersion: 1, ReplicaSetID: "live-test",

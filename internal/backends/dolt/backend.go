@@ -563,6 +563,14 @@ func (b *Backend) Close() {
 	b.dbs = make(map[string]*dbState)
 }
 
+func (b *Backend) ReplicationControlCollection() (backends.Collection, error) {
+	return backends.CollectionContract(&collection{
+		db:                    &database{backend: b, name: "admin", rootish: "main"},
+		name:                  backends.ReservedReplicationControlName,
+		allowReplicationWrite: true,
+	}), nil
+}
+
 func (b *Backend) Status(ctx context.Context, params *backends.StatusParams) (*backends.StatusResult, error) {
 	sess := sessionFromContext(ctx)
 

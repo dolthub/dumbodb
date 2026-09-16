@@ -47,7 +47,7 @@ func TestCoordinatorRunsCloneAndConcurrentCatchUpThroughStop(t *testing.T) {
 	if err := existingDatabase.CreateCollection(ctx, &backends.CreateCollectionParams{Name: "standalone_data"}); err != nil {
 		t.Fatal(err)
 	}
-	store, err := control.Open(t.TempDir(), control.Configuration{
+	store, err := control.Open(backend, control.Configuration{
 		SetName: "rs0", MemberHost: "dumbo.example:27017",
 	})
 	if err != nil {
@@ -159,7 +159,7 @@ func TestCoordinatorPreservesDataUntilSourceIsValidated(t *testing.T) {
 	if err := database.CreateCollection(ctx, &backends.CreateCollectionParams{Name: "standalone_data"}); err != nil {
 		t.Fatal(err)
 	}
-	store, err := control.Open(t.TempDir(), control.Configuration{SetName: "rs0", MemberHost: "dumbo.example:27017"})
+	store, err := control.Open(backend, control.Configuration{SetName: "rs0", MemberHost: "dumbo.example:27017"})
 	if err != nil {
 		t.Fatal(err)
 	}

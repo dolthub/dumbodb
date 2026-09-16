@@ -42,6 +42,8 @@ const (
 	ErrorCodeReadOnlyDatabase
 
 	ErrorCodeWriteConflict
+
+	ErrorCodeReadOnlyCollection
 )
 
 // Error represents a backend error returned by all Backend, Database and Collection methods.
