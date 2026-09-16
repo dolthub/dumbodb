@@ -17,6 +17,7 @@ package control
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -190,5 +191,85 @@ func TestApplyingPublicationCanAbortButReadyPublicationCannot(t *testing.T) {
 	}
 	if err := store.AbortPublication(pending.ID); err == nil {
 		t.Fatal("ready publication was aborted")
+	}
+}
+
+func TestAbortingPublicationRestoresPreApplyControlStateAfterRestart(t *testing.T) {
+	directory := t.TempDir()
+	configuration := testConfiguration()
+	store, err := Open(directory, configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapping := CollectionMapping{
+		SourceUUID: "source-original", Database: "orders", Collection: "items", LocalUUID: "local-original",
+		CreateOpTime: opTime(1), LastUpdateOpTime: opTime(1),
+	}
+	if err := store.PutCollectionMapping(mapping); err != nil {
+		t.Fatal(err)
+	}
+	fragment := TransactionFragment{Key: "transaction", First: opTime(1), Last: opTime(1), Payload: []byte{1, 2, 3}}
+	if err := store.PutTransactionFragment(fragment); err != nil {
+		t.Fatal(err)
+	}
+	ownership := AuthOwnership{
+		Namespace: "admin.system.users", Identity: "orders.reader", Owner: "rs0", LastUpdateOpTime: opTime(1),
+	}
+	if err := store.PutAuthOwnership(ownership); err != nil {
+		t.Fatal(err)
+	}
+	metadata := ReplicationMetadataRecord{
+		Kind: MetadataTransaction, Namespace: "config.transactions", Key: "session",
+		Document: []byte{4, 5, 6}, LastUpdateOpTime: opTime(1),
+	}
+	if err := store.PutReplicationMetadata(metadata); err != nil {
+		t.Fatal(err)
+	}
+	want := store.Snapshot()
+
+	position := opTime(2)
+	pending := PendingPublication{
+		ID: "applying-control-state", First: position, Last: position,
+		Databases: []string{"orders"}, Commits: make(map[string]string),
+		Checkpoint: Checkpoint{Fetched: position, Buffered: position, Written: position, Durable: position, Applied: position},
+	}
+	if err := store.BeginPublication(pending); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RenameCollectionMapping(mapping.SourceUUID, "orders", "items", "orders", "renamed", position); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutCollectionMapping(CollectionMapping{
+		SourceUUID: "source-created", Database: "orders", Collection: "created", LocalUUID: "local-created",
+		CreateOpTime: position, LastUpdateOpTime: position,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteTransactionFragment(fragment.Key); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DropAuthOwnership(ownership.Namespace, ownership.Identity, ownership.Owner, position); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteReplicationMetadata(metadata.Kind, metadata.Key, position); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := Open(directory, configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reopened.AbortPublication(pending.ID); err != nil {
+		t.Fatal(err)
+	}
+	got := reopened.Snapshot()
+	if got.PendingPublication != nil {
+		t.Fatal("aborted publication remained pending")
+	}
+	if !reflect.DeepEqual(got.CollectionMappings, want.CollectionMappings) ||
+		!reflect.DeepEqual(got.TransactionParts, want.TransactionParts) ||
+		!reflect.DeepEqual(got.AuthOwnership, want.AuthOwnership) ||
+		!reflect.DeepEqual(got.ReplicationMetadata, want.ReplicationMetadata) {
+		t.Fatalf("control state after abort = %+v, want %+v", got, want)
 	}
 }

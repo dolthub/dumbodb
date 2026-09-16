@@ -150,6 +150,9 @@ func parseSourceUUID(document *types.Document) (string, error) {
 }
 
 func (a *Applier) applyOperation(ctx context.Context, operation operation, opTime control.OpTime) error {
+	if special.IsIgnoredNamespace(operation.Namespace) {
+		return nil
+	}
 	if special.IsSpecialNamespace(operation.Namespace) {
 		return a.applySpecialOperation(ctx, operation, opTime)
 	}
@@ -226,12 +229,15 @@ func (a *Applier) applyCommand(ctx context.Context, operation operation, opTime 
 	if collectionName != "$cmd" {
 		return fmt.Errorf("command oplog namespace %q does not end in .$cmd", operation.Namespace)
 	}
-	if databaseName == "admin" || databaseName == "config" {
-		return fmt.Errorf("%w command at reserved database %q", special.ErrUnsupportedSpecialNamespace, databaseName)
-	}
 	commandName, commandValue, err := firstField(operation.Object)
 	if err != nil {
 		return err
+	}
+	if commandTarget, ok := commandValue.(string); ok && special.IsIgnoredNamespace(databaseName+"."+commandTarget) {
+		return nil
+	}
+	if databaseName == "admin" || databaseName == "config" {
+		return fmt.Errorf("%w command at reserved database %q", special.ErrUnsupportedSpecialNamespace, databaseName)
 	}
 	switch commandName {
 	case "create":
@@ -308,6 +314,23 @@ func (a *Applier) applyCommand(ctx context.Context, operation operation, opTime 
 			return err
 		}
 		return a.catalog.CreateIndexes(ctx, operation.SourceUUID, indexes)
+	case "startIndexBuild", "commitIndexBuild", "abortIndexBuild":
+		if operation.SourceUUID == "" {
+			return fmt.Errorf("%s has no collection UUID", commandName)
+		}
+		name, ok := commandValue.(string)
+		if !ok || name == "" {
+			return fmt.Errorf("%s target has type %T, want non-empty string", commandName, commandValue)
+		}
+		indexes, err := indexBuildIndexes(databaseName, name, operation.Object)
+		if err != nil {
+			return err
+		}
+		if commandName == "commitIndexBuild" {
+			return a.catalog.CreateIndexes(ctx, operation.SourceUUID, indexes)
+		}
+		_, err = a.catalog.Resolve(ctx, operation.SourceUUID)
+		return err
 	case "dropIndexes":
 		if operation.SourceUUID == "" {
 			return errors.New("dropIndexes has no collection UUID")
@@ -336,6 +359,38 @@ func (a *Applier) applyCommand(ctx context.Context, operation operation, opTime 
 	default:
 		return fmt.Errorf("%w command %q at %q", ErrUnsupportedOplogOperation, commandName, operation.Namespace)
 	}
+}
+
+func indexBuildIndexes(database, collection string, command *types.Document) ([]backends.IndexInfo, error) {
+	value, err := command.Get("indexes")
+	if err != nil {
+		return nil, errors.New("index build command has no indexes")
+	}
+	array, ok := value.(*types.Array)
+	if !ok {
+		return nil, fmt.Errorf("index build indexes has type %T, want array", value)
+	}
+	documents := make([]*types.Document, 0, array.Len())
+	iter := array.Iterator()
+	defer iter.Close()
+	for {
+		_, value, err := iter.Next()
+		if errors.Is(err, iterator.ErrIteratorDone) {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		document, ok := value.(*types.Document)
+		if !ok {
+			return nil, fmt.Errorf("index build index has type %T, want document", value)
+		}
+		documents = append(documents, document)
+	}
+	if len(documents) == 0 {
+		return nil, errors.New("index build command has no index definitions")
+	}
+	return catalog.PreflightIndexes(database, collection, documents)
 }
 
 func (a *Applier) applyTransactionEntry(ctx context.Context, entry Entry, document *types.Document, outer operation, commandName string) error {
@@ -461,10 +516,6 @@ func (a *Applier) applyTransactionOperations(ctx context.Context, entries [][]by
 			if err != nil {
 				iter.Close()
 				return err
-			}
-			if operation.Kind == "c" {
-				iter.Close()
-				return errors.New("catalog commands inside replicated transactions are not supported")
 			}
 			if special.IsSpecialNamespace(operation.Namespace) {
 				iter.Close()

@@ -15,6 +15,7 @@
 package control
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -42,6 +43,7 @@ func (s *Store) BeginPublication(publication PendingPublication) error {
 		return fmt.Errorf("publication %q is already pending", s.state.PendingPublication.ID)
 	}
 	copy := clonePendingPublication(publication)
+	copy.PreApplyState = snapshotPublicationControlState(s.state)
 	s.state.PendingPublication = &copy
 	return s.persistLocked()
 }
@@ -96,6 +98,9 @@ func (s *Store) AbortPublication(publicationID string) error {
 	if pending.Ready || len(pending.Commits) != 0 {
 		return fmt.Errorf("publication %q has entered durable commit", publicationID)
 	}
+	if pending.PreApplyState != nil {
+		restorePublicationControlState(&s.state, *pending.PreApplyState)
+	}
 	s.state.PendingPublication = nil
 	return s.persistLocked()
 }
@@ -148,7 +153,58 @@ func clonePendingPublication(publication PendingPublication) PendingPublication 
 		commits[database] = commitID
 	}
 	publication.Commits = commits
+	if publication.PreApplyState != nil {
+		cloned := clonePublicationControlState(*publication.PreApplyState)
+		publication.PreApplyState = &cloned
+	}
 	return publication
+}
+
+func snapshotPublicationControlState(state State) *PublicationControlState {
+	snapshot := PublicationControlState{
+		CollectionMappings:  state.CollectionMappings,
+		TransactionParts:    state.TransactionParts,
+		AuthOwnership:       state.AuthOwnership,
+		ReplicationMetadata: state.ReplicationMetadata,
+	}
+	cloned := clonePublicationControlState(snapshot)
+	return &cloned
+}
+
+func clonePublicationControlState(state PublicationControlState) PublicationControlState {
+	data, err := json.Marshal(state)
+	if err != nil {
+		panic(err)
+	}
+	var clone PublicationControlState
+	if err := json.Unmarshal(data, &clone); err != nil {
+		panic(err)
+	}
+	normalizePublicationControlState(&clone)
+	return clone
+}
+
+func normalizePublicationControlState(state *PublicationControlState) {
+	if state.CollectionMappings == nil {
+		state.CollectionMappings = make(map[string]CollectionMapping)
+	}
+	if state.TransactionParts == nil {
+		state.TransactionParts = make(map[string]TransactionFragment)
+	}
+	if state.AuthOwnership == nil {
+		state.AuthOwnership = make(map[string]AuthOwnership)
+	}
+	if state.ReplicationMetadata == nil {
+		state.ReplicationMetadata = make(map[string]ReplicationMetadataRecord)
+	}
+}
+
+func restorePublicationControlState(state *State, snapshot PublicationControlState) {
+	cloned := clonePublicationControlState(snapshot)
+	state.CollectionMappings = cloned.CollectionMappings
+	state.TransactionParts = cloned.TransactionParts
+	state.AuthOwnership = cloned.AuthOwnership
+	state.ReplicationMetadata = cloned.ReplicationMetadata
 }
 
 func samePublicationPlan(left, right PendingPublication) bool {

@@ -61,6 +61,13 @@ func TestRecoverPublicationDiscardsIncompleteApply(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	mapping := control.CollectionMapping{
+		SourceUUID: "created-during-apply", Database: "recovery", Collection: "events", LocalUUID: "local-created",
+		CreateOpTime: position, LastUpdateOpTime: position,
+	}
+	if err := store.PutCollectionMapping(mapping); err != nil {
+		t.Fatal(err)
+	}
 	if err := runtime.recoverPublication(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -69,6 +76,9 @@ func TestRecoverPublicationDiscardsIncompleteApply(t *testing.T) {
 	}
 	if count := recoveryCount(t, ctx, collection); count != 1 {
 		t.Fatalf("document count after recovering %s = %d, want 1", publicationID, count)
+	}
+	if _, ok := store.CollectionMapping(mapping.SourceUUID); ok {
+		t.Fatal("control mapping from incomplete publication survived recovery")
 	}
 }
 

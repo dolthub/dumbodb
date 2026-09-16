@@ -45,7 +45,7 @@ func MaterializeSpecialDatabases(
 		}
 		for _, collection := range database.Collections {
 			namespace := database.Name + "." + collection.Name
-			if ignoredSpecialNamespace(namespace) {
+			if special.IsIgnoredNamespace(namespace) {
 				continue
 			}
 			if !special.IsSpecialNamespace(namespace) {
@@ -56,7 +56,7 @@ func MaterializeSpecialDatabases(
 	for _, database := range databases {
 		for _, collection := range database.Collections {
 			namespace := database.Name + "." + collection.Name
-			if ignoredSpecialNamespace(namespace) {
+			if special.IsIgnoredNamespace(namespace) {
 				continue
 			}
 			_, err := CloneDocuments(ctx, client, CloneCursor{
@@ -70,15 +70,4 @@ func MaterializeSpecialDatabases(
 		}
 	}
 	return nil
-}
-
-func ignoredSpecialNamespace(namespace string) bool {
-	switch namespace {
-	case "admin.system.version", "admin.system.keys",
-		"config.system.sessions", "config.system.indexBuilds",
-		"config.analyzeShardKeySplitPoints", "config.sampledQueries", "config.sampledQueriesDiff":
-		return true
-	default:
-		return false
-	}
 }

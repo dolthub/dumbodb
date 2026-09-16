@@ -124,6 +124,36 @@ func TestCatalogApplierPreservesIdentityAcrossLifecycle(t *testing.T) {
 	}
 }
 
+func TestCatalogCollModMaterializesDefaultValidationAction(t *testing.T) {
+	ctx := context.Background()
+	backend, err := dolt.NewBackend(t.TempDir(), slog.Default(), false, false, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backend.Close()
+	applier, err := NewApplier(backend, testCatalogStore(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := applier.Create(ctx, "orders", backends.CreateCollectionParams{Name: "items"}, "source-one", catalogOpTime(1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := applier.CollMod(ctx, "source-one", backends.CollModParams{ValidationLevel: "moderate"}); err != nil {
+		t.Fatal(err)
+	}
+	database, err := backend.Database("orders")
+	if err != nil {
+		t.Fatal(err)
+	}
+	collections, err := database.ListCollections(ctx, &backends.ListCollectionsParams{Name: "items"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(collections.Collections) != 1 || collections.Collections[0].ValidationAction != "error" {
+		t.Fatalf("collection metadata = %+v", collections.Collections)
+	}
+}
+
 func TestResolveRejectsDuplicateSourceUUIDAcrossDatabases(t *testing.T) {
 	backend, err := dolt.NewBackend(t.TempDir(), slog.Default(), false, false, 0, 0)
 	if err != nil {

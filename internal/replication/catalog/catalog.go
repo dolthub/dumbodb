@@ -263,6 +263,18 @@ func (a *Applier) CollMod(ctx context.Context, sourceUUID string, params backend
 	if err != nil {
 		return err
 	}
+	if params.ValidationLevel != "" && params.ValidationAction == "" {
+		collections, err := database.ListCollections(ctx, &backends.ListCollectionsParams{Name: location.Collection})
+		if err != nil {
+			return err
+		}
+		if len(collections.Collections) != 1 {
+			return fmt.Errorf("collection %q.%q disappeared during collMod", location.Database, location.Collection)
+		}
+		if collections.Collections[0].ValidationAction == "" {
+			params.ValidationAction = "error"
+		}
+	}
 	return database.CollMod(ctx, &params)
 }
 

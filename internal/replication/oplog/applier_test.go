@@ -173,6 +173,24 @@ func TestApplierStoresConfigMetadataWithoutCreatingConfigDatabase(t *testing.T) 
 	if err := applier.Apply(ctx, makeOplogEntry(t, 5, "c", "config.$cmd", "", reservedCommand, nil)); !errors.Is(err, replicationspecial.ErrUnsupportedSpecialNamespace) {
 		t.Fatalf("reserved config command error = %v", err)
 	}
+	ignoredUUID := "87654321-4321-4321-8321-cba987654321"
+	createIndexBuilds := must.NotFail(types.NewDocument("create", "system.indexBuilds"))
+	if err := applier.Apply(ctx, makeOplogEntry(t, 6, "c", "config.$cmd", ignoredUUID, createIndexBuilds, nil)); err != nil {
+		t.Fatalf("creating source-local index build metadata: %v", err)
+	}
+	indexBuild := must.NotFail(types.NewDocument("_id", "build"))
+	if err := applier.Apply(ctx, makeOplogEntry(t, 7, "i", replicationspecial.IndexBuildsNamespace, ignoredUUID, indexBuild, nil)); err != nil {
+		t.Fatalf("applying source-local index build metadata: %v", err)
+	}
+	databases, err = backend.ListDatabases(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, database := range databases.Databases {
+		if database.Name == "config" {
+			t.Fatal("source-local index build metadata created the config database")
+		}
+	}
 }
 
 func TestApplierSpecialStateContinuesAcrossRestart(t *testing.T) {
@@ -253,16 +271,33 @@ func TestApplierCatalogCommands(t *testing.T) {
 	if err := applier.Apply(ctx, makeOplogEntry(t, 2, "c", "orders.$cmd", sourceUUID, createIndex, nil)); err != nil {
 		t.Fatal(err)
 	}
+	indexBuild := must.NotFail(types.NewDocument(
+		"v", int32(2), "key", must.NotFail(types.NewDocument("status", int32(1))), "name", "status_1",
+	))
+	startIndexBuild := must.NotFail(types.NewDocument(
+		"startIndexBuild", "items", "indexBuildUUID", uuidBinary(uuid.New()),
+		"indexes", must.NotFail(types.NewArray(indexBuild)),
+	))
+	if err := applier.Apply(ctx, makeOplogEntry(t, 3, "c", "orders.$cmd", sourceUUID, startIndexBuild, nil)); err != nil {
+		t.Fatal(err)
+	}
+	commitIndexBuild := must.NotFail(types.NewDocument(
+		"commitIndexBuild", "items", "indexBuildUUID", must.NotFail(startIndexBuild.Get("indexBuildUUID")),
+		"indexes", must.NotFail(types.NewArray(indexBuild)),
+	))
+	if err := applier.Apply(ctx, makeOplogEntry(t, 4, "c", "orders.$cmd", sourceUUID, commitIndexBuild, nil)); err != nil {
+		t.Fatal(err)
+	}
 	rename := must.NotFail(types.NewDocument("renameCollection", "orders.items", "to", "orders.renamed", "stayTemp", false))
-	if err := applier.Apply(ctx, makeOplogEntry(t, 3, "c", "orders.$cmd", sourceUUID, rename, nil)); err != nil {
+	if err := applier.Apply(ctx, makeOplogEntry(t, 5, "c", "orders.$cmd", sourceUUID, rename, nil)); err != nil {
 		t.Fatal(err)
 	}
 	dropIndex := must.NotFail(types.NewDocument("dropIndexes", "renamed", "index", "account_1"))
-	if err := applier.Apply(ctx, makeOplogEntry(t, 4, "c", "orders.$cmd", sourceUUID, dropIndex, nil)); err != nil {
+	if err := applier.Apply(ctx, makeOplogEntry(t, 6, "c", "orders.$cmd", sourceUUID, dropIndex, nil)); err != nil {
 		t.Fatal(err)
 	}
 	drop := must.NotFail(types.NewDocument("drop", "renamed"))
-	if err := applier.Apply(ctx, makeOplogEntry(t, 5, "c", "orders.$cmd", sourceUUID, drop, nil)); err != nil {
+	if err := applier.Apply(ctx, makeOplogEntry(t, 7, "c", "orders.$cmd", sourceUUID, drop, nil)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := applier.catalog.Resolve(ctx, sourceUUID); !errors.Is(err, catalog.ErrSourceUUIDNotFound) {
@@ -304,6 +339,27 @@ func TestApplierAssemblesTransactionsWithAtomicVisibility(t *testing.T) {
 	if len(applier.store.Snapshot().TransactionParts) != 0 {
 		t.Fatal("committed transaction fragments were retained")
 	}
+}
+
+func TestApplierCreatesCollectionsInsideApplyOps(t *testing.T) {
+	ctx := context.Background()
+	backend, applier, _ := newTestApplier(t)
+	sourceUUID := "87654321-4321-4321-8321-cba987654321"
+	create := embeddedOperation("c", "orders.$cmd", sourceUUID,
+		must.NotFail(types.NewDocument(
+			"create", "events",
+			"idIndex", must.NotFail(types.NewDocument(
+				"key", must.NotFail(types.NewDocument("_id", int32(1))), "name", "_id_", "v", int32(2),
+			)),
+		)), nil,
+	)
+	document := must.NotFail(types.NewDocument("_id", int32(1), "event", "created"))
+	insert := embeddedOperation("i", "orders.events", sourceUUID, document, document)
+	entry := makeTransactionEntry(t, 12, 23, nullOpTimeDocument(), false, false, create, insert)
+	if err := applier.Apply(ctx, entry); err != nil {
+		t.Fatal(err)
+	}
+	assertStoredDocument(t, ctx, backend, "orders", "events", document)
 }
 
 func TestApplierPreparedCommitAndAbort(t *testing.T) {

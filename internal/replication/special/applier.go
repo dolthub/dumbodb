@@ -37,6 +37,7 @@ const (
 	TransactionsNamespace          = "config.transactions"
 	RetryImagesNamespace           = "config.image_collection"
 	ChangeStreamPreimagesNamespace = "config.system.preimages"
+	IndexBuildsNamespace           = "config.system.indexBuilds"
 )
 
 var ErrUnsupportedSpecialNamespace = errors.New("unsupported replicated special namespace")
@@ -77,6 +78,18 @@ func MetadataKind(namespace string) (control.MetadataKind, bool) {
 func IsSpecialNamespace(namespace string) bool {
 	_, metadata := MetadataKind(namespace)
 	return IsAuthNamespace(namespace) || metadata || namespace == ChangeStreamPreimagesNamespace
+}
+
+// IsIgnoredNamespace identifies source-local metadata that is not replicated application state.
+func IsIgnoredNamespace(namespace string) bool {
+	switch namespace {
+	case "admin.system.version", "admin.system.keys",
+		"config.system.sessions", IndexBuildsNamespace,
+		"config.analyzeShardKeySplitPoints", "config.sampledQueries", "config.sampledQueriesDiff":
+		return true
+	default:
+		return false
+	}
 }
 
 func (a *Applier) ApplyInitialDocument(ctx context.Context, namespace string, document *types.Document, opTime control.OpTime) error {

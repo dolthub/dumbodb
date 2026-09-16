@@ -125,13 +125,21 @@ type DatabaseCommit struct {
 }
 
 type PendingPublication struct {
-	ID         string            `json:"id"`
-	First      OpTime            `json:"first"`
-	Last       OpTime            `json:"last"`
-	Databases  []string          `json:"databases"`
-	Commits    map[string]string `json:"commits"`
-	Checkpoint Checkpoint        `json:"checkpoint"`
-	Ready      bool              `json:"ready"`
+	ID            string                   `json:"id"`
+	First         OpTime                   `json:"first"`
+	Last          OpTime                   `json:"last"`
+	Databases     []string                 `json:"databases"`
+	Commits       map[string]string        `json:"commits"`
+	Checkpoint    Checkpoint               `json:"checkpoint"`
+	Ready         bool                     `json:"ready"`
+	PreApplyState *PublicationControlState `json:"pre_apply_state,omitempty"`
+}
+
+type PublicationControlState struct {
+	CollectionMappings  map[string]CollectionMapping         `json:"collection_mappings"`
+	TransactionParts    map[string]TransactionFragment       `json:"transaction_parts"`
+	AuthOwnership       map[string]AuthOwnership             `json:"auth_ownership"`
+	ReplicationMetadata map[string]ReplicationMetadataRecord `json:"replication_metadata"`
 }
 
 type RollbackDatabase struct {
@@ -999,6 +1007,9 @@ func normalizeState(state *State) {
 	}
 	if state.PendingPublication != nil && state.PendingPublication.Commits == nil {
 		state.PendingPublication.Commits = make(map[string]string)
+	}
+	if state.PendingPublication != nil && state.PendingPublication.PreApplyState != nil {
+		normalizePublicationControlState(state.PendingPublication.PreApplyState)
 	}
 }
 
