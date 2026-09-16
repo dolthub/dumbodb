@@ -650,6 +650,24 @@ fresh initial sync. Preserving abandoned commits under an optional DumboDB ref i
 internal audit policy, not part of replication configuration or visible replica
 state.
 
+Rollback is a restartable control-store operation. Before changing any `main` head,
+the member persists the source, source RBID, common source `OpTime`, target commit for
+every database, and a unique audit-branch name. It first creates that audit branch
+from every current `main` head, then hard-resets each `main` to its mapped common
+commit. A restart with this manifest still pending reports `RECOVERING` and repeats
+both operations idempotently. Only after all resets succeed does the member truncate
+the active provenance journal to the common interval, publish the rolled-back
+checkpoint, and return to `SECONDARY`.
+
+Common-point search walks retained commit intervals newest first and accepts only an
+interval whose final `OpTime` is still present in the source oplog. A point is unsafe
+when the control store contains transaction fragments or replicated metadata that
+cannot be reconstructed at that point, or when catalog/authentication mappings were
+updated after it. Such a point is skipped. If no safe point remains, the current
+heads are preserved on an RBID-qualified audit branch, control provenance is moved to
+a fresh generation, and normal initial sync resets `main` to each repository's
+initial commit before cloning.
+
 The replication control store must survive process restart and independently
 record:
 

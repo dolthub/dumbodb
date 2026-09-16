@@ -179,6 +179,14 @@ func validatePublishedCheckpoint(interval CommitInterval, checkpoint Checkpoint)
 }
 
 func (s *Store) replaceCommitLogLocked(generation uint64, intervals []CommitInterval) error {
+	return s.replaceCommitLogLockedWithOptionalCheckpoint(generation, intervals, nil)
+}
+
+func (s *Store) replaceCommitLogWithCheckpointLocked(generation uint64, intervals []CommitInterval, checkpoint Checkpoint) error {
+	return s.replaceCommitLogLockedWithOptionalCheckpoint(generation, intervals, &checkpoint)
+}
+
+func (s *Store) replaceCommitLogLockedWithOptionalCheckpoint(generation uint64, intervals []CommitInterval, checkpoint *Checkpoint) error {
 	if generation == 0 {
 		return errors.New("commit interval log generation must be positive")
 	}
@@ -193,8 +201,16 @@ func (s *Store) replaceCommitLogLocked(generation uint64, intervals []CommitInte
 	temporaryName := temporary.Name()
 	defer os.Remove(temporaryName)
 	encoder := json.NewEncoder(temporary)
-	for _, interval := range intervals {
-		if err := encoder.Encode(commitLogRecord{CommitInterval: interval}); err != nil {
+	for index, interval := range intervals {
+		record := commitLogRecord{CommitInterval: interval}
+		if checkpoint != nil && index == len(intervals)-1 {
+			if err := validatePublishedCheckpoint(interval, *checkpoint); err != nil {
+				temporary.Close()
+				return err
+			}
+			record.Checkpoint = checkpoint
+		}
+		if err := encoder.Encode(record); err != nil {
 			temporary.Close()
 			return fmt.Errorf("writing commit interval log: %w", err)
 		}

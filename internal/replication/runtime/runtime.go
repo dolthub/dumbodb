@@ -30,12 +30,11 @@ import (
 	"github.com/dolthub/dumbodb/internal/replication/initialsync"
 	"github.com/dolthub/dumbodb/internal/replication/oplog"
 	"github.com/dolthub/dumbodb/internal/replication/publication"
+	"github.com/dolthub/dumbodb/internal/replication/recovery"
 	"github.com/dolthub/dumbodb/internal/replication/special"
 	"github.com/dolthub/dumbodb/internal/replication/topology"
 	"github.com/dolthub/dumbodb/internal/replication/transport"
 )
-
-var errInitialSyncRequired = errors.New("initial sync required")
 
 type versionedBackend interface {
 	backends.Backend
@@ -50,6 +49,7 @@ type Runtime struct {
 	logger    *slog.Logger
 	bumpAuth  func()
 	publisher *publication.Publisher
+	recovery  *recovery.Recovery
 }
 
 func New(
@@ -73,9 +73,13 @@ func New(
 	if err != nil {
 		return nil, err
 	}
+	recoveryManager, err := recovery.New(versioned, store, manager)
+	if err != nil {
+		return nil, err
+	}
 	return &Runtime{
 		backend: versioned, store: store, manager: manager, logger: logger,
-		bumpAuth: bumpAuthGeneration, publisher: publisher,
+		bumpAuth: bumpAuthGeneration, publisher: publisher, recovery: recoveryManager,
 	}, nil
 }
 
@@ -86,6 +90,12 @@ func (r *Runtime) Run(ctx context.Context) {
 		if err := r.recoverPublication(ctx); err != nil {
 			r.retry(ctx, "recovering replication publication", err)
 			continue
+		}
+		if _, ok := r.store.PendingRollback(); ok {
+			if err := r.recovery.Run(ctx); err != nil {
+				r.retry(ctx, "resuming rollback recovery", err)
+				continue
+			}
 		}
 		state, err := r.waitForSource(ctx)
 		if err != nil {
@@ -101,8 +111,14 @@ func (r *Runtime) Run(ctx context.Context) {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return
 			}
-			if errors.Is(err, oplog.ErrTooStale) || errors.Is(err, errInitialSyncRequired) {
-				r.retry(ctx, "oplog history requires initial sync", err)
+			if errors.Is(err, oplog.ErrTooStale) || errors.Is(err, oplog.ErrContinuityLost) ||
+				errors.Is(err, topology.ErrSourceRollbackIDChanged) {
+				recoveryErr := r.recovery.Run(ctx)
+				if recoveryErr != nil && !errors.Is(recoveryErr, recovery.ErrInitialSyncRequired) {
+					r.retry(ctx, "rollback recovery failed", recoveryErr)
+					continue
+				}
+				r.retry(ctx, "oplog history recovered", errors.Join(err, recoveryErr))
 				continue
 			}
 			_ = r.manager.MarkContinuityLost(false)
@@ -179,6 +195,25 @@ func (r *Runtime) runSteady(ctx context.Context) error {
 		}
 	}()
 	for {
+		select {
+		case err := <-fetchDone:
+			fetchStopped = true
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return err
+		default:
+		}
+		state := r.manager.Snapshot().State
+		if state == topology.StateRecovering || state == topology.StateStartup2 {
+			select {
+			case err := <-fetchDone:
+				fetchStopped = true
+				return err
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
 		entries := buffer.Drain(1, 16<<20)
 		if len(entries) == 0 {
 			waitContext, cancelWait := context.WithCancel(fetchContext)
@@ -237,7 +272,7 @@ func (r *Runtime) applyEntry(ctx context.Context, applier *oplog.Applier, entry 
 	if err := r.publisher.Complete(ctx, publicationID); err != nil {
 		return err
 	}
-	return r.manager.MarkSteady()
+	return nil
 }
 
 func (r *Runtime) recoverPublication(ctx context.Context) error {

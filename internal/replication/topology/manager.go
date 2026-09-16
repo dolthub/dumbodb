@@ -143,6 +143,8 @@ func New(store *control.Store) *Manager {
 	}
 	if persisted.Lifecycle == control.LifecycleDetached {
 		state.State = StateRemoved
+	} else if persisted.PendingRollback != nil {
+		state.State = StateRecovering
 	}
 	return &Manager{store: store, state: state}
 }
@@ -504,6 +506,29 @@ func (m *Manager) MarkSteady() error {
 	m.mu.Unlock()
 	if listener != nil {
 		listener()
+	}
+	return nil
+}
+
+func (m *Manager) CompleteRollback(commitID, source string, rbid int64) error {
+	checkpoint, err := m.store.RollbackTo(commitID, source, rbid)
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	previous := cloneSnapshot(m.state)
+	m.state.Checkpoint = checkpoint
+	m.state.SyncSource = source
+	m.state.RBID = rbid
+	m.state.State = StateSecondary
+	listener := m.changeListenerLocked(previous)
+	progressListener := m.onProgress
+	m.mu.Unlock()
+	if listener != nil {
+		listener()
+	}
+	if progressListener != nil {
+		progressListener()
 	}
 	return nil
 }

@@ -134,6 +134,21 @@ type PendingPublication struct {
 	Ready      bool              `json:"ready"`
 }
 
+type RollbackDatabase struct {
+	Database string `json:"database"`
+	CommitID string `json:"commit_id"`
+}
+
+type RollbackAttempt struct {
+	ID          string             `json:"id"`
+	Source      string             `json:"source"`
+	SourceRBID  int64              `json:"source_rbid"`
+	CommitID    string             `json:"commit_id"`
+	OpTime      OpTime             `json:"optime"`
+	AuditBranch string             `json:"audit_branch"`
+	Databases   []RollbackDatabase `json:"databases"`
+}
+
 type CollectionMapping struct {
 	SourceUUID       string `json:"source_uuid"`
 	Database         string `json:"database"`
@@ -199,6 +214,7 @@ type State struct {
 	CommitLogGeneration uint64                               `json:"commit_log_generation"`
 	CommitIntervals     []CommitInterval                     `json:"commit_intervals,omitempty"`
 	PendingPublication  *PendingPublication                  `json:"pending_publication,omitempty"`
+	PendingRollback     *RollbackAttempt                     `json:"pending_rollback,omitempty"`
 	CollectionMappings  map[string]CollectionMapping         `json:"collection_mappings"`
 	TransactionParts    map[string]TransactionFragment       `json:"transaction_parts"`
 	AuthOwnership       map[string]AuthOwnership             `json:"auth_ownership"`
@@ -491,6 +507,7 @@ func (s *Store) ResetInitialSync(attemptID string) error {
 	s.state.CommitIntervals = nil
 	s.commitByID = make(map[string]int)
 	s.state.PendingPublication = nil
+	s.state.PendingRollback = nil
 	s.state.CollectionMappings = make(map[string]CollectionMapping)
 	s.state.TransactionParts = make(map[string]TransactionFragment)
 	s.state.AuthOwnership = make(map[string]AuthOwnership)
@@ -655,6 +672,100 @@ func (s *Store) CommitForDatabaseCommit(database, commitID string) (CommitInterv
 		}
 	}
 	return CommitInterval{}, false
+}
+
+func (s *Store) CommitIntervals() []CommitInterval {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	intervals := make([]CommitInterval, len(s.state.CommitIntervals))
+	for index, interval := range s.state.CommitIntervals {
+		intervals[index] = cloneCommitInterval(interval)
+	}
+	return intervals
+}
+
+func (s *Store) CanRollbackTo(opTime OpTime) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if len(s.state.TransactionParts) != 0 || len(s.state.ReplicationMetadata) != 0 {
+		return false
+	}
+	for _, mapping := range s.state.CollectionMappings {
+		if mapping.CreateOpTime.Compare(opTime) <= 0 && mapping.LastUpdateOpTime.Compare(opTime) > 0 {
+			return false
+		}
+	}
+	for _, ownership := range s.state.AuthOwnership {
+		if ownership.LastUpdateOpTime.Compare(opTime) > 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Store) RollbackTo(commitID, source string, rbid int64) (Checkpoint, error) {
+	if commitID == "" || source == "" || rbid < 0 {
+		return Checkpoint{}, errors.New("rollback requires commit ID, source, and non-negative rollback ID")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	previousState := cloneState(s.state)
+	index, ok := s.commitByID[commitID]
+	if !ok {
+		return Checkpoint{}, fmt.Errorf("rollback commit %q is not retained", commitID)
+	}
+	interval := s.state.CommitIntervals[index]
+	if s.state.PendingRollback != nil {
+		pending := s.state.PendingRollback
+		if pending.CommitID != commitID || pending.Source != source || pending.SourceRBID != rbid || pending.OpTime != interval.Last {
+			return Checkpoint{}, errors.New("rollback completion does not match pending recovery")
+		}
+	}
+	if len(s.state.TransactionParts) != 0 || len(s.state.ReplicationMetadata) != 0 {
+		return Checkpoint{}, errors.New("rollback requires a fresh initial sync for retained transaction metadata")
+	}
+	for sourceUUID, mapping := range s.state.CollectionMappings {
+		if mapping.CreateOpTime.Compare(interval.Last) <= 0 && mapping.LastUpdateOpTime.Compare(interval.Last) > 0 {
+			return Checkpoint{}, fmt.Errorf("collection mapping %q changed after rollback point", sourceUUID)
+		}
+	}
+	for _, ownership := range s.state.AuthOwnership {
+		if ownership.LastUpdateOpTime.Compare(interval.Last) > 0 {
+			return Checkpoint{}, fmt.Errorf("authorization ownership %q changed after rollback point", ownership.Identity)
+		}
+	}
+	for sourceUUID, mapping := range s.state.CollectionMappings {
+		if mapping.CreateOpTime.Compare(interval.Last) > 0 {
+			delete(s.state.CollectionMappings, sourceUUID)
+		}
+	}
+	checkpoint := Checkpoint{
+		Fetched: interval.Last, Buffered: interval.Last, Written: interval.Last,
+		Durable: interval.Last, Applied: interval.Last,
+	}
+	retained := append([]CommitInterval(nil), s.state.CommitIntervals[:index+1]...)
+	if err := s.replaceCommitLogWithCheckpointLocked(s.state.CommitLogGeneration, retained, checkpoint); err != nil {
+		s.state = previousState
+		s.rebuildCommitIndexLocked()
+		return Checkpoint{}, err
+	}
+	s.state.CommitIntervals = retained
+	s.commitByID = make(map[string]int, len(retained))
+	for retainedIndex, retainedInterval := range retained {
+		s.commitByID[retainedInterval.CommitID] = retainedIndex
+	}
+	s.state.Checkpoint = checkpoint
+	s.state.CurrentSource = source
+	s.state.CurrentRBID = rbid
+	s.state.InitialSyncPhase = InitialSyncComplete
+	s.state.PendingPublication = nil
+	s.state.PendingRollback = nil
+	if err := s.persistLocked(); err != nil {
+		s.state = previousState
+		s.rebuildCommitIndexLocked()
+		return Checkpoint{}, err
+	}
+	return checkpoint, nil
 }
 
 func (s *Store) PutCollectionMapping(mapping CollectionMapping) error {

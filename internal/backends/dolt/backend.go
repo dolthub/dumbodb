@@ -1433,13 +1433,14 @@ func (b *Backend) DumboDBBranch(ctx context.Context, params *backends.BranchPara
 		return nil, backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
 			fmt.Errorf("DumboDBBranch: database %q does not exist", params.DBName))
 	}
+	if params.Action == "list" {
+		return dumboDBBranchList(ctx, db)
+	}
 
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
 	switch params.Action {
-	case "list":
-		return dumboDBBranchList(ctx, db)
 	case "update":
 		return dumboDBBranchConfigure(ctx, db, params)
 	case "remove":
@@ -1512,10 +1513,12 @@ func dumboDBBranchCreate(ctx context.Context, db *dbState, params *backends.Bran
 }
 
 // dumboDBBranchList returns every branch in the database with its HEAD commit,
-// sorted by name. Caller must hold db.mu.Lock().
+// sorted by name.
 func dumboDBBranchList(ctx context.Context, db *dbState) (*backends.BranchResult, error) {
+	db.mu.Lock()
 	dsMap, err := db.datasDB.Datasets(ctx)
 	if err != nil {
+		db.mu.Unlock()
 		return nil, fmt.Errorf("DumboDBBranch: listing datasets: %w", err)
 	}
 
@@ -1524,14 +1527,7 @@ func dumboDBBranchList(ctx context.Context, db *dbState) (*backends.BranchResult
 		switch {
 		case strings.HasPrefix(id, branchRefPrefix):
 			name := strings.TrimPrefix(id, branchRefPrefix)
-			info := backends.BranchInfo{Name: name, CommitID: headAddr.String()}
-			if cfg, ok, err := db.backend.readBranchConfig(ctx, db.name, name); err != nil {
-				return err
-			} else if ok {
-				info.Pull = pullInfo(cfg.pull)
-				info.Push = pushInfo(cfg.push)
-			}
-			branches = append(branches, info)
+			branches = append(branches, backends.BranchInfo{Name: name, CommitID: headAddr.String()})
 		case strings.HasPrefix(id, remoteRefPrefix):
 			rest := strings.TrimPrefix(id, remoteRefPrefix)
 			remote, ref, ok := strings.Cut(rest, "/")
@@ -1548,7 +1544,23 @@ func dumboDBBranchList(ctx context.Context, db *dbState) (*backends.BranchResult
 		}
 		return nil
 	}); iterErr != nil {
+		db.mu.Unlock()
 		return nil, fmt.Errorf("DumboDBBranch: iterating datasets: %w", iterErr)
+	}
+	db.mu.Unlock()
+
+	for index := range branches {
+		if branches[index].RemoteTracking {
+			continue
+		}
+		cfg, ok, err := db.backend.readBranchConfig(ctx, db.name, branches[index].Name)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			branches[index].Pull = pullInfo(cfg.pull)
+			branches[index].Push = pushInfo(cfg.push)
+		}
 	}
 
 	sort.Slice(branches, func(i, j int) bool { return branches[i].Name < branches[j].Name })
