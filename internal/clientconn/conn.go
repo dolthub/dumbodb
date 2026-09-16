@@ -821,7 +821,8 @@ func (c *conn) dispatchThroughSession(connCtx context.Context, msg *wire.OpMsg, 
 	var runErr error
 	for attempt := 0; ; attempt++ {
 		runErr = runFn(time.Now(), attemptWrite)
-		if !errors.Is(runErr, handler.ErrWriteRefused) || attempt >= maxWriteReplays {
+		replayable := errors.Is(runErr, handler.ErrWriteRefused) || errors.Is(runErr, handler.ErrWriteRaced)
+		if !replayable || attempt >= maxWriteReplays {
 			break
 		}
 		replaying = true

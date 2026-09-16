@@ -31,12 +31,12 @@ import (
 // reconcile read it. That is the whole point of the optimistic lock: the merge
 // was computed against one state, so it may only replace that state.
 //
-// updateWorkingSet instead resolves the CURRENT on-disk working set and passes
-// it as prevHash, which asserts that the working set is whatever it is right
-// now. That is always true, so the lock never fails and a writer that
-// reconciled against a stale branch overwrites whoever published in between --
-// both writers having already been told n:1.
-func TestUpdateWorkingSet_RefusesAStalePublish(t *testing.T) {
+// publishWorkingSet takes that fork point from the caller. It used to resolve
+// the CURRENT on-disk working set as its own prevHash, which asserts that the
+// working set is whatever it is right now -- always true, so the lock never
+// failed and a writer that reconciled against a stale branch overwrote whoever
+// published in between, both having already been told n:1.
+func TestPublishWorkingSet_RefusesAStalePublish(t *testing.T) {
 	ctx := context.Background()
 	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, false, 0, 0)
 	require.NoError(t, err)
@@ -70,14 +70,16 @@ func TestUpdateWorkingSet_RefusesAStalePublish(t *testing.T) {
 	// reconcile again against what A left.
 	rootB := theirs.WorkingRoot()
 	wsB := theirs.WithWorkingRoot(rootB).WithStagedRoot(rootB)
-	err = updateWorkingSet(ctx, state.doltDB, wsB, defaultBranch)
+	err = publishWorkingSet(ctx, state.doltDB, wsB, defaultBranch, theirsHash)
 	require.Error(t, err,
 		"a publish reconciled against %s must not land on top of %s", theirsHash, afterAHash)
+	require.ErrorIs(t, err, backends.ErrWriteRaced,
+		"a raced publish must be answerable by replaying, not reported as a failure")
 }
 
 // The precondition the publish should be using is available at the call site:
 // the reconcile already resolved the working set it merged against.
-func TestUpdateWorkingSet_PrevHashIsTheReconciledState(t *testing.T) {
+func TestPublishWorkingSet_ForkPointIsAvailableAtTheRead(t *testing.T) {
 	ctx := context.Background()
 	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, false, 0, 0)
 	require.NoError(t, err)
