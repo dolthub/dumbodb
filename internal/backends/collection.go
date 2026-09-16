@@ -66,8 +66,26 @@ type Collection interface {
 	DropIndexes(context.Context, *DropIndexesParams) (*DropIndexesResult, error)
 }
 
+// InitialSyncCollection bulk-loads a disposable replica clone before indexes are built.
+type InitialSyncCollection interface {
+	BulkLoadInitialSync(context.Context, []*types.Document) error
+}
+
 type collectionContract struct {
 	c Collection
+}
+
+func (cc *collectionContract) BulkLoadInitialSync(ctx context.Context, documents []*types.Document) error {
+	now := time.Now()
+	for _, document := range documents {
+		document.SetRecordID(types.NextTimestamp(now).Signed())
+		document.Freeze()
+	}
+	if loader, ok := cc.c.(InitialSyncCollection); ok {
+		return loader.BulkLoadInitialSync(ctx, documents)
+	}
+	_, err := cc.c.InsertAll(ctx, &InsertAllParams{Docs: documents})
+	return err
 }
 
 // CollectionContract wraps Collection and enforces its contract.

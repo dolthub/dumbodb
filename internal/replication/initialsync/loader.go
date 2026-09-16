@@ -89,7 +89,11 @@ func (l *BoundedCollectionLoader) Flush(ctx context.Context) error {
 		return nil
 	}
 	documentCount := len(l.documents)
-	if _, err := l.collection.InsertAll(ctx, &backends.InsertAllParams{Docs: l.documents}); err != nil {
+	if bulkLoader, ok := l.collection.(backends.InitialSyncCollection); ok {
+		if err := bulkLoader.BulkLoadInitialSync(ctx, l.documents); err != nil {
+			return fmt.Errorf("bulk-loading cloned document batch: %w", err)
+		}
+	} else if _, err := l.collection.InsertAll(ctx, &backends.InsertAllParams{Docs: l.documents}); err != nil {
 		return fmt.Errorf("loading cloned document batch: %w", err)
 	}
 	l.stats.Documents += int64(documentCount)

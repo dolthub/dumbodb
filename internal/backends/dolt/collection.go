@@ -19,6 +19,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -1798,6 +1799,103 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 	}
 
 	return &backends.InsertAllResult{}, nil
+}
+
+type initialSyncTuple struct {
+	hash  [20]byte
+	id    any
+	key   val.Tuple
+	value val.Tuple
+}
+
+type initialSyncTupleIter struct {
+	tuples []initialSyncTuple
+	index  int
+}
+
+func (i *initialSyncTupleIter) Next(context.Context) (val.Tuple, val.Tuple) {
+	if i.index == len(i.tuples) {
+		return nil, nil
+	}
+	tuple := i.tuples[i.index]
+	i.index++
+	return tuple.key, tuple.value
+}
+
+func (c *collection) BulkLoadInitialSync(ctx context.Context, documents []*types.Document) error {
+	if len(documents) == 0 {
+		return nil
+	}
+	state, err := c.db.backend.getOrOpenDB(ctx, c.db.name, true)
+	if err != nil {
+		return err
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if c.db.isReadOnly(ctx, state) {
+		return backends.NewError(backends.ErrorCodeReadOnlyDatabase, fmt.Errorf("cannot write to a read-only database snapshot"))
+	}
+	primary, err := c.loadOrCreateMap(ctx, state)
+	if err != nil {
+		return err
+	}
+	indexInfos, _, err := resolveBranchIndexState(ctx, c, state)
+	if err != nil {
+		return fmt.Errorf("resolving initial-sync index state: %w", err)
+	}
+	if len(indexInfos) != 0 {
+		return errors.New("initial-sync bulk load requires indexes to be built after documents")
+	}
+	tuples := make([]initialSyncTuple, 0, len(documents))
+	for _, document := range documents {
+		documentID, err := document.Get("_id")
+		if err != nil {
+			return fmt.Errorf("document missing _id: %w", err)
+		}
+		hash, err := hashID(documentID)
+		if err != nil {
+			return fmt.Errorf("hashing _id: %w", err)
+		}
+		key, err := buildKey(hash[:])
+		if err != nil {
+			return err
+		}
+		value, err := writeDocToValue(ctx, state.ns, document)
+		if err != nil {
+			return err
+		}
+		tuples = append(tuples, initialSyncTuple{hash: hash, id: documentID, key: key, value: value})
+	}
+	slices.SortFunc(tuples, func(left, right initialSyncTuple) int {
+		return bytes.Compare(left.hash[:], right.hash[:])
+	})
+	for index, tuple := range tuples {
+		if index > 0 && tuple.hash == tuples[index-1].hash {
+			return backends.NewDuplicateKeyError(backends.DefaultIndexName, idDupKey(tuple.id))
+		}
+		exists, err := existsID(ctx, primary, tuple.hash)
+		if err != nil {
+			return fmt.Errorf("checking existing _id: %w", err)
+		}
+		if exists {
+			return backends.NewDuplicateKeyError(backends.DefaultIndexName, idDupKey(tuple.id))
+		}
+	}
+	primary, err = prolly.MutateMapWithTupleIter(ctx, primary, &initialSyncTupleIter{tuples: tuples})
+	if err != nil {
+		return fmt.Errorf("merging initial-sync sorted run: %w", err)
+	}
+	indexAM, err := buildIndexAM(ctx, state, nil, nil)
+	if err != nil {
+		return fmt.Errorf("building empty initial-sync index map: %w", err)
+	}
+	dtblHash, err := state.dtblHashForCollection(ctx, c.name, primary, indexAM, hash.Hash{})
+	if err != nil {
+		return err
+	}
+	return state.updateAddressMapWithSync(ctx, c.db.rootish, fmt.Sprintf("initial sync: load %d docs into %s", len(documents), c.name), func(editor prolly.AddressMapEditor) error {
+		return editor.Update(ctx, c.name, dtblHash)
+	}, true)
 }
 
 func existsID(ctx context.Context, m prolly.Map, h [20]byte) (bool, error) {
