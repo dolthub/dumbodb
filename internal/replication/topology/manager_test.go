@@ -74,12 +74,13 @@ func TestManagerTracksPrimaryAndReplacesSource(t *testing.T) {
 		Term:       9,
 		PrimaryID:  1,
 		Applied:    testOpTime(22),
+		Committed:  testOpTime(18),
 		ObservedAt: observedAt,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	state := manager.Snapshot()
-	if state.PrimaryHost != "primary.example:27017" || state.SyncSource != "primary.example:27017" || state.Term != 9 {
+	if state.PrimaryHost != "primary.example:27017" || state.SyncSource != "primary.example:27017" || state.Term != 9 || state.LastCommitted != testOpTime(18) {
 		t.Fatalf("primary state = %+v", state)
 	}
 	if err := manager.ObserveSourceRBID("primary.example:27017", 12); err != nil {
@@ -89,7 +90,7 @@ func TestManagerTracksPrimaryAndReplacesSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	state = manager.Snapshot()
-	if state.PrimaryID != -1 || state.PrimaryHost != "" || state.SyncSource != "secondary.example:27017" || state.RBID != 0 {
+	if state.PrimaryID != -1 || state.PrimaryHost != "" || state.SyncSource != "secondary.example:27017" || state.RBID != 0 || state.LastCommitted != (control.OpTime{}) {
 		t.Fatalf("replacement state = %+v", state)
 	}
 	if err := manager.ObserveSourceRBID("secondary.example:27017", 7); err != nil {

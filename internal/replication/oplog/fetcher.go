@@ -253,7 +253,7 @@ func (f *Fetcher) consumeResponse(ctx context.Context, source string, response *
 		if err := f.manager.ObserveHeartbeat(source, topology.Heartbeat{
 			SetName: state.SetName, MemberID: sourceMemberID, State: sourceState,
 			Term: metadata.Term, PrimaryID: memberIDAtConfigurationIndex(state, metadata.PrimaryIndex),
-			Applied: metadata.LastApplied, Written: metadata.LastWritten,
+			Applied: metadata.LastApplied, Written: metadata.LastWritten, Committed: metadata.LastCommitted,
 		}); err != nil {
 			return 0, err
 		}

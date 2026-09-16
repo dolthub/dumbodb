@@ -138,6 +138,75 @@ func TestReplicationHeartbeatReturnsNewerConfigAndTracksPrimary(t *testing.T) {
 	}
 }
 
+func TestReplicationStatusReportsDurableOptimes(t *testing.T) {
+	handler := configuredReplicationHandler(t)
+	checkpoint := control.Checkpoint{
+		Fetched:  control.OpTime{Seconds: 19, Increment: 5, Term: 9},
+		Buffered: control.OpTime{Seconds: 19, Increment: 5, Term: 9},
+		Written:  control.OpTime{Seconds: 17, Increment: 4, Term: 9},
+		Durable:  control.OpTime{Seconds: 13, Increment: 3, Term: 9},
+		Applied:  control.OpTime{Seconds: 11, Increment: 2, Term: 9},
+	}
+	if err := handler.ReplicationTopology.MarkInitialSyncComplete(checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	committed := control.OpTime{Seconds: 12, Increment: 7, Term: 9}
+	if err := handler.ReplicationTopology.ObserveHeartbeat("primary.example:27017", topology.Heartbeat{
+		SetName: "rs0", MemberID: 1, State: topology.StatePrimary, Term: 9, PrimaryID: 1,
+		Applied: checkpoint.Written, Written: checkpoint.Written, Durable: checkpoint.Durable, Committed: committed,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	response, err := handler.MsgReplSetGetStatus(context.Background(), wire.MustOpMsg("replSetGetStatus", int32(1), "$db", "admin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := opMsgDocument(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	optimes, ok := responseValue(document, "optimes").(*types.Document)
+	if !ok {
+		t.Fatalf("optimes = %T, want document", responseValue(document, "optimes"))
+	}
+	expected := map[string]control.OpTime{
+		"lastCommittedOpTime": committed,
+		"appliedOpTime":       checkpoint.Applied,
+		"durableOpTime":       checkpoint.Durable,
+		"writtenOpTime":       checkpoint.Written,
+	}
+	for field, expectedOpTime := range expected {
+		assertStatusOpTime(t, optimes, field, expectedOpTime)
+	}
+	expectedWallTimes := map[string]control.OpTime{
+		"lastCommittedWallTime": committed,
+		"lastAppliedWallTime":   checkpoint.Applied,
+		"lastDurableWallTime":   checkpoint.Durable,
+		"lastWrittenWallTime":   checkpoint.Written,
+	}
+	for field, expectedOpTime := range expectedWallTimes {
+		value, ok := responseValue(optimes, field).(time.Time)
+		if !ok || value.Unix() != int64(expectedOpTime.Seconds) {
+			t.Fatalf("optimes.%s = %v, want Unix %d", field, value, expectedOpTime.Seconds)
+		}
+	}
+}
+
+func assertStatusOpTime(t *testing.T, document *types.Document, field string, expected control.OpTime) {
+	t.Helper()
+	value, ok := responseValue(document, field).(*types.Document)
+	if !ok {
+		t.Fatalf("optimes.%s = %T, want document", field, responseValue(document, field))
+	}
+	timestamp, ok := responseValue(value, "ts").(types.Timestamp)
+	if !ok || uint64(timestamp) != uint64(expected.Seconds)<<32|uint64(expected.Increment) {
+		t.Fatalf("optimes.%s.ts = %v, want %v", field, timestamp, expected)
+	}
+	if term := responseValue(value, "t"); term != expected.Term {
+		t.Fatalf("optimes.%s.t = %v, want %d", field, term, expected.Term)
+	}
+}
+
 func TestReplicationHeartbeatRejectsInvalidProtocolFields(t *testing.T) {
 	handler := configuredReplicationHandler(t)
 	tests := []struct {

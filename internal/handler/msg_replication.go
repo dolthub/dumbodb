@@ -86,10 +86,29 @@ func (h *Handler) MsgReplSetGetStatus(_ context.Context, _ *wire.OpMsg) (*wire.O
 		"syncSourceHost", state.SyncSource,
 		"syncSourceId", memberIDForHost(state, state.SyncSource),
 		"heartbeatIntervalMillis", int64(2000),
+		"optimes", replicaStatusOpTimes(state),
 		"members", members,
 		"ok", float64(1),
 	))
 	return documentOpMsg(response)
+}
+
+func replicaStatusOpTimes(state topology.Snapshot) *types.Document {
+	committed := state.LastCommitted
+	if committed.Compare(state.Checkpoint.Durable) > 0 {
+		committed = state.Checkpoint.Durable
+	}
+	return must.NotFail(types.NewDocument(
+		"lastCommittedOpTime", opTimeDocument(committed),
+		"lastCommittedWallTime", opTimeDate(committed),
+		"readConcernMajorityOpTime", opTimeDocument(committed),
+		"appliedOpTime", opTimeDocument(state.Checkpoint.Applied),
+		"durableOpTime", opTimeDocument(state.Checkpoint.Durable),
+		"writtenOpTime", opTimeDocument(state.Checkpoint.Written),
+		"lastAppliedWallTime", opTimeDate(state.Checkpoint.Applied),
+		"lastDurableWallTime", opTimeDate(state.Checkpoint.Durable),
+		"lastWrittenWallTime", opTimeDate(state.Checkpoint.Written),
+	))
 }
 
 func (h *Handler) MsgReplSetHeartbeat(_ context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {

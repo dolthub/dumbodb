@@ -77,6 +77,7 @@ type Heartbeat struct {
 	Applied       control.OpTime
 	Written       control.OpTime
 	Durable       control.OpTime
+	Committed     control.OpTime
 	Configuration *control.ReplicaConfiguration
 	ObservedAt    time.Time
 }
@@ -90,6 +91,7 @@ type MemberStatus struct {
 	Applied       control.OpTime
 	Written       control.OpTime
 	Durable       control.OpTime
+	Committed     control.OpTime
 }
 
 type Snapshot struct {
@@ -104,6 +106,7 @@ type Snapshot struct {
 	RBID          int64
 	Configuration *control.ReplicaConfiguration
 	Checkpoint    control.Checkpoint
+	LastCommitted control.OpTime
 	Members       map[int]MemberStatus
 }
 
@@ -254,6 +257,7 @@ func (m *Manager) ObserveHeartbeat(host string, heartbeat Heartbeat) error {
 		Applied:       heartbeat.Applied,
 		Written:       heartbeat.Written,
 		Durable:       heartbeat.Durable,
+		Committed:     heartbeat.Committed,
 	}
 	if heartbeat.State == StatePrimary {
 		m.state.PrimaryID = heartbeat.MemberID
@@ -268,11 +272,15 @@ func (m *Manager) ObserveHeartbeat(host string, heartbeat Heartbeat) error {
 	m.state.SyncSource = m.selectSourceLocked()
 	if m.state.SyncSource != previous.SyncSource {
 		m.state.RBID = 0
+		m.state.LastCommitted = control.OpTime{}
 		if err := m.store.SetSource(m.state.SyncSource, 0); err != nil {
 			m.state = previous
 			m.mu.Unlock()
 			return err
 		}
+	}
+	if host == m.state.SyncSource && heartbeat.Committed != (control.OpTime{}) {
+		m.state.LastCommitted = heartbeat.Committed
 	}
 	listener := m.changeListenerLocked(previous)
 	m.mu.Unlock()
@@ -310,6 +318,7 @@ func (m *Manager) ObserveMemberContact(host string, memberID int, term int64, pr
 	m.state.SyncSource = m.selectSourceLocked()
 	if m.state.SyncSource != previous.SyncSource {
 		m.state.RBID = 0
+		m.state.LastCommitted = control.OpTime{}
 		if err := m.store.SetSource(m.state.SyncSource, 0); err != nil {
 			m.state = previous
 			m.mu.Unlock()
@@ -397,6 +406,7 @@ func (m *Manager) MarkMemberDown(memberID int) error {
 	m.state.SyncSource = m.selectSourceLocked()
 	if m.state.SyncSource != previous.SyncSource {
 		m.state.RBID = 0
+		m.state.LastCommitted = control.OpTime{}
 		if err := m.store.SetSource(m.state.SyncSource, 0); err != nil {
 			m.state = previous
 			m.mu.Unlock()
