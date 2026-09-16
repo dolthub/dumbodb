@@ -89,7 +89,7 @@ func TestStorePersistsRecoveryState(t *testing.T) {
 	if state.Checkpoint != checkpoint || state.InitialSyncPhase != InitialSyncApplying {
 		t.Fatalf("checkpoint state = %+v", state)
 	}
-	if got, ok := reopened.CommitFor(opTime(14)); !ok || got != interval {
+	if got, ok := reopened.CommitFor(opTime(14)); !ok || !equalCommitInterval(got, interval) {
 		t.Fatalf("CommitFor = %+v, %v; want %+v, true", got, ok, interval)
 	}
 	if got, ok := reopened.CollectionMapping(mapping.SourceUUID); !ok || got != mapping {
@@ -372,7 +372,7 @@ func TestCommitIntervalsUseAppendOnlyJournal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, ok := reopened.CommitFor(opTime(6)); !ok || got != intervals[1] {
+	if got, ok := reopened.CommitFor(opTime(6)); !ok || !equalCommitInterval(got, intervals[1]) {
 		t.Fatalf("CommitFor after reopen = %+v, %v; want %+v, true", got, ok, intervals[1])
 	}
 	if _, ok := reopened.CommitFor(opTime(9)); ok {
@@ -447,7 +447,7 @@ func TestOpenDiscardsIncompleteCommitLogTail(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, ok := reopened.CommitFor(opTime(1)); !ok || got != interval {
+	if got, ok := reopened.CommitFor(opTime(1)); !ok || !equalCommitInterval(got, interval) {
 		t.Fatalf("CommitFor after tail repair = %+v, %v", got, ok)
 	}
 	repairedInfo, err := os.Stat(journalPath)
@@ -456,6 +456,62 @@ func TestOpenDiscardsIncompleteCommitLogTail(t *testing.T) {
 	}
 	if repairedInfo.Size() != completeInfo.Size() {
 		t.Fatalf("repaired journal size = %d, want %d", repairedInfo.Size(), completeInfo.Size())
+	}
+}
+
+func TestPublishCommitRecoversCheckpointFromJournal(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir, testConfiguration())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fetched := opTime(9)
+	if err := store.SetCheckpoint(Checkpoint{Fetched: fetched, Buffered: fetched}); err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(dir, stateFileName)
+	stateBeforePublication, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	interval := CommitInterval{
+		First: opTime(1), Last: opTime(5), CommitID: "published",
+		Commits: []DatabaseCommit{{Database: "accounts", CommitID: "accounts-five"}, {Database: "orders", CommitID: "orders-five"}},
+	}
+	checkpoint := Checkpoint{
+		Fetched: fetched, Buffered: fetched, Written: interval.Last, Durable: interval.Last, Applied: interval.Last,
+	}
+	if err := store.PublishCommit(interval, checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := store.CommitForID(interval.CommitID); !ok || !equalCommitInterval(got, interval) {
+		t.Fatalf("CommitForID = %+v, %v; want %+v, true", got, ok, interval)
+	}
+	if got, ok := store.CommitForDatabaseCommit("orders", "orders-five"); !ok || !equalCommitInterval(got, interval) {
+		t.Fatalf("CommitForDatabaseCommit = %+v, %v; want %+v, true", got, ok, interval)
+	}
+
+	if err := os.WriteFile(statePath, stateBeforePublication, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(dir, testConfiguration())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reopened.Snapshot().Checkpoint; got != checkpoint {
+		t.Fatalf("checkpoint recovered from journal = %+v, want %+v", got, checkpoint)
+	}
+	if got, ok := reopened.CommitForID(interval.CommitID); !ok || !equalCommitInterval(got, interval) {
+		t.Fatalf("reopened CommitForID = %+v, %v; want %+v, true", got, ok, interval)
+	}
+	if err := reopened.PublishCommit(interval, checkpoint); err != nil {
+		t.Fatalf("idempotent publication: %v", err)
+	}
+	if err := reopened.PublishCommit(
+		CommitInterval{First: opTime(6), Last: opTime(6), CommitID: interval.CommitID},
+		Checkpoint{Fetched: fetched, Buffered: fetched, Written: opTime(6), Durable: opTime(6), Applied: opTime(6)},
+	); err == nil {
+		t.Fatal("PublishCommit accepted a reused commit ID")
 	}
 }
 

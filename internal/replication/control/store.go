@@ -21,7 +21,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
+	"strings"
 	"sync"
 )
 
@@ -111,9 +113,24 @@ type Checkpoint struct {
 }
 
 type CommitInterval struct {
-	First    OpTime `json:"first"`
-	Last     OpTime `json:"last"`
+	First    OpTime           `json:"first"`
+	Last     OpTime           `json:"last"`
+	CommitID string           `json:"commit_id"`
+	Commits  []DatabaseCommit `json:"commits,omitempty"`
+}
+
+type DatabaseCommit struct {
+	Database string `json:"database"`
 	CommitID string `json:"commit_id"`
+}
+
+type PendingPublication struct {
+	ID         string            `json:"id"`
+	First      OpTime            `json:"first"`
+	Last       OpTime            `json:"last"`
+	Databases  []string          `json:"databases"`
+	Commits    map[string]string `json:"commits"`
+	Checkpoint Checkpoint        `json:"checkpoint"`
 }
 
 type CollectionMapping struct {
@@ -180,6 +197,7 @@ type State struct {
 	Checkpoint          Checkpoint                           `json:"checkpoint"`
 	CommitLogGeneration uint64                               `json:"commit_log_generation"`
 	CommitIntervals     []CommitInterval                     `json:"commit_intervals,omitempty"`
+	PendingPublication  *PendingPublication                  `json:"pending_publication,omitempty"`
 	CollectionMappings  map[string]CollectionMapping         `json:"collection_mappings"`
 	TransactionParts    map[string]TransactionFragment       `json:"transaction_parts"`
 	AuthOwnership       map[string]AuthOwnership             `json:"auth_ownership"`
@@ -187,9 +205,10 @@ type State struct {
 }
 
 type Store struct {
-	mu    sync.RWMutex
-	path  string
-	state State
+	mu         sync.RWMutex
+	path       string
+	state      State
+	commitByID map[string]int
 }
 
 func Open(dir string, configuration Configuration) (*Store, error) {
@@ -204,6 +223,7 @@ func Open(dir string, configuration Configuration) (*Store, error) {
 	data, err := os.ReadFile(store.path)
 	if errors.Is(err, os.ErrNotExist) {
 		store.state = newState(configuration)
+		store.commitByID = make(map[string]int)
 		if err := store.replaceCommitLogLocked(store.state.CommitLogGeneration, nil); err != nil {
 			return nil, err
 		}
@@ -236,16 +256,31 @@ func Open(dir string, configuration Configuration) (*Store, error) {
 			return nil, err
 		}
 		store.state.CommitIntervals = legacyIntervals
+		store.rebuildCommitIndexLocked()
 		if err := store.persistLocked(); err != nil {
 			return nil, err
 		}
 		return store, nil
 	}
-	intervals, err := store.loadCommitLogLocked(store.state.CommitLogGeneration)
+	intervals, publishedCheckpoint, err := store.loadCommitLogLocked(store.state.CommitLogGeneration)
 	if err != nil {
 		return nil, err
 	}
 	store.state.CommitIntervals = intervals
+	store.rebuildCommitIndexLocked()
+	if publishedCheckpoint != nil && publishedCheckpoint.Applied.Compare(store.state.Checkpoint.Applied) > 0 {
+		store.state.Checkpoint = *publishedCheckpoint
+	}
+	if store.state.PendingPublication != nil {
+		if _, ok := store.commitByID[store.state.PendingPublication.ID]; ok {
+			store.state.PendingPublication = nil
+		}
+	}
+	if publishedCheckpoint != nil && publishedCheckpoint.Applied.Compare(store.state.Checkpoint.Applied) >= 0 {
+		if err := store.persistLocked(); err != nil {
+			return nil, err
+		}
+	}
 	return store, nil
 }
 
@@ -453,6 +488,8 @@ func (s *Store) ResetInitialSync(attemptID string) error {
 	s.state.CurrentRBID = 0
 	s.state.CommitLogGeneration = newGeneration
 	s.state.CommitIntervals = nil
+	s.commitByID = make(map[string]int)
+	s.state.PendingPublication = nil
 	s.state.CollectionMappings = make(map[string]CollectionMapping)
 	s.state.TransactionParts = make(map[string]TransactionFragment)
 	s.state.AuthOwnership = make(map[string]AuthOwnership)
@@ -471,7 +508,7 @@ func (s *Store) SetCheckpoint(checkpoint Checkpoint) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if checkpoint.Fetched.Compare(s.state.Checkpoint.Fetched) < 0 || checkpoint.Applied.Compare(s.state.Checkpoint.Applied) < 0 {
+	if checkpointRegresses(checkpoint, s.state.Checkpoint) {
 		return errors.New("replication checkpoint moved backwards")
 	}
 	s.state.Checkpoint = checkpoint
@@ -506,10 +543,11 @@ func (s *Store) RecordCommit(interval CommitInterval) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(s.state.CommitIntervals) == 0 || interval.First.Compare(s.state.CommitIntervals[len(s.state.CommitIntervals)-1].Last) > 0 {
-		if err := s.appendCommitIntervalLocked(interval); err != nil {
+		if err := s.appendCommitIntervalLocked(interval, nil); err != nil {
 			return err
 		}
 		s.state.CommitIntervals = append(s.state.CommitIntervals, interval)
+		s.commitByID[interval.CommitID] = len(s.state.CommitIntervals) - 1
 		return nil
 	}
 	index := sort.Search(len(s.state.CommitIntervals), func(i int) bool {
@@ -517,7 +555,7 @@ func (s *Store) RecordCommit(interval CommitInterval) error {
 	})
 	if index < len(s.state.CommitIntervals) {
 		existing := s.state.CommitIntervals[index]
-		if interval == existing {
+		if equalCommitInterval(interval, existing) {
 			return nil
 		}
 		if interval.Last.Compare(existing.First) >= 0 {
@@ -526,6 +564,57 @@ func (s *Store) RecordCommit(interval CommitInterval) error {
 		return fmt.Errorf("commit interval %v precedes already recorded commit %q", interval, existing.CommitID)
 	}
 	return fmt.Errorf("commit interval %v is not after retained history", interval)
+}
+
+// PublishCommit durably records a commit interval and the checkpoint it makes reportable.
+func (s *Store) PublishCommit(interval CommitInterval, checkpoint Checkpoint) error {
+	if interval.CommitID == "" {
+		return errors.New("commit ID is required")
+	}
+	if interval.First.Compare(interval.Last) > 0 {
+		return errors.New("commit interval starts after it ends")
+	}
+	if err := validateCheckpoint(checkpoint); err != nil {
+		return err
+	}
+	if checkpoint.Written != interval.Last || checkpoint.Durable != interval.Last || checkpoint.Applied != interval.Last {
+		return errors.New("published checkpoint must write, durably store, and apply the complete commit interval")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if checkpointRegresses(checkpoint, s.state.Checkpoint) {
+		return errors.New("replication checkpoint moved backwards")
+	}
+	if s.state.PendingPublication != nil {
+		if err := validatePendingCompletion(*s.state.PendingPublication, interval, checkpoint); err != nil {
+			return err
+		}
+	}
+	if index, ok := s.commitByID[interval.CommitID]; ok {
+		if !equalCommitInterval(s.state.CommitIntervals[index], interval) {
+			return fmt.Errorf("commit ID %q already identifies interval %v", interval.CommitID, s.state.CommitIntervals[index])
+		}
+		if checkpoint.Applied.Compare(s.state.Checkpoint.Applied) <= 0 {
+			return nil
+		}
+		return errors.New("published commit interval is missing its durable checkpoint record")
+	}
+	if len(s.state.CommitIntervals) != 0 {
+		last := s.state.CommitIntervals[len(s.state.CommitIntervals)-1]
+		if interval.First.Compare(last.Last) <= 0 {
+			return fmt.Errorf("commit interval %v does not follow commit %q", interval, last.CommitID)
+		}
+	}
+	if err := s.appendCommitIntervalLocked(interval, &checkpoint); err != nil {
+		return err
+	}
+	s.state.CommitIntervals = append(s.state.CommitIntervals, interval)
+	s.commitByID[interval.CommitID] = len(s.state.CommitIntervals) - 1
+	s.state.Checkpoint = checkpoint
+	if s.state.PendingPublication != nil && s.state.PendingPublication.ID == interval.CommitID {
+		s.state.PendingPublication = nil
+	}
+	return s.persistLocked()
 }
 
 func (s *Store) CommitFor(opTime OpTime) (CommitInterval, bool) {
@@ -537,7 +626,31 @@ func (s *Store) CommitFor(opTime OpTime) (CommitInterval, bool) {
 	if index < len(s.state.CommitIntervals) {
 		interval := s.state.CommitIntervals[index]
 		if interval.First.Compare(opTime) <= 0 {
-			return interval, true
+			return cloneCommitInterval(interval), true
+		}
+	}
+	return CommitInterval{}, false
+}
+
+func (s *Store) CommitForID(commitID string) (CommitInterval, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	index, ok := s.commitByID[commitID]
+	if !ok {
+		return CommitInterval{}, false
+	}
+	return cloneCommitInterval(s.state.CommitIntervals[index]), true
+}
+
+func (s *Store) CommitForDatabaseCommit(database, commitID string) (CommitInterval, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, interval := range s.state.CommitIntervals {
+		index, ok := slices.BinarySearchFunc(interval.Commits, DatabaseCommit{Database: database}, func(left, right DatabaseCommit) int {
+			return strings.Compare(left.Database, right.Database)
+		})
+		if ok && interval.Commits[index].CommitID == commitID {
+			return cloneCommitInterval(interval), true
 		}
 	}
 	return CommitInterval{}, false
@@ -742,6 +855,33 @@ func normalizeState(state *State) {
 	if state.ReplicationMetadata == nil {
 		state.ReplicationMetadata = make(map[string]ReplicationMetadataRecord)
 	}
+	if state.PendingPublication != nil && state.PendingPublication.Commits == nil {
+		state.PendingPublication.Commits = make(map[string]string)
+	}
+}
+
+func (s *Store) rebuildCommitIndexLocked() {
+	s.commitByID = make(map[string]int, len(s.state.CommitIntervals))
+	for index, interval := range s.state.CommitIntervals {
+		s.commitByID[interval.CommitID] = index
+	}
+}
+
+func checkpointRegresses(next, current Checkpoint) bool {
+	return next.Fetched.Compare(current.Fetched) < 0 ||
+		next.Buffered.Compare(current.Buffered) < 0 ||
+		next.Written.Compare(current.Written) < 0 ||
+		next.Durable.Compare(current.Durable) < 0 ||
+		next.Applied.Compare(current.Applied) < 0
+}
+
+func equalCommitInterval(left, right CommitInterval) bool {
+	return left.First == right.First && left.Last == right.Last && left.CommitID == right.CommitID && slices.Equal(left.Commits, right.Commits)
+}
+
+func cloneCommitInterval(interval CommitInterval) CommitInterval {
+	interval.Commits = append([]DatabaseCommit(nil), interval.Commits...)
+	return interval
 }
 
 func cloneState(state State) State {

@@ -589,6 +589,14 @@ written. **SRC**
 Progress is forwarded along sync chains, not only directly to the primary. This is
 why an `optimes` array can describe more than the sending member. **SRC/WIRE**
 
+The DumboDB reporter serializes requests to the current sync source, sends its own
+durable checkpoint plus healthy member positions learned through heartbeats, and
+uses the installed replica configuration version. A durable publication wakes the
+reporter immediately. If another publication finishes while a request is in flight,
+the reporter sends the newer position immediately after the response; otherwise a
+heartbeat-period keepalive refreshes the source. Failed connections are replaced on
+the next report without advancing acknowledged progress. **DESIGN**
+
 ## Sync-source selection and primary changes
 
 A secondary normally chooses a reachable data-bearing member that is ahead of its
@@ -667,6 +675,17 @@ linear in the number of DumboDB commits, not source operations, and preserves th
 complete optime-to-commit mapping required for rollback and historical inspection.
 The replication benchmark must report bytes per interval and lookup/startup cost at
 the selected batch size before production batching defaults are fixed. **DESIGN**
+
+Publishing a source interval uses a durable manifest identified by a hash of its
+source boundaries and sorted database set. The manifest is written before any
+database commit and records each resulting `main` commit ID. Every database commit
+uses the manifest ID in its commit message. After a crash or ambiguous commit
+result, recovery compares each database HEAD with that message, records an already
+completed commit, and commits only the remaining working roots. The final journal
+record contains the complete sorted database-to-commit mapping and the written,
+durable, and applied checkpoint. Only that journal append makes the positions
+reportable; a lagging mutable state snapshot is repaired from the journal on open.
+**DESIGN**
 
 ## Collection identity
 

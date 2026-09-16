@@ -27,12 +27,18 @@ import (
 
 const commitLogNameFormat = "commit-intervals-%020d.jsonl"
 
+type commitLogRecord struct {
+	CommitInterval
+	Checkpoint *Checkpoint `json:"checkpoint,omitempty"`
+}
+
 func (s *Store) commitLogPath(generation uint64) string {
 	return filepath.Join(filepath.Dir(s.path), fmt.Sprintf(commitLogNameFormat, generation))
 }
 
-func (s *Store) appendCommitIntervalLocked(interval CommitInterval) error {
-	data, err := json.Marshal(interval)
+func (s *Store) appendCommitIntervalLocked(interval CommitInterval, checkpoint *Checkpoint) error {
+	record := commitLogRecord{CommitInterval: interval, Checkpoint: checkpoint}
+	data, err := json.Marshal(record)
 	if err != nil {
 		return fmt.Errorf("encoding commit interval: %w", err)
 	}
@@ -83,47 +89,59 @@ func truncateAndSync(path string, size int64) error {
 	return file.Sync()
 }
 
-func (s *Store) loadCommitLogLocked(generation uint64) ([]CommitInterval, error) {
+func (s *Store) loadCommitLogLocked(generation uint64) ([]CommitInterval, *Checkpoint, error) {
 	path := s.commitLogPath(generation)
 	file, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err != nil {
-		return nil, fmt.Errorf("opening commit interval log generation %d: %w", generation, err)
+		return nil, nil, fmt.Errorf("opening commit interval log generation %d: %w", generation, err)
 	}
 	defer file.Close()
 
 	var intervals []CommitInterval
+	var publishedCheckpoint *Checkpoint
 	var completeBytes int64
 	reader := bufio.NewReader(file)
 	for {
 		line, readErr := reader.ReadBytes('\n')
 		if readErr != nil {
 			if !errors.Is(readErr, io.EOF) {
-				return nil, fmt.Errorf("reading commit interval log: %w", readErr)
+				return nil, nil, fmt.Errorf("reading commit interval log: %w", readErr)
 			}
 			if len(line) != 0 {
 				if err := file.Truncate(completeBytes); err != nil {
-					return nil, fmt.Errorf("discarding incomplete commit interval: %w", err)
+					return nil, nil, fmt.Errorf("discarding incomplete commit interval: %w", err)
 				}
 				if err := file.Sync(); err != nil {
-					return nil, fmt.Errorf("syncing repaired commit interval log: %w", err)
+					return nil, nil, fmt.Errorf("syncing repaired commit interval log: %w", err)
 				}
 			}
 			break
 		}
 		completeBytes += int64(len(line))
-		var interval CommitInterval
-		if err := json.Unmarshal(bytes.TrimSuffix(line, []byte{'\n'}), &interval); err != nil {
-			return nil, fmt.Errorf("decoding commit interval %d: %w", len(intervals), err)
+		var record commitLogRecord
+		if err := json.Unmarshal(bytes.TrimSuffix(line, []byte{'\n'}), &record); err != nil {
+			return nil, nil, fmt.Errorf("decoding commit interval %d: %w", len(intervals), err)
 		}
-		intervals = append(intervals, interval)
+		if record.Checkpoint != nil {
+			if err := validatePublishedCheckpoint(record.CommitInterval, *record.Checkpoint); err != nil {
+				return nil, nil, fmt.Errorf("validating commit interval %d checkpoint: %w", len(intervals), err)
+			}
+			if publishedCheckpoint != nil && checkpointRegresses(*record.Checkpoint, *publishedCheckpoint) {
+				return nil, nil, fmt.Errorf("commit interval %d checkpoint regresses", len(intervals))
+			}
+			checkpoint := *record.Checkpoint
+			publishedCheckpoint = &checkpoint
+		}
+		intervals = append(intervals, record.CommitInterval)
 	}
 	if err := validateCommitIntervals(intervals); err != nil {
-		return nil, fmt.Errorf("validating commit interval log: %w", err)
+		return nil, nil, fmt.Errorf("validating commit interval log: %w", err)
 	}
-	return intervals, nil
+	return intervals, publishedCheckpoint, nil
 }
 
 func validateCommitIntervals(intervals []CommitInterval) error {
+	commitIDs := make(map[string]struct{}, len(intervals))
 	for index, interval := range intervals {
 		if interval.CommitID == "" {
 			return fmt.Errorf("commit interval %d has no commit ID", index)
@@ -131,9 +149,31 @@ func validateCommitIntervals(intervals []CommitInterval) error {
 		if interval.First.Compare(interval.Last) > 0 {
 			return fmt.Errorf("commit interval %d starts after it ends", index)
 		}
+		if _, ok := commitIDs[interval.CommitID]; ok {
+			return fmt.Errorf("commit interval %d repeats commit ID %q", index, interval.CommitID)
+		}
+		commitIDs[interval.CommitID] = struct{}{}
+		for commitIndex, commit := range interval.Commits {
+			if commit.Database == "" || commit.CommitID == "" {
+				return fmt.Errorf("commit interval %d has incomplete database commit %d", index, commitIndex)
+			}
+			if commitIndex > 0 && interval.Commits[commitIndex-1].Database >= commit.Database {
+				return fmt.Errorf("commit interval %d database commits are not strictly sorted", index)
+			}
+		}
 		if index > 0 && intervals[index-1].Last.Compare(interval.First) >= 0 {
 			return fmt.Errorf("commit interval %d overlaps or precedes commit %q", index, intervals[index-1].CommitID)
 		}
+	}
+	return nil
+}
+
+func validatePublishedCheckpoint(interval CommitInterval, checkpoint Checkpoint) error {
+	if err := validateCheckpoint(checkpoint); err != nil {
+		return err
+	}
+	if checkpoint.Written != interval.Last || checkpoint.Durable != interval.Last || checkpoint.Applied != interval.Last {
+		return errors.New("checkpoint does not publish the complete commit interval")
 	}
 	return nil
 }
@@ -154,7 +194,7 @@ func (s *Store) replaceCommitLogLocked(generation uint64, intervals []CommitInte
 	defer os.Remove(temporaryName)
 	encoder := json.NewEncoder(temporary)
 	for _, interval := range intervals {
-		if err := encoder.Encode(interval); err != nil {
+		if err := encoder.Encode(commitLogRecord{CommitInterval: interval}); err != nil {
 			temporary.Close()
 			return fmt.Errorf("writing commit interval log: %w", err)
 		}

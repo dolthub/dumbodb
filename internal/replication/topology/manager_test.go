@@ -16,6 +16,7 @@ package topology
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -143,6 +144,39 @@ func TestManagerTransitionsToSecondaryAfterInitialSync(t *testing.T) {
 	}
 	if recovered := New(openControlStore(t, dir)).Snapshot(); recovered.State != StateSecondary || recovered.Checkpoint != checkpoint {
 		t.Fatalf("recovered secondary state = %+v", recovered)
+	}
+}
+
+func TestManagerPublishesCommitBeforeNotifyingProgress(t *testing.T) {
+	dir := t.TempDir()
+	store := openControlStore(t, dir)
+	manager := New(store)
+	fetched := testOpTime(8)
+	if err := manager.AdvanceFetched(fetched, fetched); err != nil {
+		t.Fatal(err)
+	}
+	interval := control.CommitInterval{First: testOpTime(1), Last: testOpTime(5), CommitID: "commit-five"}
+	checkpoint := control.Checkpoint{
+		Fetched: fetched, Buffered: fetched, Written: interval.Last, Durable: interval.Last, Applied: interval.Last,
+	}
+	notifications := 0
+	manager.SetProgressListener(func() {
+		notifications++
+		if got, ok := store.CommitForID(interval.CommitID); !ok || !reflect.DeepEqual(got, interval) {
+			t.Fatalf("notification preceded durable provenance: %+v, %v", got, ok)
+		}
+	})
+	if err := manager.PublishCommit(interval, checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	if notifications != 1 {
+		t.Fatalf("progress notifications = %d, want 1", notifications)
+	}
+	if state := manager.Snapshot(); state.Checkpoint != checkpoint {
+		t.Fatalf("manager checkpoint = %+v, want %+v", state.Checkpoint, checkpoint)
+	}
+	if recovered := New(openControlStore(t, dir)).Snapshot(); recovered.Checkpoint != checkpoint {
+		t.Fatalf("recovered checkpoint = %+v, want %+v", recovered.Checkpoint, checkpoint)
 	}
 }
 

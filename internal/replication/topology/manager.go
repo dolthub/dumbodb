@@ -108,10 +108,11 @@ type Snapshot struct {
 }
 
 type Manager struct {
-	mu       sync.RWMutex
-	store    *control.Store
-	state    Snapshot
-	onChange func()
+	mu         sync.RWMutex
+	store      *control.Store
+	state      Snapshot
+	onChange   func()
+	onProgress func()
 }
 
 func New(store *control.Store) *Manager {
@@ -150,6 +151,12 @@ func (m *Manager) SetChangeListener(listener func()) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.onChange = listener
+}
+
+func (m *Manager) SetProgressListener(listener func()) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onProgress = listener
 }
 
 func (m *Manager) Snapshot() Snapshot {
@@ -434,6 +441,22 @@ func (m *Manager) AdvanceFetched(fetched, buffered control.OpTime) error {
 		return err
 	}
 	m.state.Checkpoint = checkpoint
+	return nil
+}
+
+// PublishCommit atomically persists commit provenance and reportable progress.
+func (m *Manager) PublishCommit(interval control.CommitInterval, checkpoint control.Checkpoint) error {
+	m.mu.Lock()
+	if err := m.store.PublishCommit(interval, checkpoint); err != nil {
+		m.mu.Unlock()
+		return err
+	}
+	m.state.Checkpoint = checkpoint
+	listener := m.onProgress
+	m.mu.Unlock()
+	if listener != nil {
+		listener()
+	}
 	return nil
 }
 
