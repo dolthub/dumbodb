@@ -712,6 +712,45 @@ func TestStorePersistsInstalledReplicaConfiguration(t *testing.T) {
 	}
 }
 
+func TestInitialSyncDataResetPreservesReplicaIdentity(t *testing.T) {
+	directory := t.TempDir()
+	configuration := testConfiguration()
+	backend := testBackend(t, directory)
+	store, err := Open(backend, configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replicaConfiguration := ReplicaConfiguration{
+		SetName:         configuration.SetName,
+		Version:         9,
+		Term:            4,
+		ProtocolVersion: 1,
+		ReplicaSetID:    "set-id",
+		Members: []MemberConfiguration{
+			{MemberID: 1, Host: "primary.example:27017", Priority: 1, Votes: 1},
+			{MemberID: 3, Host: configuration.MemberHost, Hidden: true, Priority: 0, Votes: 0},
+		},
+	}
+	if err := store.InstallReplicaConfiguration(replicaConfiguration, 11); err != nil {
+		t.Fatal(err)
+	}
+	resetter := backend.(backends.InitialSyncResetter)
+	if err := resetter.ResetInitialSyncData(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(backend, configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := reopened.Snapshot()
+	if state.ReplicaConfig == nil || state.ReplicaConfig.Version != replicaConfiguration.Version {
+		t.Fatalf("replica configuration = %+v", state.ReplicaConfig)
+	}
+	if state.Identity == nil || state.Identity.MemberID != 3 || state.Identity.Term != 11 {
+		t.Fatalf("identity = %+v", state.Identity)
+	}
+}
+
 func TestStoreRejectsReplicaConfigurationWithoutSafeMember(t *testing.T) {
 	store, err := openTestStore(t, t.TempDir(), testConfiguration())
 	if err != nil {

@@ -52,9 +52,13 @@ func (b *Backend) ResetInitialSyncData(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("finding %s initial commit: %w", entry.Name(), err)
 		}
-		_, err = b.DumboDBReset(ctx, &backends.ResetParams{
+		var preserveCollections []string
+		if entry.Name() == "admin" {
+			preserveCollections = []string{backends.ReservedReplicationControlName}
+		}
+		_, err = b.dumboDBReset(ctx, &backends.ResetParams{
 			DBName: entry.Name(), Branch: defaultBranch, CommitID: initialCommit.String(), Hard: true,
-		})
+		}, preserveCollections)
 		if err != nil {
 			return fmt.Errorf("resetting %s initial sync data: %w", entry.Name(), err)
 		}

@@ -60,12 +60,36 @@ func TestResetInitialSyncDataResetsMainToInitialCommit(t *testing.T) {
 	if err := customers.CreateCollection(ctx, &backends.CreateCollectionParams{Name: "uncommitted_clone"}); err != nil {
 		t.Fatal(err)
 	}
+	controlCollection, err := backend.(backends.ReplicationControlBackend).ReplicationControlCollection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controlCollection.InsertAll(ctx, &backends.InsertAllParams{Docs: []*types.Document{
+		must.NotFail(types.NewDocument("_id", "control", "marker", "preserved")),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	admin, err := backend.Database("admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	users, err := admin.Collection("system.users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := users.InsertAll(ctx, &backends.InsertAllParams{Docs: []*types.Document{
+		must.NotFail(types.NewDocument("_id", "source-user")),
+	}}); err != nil {
+		t.Fatal(err)
+	}
 	resetter := backend.(backends.InitialSyncResetter)
 	if err := resetter.ResetInitialSyncData(ctx); err != nil {
 		t.Fatal(err)
 	}
 	assertCollectionNames(t, ctx, backend, "orders")
 	assertCollectionNames(t, ctx, backend, "customers")
+	assertCollectionNames(t, ctx, backend, "admin", backends.ReservedReplicationControlName)
+	assertControlMarker(t, ctx, backend)
 	backend.Close()
 
 	reopened, err := NewBackend(directory, slog.Default(), false, false, 0, 0)
@@ -75,6 +99,36 @@ func TestResetInitialSyncDataResetsMainToInitialCommit(t *testing.T) {
 	defer reopened.Close()
 	assertCollectionNames(t, ctx, reopened, "orders")
 	assertCollectionNames(t, ctx, reopened, "customers")
+	assertCollectionNames(t, ctx, reopened, "admin", backends.ReservedReplicationControlName)
+	assertControlMarker(t, ctx, reopened)
+}
+
+func assertControlMarker(t *testing.T, ctx context.Context, backend backends.Backend) {
+	t.Helper()
+	admin, err := backend.Database("admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	collection, err := admin.Collection(backends.ReservedReplicationControlName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := collection.Query(ctx, new(backends.QueryParams))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer result.Iter.Close()
+	_, document, err := result.Iter.Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker, err := document.Get("marker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if marker != "preserved" {
+		t.Fatalf("control marker = %v, want preserved", marker)
+	}
 }
 
 func assertCollectionNames(t *testing.T, ctx context.Context, backend backends.Backend, databaseName string, want ...string) {

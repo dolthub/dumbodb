@@ -2847,6 +2847,14 @@ func (b *Backend) DumboDBStatus(ctx context.Context, params *backends.Versioning
 // or a relative ancestor expression (e.g. "main~2"). HEAD/HEAD~N forms are rewritten by
 // the handler to "<branch>"/"<branch>~N" before they reach the backend.
 func (b *Backend) DumboDBReset(ctx context.Context, params *backends.ResetParams) (*backends.ResetResult, error) {
+	return b.dumboDBReset(ctx, params, nil)
+}
+
+func (b *Backend) dumboDBReset(
+	ctx context.Context,
+	params *backends.ResetParams,
+	preserveCollections []string,
+) (*backends.ResetResult, error) {
 	db, err := b.getOrOpenDB(ctx, params.DBName, false)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBReset: opening db %q: %w", params.DBName, err)
@@ -2887,6 +2895,37 @@ func (b *Backend) DumboDBReset(ctx context.Context, params *backends.ResetParams
 	targetAM, err := amFromCommitHash(ctx, db, commitID)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBReset: resolving target commit %q: %w", commitID, err)
+	}
+	if len(preserveCollections) > 0 {
+		currentAM, currentErr := db.getOrInitBranchAM(ctx, branch)
+		if currentErr != nil {
+			return nil, fmt.Errorf("DumboDBReset: reading collections to preserve: %w", currentErr)
+		}
+		editor := targetAM.Editor()
+		for _, name := range preserveCollections {
+			collectionHash, getErr := currentAM.Get(ctx, name)
+			if getErr != nil {
+				return nil, fmt.Errorf("DumboDBReset: reading preserved collection %q: %w", name, getErr)
+			}
+			if collectionHash.IsEmpty() {
+				continue
+			}
+			targetHash, targetErr := targetAM.Get(ctx, name)
+			if targetErr != nil {
+				return nil, fmt.Errorf("DumboDBReset: reading target collection %q: %w", name, targetErr)
+			}
+			if targetHash.IsEmpty() {
+				if addErr := editor.Add(ctx, name, collectionHash); addErr != nil {
+					return nil, fmt.Errorf("DumboDBReset: preserving collection %q: %w", name, addErr)
+				}
+			} else if updateErr := editor.Update(ctx, name, collectionHash); updateErr != nil {
+				return nil, fmt.Errorf("DumboDBReset: preserving collection %q: %w", name, updateErr)
+			}
+		}
+		targetAM, err = editor.Flush(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("DumboDBReset: flushing preserved collections: %w", err)
+		}
 	}
 
 	branchDS, dsErr := db.datasDB.GetDataset(ctx, branchDataset)
