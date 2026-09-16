@@ -34,6 +34,19 @@ type CloneCursor struct {
 	ResumeAfter *types.Document
 }
 
+// UnsupportedBSONTypeError reports a source value DumboDB cannot represent.
+type UnsupportedBSONTypeError struct {
+	Namespace string
+	BSONType  string
+}
+
+func (e *UnsupportedBSONTypeError) Error() string {
+	if e.Namespace == "" {
+		return fmt.Sprintf("DumboDB does not support BSON type %s", e.BSONType)
+	}
+	return fmt.Sprintf("DumboDB does not support BSON type %s while cloning %s", e.BSONType, e.Namespace)
+}
+
 // CloneDocuments scans a source collection in natural order and returns its final resume token.
 func CloneDocuments(ctx context.Context, client requestClient, cursor CloneCursor, consume func(*types.Document) error) (*types.Document, error) {
 	if consume == nil {
@@ -60,6 +73,17 @@ func CloneDocumentBatches(ctx context.Context, client requestClient, cursor Clon
 	}
 	lastToken := cursor.ResumeAfter
 	for {
+		raw, err := response.RawDocument()
+		if err != nil {
+			return lastToken, err
+		}
+		unsupportedType, unsupported, err := bson.UnsupportedTypeName(raw)
+		if err != nil {
+			return lastToken, fmt.Errorf("inspecting clone response BSON: %w", err)
+		}
+		if unsupported {
+			return lastToken, &UnsupportedBSONTypeError{BSONType: unsupportedType}
+		}
 		document, err := responseDocument(response)
 		if err != nil {
 			return lastToken, err

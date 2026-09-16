@@ -75,6 +75,13 @@ func MaterializeCollection(
 	result.ResumeToken = resumeToken
 	result.Loader = loader.Stats()
 	if err != nil {
+		var unsupported *UnsupportedBSONTypeError
+		if errors.As(err, &unsupported) {
+			return result, &UnsupportedBSONTypeError{
+				Namespace: database + "." + collection.Name,
+				BSONType:  unsupported.BSONType,
+			}
+		}
 		return result, fmt.Errorf("cloning %s.%s: %w", database, collection.Name, err)
 	}
 	if err := catalogApplier.CreateIndexes(ctx, collection.SourceUUID, plan.Indexes); err != nil {

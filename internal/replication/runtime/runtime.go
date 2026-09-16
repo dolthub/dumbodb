@@ -84,8 +84,14 @@ func New(
 }
 
 func (r *Runtime) Run(ctx context.Context) {
+	if failure := r.store.Snapshot().InitialSyncFailure; failure != nil {
+		r.logger.Error("MongoDB replication stopped by terminal initial-sync failure", "err", failure.Message)
+		return
+	}
+	reportContext, cancelReport := context.WithCancel(ctx)
+	defer cancelReport()
 	reporter := topology.NewProgressReporter(r.manager, r.logger)
-	go reporter.Run(ctx)
+	go reporter.Run(reportContext)
 	for ctx.Err() == nil {
 		if err := r.recoverPublication(ctx); err != nil {
 			r.retry(ctx, "recovering replication publication", err)
@@ -103,6 +109,14 @@ func (r *Runtime) Run(ctx context.Context) {
 		}
 		if r.store.Snapshot().InitialSyncPhase != control.InitialSyncComplete {
 			if err := r.runInitialSync(ctx, state.SyncSource); err != nil {
+				if failure, terminal := terminalInitialSyncFailure(err); terminal {
+					if recordErr := r.manager.MarkInitialSyncFailed(failure); recordErr != nil {
+						r.logger.Error("recording terminal initial-sync failure", "err", errors.Join(err, recordErr))
+						return
+					}
+					r.logger.Error("MongoDB replication stopped by terminal initial-sync failure", "err", failure.Message)
+					return
+				}
 				r.retry(ctx, "initial sync failed", err)
 				continue
 			}
@@ -125,6 +139,18 @@ func (r *Runtime) Run(ctx context.Context) {
 			r.retry(ctx, "steady replication stopped", err)
 		}
 	}
+}
+
+func terminalInitialSyncFailure(err error) (control.InitialSyncFailure, bool) {
+	var unsupported *initialsync.UnsupportedBSONTypeError
+	if !errors.As(err, &unsupported) || unsupported.Namespace == "" || unsupported.BSONType == "" {
+		return control.InitialSyncFailure{}, false
+	}
+	return control.InitialSyncFailure{
+		Namespace: unsupported.Namespace,
+		BSONType:  unsupported.BSONType,
+		Message:   unsupported.Error(),
+	}, true
 }
 
 func (r *Runtime) runInitialSync(ctx context.Context, source string) error {

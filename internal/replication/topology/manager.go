@@ -95,19 +95,20 @@ type MemberStatus struct {
 }
 
 type Snapshot struct {
-	SetName       string
-	MemberHost    string
-	MemberID      int
-	State         MemberState
-	Term          int64
-	PrimaryID     int
-	PrimaryHost   string
-	SyncSource    string
-	RBID          int64
-	Configuration *control.ReplicaConfiguration
-	Checkpoint    control.Checkpoint
-	LastCommitted control.OpTime
-	Members       map[int]MemberStatus
+	SetName            string
+	MemberHost         string
+	MemberID           int
+	State              MemberState
+	Term               int64
+	PrimaryID          int
+	PrimaryHost        string
+	SyncSource         string
+	RBID               int64
+	Configuration      *control.ReplicaConfiguration
+	Checkpoint         control.Checkpoint
+	LastCommitted      control.OpTime
+	InitialSyncFailure *control.InitialSyncFailure
+	Members            map[int]MemberStatus
 }
 
 type Manager struct {
@@ -121,14 +122,15 @@ type Manager struct {
 func New(store *control.Store) *Manager {
 	persisted := store.Snapshot()
 	state := Snapshot{
-		SetName:    persisted.Configuration.SetName,
-		MemberHost: persisted.Configuration.MemberHost,
-		State:      StateStartup,
-		PrimaryID:  -1,
-		RBID:       persisted.CurrentRBID,
-		SyncSource: persisted.CurrentSource,
-		Checkpoint: persisted.Checkpoint,
-		Members:    make(map[int]MemberStatus),
+		SetName:            persisted.Configuration.SetName,
+		MemberHost:         persisted.Configuration.MemberHost,
+		State:              StateStartup,
+		PrimaryID:          -1,
+		RBID:               persisted.CurrentRBID,
+		SyncSource:         persisted.CurrentSource,
+		Checkpoint:         persisted.Checkpoint,
+		InitialSyncFailure: cloneInitialSyncFailure(persisted.InitialSyncFailure),
+		Members:            make(map[int]MemberStatus),
 	}
 	if persisted.Identity != nil {
 		state.MemberID = persisted.Identity.MemberID
@@ -146,7 +148,7 @@ func New(store *control.Store) *Manager {
 	}
 	if persisted.Lifecycle == control.LifecycleDetached {
 		state.State = StateRemoved
-	} else if persisted.PendingRollback != nil {
+	} else if persisted.PendingRollback != nil || persisted.InitialSyncFailure != nil {
 		state.State = StateRecovering
 	}
 	return &Manager{store: store, state: state}
@@ -343,6 +345,7 @@ func (m *Manager) MarkInitialSyncComplete(checkpoint control.Checkpoint) error {
 	m.mu.Lock()
 	previous := cloneSnapshot(m.state)
 	m.state.Checkpoint = checkpoint
+	m.state.InitialSyncFailure = nil
 	m.state.State = StateSecondary
 	listener := m.changeListenerLocked(previous)
 	m.mu.Unlock()
@@ -361,6 +364,7 @@ func (m *Manager) CompleteInitialSync(attemptID string, checkpoint control.Check
 	previous := cloneSnapshot(m.state)
 	m.state.Checkpoint = checkpoint
 	m.state.RBID = finalRBID
+	m.state.InitialSyncFailure = nil
 	m.state.State = StateSecondary
 	listener := m.changeListenerLocked(previous)
 	m.mu.Unlock()
@@ -379,7 +383,25 @@ func (m *Manager) ResetInitialSync(attemptID string) error {
 	previous := cloneSnapshot(m.state)
 	m.state.Checkpoint = control.Checkpoint{}
 	m.state.RBID = 0
+	m.state.InitialSyncFailure = nil
 	m.state.State = StateStartup2
+	listener := m.changeListenerLocked(previous)
+	m.mu.Unlock()
+	if listener != nil {
+		listener()
+	}
+	return nil
+}
+
+// MarkInitialSyncFailed records a terminal initial-sync failure and stops secondary claims.
+func (m *Manager) MarkInitialSyncFailed(failure control.InitialSyncFailure) error {
+	if err := m.store.RecordInitialSyncFailure(failure); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	previous := cloneSnapshot(m.state)
+	m.state.InitialSyncFailure = cloneInitialSyncFailure(&failure)
+	m.state.State = StateRecovering
 	listener := m.changeListenerLocked(previous)
 	m.mu.Unlock()
 	if listener != nil {
@@ -613,9 +635,18 @@ func cloneConfiguration(configuration *control.ReplicaConfiguration) *control.Re
 	return &clone
 }
 
+func cloneInitialSyncFailure(failure *control.InitialSyncFailure) *control.InitialSyncFailure {
+	if failure == nil {
+		return nil
+	}
+	clone := *failure
+	return &clone
+}
+
 func cloneSnapshot(state Snapshot) Snapshot {
 	clone := state
 	clone.Configuration = cloneConfiguration(state.Configuration)
+	clone.InitialSyncFailure = cloneInitialSyncFailure(state.InitialSyncFailure)
 	clone.Members = make(map[int]MemberStatus, len(state.Members))
 	for id, member := range state.Members {
 		clone.Members[id] = member

@@ -16,10 +16,14 @@ package initialsync
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/FerretDB/wire"
+	"github.com/FerretDB/wire/wirebson"
 	"github.com/google/uuid"
+	mongobson "go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 
 	"github.com/dolthub/dumbodb/internal/bson"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -95,6 +99,36 @@ func TestCloneDocumentsReturnsLastCompleteBatchTokenOnConsumerFailure(t *testing
 	}
 	if types.Compare(token, previousToken) != types.Equal {
 		t.Fatalf("failure token = %v, want %v", token, previousToken)
+	}
+}
+
+func TestCloneDocumentsReportsUnsupportedBSONType(t *testing.T) {
+	sourceUUID := uuid.MustParse("12345678-1234-4234-9234-123456789abc")
+	raw, err := mongobson.Marshal(mongobson.D{
+		{Key: "cursor", Value: mongobson.D{
+			{Key: "firstBatch", Value: mongobson.A{mongobson.D{
+				{Key: "_id", Value: int32(1)},
+				{Key: "value", Value: primitive.JavaScript("return 1")},
+			}}},
+			{Key: "id", Value: int64(0)},
+			{Key: "ns", Value: "orders.items"},
+		}},
+		{Key: "ok", Value: float64(1)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := wire.NewOpMsg(wirebson.RawDocument(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &boundaryClient{responses: []*wire.OpMsg{response}}
+	_, err = CloneDocuments(context.Background(), client, CloneCursor{
+		Database: "orders", SourceUUID: types.Binary{Subtype: types.BinaryUUID, B: sourceUUID[:]},
+	}, func(*types.Document) error { return nil })
+	var unsupported *UnsupportedBSONTypeError
+	if !errors.As(err, &unsupported) || unsupported.BSONType != "JavaScript" {
+		t.Fatalf("clone error = %v, want unsupported JavaScript", err)
 	}
 }
 

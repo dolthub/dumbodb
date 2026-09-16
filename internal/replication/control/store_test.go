@@ -156,6 +156,45 @@ func TestInitialSyncAttemptLifecycleIsAtomicAndPersistent(t *testing.T) {
 	}
 }
 
+func TestInitialSyncFailurePersistsUntilReset(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir, testConfiguration())
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt := InitialSyncAttempt{
+		ID: "attempt-one", Source: "primary.example:27017", SourceRBID: 4,
+		BeginFetch: opTime(1), BeginApply: opTime(1),
+	}
+	if err := store.BeginInitialSync(attempt); err != nil {
+		t.Fatal(err)
+	}
+	failure := InitialSyncFailure{
+		Namespace: "archive.items",
+		BSONType:  "JavaScript",
+		Message:   "DumboDB does not support BSON type JavaScript while cloning archive.items",
+	}
+	if err := store.RecordInitialSyncFailure(failure); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(dir, testConfiguration())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reopened.Snapshot().InitialSyncFailure == nil || *reopened.Snapshot().InitialSyncFailure != failure {
+		t.Fatalf("recovered initial-sync failure = %+v", reopened.Snapshot().InitialSyncFailure)
+	}
+	if err := reopened.BeginInitialSync(attempt); err == nil {
+		t.Fatal("BeginInitialSync accepted a terminal failure")
+	}
+	if err := reopened.ResetInitialSync(attempt.ID); err != nil {
+		t.Fatal(err)
+	}
+	if reopened.Snapshot().InitialSyncFailure != nil {
+		t.Fatalf("reset retained initial-sync failure = %+v", reopened.Snapshot().InitialSyncFailure)
+	}
+}
+
 func TestInitialSyncAttemptRejectsInvalidBoundaries(t *testing.T) {
 	store, err := Open(t.TempDir(), testConfiguration())
 	if err != nil {

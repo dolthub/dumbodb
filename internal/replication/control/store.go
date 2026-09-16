@@ -201,6 +201,12 @@ type InitialSyncAttempt struct {
 	Stop                OpTime `json:"stop"`
 }
 
+type InitialSyncFailure struct {
+	Namespace string `json:"namespace"`
+	BSONType  string `json:"bson_type"`
+	Message   string `json:"message"`
+}
+
 type State struct {
 	Configuration       Configuration                        `json:"configuration"`
 	Lifecycle           Lifecycle                            `json:"lifecycle"`
@@ -210,6 +216,7 @@ type State struct {
 	CurrentRBID         int64                                `json:"current_rbid"`
 	InitialSyncPhase    InitialSyncPhase                     `json:"initial_sync_phase"`
 	InitialSyncAttempt  *InitialSyncAttempt                  `json:"initial_sync_attempt,omitempty"`
+	InitialSyncFailure  *InitialSyncFailure                  `json:"initial_sync_failure,omitempty"`
 	Checkpoint          Checkpoint                           `json:"checkpoint"`
 	CommitLogGeneration uint64                               `json:"commit_log_generation"`
 	CommitIntervals     []CommitInterval                     `json:"commit_intervals,omitempty"`
@@ -415,6 +422,9 @@ func (s *Store) SetInitialSyncPhase(phase InitialSyncPhase) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.state.InitialSyncPhase = phase
+	if phase == InitialSyncComplete {
+		s.state.InitialSyncFailure = nil
+	}
 	return s.persistLocked()
 }
 
@@ -433,6 +443,9 @@ func (s *Store) BeginInitialSync(attempt InitialSyncAttempt) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.state.InitialSyncFailure != nil {
+		return errors.New("cannot begin initial sync with a terminal failure")
+	}
 	copy := attempt
 	s.state.InitialSyncAttempt = &copy
 	s.state.InitialSyncPhase = InitialSyncCloning
@@ -453,6 +466,20 @@ func (s *Store) SetInitialSyncStop(attemptID string, stop OpTime) error {
 	}
 	s.state.InitialSyncAttempt.Stop = stop
 	s.state.InitialSyncPhase = InitialSyncApplying
+	return s.persistLocked()
+}
+
+func (s *Store) RecordInitialSyncFailure(failure InitialSyncFailure) error {
+	if failure.Namespace == "" || failure.BSONType == "" || failure.Message == "" {
+		return errors.New("initial sync failure requires namespace, BSON type, and message")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state.InitialSyncPhase == InitialSyncComplete {
+		return errors.New("cannot fail a completed initial sync")
+	}
+	copy := failure
+	s.state.InitialSyncFailure = &copy
 	return s.persistLocked()
 }
 
@@ -482,6 +509,7 @@ func (s *Store) CompleteInitialSync(attemptID string, checkpoint Checkpoint, fin
 	s.state.CurrentSource = attempt.Source
 	s.state.CurrentRBID = finalRBID
 	s.state.InitialSyncPhase = InitialSyncComplete
+	s.state.InitialSyncFailure = nil
 	return s.persistLocked()
 }
 
@@ -501,6 +529,7 @@ func (s *Store) ResetInitialSync(attemptID string) error {
 	}
 	s.state.InitialSyncAttempt = nil
 	s.state.InitialSyncPhase = InitialSyncNotStarted
+	s.state.InitialSyncFailure = nil
 	s.state.Checkpoint = Checkpoint{}
 	s.state.CurrentRBID = 0
 	s.state.CommitLogGeneration = newGeneration

@@ -65,8 +65,12 @@ func (h *Handler) MsgReplSetGetStatus(_ context.Context, _ *wire.OpMsg) (*wire.O
 	if err != nil {
 		return nil, err
 	}
+	infoMessage := ""
+	if state.InitialSyncFailure != nil {
+		infoMessage = state.InitialSyncFailure.Message
+	}
 	members := types.MakeArray(len(state.Members) + 1)
-	members.Append(replicaStatusMember(state.MemberID, state.MemberHost, state.State, true, true, state.Checkpoint.Applied, time.Now()))
+	members.Append(replicaStatusMember(state.MemberID, state.MemberHost, state.State, true, true, state.Checkpoint.Applied, time.Now(), infoMessage))
 	memberIDs := make([]int, 0, len(state.Members))
 	for memberID := range state.Members {
 		if memberID != state.MemberID {
@@ -76,7 +80,7 @@ func (h *Handler) MsgReplSetGetStatus(_ context.Context, _ *wire.OpMsg) (*wire.O
 	sort.Ints(memberIDs)
 	for _, memberID := range memberIDs {
 		member := state.Members[memberID]
-		members.Append(replicaStatusMember(member.MemberID, member.Host, member.State, false, member.Healthy, member.Applied, member.LastHeartbeat))
+		members.Append(replicaStatusMember(member.MemberID, member.Host, member.State, false, member.Healthy, member.Applied, member.LastHeartbeat, ""))
 	}
 	response := must.NotFail(types.NewDocument(
 		"set", state.SetName,
@@ -90,6 +94,15 @@ func (h *Handler) MsgReplSetGetStatus(_ context.Context, _ *wire.OpMsg) (*wire.O
 		"members", members,
 		"ok", float64(1),
 	))
+	if state.InitialSyncFailure != nil {
+		response.Set("initialSyncStatus", must.NotFail(types.NewDocument(
+			"failedInitialSyncAttempts", int32(1),
+			"maxFailedInitialSyncAttempts", int32(1),
+			"initialSyncFailure", state.InitialSyncFailure.Message,
+			"namespace", state.InitialSyncFailure.Namespace,
+			"bsonType", state.InitialSyncFailure.BSONType,
+		)))
+	}
 	return documentOpMsg(response)
 }
 
@@ -241,7 +254,7 @@ func replicaConfigurationDocument(configuration control.ReplicaConfiguration) *t
 	))
 }
 
-func replicaStatusMember(memberID int, host string, state topology.MemberState, self, healthy bool, applied control.OpTime, heartbeat time.Time) *types.Document {
+func replicaStatusMember(memberID int, host string, state topology.MemberState, self, healthy bool, applied control.OpTime, heartbeat time.Time, infoMessage string) *types.Document {
 	document := must.NotFail(types.NewDocument(
 		"_id", int32(memberID),
 		"name", host,
@@ -256,6 +269,9 @@ func replicaStatusMember(memberID int, host string, state topology.MemberState, 
 		document.Set("self", true)
 	} else if !heartbeat.IsZero() {
 		document.Set("lastHeartbeat", heartbeat)
+	}
+	if infoMessage != "" {
+		document.Set("infoMessage", infoMessage)
 	}
 	return document
 }

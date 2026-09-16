@@ -157,6 +157,35 @@ func TestManagerTransitionsToSecondaryAfterInitialSync(t *testing.T) {
 	}
 }
 
+func TestManagerPersistsTerminalInitialSyncFailure(t *testing.T) {
+	dir := t.TempDir()
+	store := openControlStore(t, dir)
+	manager := New(store)
+	if err := manager.InstallConfiguration(testReplicaConfiguration(), 8); err != nil {
+		t.Fatal(err)
+	}
+	failure := control.InitialSyncFailure{
+		Namespace: "archive.items",
+		BSONType:  "JavaScript",
+		Message:   "DumboDB does not support BSON type JavaScript while cloning archive.items",
+	}
+	if err := manager.MarkInitialSyncFailed(failure); err != nil {
+		t.Fatal(err)
+	}
+	state := manager.Snapshot()
+	if state.State != StateRecovering || state.InitialSyncFailure == nil || *state.InitialSyncFailure != failure {
+		t.Fatalf("failed topology state = %+v", state)
+	}
+	state.InitialSyncFailure.Message = "changed"
+	if manager.Snapshot().InitialSyncFailure.Message != failure.Message {
+		t.Fatal("Snapshot returned mutable initial-sync failure state")
+	}
+	recovered := New(openControlStore(t, dir)).Snapshot()
+	if recovered.State != StateRecovering || recovered.InitialSyncFailure == nil || *recovered.InitialSyncFailure != failure {
+		t.Fatalf("recovered failed topology state = %+v", recovered)
+	}
+}
+
 func TestManagerPublishesCommitBeforeNotifyingProgress(t *testing.T) {
 	dir := t.TempDir()
 	store := openControlStore(t, dir)

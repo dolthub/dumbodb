@@ -16,6 +16,8 @@ package runtime
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"testing"
@@ -23,10 +25,25 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/backends/dolt"
 	"github.com/dolthub/dumbodb/internal/replication/control"
+	"github.com/dolthub/dumbodb/internal/replication/initialsync"
 	"github.com/dolthub/dumbodb/internal/replication/topology"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
+
+func TestTerminalInitialSyncFailureClassifiesUnsupportedBSON(t *testing.T) {
+	unsupported := &initialsync.UnsupportedBSONTypeError{
+		Namespace: "archive.items",
+		BSONType:  "JavaScript",
+	}
+	failure, terminal := terminalInitialSyncFailure(fmt.Errorf("initial sync: %w", unsupported))
+	if !terminal || failure.Namespace != unsupported.Namespace || failure.BSONType != unsupported.BSONType || failure.Message != unsupported.Error() {
+		t.Fatalf("terminal failure = %+v, %v", failure, terminal)
+	}
+	if failure, terminal := terminalInitialSyncFailure(errors.New("connection reset")); terminal || failure != (control.InitialSyncFailure{}) {
+		t.Fatalf("transient failure = %+v, %v", failure, terminal)
+	}
+}
 
 func TestRecoverPublicationDiscardsIncompleteApply(t *testing.T) {
 	ctx := context.Background()

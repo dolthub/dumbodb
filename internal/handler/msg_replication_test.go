@@ -79,6 +79,46 @@ func TestReplicationInspectionCommands(t *testing.T) {
 	}
 }
 
+func TestReplicationStatusReportsTerminalInitialSyncFailure(t *testing.T) {
+	handler := configuredReplicationHandler(t)
+	failure := control.InitialSyncFailure{
+		Namespace: "archive.items",
+		BSONType:  "JavaScript",
+		Message:   "DumboDB does not support BSON type JavaScript while cloning archive.items",
+	}
+	if err := handler.ReplicationTopology.MarkInitialSyncFailed(failure); err != nil {
+		t.Fatal(err)
+	}
+	response, err := handler.MsgReplSetGetStatus(context.Background(), wire.MustOpMsg("replSetGetStatus", int32(1), "$db", "admin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := opMsgDocument(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if responseValue(document, "myState") != int32(topology.StateRecovering) {
+		t.Fatalf("terminal myState = %v", responseValue(document, "myState"))
+	}
+	status, ok := responseValue(document, "initialSyncStatus").(*types.Document)
+	if !ok {
+		t.Fatalf("initialSyncStatus = %T", responseValue(document, "initialSyncStatus"))
+	}
+	if responseValue(status, "initialSyncFailure") != failure.Message ||
+		responseValue(status, "namespace") != failure.Namespace || responseValue(status, "bsonType") != failure.BSONType {
+		t.Fatalf("initialSyncStatus = %v", status)
+	}
+	members := responseValue(document, "members").(*types.Array)
+	selfValue, err := members.Get(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	self := selfValue.(*types.Document)
+	if responseValue(self, "infoMessage") != failure.Message {
+		t.Fatalf("self infoMessage = %v", responseValue(self, "infoMessage"))
+	}
+}
+
 func TestReplicationHeartbeatReturnsNewerConfigAndTracksPrimary(t *testing.T) {
 	handler := configuredReplicationHandler(t)
 	checkpoint := control.Checkpoint{
