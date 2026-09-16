@@ -463,7 +463,7 @@ func (m *Manager) PublishCommit(interval control.CommitInterval, checkpoint cont
 		m.mu.Unlock()
 		return err
 	}
-	m.state.Checkpoint = checkpoint
+	m.state.Checkpoint = m.store.Snapshot().Checkpoint
 	listener := m.onProgress
 	m.mu.Unlock()
 	if listener != nil {

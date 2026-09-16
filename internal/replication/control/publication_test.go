@@ -86,6 +86,57 @@ func TestPendingPublicationSurvivesRestartAndCompletes(t *testing.T) {
 	}
 }
 
+func TestPendingPublicationPreservesConcurrentFetchProgress(t *testing.T) {
+	store, err := Open(t.TempDir(), testConfiguration())
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := opTime(5)
+	if err := store.SetCheckpoint(Checkpoint{
+		Fetched: base, Buffered: base, Written: base, Durable: base, Applied: base,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	published := opTime(6)
+	pendingCheckpoint := Checkpoint{
+		Fetched: published, Buffered: published, Written: published, Durable: published, Applied: published,
+	}
+	pending := PendingPublication{
+		ID: "publication-six", First: published, Last: published,
+		Databases: []string{"orders"}, Commits: make(map[string]string), Checkpoint: pendingCheckpoint,
+	}
+	if err := store.BeginPublication(pending); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkPublicationReady(pending.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordPublicationCommit(pending.ID, "orders", "orders-six"); err != nil {
+		t.Fatal(err)
+	}
+	fetched := opTime(10)
+	if err := store.SetCheckpoint(Checkpoint{
+		Fetched: fetched, Buffered: fetched, Written: base, Durable: base, Applied: base,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	interval := CommitInterval{
+		First: published, Last: published, CommitID: pending.ID,
+		Commits: []DatabaseCommit{{Database: "orders", CommitID: "orders-six"}},
+	}
+	if err := store.PublishCommit(interval, pendingCheckpoint); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint := store.Snapshot().Checkpoint
+	if checkpoint.Fetched != fetched || checkpoint.Buffered != fetched || checkpoint.Written != published ||
+		checkpoint.Durable != published || checkpoint.Applied != published {
+		t.Fatalf("published checkpoint = %+v", checkpoint)
+	}
+	if _, ok := store.PendingPublication(); ok {
+		t.Fatal("completed publication remained pending")
+	}
+}
+
 func TestPendingPublicationRejectsIncompleteOrDifferentCompletion(t *testing.T) {
 	store, err := Open(t.TempDir(), testConfiguration())
 	if err != nil {

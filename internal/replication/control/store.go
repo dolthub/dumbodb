@@ -600,13 +600,14 @@ func (s *Store) PublishCommit(interval CommitInterval, checkpoint Checkpoint) er
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if checkpointRegresses(checkpoint, s.state.Checkpoint) {
-		return errors.New("replication checkpoint moved backwards")
-	}
 	if s.state.PendingPublication != nil {
 		if err := validatePendingCompletion(*s.state.PendingPublication, interval, checkpoint); err != nil {
 			return err
 		}
+	}
+	checkpoint = preserveFetchProgress(checkpoint, s.state.Checkpoint)
+	if checkpointRegresses(checkpoint, s.state.Checkpoint) {
+		return errors.New("replication checkpoint moved backwards")
 	}
 	if index, ok := s.commitByID[interval.CommitID]; ok {
 		if !equalCommitInterval(s.state.CommitIntervals[index], interval) {
@@ -985,6 +986,16 @@ func checkpointRegresses(next, current Checkpoint) bool {
 		next.Written.Compare(current.Written) < 0 ||
 		next.Durable.Compare(current.Durable) < 0 ||
 		next.Applied.Compare(current.Applied) < 0
+}
+
+func preserveFetchProgress(next, current Checkpoint) Checkpoint {
+	if next.Fetched.Compare(current.Fetched) < 0 {
+		next.Fetched = current.Fetched
+	}
+	if next.Buffered.Compare(current.Buffered) < 0 {
+		next.Buffered = current.Buffered
+	}
+	return next
 }
 
 func equalCommitInterval(left, right CommitInterval) bool {

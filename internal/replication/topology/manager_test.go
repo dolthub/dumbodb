@@ -190,6 +190,31 @@ func TestManagerPublishesCommitBeforeNotifyingProgress(t *testing.T) {
 	}
 }
 
+func TestManagerPublishCommitPreservesConcurrentFetchProgress(t *testing.T) {
+	store := openControlStore(t, t.TempDir())
+	base := testOpTime(5)
+	fetched := testOpTime(10)
+	if err := store.SetCheckpoint(control.Checkpoint{
+		Fetched: fetched, Buffered: fetched, Written: base, Durable: base, Applied: base,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	manager := New(store)
+	published := testOpTime(6)
+	checkpoint := control.Checkpoint{
+		Fetched: published, Buffered: published, Written: published, Durable: published, Applied: published,
+	}
+	interval := control.CommitInterval{First: published, Last: published, CommitID: "publication-six"}
+	if err := manager.PublishCommit(interval, checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint = manager.Snapshot().Checkpoint
+	if checkpoint.Fetched != fetched || checkpoint.Buffered != fetched || checkpoint.Written != published ||
+		checkpoint.Durable != published || checkpoint.Applied != published {
+		t.Fatalf("manager checkpoint = %+v", checkpoint)
+	}
+}
+
 func TestManagerRejectsStaleOrConflictingConfiguration(t *testing.T) {
 	manager := New(openControlStore(t, t.TempDir()))
 	configuration := testReplicaConfiguration()
