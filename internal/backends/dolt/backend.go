@@ -321,11 +321,15 @@ func (b *Backend) OnTransactionCommit(ctx context.Context, owner string) error {
 	}
 	b.mu.RUnlock()
 
+	// No database-wide lock here. Every storage update this reaches carries
+	// the fork point it was derived from, so two writers publishing at once is
+	// settled by the compare-and-swap on the working set ref: the loser is told
+	// its branch moved and replays against the new tip. Serializing the whole
+	// reconcile behind a mutex would only hide that mechanism -- and hide
+	// whether it works -- while capping writes at one per database.
 	var firstErr error
 	for _, db := range dbs {
-		db.mu.Lock()
 		_, err := db.commitDirtyBranchesForSession(sqlCtx, sess, tx)
-		db.mu.Unlock()
 		if err != nil && firstErr == nil {
 			firstErr = err
 		}
