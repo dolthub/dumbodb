@@ -16,13 +16,16 @@ package control
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/iterator"
 )
 
 func TestStorePersistsRecoveryState(t *testing.T) {
@@ -376,15 +379,25 @@ func TestCommitIntervalsUseAdminCollection(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	persisted, exists, err := store.storage.load(t.Context())
+	persisted, version, exists, err := store.storage.load(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !exists {
 		t.Fatal("admin control document does not exist")
 	}
-	if len(persisted.CommitIntervals) != len(intervals) {
-		t.Fatalf("persisted commit intervals = %+v", persisted.CommitIntervals)
+	if version != controlFormatVersion {
+		t.Fatalf("control format version = %d, want %d", version, controlFormatVersion)
+	}
+	if len(persisted.CommitIntervals) != 0 {
+		t.Fatalf("control document embeds commit intervals = %+v", persisted.CommitIntervals)
+	}
+	persistedIntervals, err := store.storage.loadCommitIntervals(t.Context(), persisted.CommitLogGeneration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.EqualFunc(persistedIntervals, intervals, equalCommitInterval) {
+		t.Fatalf("persisted commit intervals = %+v, want %+v", persistedIntervals, intervals)
 	}
 	if err := store.RecordCommit(intervals[1]); err != nil {
 		t.Fatal(err)
@@ -547,11 +560,19 @@ func readPublicControlDocument(t *testing.T, collection backends.Collection) *ty
 		t.Fatal(err)
 	}
 	defer result.Iter.Close()
-	_, document, err := result.Iter.Next()
-	if err != nil {
-		t.Fatal(err)
+	for {
+		_, document, err := result.Iter.Next()
+		if errors.Is(err, iterator.ErrIteratorDone) {
+			t.Fatal("control document not found")
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		id, _ := document.Get("_id")
+		if id == controlDocumentID {
+			return document
+		}
 	}
-	return document
 }
 
 func mustDocument(t *testing.T, pairs ...any) *types.Document {
@@ -579,7 +600,7 @@ func TestOpenMigratesLegacyBinaryControlState(t *testing.T) {
 	}
 	legacyDocument := mustDocument(t,
 		"_id", controlDocumentID,
-		"formatVersion", legacyControlFormatVersion,
+		"formatVersion", legacyBinaryControlVersion,
 		"state", types.Binary{B: data, Subtype: types.BinaryGeneric},
 	)
 	if _, err := internalCollection.InsertAll(t.Context(), &backends.InsertAllParams{Docs: []*types.Document{legacyDocument}}); err != nil {
@@ -609,6 +630,58 @@ func TestOpenMigratesLegacyBinaryControlState(t *testing.T) {
 	}
 }
 
+func TestOpenMigratesStructuredControlStateWithEmbeddedIntervals(t *testing.T) {
+	directory := t.TempDir()
+	backend := testBackend(t, directory)
+	configuration := testConfiguration()
+	legacyState := newState(configuration)
+	legacyState.CommitIntervals = []CommitInterval{
+		{First: opTime(1), Last: opTime(2), CommitID: "one"},
+		{First: opTime(3), Last: opTime(4), CommitID: "two"},
+	}
+	stateDocument, err := encodeStateDocument(legacyState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	internalCollection, err := backend.(backends.ReplicationControlBackend).ReplicationControlCollection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyDocument := mustDocument(t,
+		"_id", controlDocumentID,
+		"formatVersion", legacyStructuredControlVersion,
+		"state", stateDocument,
+	)
+	if _, err := internalCollection.InsertAll(t.Context(), &backends.InsertAllParams{Docs: []*types.Document{legacyDocument}}); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := Open(backend, configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := store.CommitIntervals(); !slices.EqualFunc(got, legacyState.CommitIntervals, equalCommitInterval) {
+		t.Fatalf("migrated intervals = %+v, want %+v", got, legacyState.CommitIntervals)
+	}
+	persisted, version, exists, err := store.storage.load(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exists || version != controlFormatVersion {
+		t.Fatalf("migrated control document exists = %v, version = %d", exists, version)
+	}
+	if len(persisted.CommitIntervals) != 0 {
+		t.Fatalf("migrated control document embeds intervals = %+v", persisted.CommitIntervals)
+	}
+	persistedIntervals, err := store.storage.loadCommitIntervals(t.Context(), persisted.CommitLogGeneration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.EqualFunc(persistedIntervals, legacyState.CommitIntervals, equalCommitInterval) {
+		t.Fatalf("segmented intervals = %+v, want %+v", persistedIntervals, legacyState.CommitIntervals)
+	}
+}
+
 func TestCommitIntervalsSurviveStorageReopen(t *testing.T) {
 	dir := t.TempDir()
 	store, err := openTestStore(t, dir, testConfiguration())
@@ -629,6 +702,37 @@ func TestCommitIntervalsSurviveStorageReopen(t *testing.T) {
 	}
 	if got, ok := reopened.CommitFor(opTime(1)); !ok || !equalCommitInterval(got, interval) {
 		t.Fatalf("CommitFor after storage reopen = %+v, %v", got, ok)
+	}
+}
+
+func TestResetInitialSyncDiscardsInactiveGenerationIntervals(t *testing.T) {
+	directory := t.TempDir()
+	store, err := openTestStore(t, directory, testConfiguration())
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeGeneration := store.Snapshot().CommitLogGeneration
+	if err := store.RecordCommit(CommitInterval{First: opTime(1), Last: opTime(1), CommitID: "active"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.storage.appendCommitInterval(t.Context(), activeGeneration+1, CommitInterval{
+		First: opTime(2), Last: opTime(2), CommitID: "stale-inactive-generation",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ResetInitialSync(""); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := openTestStore(t, directory, testConfiguration())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if intervals := reopened.CommitIntervals(); len(intervals) != 0 {
+		t.Fatalf("reset retained inactive generation intervals = %+v", intervals)
 	}
 }
 
@@ -720,6 +824,43 @@ func TestPublishCommitRecoversCheckpointFromStorage(t *testing.T) {
 		Checkpoint{Fetched: fetched, Buffered: fetched, Written: opTime(6), Durable: opTime(6), Applied: opTime(6)},
 	); err == nil {
 		t.Fatal("PublishCommit accepted a reused commit ID")
+	}
+}
+
+func TestPublishCommitCompletesAfterIntervalOnlyCrash(t *testing.T) {
+	directory := t.TempDir()
+	store, err := openTestStore(t, directory, testConfiguration())
+	if err != nil {
+		t.Fatal(err)
+	}
+	interval := CommitInterval{First: opTime(1), Last: opTime(2), CommitID: "published"}
+	checkpoint := Checkpoint{
+		Fetched: interval.Last, Buffered: interval.Last, Written: interval.Last,
+		Durable: interval.Last, Applied: interval.Last,
+	}
+	generation := store.Snapshot().CommitLogGeneration
+	if err := store.storage.appendCommitInterval(t.Context(), generation, interval); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := openTestStore(t, directory, testConfiguration())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reopened.Snapshot().Checkpoint; got != (Checkpoint{}) {
+		t.Fatalf("checkpoint advanced before publication = %+v", got)
+	}
+	if got, ok := reopened.CommitForID(interval.CommitID); !ok || !equalCommitInterval(got, interval) {
+		t.Fatalf("interval after restart = %+v, %v; want %+v, true", got, ok, interval)
+	}
+	if err := reopened.PublishCommit(interval, checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	if got := reopened.Snapshot().Checkpoint; got != checkpoint {
+		t.Fatalf("completed checkpoint = %+v, want %+v", got, checkpoint)
 	}
 }
 

@@ -251,7 +251,7 @@ func Open(backend backends.Backend, configuration Configuration) (*Store, error)
 		return nil, err
 	}
 	store := &Store{storage: storage}
-	state, exists, err := storage.load(context.Background())
+	state, formatVersion, exists, err := storage.load(context.Background())
 	if err != nil {
 		return nil, err
 	}
@@ -277,6 +277,22 @@ func Open(backend backends.Backend, configuration Configuration) (*Store, error)
 	}
 	if err := validateCommitIntervals(store.state.CommitIntervals); err != nil {
 		return nil, fmt.Errorf("validating commit intervals: %w", err)
+	}
+	if formatVersion < controlFormatVersion {
+		if err := storage.appendCommitIntervals(context.Background(), store.state.CommitLogGeneration, store.state.CommitIntervals); err != nil {
+			return nil, fmt.Errorf("migrating commit intervals: %w", err)
+		}
+		if err := storage.save(context.Background(), store.state); err != nil {
+			return nil, fmt.Errorf("migrating replication control state: %w", err)
+		}
+	} else {
+		store.state.CommitIntervals, err = storage.loadCommitIntervals(context.Background(), store.state.CommitLogGeneration)
+		if err != nil {
+			return nil, err
+		}
+		if err := validateCommitIntervals(store.state.CommitIntervals); err != nil {
+			return nil, fmt.Errorf("validating commit intervals: %w", err)
+		}
 	}
 	store.rebuildCommitIndexLocked()
 	return store, nil
@@ -498,9 +514,13 @@ func (s *Store) ResetInitialSync(attemptID string) error {
 		return fmt.Errorf("initial sync attempt %q is not active", attemptID)
 	}
 	previousState := cloneState(s.state)
-	newGeneration := s.state.CommitLogGeneration + 1
+	oldGeneration := s.state.CommitLogGeneration
+	newGeneration := oldGeneration + 1
 	if newGeneration == 0 {
 		return errors.New("commit interval log generation exhausted")
+	}
+	if err := s.storage.deleteCommitIntervals(context.Background(), newGeneration); err != nil {
+		return err
 	}
 	s.state.InitialSyncAttempt = nil
 	s.state.InitialSyncPhase = InitialSyncNotStarted
@@ -521,6 +541,7 @@ func (s *Store) ResetInitialSync(attemptID string) error {
 		s.rebuildCommitIndexLocked()
 		return err
 	}
+	_ = s.storage.deleteCommitIntervals(context.Background(), oldGeneration)
 	return nil
 }
 
@@ -565,13 +586,11 @@ func (s *Store) RecordCommit(interval CommitInterval) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(s.state.CommitIntervals) == 0 || interval.First.Compare(s.state.CommitIntervals[len(s.state.CommitIntervals)-1].Last) > 0 {
-		s.state.CommitIntervals = append(s.state.CommitIntervals, cloneCommitInterval(interval))
-		s.commitByID[interval.CommitID] = len(s.state.CommitIntervals) - 1
-		if err := s.persistLocked(); err != nil {
-			s.state.CommitIntervals = s.state.CommitIntervals[:len(s.state.CommitIntervals)-1]
-			delete(s.commitByID, interval.CommitID)
+		if err := s.storage.appendCommitInterval(context.Background(), s.state.CommitLogGeneration, interval); err != nil {
 			return err
 		}
+		s.state.CommitIntervals = append(s.state.CommitIntervals, cloneCommitInterval(interval))
+		s.commitByID[interval.CommitID] = len(s.state.CommitIntervals) - 1
 		return nil
 	}
 	index := sort.Search(len(s.state.CommitIntervals), func(i int) bool {
@@ -622,7 +641,17 @@ func (s *Store) PublishCommit(interval CommitInterval, checkpoint Checkpoint) er
 		if checkpoint.Applied.Compare(s.state.Checkpoint.Applied) <= 0 {
 			return nil
 		}
-		return errors.New("published commit interval is missing its durable checkpoint record")
+		previousState := cloneState(s.state)
+		s.state.Checkpoint = checkpoint
+		if s.state.PendingPublication != nil && s.state.PendingPublication.ID == interval.CommitID {
+			s.state.PendingPublication = nil
+		}
+		if err := s.persistLocked(); err != nil {
+			s.state = previousState
+			s.rebuildCommitIndexLocked()
+			return err
+		}
+		return nil
 	}
 	if len(s.state.CommitIntervals) != 0 {
 		last := s.state.CommitIntervals[len(s.state.CommitIntervals)-1]
@@ -631,6 +660,9 @@ func (s *Store) PublishCommit(interval CommitInterval, checkpoint Checkpoint) er
 		}
 	}
 	previousState := cloneState(s.state)
+	if err := s.storage.appendCommitInterval(context.Background(), s.state.CommitLogGeneration, interval); err != nil {
+		return err
+	}
 	s.state.CommitIntervals = append(s.state.CommitIntervals, cloneCommitInterval(interval))
 	s.commitByID[interval.CommitID] = len(s.state.CommitIntervals) - 1
 	s.state.Checkpoint = checkpoint
@@ -638,7 +670,9 @@ func (s *Store) PublishCommit(interval CommitInterval, checkpoint Checkpoint) er
 		s.state.PendingPublication = nil
 	}
 	if err := s.persistLocked(); err != nil {
+		retainedInterval := cloneCommitInterval(interval)
 		s.state = previousState
+		s.state.CommitIntervals = append(s.state.CommitIntervals, retainedInterval)
 		s.rebuildCommitIndexLocked()
 		return err
 	}
@@ -754,6 +788,18 @@ func (s *Store) RollbackTo(commitID, source string, rbid int64) (Checkpoint, err
 		Durable: interval.Last, Applied: interval.Last,
 	}
 	retained := append([]CommitInterval(nil), s.state.CommitIntervals[:index+1]...)
+	oldGeneration := s.state.CommitLogGeneration
+	newGeneration := oldGeneration + 1
+	if newGeneration == 0 {
+		return Checkpoint{}, errors.New("commit interval log generation exhausted")
+	}
+	if err := s.storage.deleteCommitIntervals(context.Background(), newGeneration); err != nil {
+		return Checkpoint{}, err
+	}
+	if err := s.storage.appendCommitIntervals(context.Background(), newGeneration, retained); err != nil {
+		return Checkpoint{}, err
+	}
+	s.state.CommitLogGeneration = newGeneration
 	s.state.CommitIntervals = retained
 	s.commitByID = make(map[string]int, len(retained))
 	for retainedIndex, retainedInterval := range retained {
@@ -770,6 +816,7 @@ func (s *Store) RollbackTo(commitID, source string, rbid int64) (Checkpoint, err
 		s.rebuildCommitIndexLocked()
 		return Checkpoint{}, err
 	}
+	_ = s.storage.deleteCommitIntervals(context.Background(), oldGeneration)
 	return checkpoint, nil
 }
 

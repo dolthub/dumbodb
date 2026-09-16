@@ -684,21 +684,29 @@ DumboDB work session fails. **DESIGN**
 
 Replication control state and commit-interval provenance are stored in the reserved
 `admin.system.dumbodb.replication` collection. The control document contains the
-bounded mutable state and all intervals retained for the attached replica-set
-identity as structured BSON fields that operators and tests can inspect directly.
-Updating it is one normal collection mutation, so the Prolly storage layer
-owns atomicity, durability, and crash recovery. DumboDB does not create replication
-state files or implement journal writes, torn-record recovery, or filesystem
-durability. In-memory lookup by source optime is binary. A fresh initial sync clears
-the retained interval list in the same collection update that resets mutable control
-state. The replication benchmark must measure document growth, publication cost, and
-lookup/startup cost at the selected batch size before production batching defaults
-are fixed. If retained provenance needs a segmented representation, that
-representation must remain documents in this collection and use normal collection
-mutation semantics. The collection is visible through `listCollections` and normal
-queries so operators and tests can inspect it. Ordinary clients cannot insert,
-update, delete, rename, drop, modify, compact, or change indexes on it; only the
-replication-control backend can mutate it. **DESIGN**
+bounded mutable state as structured BSON. Each published commit interval is a
+separate immutable document tagged with the active provenance generation. The
+active generation retains every interval needed for source-optime lookup and
+rollback; storage therefore grows by one document per DumboDB replication commit,
+while the common append path writes a constant-size document independent of retained
+history. A fresh initial sync advances the generation and removes the old generation.
+A rollback copies its retained prefix into a new generation before atomically making
+that generation active, then removes the old generation. Interrupted cleanup may
+leave inactive documents, but they are ignored and can be removed safely later.
+
+Publication inserts the immutable interval before advancing the checkpoint in the
+control document. A crash between those mutations leaves the interval visible on
+restart but the old checkpoint remains reportable; retry recognizes the identical
+interval and completes the control update without reapplying data. Both mutations
+use normal collection operations, so the Prolly storage layer owns atomicity,
+durability, and crash recovery. DumboDB does not create replication state files or
+implement journal writes, torn-record recovery, or filesystem durability. In-memory
+lookup by source optime is binary. The replication benchmark must measure
+publication and lookup/startup cost at the selected batch size before production
+batching defaults are fixed. The collection is visible through `listCollections`
+and normal queries so operators and tests can inspect it. Ordinary clients cannot
+insert, update, delete, rename, drop, modify, compact, or change indexes on it; only
+the replication-control backend can mutate it. **DESIGN**
 
 Publishing a source interval uses a durable manifest identified by a hash of its
 source boundaries and sorted database set. The manifest is written before any

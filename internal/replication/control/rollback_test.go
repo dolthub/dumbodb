@@ -36,6 +36,12 @@ func TestRollbackReplacesProvenanceAndSurvivesRestart(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	nextGeneration := store.Snapshot().CommitLogGeneration + 1
+	if err := store.storage.appendCommitInterval(t.Context(), nextGeneration, CommitInterval{
+		First: opTime(4), Last: opTime(4), CommitID: "stale-inactive-generation",
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.PutCollectionMapping(CollectionMapping{
 		SourceUUID: "retained", Database: "db", Collection: "retained", LocalUUID: "local-retained",
 		CreateOpTime: opTime(1), LastUpdateOpTime: opTime(1),

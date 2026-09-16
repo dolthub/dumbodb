@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 
 	"github.com/FerretDB/wire/wirebson"
 	"github.com/dolthub/dumbodb/internal/backends"
@@ -32,9 +33,12 @@ import (
 )
 
 const (
-	controlDocumentID          = "control"
-	legacyControlFormatVersion = int32(1)
-	controlFormatVersion       = int32(2)
+	controlDocumentID              = "control"
+	legacyBinaryControlVersion     = int32(1)
+	legacyStructuredControlVersion = int32(2)
+	controlFormatVersion           = int32(3)
+	commitIntervalDocumentKind     = "commit_interval"
+	commitIntervalDocumentPrefix   = "interval:"
 )
 
 type collectionStorage struct {
@@ -53,23 +57,23 @@ func openCollectionStorage(backend backends.Backend) (*collectionStorage, error)
 	return &collectionStorage{collection: collection}, nil
 }
 
-func (s *collectionStorage) load(ctx context.Context) (State, bool, error) {
+func (s *collectionStorage) load(ctx context.Context) (State, int32, bool, error) {
 	filter, err := types.NewDocument("_id", controlDocumentID)
 	if err != nil {
-		return State{}, false, err
+		return State{}, 0, false, err
 	}
 	result, err := s.collection.Query(ctx, &backends.QueryParams{Filter: filter})
 	if err != nil {
-		return State{}, false, fmt.Errorf("querying replication control state: %w", err)
+		return State{}, 0, false, fmt.Errorf("querying replication control state: %w", err)
 	}
 	defer result.Iter.Close()
 	for {
 		_, document, err := result.Iter.Next()
 		if errors.Is(err, iterator.ErrIteratorDone) {
-			return State{}, false, nil
+			return State{}, 0, false, nil
 		}
 		if err != nil {
-			return State{}, false, fmt.Errorf("reading replication control state: %w", err)
+			return State{}, 0, false, fmt.Errorf("reading replication control state: %w", err)
 		}
 		id, _ := document.Get("_id")
 		if id != controlDocumentID {
@@ -78,42 +82,44 @@ func (s *collectionStorage) load(ctx context.Context) (State, bool, error) {
 		version, _ := document.Get("formatVersion")
 		value, err := document.Get("state")
 		if err != nil {
-			return State{}, false, errors.New("replication control document has no state")
+			return State{}, 0, false, errors.New("replication control document has no state")
 		}
 		switch version {
-		case legacyControlFormatVersion:
+		case legacyBinaryControlVersion:
 			binary, ok := value.(types.Binary)
 			if !ok || binary.Subtype != types.BinaryGeneric {
-				return State{}, false, errors.New("legacy replication control state is not generic binary data")
+				return State{}, 0, false, errors.New("legacy replication control state is not generic binary data")
 			}
 			var state State
 			if err := json.Unmarshal(binary.B, &state); err != nil {
-				return State{}, false, fmt.Errorf("decoding legacy replication control state: %w", err)
+				return State{}, 0, false, fmt.Errorf("decoding legacy replication control state: %w", err)
 			}
-			return state, true, nil
-		case controlFormatVersion:
+			return state, legacyBinaryControlVersion, true, nil
+		case legacyStructuredControlVersion, controlFormatVersion:
 			stateDocument, ok := value.(*types.Document)
 			if !ok {
-				return State{}, false, fmt.Errorf("replication control state has type %T, want document", value)
+				return State{}, 0, false, fmt.Errorf("replication control state has type %T, want document", value)
 			}
 			state, err := decodeStateDocument(stateDocument)
 			if err != nil {
-				return State{}, false, err
+				return State{}, 0, false, err
 			}
-			return state, true, nil
+			return state, version.(int32), true, nil
 		default:
-			return State{}, false, fmt.Errorf("unsupported replication control format version %v", version)
+			return State{}, 0, false, fmt.Errorf("unsupported replication control format version %v", version)
 		}
 	}
 }
 
 func (s *collectionStorage) save(ctx context.Context, state State) error {
+	state.CommitIntervals = nil
 	stateDocument, err := encodeStateDocument(state)
 	if err != nil {
 		return err
 	}
 	document, err := types.NewDocument(
 		"_id", controlDocumentID,
+		"kind", "control",
 		"formatVersion", controlFormatVersion,
 		"state", stateDocument,
 	)
@@ -133,8 +139,195 @@ func (s *collectionStorage) save(ctx context.Context, state State) error {
 	return nil
 }
 
+type storedCommitInterval struct {
+	Generation int64          `json:"generation"`
+	Interval   CommitInterval `json:"interval"`
+}
+
+func (s *collectionStorage) loadCommitIntervals(ctx context.Context, generation uint64) ([]CommitInterval, error) {
+	bsonGeneration, err := commitIntervalGeneration(generation)
+	if err != nil {
+		return nil, err
+	}
+	filter, err := types.NewDocument("kind", commitIntervalDocumentKind, "generation", bsonGeneration)
+	if err != nil {
+		return nil, err
+	}
+	result, err := s.collection.Query(ctx, &backends.QueryParams{Filter: filter})
+	if err != nil {
+		return nil, fmt.Errorf("querying replication commit intervals: %w", err)
+	}
+	defer result.Iter.Close()
+	var intervals []CommitInterval
+	for {
+		_, document, err := result.Iter.Next()
+		if errors.Is(err, iterator.ErrIteratorDone) {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("reading replication commit intervals: %w", err)
+		}
+		stored, err := decodeCommitIntervalDocument(document)
+		if err != nil {
+			return nil, err
+		}
+		if stored.Generation != bsonGeneration {
+			return nil, errors.New("replication commit interval payload has a mismatched generation")
+		}
+		intervals = append(intervals, stored.Interval)
+	}
+	sort.Slice(intervals, func(left, right int) bool {
+		return intervals[left].First.Compare(intervals[right].First) < 0
+	})
+	return intervals, nil
+}
+
+func (s *collectionStorage) appendCommitInterval(ctx context.Context, generation uint64, interval CommitInterval) error {
+	document, err := encodeCommitIntervalDocument(generation, interval)
+	if err != nil {
+		return err
+	}
+	if _, err := s.collection.InsertAll(ctx, &backends.InsertAllParams{Docs: []*types.Document{document}}); err == nil {
+		return nil
+	} else if !backends.ErrorCodeIs(err, backends.ErrorCodeInsertDuplicateID) {
+		return fmt.Errorf("inserting replication commit interval: %w", err)
+	}
+	id, _ := document.Get("_id")
+	existing, found, err := s.findDocument(ctx, id)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("duplicate replication commit interval document %q was not found", id)
+	}
+	stored, err := decodeCommitIntervalDocument(existing)
+	if err != nil {
+		return err
+	}
+	if stored.Generation == int64(generation) && equalCommitInterval(stored.Interval, interval) {
+		return nil
+	}
+	return fmt.Errorf("replication commit interval document %q disagrees with retained state", id)
+}
+
+func (s *collectionStorage) appendCommitIntervals(ctx context.Context, generation uint64, intervals []CommitInterval) error {
+	for _, interval := range intervals {
+		if err := s.appendCommitInterval(ctx, generation, interval); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *collectionStorage) deleteCommitIntervals(ctx context.Context, generation uint64) error {
+	bsonGeneration, err := commitIntervalGeneration(generation)
+	if err != nil {
+		return err
+	}
+	filter, err := types.NewDocument("kind", commitIntervalDocumentKind, "generation", bsonGeneration)
+	if err != nil {
+		return err
+	}
+	result, err := s.collection.Query(ctx, &backends.QueryParams{Filter: filter})
+	if err != nil {
+		return fmt.Errorf("querying obsolete replication commit intervals: %w", err)
+	}
+	defer result.Iter.Close()
+	var ids []any
+	for {
+		_, document, err := result.Iter.Next()
+		if errors.Is(err, iterator.ErrIteratorDone) {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("reading obsolete replication commit intervals: %w", err)
+		}
+		id, _ := document.Get("_id")
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	if _, err := s.collection.DeleteAll(ctx, &backends.DeleteAllParams{IDs: ids}); err != nil {
+		return fmt.Errorf("deleting obsolete replication commit intervals: %w", err)
+	}
+	return nil
+}
+
+func (s *collectionStorage) findDocument(ctx context.Context, id any) (*types.Document, bool, error) {
+	filter, err := types.NewDocument("_id", id)
+	if err != nil {
+		return nil, false, err
+	}
+	result, err := s.collection.Query(ctx, &backends.QueryParams{Filter: filter})
+	if err != nil {
+		return nil, false, fmt.Errorf("querying replication control document %v: %w", id, err)
+	}
+	defer result.Iter.Close()
+	for {
+		_, document, err := result.Iter.Next()
+		if errors.Is(err, iterator.ErrIteratorDone) {
+			return nil, false, nil
+		}
+		if err != nil {
+			return nil, false, fmt.Errorf("reading replication control document %v: %w", id, err)
+		}
+		documentID, _ := document.Get("_id")
+		if documentID == id {
+			return document, true, nil
+		}
+	}
+}
+
+func encodeCommitIntervalDocument(generation uint64, interval CommitInterval) (*types.Document, error) {
+	bsonGeneration, err := commitIntervalGeneration(generation)
+	if err != nil {
+		return nil, err
+	}
+	stored := storedCommitInterval{Generation: bsonGeneration, Interval: cloneCommitInterval(interval)}
+	payload, err := encodeBSONDocument(stored)
+	if err != nil {
+		return nil, fmt.Errorf("encoding replication commit interval: %w", err)
+	}
+	id := commitIntervalDocumentPrefix + fmt.Sprintf("%020d:", generation) +
+		base64.RawURLEncoding.EncodeToString([]byte(interval.CommitID))
+	return types.NewDocument(
+		"_id", id,
+		"kind", commitIntervalDocumentKind,
+		"generation", bsonGeneration,
+		"value", payload,
+	)
+}
+
+func commitIntervalGeneration(generation uint64) (int64, error) {
+	if generation > uint64(^uint64(0)>>1) {
+		return 0, errors.New("replication commit interval generation exceeds BSON int64")
+	}
+	return int64(generation), nil
+}
+
+func decodeCommitIntervalDocument(document *types.Document) (storedCommitInterval, error) {
+	value, err := document.Get("value")
+	if err != nil {
+		return storedCommitInterval{}, errors.New("replication commit interval document has no value")
+	}
+	payload, ok := value.(*types.Document)
+	if !ok {
+		return storedCommitInterval{}, fmt.Errorf("replication commit interval value has type %T, want document", value)
+	}
+	var stored storedCommitInterval
+	if err := decodeBSONDocument(payload, &stored); err != nil {
+		return storedCommitInterval{}, fmt.Errorf("decoding replication commit interval: %w", err)
+	}
+	return stored, nil
+}
+
 func encodeStateDocument(state State) (*types.Document, error) {
 	state = encodeStateMapKeys(state)
+	return encodeBSONDocument(state)
+}
+
+func encodeBSONDocument(value any) (*types.Document, error) {
 	var buffer bytes.Buffer
 	valueWriter, err := bsonrw.NewBSONValueWriter(&buffer)
 	if err != nil {
@@ -145,8 +338,8 @@ func encodeStateDocument(state State) (*types.Document, error) {
 		return nil, fmt.Errorf("creating replication control BSON encoder: %w", err)
 	}
 	encoder.UseJSONStructTags()
-	if err := encoder.Encode(state); err != nil {
-		return nil, fmt.Errorf("encoding replication control state as BSON: %w", err)
+	if err := encoder.Encode(value); err != nil {
+		return nil, fmt.Errorf("encoding structured BSON: %w", err)
 	}
 	document, err := dumbobson.ToDocument(wirebson.RawDocument(buffer.Bytes()))
 	if err != nil {
@@ -156,24 +349,31 @@ func encodeStateDocument(state State) (*types.Document, error) {
 }
 
 func decodeStateDocument(document *types.Document) (State, error) {
-	raw, err := dumbobson.FromDocumentRaw(document)
-	if err != nil {
-		return State{}, fmt.Errorf("encoding stored replication control document: %w", err)
-	}
-	decoder, err := mongobson.NewDecoder(bsonrw.NewBSONDocumentReader(raw))
-	if err != nil {
-		return State{}, fmt.Errorf("creating replication control BSON decoder: %w", err)
-	}
-	decoder.UseJSONStructTags()
 	var state State
-	if err := decoder.Decode(&state); err != nil {
+	if err := decodeBSONDocument(document, &state); err != nil {
 		return State{}, fmt.Errorf("decoding replication control BSON: %w", err)
 	}
-	state, err = decodeStateMapKeys(state)
+	state, err := decodeStateMapKeys(state)
 	if err != nil {
 		return State{}, err
 	}
 	return state, nil
+}
+
+func decodeBSONDocument(document *types.Document, value any) error {
+	raw, err := dumbobson.FromDocumentRaw(document)
+	if err != nil {
+		return fmt.Errorf("encoding stored structured document: %w", err)
+	}
+	decoder, err := mongobson.NewDecoder(bsonrw.NewBSONDocumentReader(raw))
+	if err != nil {
+		return fmt.Errorf("creating structured BSON decoder: %w", err)
+	}
+	decoder.UseJSONStructTags()
+	if err := decoder.Decode(value); err != nil {
+		return fmt.Errorf("decoding structured BSON: %w", err)
+	}
+	return nil
 }
 
 func encodeStateMapKeys(state State) State {
