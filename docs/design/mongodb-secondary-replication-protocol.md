@@ -656,6 +656,18 @@ record:
 These records must not be rolled back merely because an application transaction or
 DumboDB work session fails. **DESIGN**
 
+Commit-interval provenance is retained for the lifetime of the attached replica-set
+identity. It is stored in a generation-named append-only journal rather than in the
+bounded mutable control-state file. Recording the normal next interval appends and
+syncs one record in constant work with respect to retained history; in-memory lookup
+by source optime is binary. Startup validates and indexes the journal once. A fresh
+initial sync atomically publishes a new empty journal generation with its reset
+control state, after which the old generation can be removed. This makes growth
+linear in the number of DumboDB commits, not source operations, and preserves the
+complete optime-to-commit mapping required for rollback and historical inspection.
+The replication benchmark must report bytes per interval and lookup/startup cost at
+the selected batch size before production batching defaults are fixed. **DESIGN**
+
 ## Collection identity
 
 MongoDB's source collection UUID (`ui`) is the authoritative replication identity.

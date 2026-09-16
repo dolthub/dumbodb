@@ -178,7 +178,8 @@ type State struct {
 	InitialSyncPhase    InitialSyncPhase                     `json:"initial_sync_phase"`
 	InitialSyncAttempt  *InitialSyncAttempt                  `json:"initial_sync_attempt,omitempty"`
 	Checkpoint          Checkpoint                           `json:"checkpoint"`
-	CommitIntervals     []CommitInterval                     `json:"commit_intervals"`
+	CommitLogGeneration uint64                               `json:"commit_log_generation"`
+	CommitIntervals     []CommitInterval                     `json:"commit_intervals,omitempty"`
 	CollectionMappings  map[string]CollectionMapping         `json:"collection_mappings"`
 	TransactionParts    map[string]TransactionFragment       `json:"transaction_parts"`
 	AuthOwnership       map[string]AuthOwnership             `json:"auth_ownership"`
@@ -203,6 +204,9 @@ func Open(dir string, configuration Configuration) (*Store, error) {
 	data, err := os.ReadFile(store.path)
 	if errors.Is(err, os.ErrNotExist) {
 		store.state = newState(configuration)
+		if err := store.replaceCommitLogLocked(store.state.CommitLogGeneration, nil); err != nil {
+			return nil, err
+		}
 		if err := store.persistLocked(); err != nil {
 			return nil, err
 		}
@@ -214,6 +218,7 @@ func Open(dir string, configuration Configuration) (*Store, error) {
 	if err := json.Unmarshal(data, &store.state); err != nil {
 		return nil, fmt.Errorf("decoding replication control state: %w", err)
 	}
+	legacyIntervals := append([]CommitInterval(nil), store.state.CommitIntervals...)
 	normalizeState(&store.state)
 	if store.state.Configuration != configuration {
 		return nil, fmt.Errorf("replication control state belongs to set %q member %q, not set %q member %q",
@@ -222,6 +227,25 @@ func Open(dir string, configuration Configuration) (*Store, error) {
 			configuration.SetName,
 			configuration.MemberHost)
 	}
+	if store.state.CommitLogGeneration == 0 {
+		store.state.CommitLogGeneration = 1
+		if err := validateCommitIntervals(legacyIntervals); err != nil {
+			return nil, fmt.Errorf("validating legacy commit intervals: %w", err)
+		}
+		if err := store.replaceCommitLogLocked(store.state.CommitLogGeneration, legacyIntervals); err != nil {
+			return nil, err
+		}
+		store.state.CommitIntervals = legacyIntervals
+		if err := store.persistLocked(); err != nil {
+			return nil, err
+		}
+		return store, nil
+	}
+	intervals, err := store.loadCommitLogLocked(store.state.CommitLogGeneration)
+	if err != nil {
+		return nil, err
+	}
+	store.state.CommitIntervals = intervals
 	return store, nil
 }
 
@@ -415,16 +439,30 @@ func (s *Store) ResetInitialSync(attemptID string) error {
 	if s.state.InitialSyncAttempt != nil && attemptID != "" && s.state.InitialSyncAttempt.ID != attemptID {
 		return fmt.Errorf("initial sync attempt %q is not active", attemptID)
 	}
+	previousState := cloneState(s.state)
+	newGeneration := s.state.CommitLogGeneration + 1
+	if newGeneration == 0 {
+		return errors.New("commit interval log generation exhausted")
+	}
+	if err := s.replaceCommitLogLocked(newGeneration, nil); err != nil {
+		return err
+	}
 	s.state.InitialSyncAttempt = nil
 	s.state.InitialSyncPhase = InitialSyncNotStarted
 	s.state.Checkpoint = Checkpoint{}
 	s.state.CurrentRBID = 0
+	s.state.CommitLogGeneration = newGeneration
 	s.state.CommitIntervals = nil
 	s.state.CollectionMappings = make(map[string]CollectionMapping)
 	s.state.TransactionParts = make(map[string]TransactionFragment)
 	s.state.AuthOwnership = make(map[string]AuthOwnership)
 	s.state.ReplicationMetadata = make(map[string]ReplicationMetadataRecord)
-	return s.persistLocked()
+	if err := s.persistLocked(); err != nil {
+		s.state = previousState
+		return err
+	}
+	s.removeCommitLogLocked(previousState.CommitLogGeneration)
+	return nil
 }
 
 func (s *Store) SetCheckpoint(checkpoint Checkpoint) error {
@@ -467,26 +505,38 @@ func (s *Store) RecordCommit(interval CommitInterval) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, existing := range s.state.CommitIntervals {
-		if interval.First.Compare(existing.Last) <= 0 && interval.Last.Compare(existing.First) >= 0 {
-			if interval == existing {
-				return nil
-			}
+	if len(s.state.CommitIntervals) == 0 || interval.First.Compare(s.state.CommitIntervals[len(s.state.CommitIntervals)-1].Last) > 0 {
+		if err := s.appendCommitIntervalLocked(interval); err != nil {
+			return err
+		}
+		s.state.CommitIntervals = append(s.state.CommitIntervals, interval)
+		return nil
+	}
+	index := sort.Search(len(s.state.CommitIntervals), func(i int) bool {
+		return s.state.CommitIntervals[i].Last.Compare(interval.First) >= 0
+	})
+	if index < len(s.state.CommitIntervals) {
+		existing := s.state.CommitIntervals[index]
+		if interval == existing {
+			return nil
+		}
+		if interval.Last.Compare(existing.First) >= 0 {
 			return fmt.Errorf("commit interval %v overlaps existing interval for commit %q", interval, existing.CommitID)
 		}
+		return fmt.Errorf("commit interval %v precedes already recorded commit %q", interval, existing.CommitID)
 	}
-	s.state.CommitIntervals = append(s.state.CommitIntervals, interval)
-	sort.Slice(s.state.CommitIntervals, func(i, j int) bool {
-		return s.state.CommitIntervals[i].First.Compare(s.state.CommitIntervals[j].First) < 0
-	})
-	return s.persistLocked()
+	return fmt.Errorf("commit interval %v is not after retained history", interval)
 }
 
 func (s *Store) CommitFor(opTime OpTime) (CommitInterval, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	for _, interval := range s.state.CommitIntervals {
-		if interval.First.Compare(opTime) <= 0 && interval.Last.Compare(opTime) >= 0 {
+	index := sort.Search(len(s.state.CommitIntervals), func(i int) bool {
+		return s.state.CommitIntervals[i].Last.Compare(opTime) >= 0
+	})
+	if index < len(s.state.CommitIntervals) {
+		interval := s.state.CommitIntervals[index]
+		if interval.First.Compare(opTime) <= 0 {
 			return interval, true
 		}
 	}
@@ -665,6 +715,7 @@ func newState(configuration Configuration) State {
 		Configuration:       configuration,
 		Lifecycle:           LifecycleActive,
 		InitialSyncPhase:    InitialSyncNotStarted,
+		CommitLogGeneration: 1,
 		CollectionMappings:  make(map[string]CollectionMapping),
 		TransactionParts:    make(map[string]TransactionFragment),
 		AuthOwnership:       make(map[string]AuthOwnership),
@@ -707,7 +758,9 @@ func cloneState(state State) State {
 }
 
 func (s *Store) persistLocked() error {
-	data, err := json.Marshal(s.state)
+	persistedState := s.state
+	persistedState.CommitIntervals = nil
+	data, err := json.Marshal(persistedState)
 	if err != nil {
 		return fmt.Errorf("encoding replication control state: %w", err)
 	}

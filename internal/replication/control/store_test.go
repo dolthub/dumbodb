@@ -15,6 +15,9 @@
 package control
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -185,6 +188,8 @@ func TestInitialSyncAttemptRejectsInvalidBoundaries(t *testing.T) {
 	if err := store.RecordCommit(CommitInterval{First: earlier, Last: later, CommitID: "partial"}); err != nil {
 		t.Fatal(err)
 	}
+	oldCommitLogGeneration := store.Snapshot().CommitLogGeneration
+	oldCommitLogPath := store.commitLogPath(oldCommitLogGeneration)
 	if err := store.PutCollectionMapping(CollectionMapping{
 		SourceUUID: "source", Database: "orders", Collection: "items", LocalUUID: "local", CreateOpTime: earlier,
 	}); err != nil {
@@ -200,6 +205,15 @@ func TestInitialSyncAttemptRejectsInvalidBoundaries(t *testing.T) {
 	if state.InitialSyncPhase != InitialSyncNotStarted || state.InitialSyncAttempt != nil || state.Checkpoint != (Checkpoint{}) ||
 		state.CurrentRBID != 0 || len(state.CommitIntervals) != 0 || len(state.CollectionMappings) != 0 || len(state.TransactionParts) != 0 {
 		t.Fatalf("reset initial sync state = %+v", state)
+	}
+	if state.CommitLogGeneration != oldCommitLogGeneration+1 {
+		t.Fatalf("reset commit log generation = %d, want %d", state.CommitLogGeneration, oldCommitLogGeneration+1)
+	}
+	if _, err := os.Stat(oldCommitLogPath); !os.IsNotExist(err) {
+		t.Fatalf("old commit log remains after reset: %v", err)
+	}
+	if _, err := os.Stat(store.commitLogPath(state.CommitLogGeneration)); err != nil {
+		t.Fatalf("new commit log after reset: %v", err)
 	}
 }
 
@@ -302,6 +316,147 @@ func TestStoreRejectsCheckpointAndCommitRegression(t *testing.T) {
 	if err := store.RecordCommit(CommitInterval{First: opTime(4), Last: opTime(6), CommitID: "two"}); err != nil {
 		t.Fatal(err)
 	}
+	if err := store.RecordCommit(CommitInterval{First: opTime(7), Last: opTime(7), CommitID: "three"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordCommit(CommitInterval{First: opTime(6), Last: opTime(6), CommitID: "out-of-order"}); err == nil {
+		t.Fatal("RecordCommit accepted an out-of-order interval")
+	}
+}
+
+func TestCommitIntervalsUseAppendOnlyJournal(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir, testConfiguration())
+	if err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(dir, stateFileName)
+	stateBefore, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intervals := []CommitInterval{
+		{First: opTime(1), Last: opTime(3), CommitID: "one"},
+		{First: opTime(4), Last: opTime(8), CommitID: "two"},
+		{First: opTime(10), Last: opTime(10), CommitID: "three"},
+	}
+	for _, interval := range intervals {
+		if err := store.RecordCommit(interval); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stateAfter, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(stateAfter, stateBefore) {
+		t.Fatal("recording commits rewrote the bounded control state")
+	}
+	journalPath := store.commitLogPath(store.Snapshot().CommitLogGeneration)
+	journalBeforeReplay, err := os.Stat(journalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordCommit(intervals[1]); err != nil {
+		t.Fatal(err)
+	}
+	journalAfterReplay, err := os.Stat(journalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journalAfterReplay.Size() != journalBeforeReplay.Size() {
+		t.Fatal("idempotent replay appended another commit interval")
+	}
+
+	reopened, err := Open(dir, testConfiguration())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := reopened.CommitFor(opTime(6)); !ok || got != intervals[1] {
+		t.Fatalf("CommitFor after reopen = %+v, %v; want %+v, true", got, ok, intervals[1])
+	}
+	if _, ok := reopened.CommitFor(opTime(9)); ok {
+		t.Fatal("CommitFor matched an uncovered gap")
+	}
+}
+
+func TestOpenMigratesLegacyCommitIntervals(t *testing.T) {
+	dir := t.TempDir()
+	configuration := testConfiguration()
+	legacy := newState(configuration)
+	legacy.CommitLogGeneration = 0
+	legacy.CommitIntervals = []CommitInterval{
+		{First: opTime(1), Last: opTime(2), CommitID: "legacy-one"},
+		{First: opTime(3), Last: opTime(4), CommitID: "legacy-two"},
+	}
+	data, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, stateFileName), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := Open(dir, configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := store.CommitFor(opTime(4)); !ok || got.CommitID != "legacy-two" {
+		t.Fatalf("migrated CommitFor = %+v, %v", got, ok)
+	}
+	persistedState, err := os.ReadFile(filepath.Join(dir, stateFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(persistedState, []byte("commit_intervals")) {
+		t.Fatal("migrated state retained inline commit intervals")
+	}
+	if _, err := Open(dir, configuration); err != nil {
+		t.Fatalf("opening migrated store again: %v", err)
+	}
+}
+
+func TestOpenDiscardsIncompleteCommitLogTail(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir, testConfiguration())
+	if err != nil {
+		t.Fatal(err)
+	}
+	interval := CommitInterval{First: opTime(1), Last: opTime(2), CommitID: "complete"}
+	if err := store.RecordCommit(interval); err != nil {
+		t.Fatal(err)
+	}
+	journalPath := store.commitLogPath(store.Snapshot().CommitLogGeneration)
+	completeInfo, err := os.Stat(journalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err := os.OpenFile(journalPath, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := journal.Write([]byte("{\"first\":")); err != nil {
+		journal.Close()
+		t.Fatal(err)
+	}
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := Open(dir, testConfiguration())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := reopened.CommitFor(opTime(1)); !ok || got != interval {
+		t.Fatalf("CommitFor after tail repair = %+v, %v", got, ok)
+	}
+	repairedInfo, err := os.Stat(journalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repairedInfo.Size() != completeInfo.Size() {
+		t.Fatalf("repaired journal size = %d, want %d", repairedInfo.Size(), completeInfo.Size())
+	}
 }
 
 func TestOpenRejectsDifferentLifecycleConfiguration(t *testing.T) {
@@ -377,4 +532,45 @@ func testConfiguration() Configuration {
 
 func opTime(increment uint32) OpTime {
 	return OpTime{Seconds: 100, Increment: increment, Term: 2}
+}
+
+func BenchmarkRecordCommitAppend(b *testing.B) {
+	for _, historyLength := range []int{0, 1_000, 100_000} {
+		b.Run(fmt.Sprintf("history_%d", historyLength), func(b *testing.B) {
+			store, err := Open(b.TempDir(), testConfiguration())
+			if err != nil {
+				b.Fatal(err)
+			}
+			intervals := make([]CommitInterval, historyLength, historyLength+b.N)
+			for index := range intervals {
+				position := uint32(index + 1)
+				intervals[index] = CommitInterval{First: opTime(position), Last: opTime(position), CommitID: fmt.Sprintf("seed-%d", index)}
+			}
+			store.state.CommitIntervals = intervals
+			if err := store.replaceCommitLogLocked(store.state.CommitLogGeneration, intervals); err != nil {
+				b.Fatal(err)
+			}
+			journalPath := store.commitLogPath(store.state.CommitLogGeneration)
+			before, err := os.Stat(journalPath)
+			if err != nil {
+				b.Fatal(err)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for index := 0; index < b.N; index++ {
+				position := uint32(historyLength + index + 1)
+				if err := store.RecordCommit(CommitInterval{
+					First: opTime(position), Last: opTime(position), CommitID: fmt.Sprintf("measured-%d", index),
+				}); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.StopTimer()
+			after, err := os.Stat(journalPath)
+			if err != nil {
+				b.Fatal(err)
+			}
+			b.ReportMetric(float64(after.Size()-before.Size())/float64(b.N), "journal-B/op")
+		})
+	}
 }
