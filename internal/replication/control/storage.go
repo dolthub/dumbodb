@@ -15,19 +15,26 @@
 package control
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 
+	"github.com/FerretDB/wire/wirebson"
 	"github.com/dolthub/dumbodb/internal/backends"
+	dumbobson "github.com/dolthub/dumbodb/internal/bson"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
+	mongobson "go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/bsonrw"
 )
 
 const (
-	controlDocumentID    = "control"
-	controlFormatVersion = int32(1)
+	controlDocumentID          = "control"
+	legacyControlFormatVersion = int32(1)
+	controlFormatVersion       = int32(2)
 )
 
 type collectionStorage struct {
@@ -46,53 +53,69 @@ func openCollectionStorage(backend backends.Backend) (*collectionStorage, error)
 	return &collectionStorage{collection: collection}, nil
 }
 
-func (s *collectionStorage) load(ctx context.Context) ([]byte, bool, error) {
+func (s *collectionStorage) load(ctx context.Context) (State, bool, error) {
 	filter, err := types.NewDocument("_id", controlDocumentID)
 	if err != nil {
-		return nil, false, err
+		return State{}, false, err
 	}
 	result, err := s.collection.Query(ctx, &backends.QueryParams{Filter: filter})
 	if err != nil {
-		return nil, false, fmt.Errorf("querying replication control state: %w", err)
+		return State{}, false, fmt.Errorf("querying replication control state: %w", err)
 	}
 	defer result.Iter.Close()
 	for {
 		_, document, err := result.Iter.Next()
 		if errors.Is(err, iterator.ErrIteratorDone) {
-			return nil, false, nil
+			return State{}, false, nil
 		}
 		if err != nil {
-			return nil, false, fmt.Errorf("reading replication control state: %w", err)
+			return State{}, false, fmt.Errorf("reading replication control state: %w", err)
 		}
 		id, _ := document.Get("_id")
 		if id != controlDocumentID {
 			continue
 		}
 		version, _ := document.Get("formatVersion")
-		if version != controlFormatVersion {
-			return nil, false, fmt.Errorf("unsupported replication control format version %v", version)
-		}
 		value, err := document.Get("state")
 		if err != nil {
-			return nil, false, errors.New("replication control document has no state")
+			return State{}, false, errors.New("replication control document has no state")
 		}
-		binary, ok := value.(types.Binary)
-		if !ok || binary.Subtype != types.BinaryGeneric {
-			return nil, false, errors.New("replication control document state is not generic binary data")
+		switch version {
+		case legacyControlFormatVersion:
+			binary, ok := value.(types.Binary)
+			if !ok || binary.Subtype != types.BinaryGeneric {
+				return State{}, false, errors.New("legacy replication control state is not generic binary data")
+			}
+			var state State
+			if err := json.Unmarshal(binary.B, &state); err != nil {
+				return State{}, false, fmt.Errorf("decoding legacy replication control state: %w", err)
+			}
+			return state, true, nil
+		case controlFormatVersion:
+			stateDocument, ok := value.(*types.Document)
+			if !ok {
+				return State{}, false, fmt.Errorf("replication control state has type %T, want document", value)
+			}
+			state, err := decodeStateDocument(stateDocument)
+			if err != nil {
+				return State{}, false, err
+			}
+			return state, true, nil
+		default:
+			return State{}, false, fmt.Errorf("unsupported replication control format version %v", version)
 		}
-		return append([]byte(nil), binary.B...), true, nil
 	}
 }
 
 func (s *collectionStorage) save(ctx context.Context, state State) error {
-	data, err := json.Marshal(state)
+	stateDocument, err := encodeStateDocument(state)
 	if err != nil {
-		return fmt.Errorf("encoding replication control state: %w", err)
+		return err
 	}
 	document, err := types.NewDocument(
 		"_id", controlDocumentID,
 		"formatVersion", controlFormatVersion,
-		"state", types.Binary{B: data, Subtype: types.BinaryGeneric},
+		"state", stateDocument,
 	)
 	if err != nil {
 		return fmt.Errorf("constructing replication control document: %w", err)
@@ -108,6 +131,125 @@ func (s *collectionStorage) save(ctx context.Context, state State) error {
 		return fmt.Errorf("inserting replication control document: %w", err)
 	}
 	return nil
+}
+
+func encodeStateDocument(state State) (*types.Document, error) {
+	state = encodeStateMapKeys(state)
+	var buffer bytes.Buffer
+	valueWriter, err := bsonrw.NewBSONValueWriter(&buffer)
+	if err != nil {
+		return nil, fmt.Errorf("creating replication control BSON writer: %w", err)
+	}
+	encoder, err := mongobson.NewEncoder(valueWriter)
+	if err != nil {
+		return nil, fmt.Errorf("creating replication control BSON encoder: %w", err)
+	}
+	encoder.UseJSONStructTags()
+	if err := encoder.Encode(state); err != nil {
+		return nil, fmt.Errorf("encoding replication control state as BSON: %w", err)
+	}
+	document, err := dumbobson.ToDocument(wirebson.RawDocument(buffer.Bytes()))
+	if err != nil {
+		return nil, fmt.Errorf("converting replication control BSON: %w", err)
+	}
+	return document, nil
+}
+
+func decodeStateDocument(document *types.Document) (State, error) {
+	raw, err := dumbobson.FromDocumentRaw(document)
+	if err != nil {
+		return State{}, fmt.Errorf("encoding stored replication control document: %w", err)
+	}
+	decoder, err := mongobson.NewDecoder(bsonrw.NewBSONDocumentReader(raw))
+	if err != nil {
+		return State{}, fmt.Errorf("creating replication control BSON decoder: %w", err)
+	}
+	decoder.UseJSONStructTags()
+	var state State
+	if err := decoder.Decode(&state); err != nil {
+		return State{}, fmt.Errorf("decoding replication control BSON: %w", err)
+	}
+	state, err = decodeStateMapKeys(state)
+	if err != nil {
+		return State{}, err
+	}
+	return state, nil
+}
+
+func encodeStateMapKeys(state State) State {
+	state = cloneState(state)
+	state.CollectionMappings = encodeMapKeys(state.CollectionMappings)
+	state.TransactionParts = encodeMapKeys(state.TransactionParts)
+	state.AuthOwnership = encodeMapKeys(state.AuthOwnership)
+	state.ReplicationMetadata = encodeMapKeys(state.ReplicationMetadata)
+	if state.PendingPublication != nil {
+		state.PendingPublication.Commits = encodeMapKeys(state.PendingPublication.Commits)
+		if state.PendingPublication.PreApplyState != nil {
+			preApply := state.PendingPublication.PreApplyState
+			preApply.CollectionMappings = encodeMapKeys(preApply.CollectionMappings)
+			preApply.TransactionParts = encodeMapKeys(preApply.TransactionParts)
+			preApply.AuthOwnership = encodeMapKeys(preApply.AuthOwnership)
+			preApply.ReplicationMetadata = encodeMapKeys(preApply.ReplicationMetadata)
+		}
+	}
+	return state
+}
+
+func decodeStateMapKeys(state State) (State, error) {
+	var err error
+	if state.CollectionMappings, err = decodeMapKeys(state.CollectionMappings); err != nil {
+		return State{}, fmt.Errorf("decoding collection mapping keys: %w", err)
+	}
+	if state.TransactionParts, err = decodeMapKeys(state.TransactionParts); err != nil {
+		return State{}, fmt.Errorf("decoding transaction fragment keys: %w", err)
+	}
+	if state.AuthOwnership, err = decodeMapKeys(state.AuthOwnership); err != nil {
+		return State{}, fmt.Errorf("decoding auth ownership keys: %w", err)
+	}
+	if state.ReplicationMetadata, err = decodeMapKeys(state.ReplicationMetadata); err != nil {
+		return State{}, fmt.Errorf("decoding replication metadata keys: %w", err)
+	}
+	if state.PendingPublication != nil {
+		if state.PendingPublication.Commits, err = decodeMapKeys(state.PendingPublication.Commits); err != nil {
+			return State{}, fmt.Errorf("decoding pending publication commit keys: %w", err)
+		}
+		if state.PendingPublication.PreApplyState != nil {
+			preApply := state.PendingPublication.PreApplyState
+			if preApply.CollectionMappings, err = decodeMapKeys(preApply.CollectionMappings); err != nil {
+				return State{}, fmt.Errorf("decoding pre-apply collection mapping keys: %w", err)
+			}
+			if preApply.TransactionParts, err = decodeMapKeys(preApply.TransactionParts); err != nil {
+				return State{}, fmt.Errorf("decoding pre-apply transaction fragment keys: %w", err)
+			}
+			if preApply.AuthOwnership, err = decodeMapKeys(preApply.AuthOwnership); err != nil {
+				return State{}, fmt.Errorf("decoding pre-apply auth ownership keys: %w", err)
+			}
+			if preApply.ReplicationMetadata, err = decodeMapKeys(preApply.ReplicationMetadata); err != nil {
+				return State{}, fmt.Errorf("decoding pre-apply replication metadata keys: %w", err)
+			}
+		}
+	}
+	return state, nil
+}
+
+func encodeMapKeys[V any](values map[string]V) map[string]V {
+	encoded := make(map[string]V, len(values))
+	for key, value := range values {
+		encoded[base64.RawURLEncoding.EncodeToString([]byte(key))] = value
+	}
+	return encoded
+}
+
+func decodeMapKeys[V any](values map[string]V) (map[string]V, error) {
+	decoded := make(map[string]V, len(values))
+	for key, value := range values {
+		decodedKey, err := base64.RawURLEncoding.DecodeString(key)
+		if err != nil {
+			return nil, fmt.Errorf("invalid encoded map key %q: %w", key, err)
+		}
+		decoded[string(decodedKey)] = value
+	}
+	return decoded, nil
 }
 
 func validateCommitIntervals(intervals []CommitInterval) error {

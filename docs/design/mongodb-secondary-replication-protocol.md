@@ -685,7 +685,8 @@ DumboDB work session fails. **DESIGN**
 Replication control state and commit-interval provenance are stored in the reserved
 `admin.system.dumbodb.replication` collection. The control document contains the
 bounded mutable state and all intervals retained for the attached replica-set
-identity. Updating it is one normal collection mutation, so the Prolly storage layer
+identity as structured BSON fields that operators and tests can inspect directly.
+Updating it is one normal collection mutation, so the Prolly storage layer
 owns atomicity, durability, and crash recovery. DumboDB does not create replication
 state files or implement journal writes, torn-record recovery, or filesystem
 durability. In-memory lookup by source optime is binary. A fresh initial sync clears

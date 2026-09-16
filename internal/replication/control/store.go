@@ -251,7 +251,7 @@ func Open(backend backends.Backend, configuration Configuration) (*Store, error)
 		return nil, err
 	}
 	store := &Store{storage: storage}
-	data, exists, err := storage.load(context.Background())
+	state, exists, err := storage.load(context.Background())
 	if err != nil {
 		return nil, err
 	}
@@ -263,9 +263,7 @@ func Open(backend backends.Backend, configuration Configuration) (*Store, error)
 		}
 		return store, nil
 	}
-	if err := json.Unmarshal(data, &store.state); err != nil {
-		return nil, fmt.Errorf("decoding replication control state: %w", err)
-	}
+	store.state = state
 	normalizeState(&store.state)
 	if store.state.Configuration != configuration {
 		return nil, fmt.Errorf("replication control state belongs to set %q member %q, not set %q member %q",

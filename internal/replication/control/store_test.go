@@ -376,16 +376,12 @@ func TestCommitIntervalsUseAdminCollection(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	data, exists, err := store.storage.load(t.Context())
+	persisted, exists, err := store.storage.load(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !exists {
 		t.Fatal("admin control document does not exist")
-	}
-	var persisted State
-	if err := json.Unmarshal(data, &persisted); err != nil {
-		t.Fatal(err)
 	}
 	if len(persisted.CommitIntervals) != len(intervals) {
 		t.Fatalf("persisted commit intervals = %+v", persisted.CommitIntervals)
@@ -514,6 +510,38 @@ func TestControlStateUsesOnlyReservedAdminCollection(t *testing.T) {
 
 func readPublicControlState(t *testing.T, collection backends.Collection) State {
 	t.Helper()
+	document := readPublicControlDocument(t, collection)
+	version, err := document.Get("formatVersion")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if version != controlFormatVersion {
+		t.Fatalf("format version = %v, want %d", version, controlFormatVersion)
+	}
+	value, err := document.Get("state")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateDocument, ok := value.(*types.Document)
+	if !ok {
+		t.Fatalf("state type = %T, want *types.Document", value)
+	}
+	lifecycle, err := stateDocument.Get("lifecycle")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lifecycle == nil {
+		t.Fatal("structured state has no lifecycle")
+	}
+	state, err := decodeStateDocument(stateDocument)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return state
+}
+
+func readPublicControlDocument(t *testing.T, collection backends.Collection) *types.Document {
+	t.Helper()
 	result, err := collection.Query(t.Context(), new(backends.QueryParams))
 	if err != nil {
 		t.Fatal(err)
@@ -523,19 +551,7 @@ func readPublicControlState(t *testing.T, collection backends.Collection) State 
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := document.Get("state")
-	if err != nil {
-		t.Fatal(err)
-	}
-	binary, ok := value.(types.Binary)
-	if !ok {
-		t.Fatalf("state type = %T, want types.Binary", value)
-	}
-	var state State
-	if err := json.Unmarshal(binary.B, &state); err != nil {
-		t.Fatal(err)
-	}
-	return state
+	return document
 }
 
 func mustDocument(t *testing.T, pairs ...any) *types.Document {
@@ -545,6 +561,52 @@ func mustDocument(t *testing.T, pairs ...any) *types.Document {
 		t.Fatal(err)
 	}
 	return document
+}
+
+func TestOpenMigratesLegacyBinaryControlState(t *testing.T) {
+	directory := t.TempDir()
+	backend := testBackend(t, directory)
+	configuration := testConfiguration()
+	legacyState := newState(configuration)
+	legacyState.CurrentSource = "legacy.example:27017"
+	data, err := json.Marshal(legacyState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	internalCollection, err := backend.(backends.ReplicationControlBackend).ReplicationControlCollection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyDocument := mustDocument(t,
+		"_id", controlDocumentID,
+		"formatVersion", legacyControlFormatVersion,
+		"state", types.Binary{B: data, Subtype: types.BinaryGeneric},
+	)
+	if _, err := internalCollection.InsertAll(t.Context(), &backends.InsertAllParams{Docs: []*types.Document{legacyDocument}}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(backend, configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source := store.Snapshot().CurrentSource; source != legacyState.CurrentSource {
+		t.Fatalf("source = %q, want %q", source, legacyState.CurrentSource)
+	}
+	if err := store.SetInitialSyncPhase(InitialSyncCloning); err != nil {
+		t.Fatal(err)
+	}
+	admin, err := backend.Database("admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	collection, err := admin.Collection(backends.ReservedReplicationControlName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := readPublicControlState(t, collection)
+	if state.CurrentSource != legacyState.CurrentSource || state.InitialSyncPhase != InitialSyncCloning {
+		t.Fatalf("migrated state = %+v", state)
+	}
 }
 
 func TestCommitIntervalsSurviveStorageReopen(t *testing.T) {
