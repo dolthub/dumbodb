@@ -339,7 +339,30 @@ func (s *dbState) commitBranchRootLocked(
 // commitBranchWS commits branch's working root as one Dolt commit, or returns
 // false without committing when the root already matches HEAD. Caller must hold
 // state.mu.
-func (s *dbState) commitBranchWS(ctx context.Context, branch, message, author string) (committed bool, err error) {
+// maxAutoCommitRetries bounds the re-reads below. Each pass either commits or
+// discovers there is nothing left to commit, so this is a livelock brake and
+// not a policy.
+const maxAutoCommitRetries = 8
+
+// commitBranchWS creates the auto-commit for a branch. Losing the race to
+// another writer is not a failure and must never reach the client: that writer
+// committed whatever was on the branch, which includes this write, so the
+// re-read below normally finds the working set already equal to HEAD and
+// reports that there was nothing to commit.
+//
+// The retry lives here rather than in the command replay loop because the
+// document write has already been published by the time auto-commit runs.
+// Replaying the operation would apply it twice.
+func (s *dbState) commitBranchWS(ctx context.Context, branch, message, author string) (bool, error) {
+	for attempt := 0; ; attempt++ {
+		committed, err := s.tryCommitBranchWS(ctx, branch, message, author)
+		if !errors.Is(err, backends.ErrWriteRaced) || attempt >= maxAutoCommitRetries {
+			return committed, err
+		}
+	}
+}
+
+func (s *dbState) tryCommitBranchWS(ctx context.Context, branch, message, author string) (committed bool, err error) {
 	e := s.branchEntry(branch)
 	wsRef := doltref.NewWorkingSetRef("heads/" + branch)
 
