@@ -78,16 +78,17 @@ func (h *Handler) hello(ctx context.Context, doc *types.Document, tcpHost, name 
 	if h.ReplicationTopology != nil {
 		isSecondary = h.ReplicationTopology.Snapshot().State == topology.StateSecondary
 	}
+	isWritablePrimary := name == ""
 
 	switch doc.Command() {
 	case "hello":
-		res.Set("isWritablePrimary", !isSecondary)
+		res.Set("isWritablePrimary", isWritablePrimary)
 	case "isMaster", "ismaster":
 		if helloOk, _ := doc.Get("helloOk"); helloOk != nil {
 			res.Set("helloOk", true)
 		}
 
-		res.Set("ismaster", !isSecondary)
+		res.Set("ismaster", isWritablePrimary)
 	default:
 		panic(fmt.Sprintf("unexpected command: %q", doc.Command()))
 	}

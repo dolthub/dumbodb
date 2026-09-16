@@ -137,6 +137,9 @@ func TestReplicaSetHelloDoesNotReportSecondaryBeforeInitialSync(t *testing.T) {
 	if responseValue(response, "secondary") != false {
 		t.Fatalf("secondary before initial sync = %v", responseValue(response, "secondary"))
 	}
+	if responseValue(response, "isWritablePrimary") != false {
+		t.Fatalf("isWritablePrimary before initial sync = %v", responseValue(response, "isWritablePrimary"))
+	}
 	if responseValue(response, "setVersion") != int64(4) {
 		t.Fatalf("setVersion = %v", responseValue(response, "setVersion"))
 	}
@@ -150,6 +153,41 @@ func TestReplicaSetHelloDoesNotReportSecondaryBeforeInitialSync(t *testing.T) {
 	}
 	if responseValue(response, "secondary") != true {
 		t.Fatalf("secondary after initial sync = %v", responseValue(response, "secondary"))
+	}
+	if responseValue(response, "isWritablePrimary") != false {
+		t.Fatalf("isWritablePrimary after initial sync = %v", responseValue(response, "isWritablePrimary"))
+	}
+}
+
+func TestReplicaSetLegacyHelloNeverReportsPrimary(t *testing.T) {
+	handler := testTopologyHandler()
+	response, err := handler.hello(
+		context.Background(),
+		must.NotFail(types.NewDocument("ismaster", int32(1), "$db", "admin")),
+		"dumbo.example:27017",
+		"rs0",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if responseValue(response, "ismaster") != false {
+		t.Fatalf("replica-set ismaster = %v", responseValue(response, "ismaster"))
+	}
+}
+
+func TestStandaloneHelloReportsWritablePrimary(t *testing.T) {
+	handler := testTopologyHandler()
+	response, err := handler.hello(
+		context.Background(),
+		must.NotFail(types.NewDocument("hello", int32(1), "$db", "admin")),
+		"dumbo.example:27017",
+		"",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if responseValue(response, "isWritablePrimary") != true {
+		t.Fatalf("standalone isWritablePrimary = %v", responseValue(response, "isWritablePrimary"))
 	}
 }
 
