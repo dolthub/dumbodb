@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/binary"
+	"errors"
 	"hash/crc32"
 	"io"
 	"net"
@@ -67,6 +68,45 @@ func TestRequestCorrelatesResponse(t *testing.T) {
 	}
 	if decoded.Get("ok") != float64(1) {
 		t.Fatalf("response = %s", response)
+	}
+}
+
+func TestRequestCancellationInterruptsRead(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	requestRead := make(chan struct{})
+	go func() {
+		reader := bufio.NewReader(server)
+		header, err := readHeader(reader)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		if _, err := io.CopyN(io.Discard, reader, int64(header.MessageLength-wire.MsgHeaderLen)); err != nil {
+			t.Error(err)
+			return
+		}
+		close(requestRead)
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	connection := New(client)
+	go func() {
+		_, err := connection.Request(ctx, wire.MustOpMsg("ping", int32(1), "$db", "admin"))
+		done <- err
+	}()
+	<-requestRead
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Request error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Request did not stop after context cancellation")
 	}
 }
 

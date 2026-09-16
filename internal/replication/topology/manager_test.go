@@ -142,6 +142,15 @@ func TestManagerTransitionsToSecondaryAfterInitialSync(t *testing.T) {
 	if state := manager.Snapshot(); state.State != StateSecondary || state.Checkpoint != checkpoint {
 		t.Fatalf("secondary state = %+v", state)
 	}
+	if err := manager.MarkContinuityLost(false); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.MarkSteady(); err != nil {
+		t.Fatal(err)
+	}
+	if state := manager.Snapshot(); state.State != StateSecondary {
+		t.Fatalf("restored steady state = %+v", state)
+	}
 	if recovered := New(openControlStore(t, dir)).Snapshot(); recovered.State != StateSecondary || recovered.Checkpoint != checkpoint {
 		t.Fatalf("recovered secondary state = %+v", recovered)
 	}

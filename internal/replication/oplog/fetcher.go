@@ -270,6 +270,9 @@ func (f *Fetcher) consumeResponse(ctx context.Context, source string, response *
 		if *continuityPending {
 			*continuityPending = false
 			if entry.OpTime == expected {
+				if err := f.manager.AdvanceFetched(entry.OpTime, entry.OpTime); err != nil {
+					return 0, err
+				}
 				continue
 			}
 			if timestampCompare(entry.OpTime, expected) > 0 {

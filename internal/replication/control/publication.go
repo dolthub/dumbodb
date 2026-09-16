@@ -56,6 +56,9 @@ func (s *Store) RecordPublicationCommit(publicationID, database, commitID string
 	if pending == nil || pending.ID != publicationID {
 		return fmt.Errorf("publication %q is not pending", publicationID)
 	}
+	if !pending.Ready {
+		return fmt.Errorf("publication %q is not ready", publicationID)
+	}
 	if _, ok := slices.BinarySearch(pending.Databases, database); !ok {
 		return fmt.Errorf("database %q is not part of publication %q", database, publicationID)
 	}
@@ -66,6 +69,34 @@ func (s *Store) RecordPublicationCommit(publicationID, database, commitID string
 		return fmt.Errorf("database %q publication commit changed from %q to %q", database, existing, commitID)
 	}
 	pending.Commits[database] = commitID
+	return s.persistLocked()
+}
+
+func (s *Store) MarkPublicationReady(publicationID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	pending := s.state.PendingPublication
+	if pending == nil || pending.ID != publicationID {
+		return fmt.Errorf("publication %q is not pending", publicationID)
+	}
+	if pending.Ready {
+		return nil
+	}
+	pending.Ready = true
+	return s.persistLocked()
+}
+
+func (s *Store) AbortPublication(publicationID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	pending := s.state.PendingPublication
+	if pending == nil || pending.ID != publicationID {
+		return fmt.Errorf("publication %q is not pending", publicationID)
+	}
+	if pending.Ready || len(pending.Commits) != 0 {
+		return fmt.Errorf("publication %q has entered durable commit", publicationID)
+	}
+	s.state.PendingPublication = nil
 	return s.persistLocked()
 }
 
@@ -125,6 +156,9 @@ func samePublicationPlan(left, right PendingPublication) bool {
 }
 
 func validatePendingCompletion(pending PendingPublication, interval CommitInterval, checkpoint Checkpoint) error {
+	if !pending.Ready {
+		return errors.New("completed publication was not ready")
+	}
 	if pending.ID != interval.CommitID || pending.First != interval.First || pending.Last != interval.Last || pending.Checkpoint != checkpoint {
 		return errors.New("completed publication does not match its pending record")
 	}

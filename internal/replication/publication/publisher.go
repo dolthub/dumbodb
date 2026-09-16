@@ -66,6 +66,20 @@ func (p *Publisher) PublishInitialSync(ctx context.Context, publication initials
 }
 
 func (p *Publisher) Publish(ctx context.Context, first, last control.OpTime, databases []string, checkpoint control.Checkpoint) error {
+	publicationID, err := p.Begin(first, last, databases, checkpoint)
+	if err != nil {
+		if errors.Is(err, control.ErrPublicationComplete) {
+			return nil
+		}
+		return err
+	}
+	if err := p.MarkReady(publicationID); err != nil {
+		return err
+	}
+	return p.Complete(ctx, publicationID)
+}
+
+func (p *Publisher) Begin(first, last control.OpTime, databases []string, checkpoint control.Checkpoint) (string, error) {
 	databases = sortedDatabases(databases)
 	publicationID := publicationID(first, last, databases)
 	pending := control.PendingPublication{
@@ -73,11 +87,27 @@ func (p *Publisher) Publish(ctx context.Context, first, last control.OpTime, dat
 		Commits: make(map[string]string), Checkpoint: checkpoint,
 	}
 	if err := p.store.BeginPublication(pending); err != nil {
-		if errors.Is(err, control.ErrPublicationComplete) {
-			return nil
-		}
-		return err
+		return publicationID, err
 	}
+	return publicationID, nil
+}
+
+func (p *Publisher) MarkReady(publicationID string) error {
+	return p.store.MarkPublicationReady(publicationID)
+}
+
+func (p *Publisher) Complete(ctx context.Context, publicationID string) error {
+	pending, ok := p.store.PendingPublication()
+	if !ok || pending.ID != publicationID {
+		return fmt.Errorf("publication %q is not pending", publicationID)
+	}
+	if !pending.Ready {
+		return fmt.Errorf("publication %q is not ready", publicationID)
+	}
+	databases := pending.Databases
+	checkpoint := pending.Checkpoint
+	first := pending.First
+	last := pending.Last
 	message := publicationMessage(publicationID)
 	for _, database := range databases {
 		current, ok := p.store.PendingPublication()

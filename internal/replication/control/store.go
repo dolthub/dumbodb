@@ -131,6 +131,7 @@ type PendingPublication struct {
 	Databases  []string          `json:"databases"`
 	Commits    map[string]string `json:"commits"`
 	Checkpoint Checkpoint        `json:"checkpoint"`
+	Ready      bool              `json:"ready"`
 }
 
 type CollectionMapping struct {

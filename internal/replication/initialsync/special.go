@@ -51,9 +51,6 @@ func MaterializeSpecialDatabases(
 			if !special.IsSpecialNamespace(namespace) {
 				return fmt.Errorf("%w %q", special.ErrUnsupportedSpecialNamespace, namespace)
 			}
-			if namespace == special.ChangeStreamPreimagesNamespace {
-				return fmt.Errorf("%w %q: change-stream pre-images are not supported", special.ErrUnsupportedSpecialNamespace, namespace)
-			}
 		}
 	}
 	for _, database := range databases {
@@ -77,7 +74,9 @@ func MaterializeSpecialDatabases(
 
 func ignoredSpecialNamespace(namespace string) bool {
 	switch namespace {
-	case "admin.system.version", "admin.system.keys", "config.system.sessions":
+	case "admin.system.version", "admin.system.keys",
+		"config.system.sessions", "config.system.indexBuilds",
+		"config.analyzeShardKeySplitPoints", "config.sampledQueries", "config.sampledQueriesDiff":
 		return true
 	default:
 		return false

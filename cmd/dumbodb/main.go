@@ -37,6 +37,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/handler/registry"
 	"github.com/dolthub/dumbodb/internal/metrics"
 	"github.com/dolthub/dumbodb/internal/replication/control"
+	replicationruntime "github.com/dolthub/dumbodb/internal/replication/runtime"
 	"github.com/dolthub/dumbodb/internal/replication/topology"
 	"github.com/dolthub/dumbodb/internal/util/logging"
 	"github.com/dolthub/dumbodb/internal/util/state"
@@ -140,12 +141,14 @@ func run(logger *slog.Logger) error {
 
 	replicationConfiguration, replicationEnabled := replicationControlConfiguration(*replSetName, *addr)
 	var replicationTopology *topology.Manager
+	var replicationControlStore *control.Store
 	if replicationEnabled {
 		controlDirectory := filepath.Join(*dataDir, ".replication")
 		controlStore, err := control.Open(controlDirectory, replicationConfiguration)
 		if err != nil {
 			return err
 		}
+		replicationControlStore = controlStore
 		replicationTopology = topology.New(controlStore)
 		logger.Info("replication control state opened", "replSet", *replSetName)
 	}
@@ -195,6 +198,11 @@ func run(logger *slog.Logger) error {
 	go metrics.RunReporter(ctx, logger, version.Get().Version, metricsEnabled)
 	if replicationTopology != nil {
 		go topology.NewHeartbeatMesh(replicationTopology, logger).Run(ctx)
+		runtime, err := replicationruntime.New(h.Backend, replicationControlStore, replicationTopology, logger, h.BumpAuthGeneration)
+		if err != nil {
+			return err
+		}
+		go runtime.Run(ctx)
 	}
 
 	listener.Run(ctx)

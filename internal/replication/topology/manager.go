@@ -492,6 +492,22 @@ func (m *Manager) MarkContinuityLost(tooStale bool) error {
 	return nil
 }
 
+// MarkSteady returns a successfully publishing initialized member to SECONDARY.
+func (m *Manager) MarkSteady() error {
+	if m.store.Snapshot().InitialSyncPhase != control.InitialSyncComplete {
+		return errors.New("member cannot become secondary before initial sync completes")
+	}
+	m.mu.Lock()
+	previous := cloneSnapshot(m.state)
+	m.state.State = StateSecondary
+	listener := m.changeListenerLocked(previous)
+	m.mu.Unlock()
+	if listener != nil {
+		listener()
+	}
+	return nil
+}
+
 func (m *Manager) selectSourceLocked() string {
 	if primary, ok := m.state.Members[m.state.PrimaryID]; ok && primary.Healthy {
 		return primary.Host

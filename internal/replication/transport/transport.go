@@ -393,12 +393,22 @@ func (c *Connection) readMessage(ctx context.Context) (wire.MsgHeader, *wire.OpM
 	if err := setReadDeadline(ctx, c.connection); err != nil {
 		return wire.MsgHeader{}, nil, err
 	}
+	stopCancellation := context.AfterFunc(ctx, func() {
+		_ = c.connection.SetReadDeadline(time.Now())
+	})
+	defer stopCancellation()
 	header, err := readHeader(c.reader)
 	if err != nil {
+		if ctx.Err() != nil {
+			return wire.MsgHeader{}, nil, ctx.Err()
+		}
 		return wire.MsgHeader{}, nil, err
 	}
 	body := make([]byte, int(header.MessageLength)-wire.MsgHeaderLen)
 	if _, err := io.ReadFull(c.reader, body); err != nil {
+		if ctx.Err() != nil {
+			return wire.MsgHeader{}, nil, ctx.Err()
+		}
 		return wire.MsgHeader{}, nil, fmt.Errorf("reading MongoDB member message body: %w", err)
 	}
 	if header.OpCode == wire.OpCodeCompressed {

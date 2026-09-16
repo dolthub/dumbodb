@@ -1,0 +1,149 @@
+// Copyright 2026 Dolthub, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package runtime
+
+import (
+	"context"
+	"io"
+	"log/slog"
+	"testing"
+
+	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/backends/dolt"
+	"github.com/dolthub/dumbodb/internal/replication/control"
+	"github.com/dolthub/dumbodb/internal/replication/topology"
+	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/must"
+)
+
+func TestRecoverPublicationDiscardsIncompleteApply(t *testing.T) {
+	ctx := context.Background()
+	runtime, backend, store := newRecoveryRuntime(t)
+	collection := recoveryCollection(t, ctx, backend)
+	insertRecoveryDocument(t, ctx, collection, 1)
+	commitRecoveryDatabase(t, ctx, backend, "base")
+	insertRecoveryDocument(t, ctx, collection, 2)
+
+	position := control.OpTime{Seconds: 100, Increment: 2, Term: 1}
+	checkpoint := control.Checkpoint{
+		Fetched: position, Buffered: position, Written: position, Durable: position, Applied: position,
+	}
+	publicationID, err := runtime.publisher.Begin(position, position, []string{"recovery"}, checkpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.recoverPublication(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := store.PendingPublication(); ok {
+		t.Fatal("incomplete publication remained pending")
+	}
+	if count := recoveryCount(t, ctx, collection); count != 1 {
+		t.Fatalf("document count after recovering %s = %d, want 1", publicationID, count)
+	}
+}
+
+func TestRecoverPublicationCompletesReadyApply(t *testing.T) {
+	ctx := context.Background()
+	runtime, backend, store := newRecoveryRuntime(t)
+	collection := recoveryCollection(t, ctx, backend)
+	insertRecoveryDocument(t, ctx, collection, 1)
+	commitRecoveryDatabase(t, ctx, backend, "base")
+	insertRecoveryDocument(t, ctx, collection, 2)
+
+	position := control.OpTime{Seconds: 100, Increment: 2, Term: 1}
+	checkpoint := control.Checkpoint{
+		Fetched: position, Buffered: position, Written: position, Durable: position, Applied: position,
+	}
+	publicationID, err := runtime.publisher.Begin(position, position, []string{"recovery"}, checkpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.publisher.MarkReady(publicationID); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.recoverPublication(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if count := recoveryCount(t, ctx, collection); count != 2 {
+		t.Fatalf("document count after ready recovery = %d, want 2", count)
+	}
+	if interval, ok := store.CommitFor(position); !ok || interval.CommitID != publicationID {
+		t.Fatalf("recovered commit interval = %+v, %v", interval, ok)
+	}
+}
+
+func newRecoveryRuntime(t *testing.T) (*Runtime, backends.Backend, *control.Store) {
+	t.Helper()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	backend, err := dolt.NewBackend(t.TempDir(), logger, false, false, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(backend.Close)
+	store, err := control.Open(t.TempDir(), control.Configuration{SetName: "rs0", MemberHost: "dumbo.example:27017"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := topology.New(store)
+	runtime, err := New(backend, store, manager, logger, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return runtime, backend, store
+}
+
+func recoveryCollection(t *testing.T, ctx context.Context, backend backends.Backend) backends.Collection {
+	t.Helper()
+	database, err := backend.Database("recovery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.CreateCollection(ctx, &backends.CreateCollectionParams{Name: "events"}); err != nil {
+		t.Fatal(err)
+	}
+	collection, err := database.Collection("events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return collection
+}
+
+func insertRecoveryDocument(t *testing.T, ctx context.Context, collection backends.Collection, id int32) {
+	t.Helper()
+	document := must.NotFail(types.NewDocument("_id", id))
+	if _, err := collection.InsertAll(ctx, &backends.InsertAllParams{Docs: []*types.Document{document}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func commitRecoveryDatabase(t *testing.T, ctx context.Context, backend backends.Backend, message string) {
+	t.Helper()
+	versioned := backend.(backends.VersioningBackend)
+	if _, err := versioned.DumboDBCommit(ctx, &backends.CommitParams{
+		DBName: "recovery", Branch: "main", Message: message, Author: "Test <test@example.com>",
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func recoveryCount(t *testing.T, ctx context.Context, collection backends.Collection) int64 {
+	t.Helper()
+	result, err := collection.Count(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result.Count
+}

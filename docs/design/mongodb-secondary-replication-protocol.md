@@ -678,7 +678,11 @@ the selected batch size before production batching defaults are fixed. **DESIGN*
 
 Publishing a source interval uses a durable manifest identified by a hash of its
 source boundaries and sorted database set. The manifest is written before any
-database commit and records each resulting `main` commit ID. Every database commit
+mutation as `applying`. A crash in that phase hard-resets the named database
+working roots to their current `main` heads, clears fetched progress after the last
+published interval, and refetches the operation. Once every mutation succeeds, the
+manifest durably changes to `ready`; recovery can then finish publication without
+reapplying it. The manifest records each resulting `main` commit ID. Every database commit
 uses the manifest ID in its commit message. After a crash or ambiguous commit
 result, recovery compares each database HEAD with that message, records an already
 completed commit, and commits only the remaining working roots. The final journal

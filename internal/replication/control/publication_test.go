@@ -35,6 +35,9 @@ func TestPendingPublicationSurvivesRestartAndCompletes(t *testing.T) {
 	if err := store.BeginPublication(pending); err != nil {
 		t.Fatal(err)
 	}
+	if err := store.MarkPublicationReady(pending.ID); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.RecordPublicationCommit(pending.ID, "accounts", "accounts-five"); err != nil {
 		t.Fatal(err)
 	}
@@ -97,10 +100,44 @@ func TestPendingPublicationRejectsIncompleteOrDifferentCompletion(t *testing.T) 
 	if err := store.BeginPublication(pending); err != nil {
 		t.Fatal(err)
 	}
+	if err := store.MarkPublicationReady(pending.ID); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.PublishCommit(CommitInterval{First: pending.First, Last: last, CommitID: pending.ID}, checkpoint); err == nil {
 		t.Fatal("PublishCommit completed without the database commit")
 	}
 	if err := store.RecordPublicationCommit(pending.ID, "other", "commit"); err == nil {
 		t.Fatal("RecordPublicationCommit accepted an unrelated database")
+	}
+}
+
+func TestApplyingPublicationCanAbortButReadyPublicationCannot(t *testing.T) {
+	store, err := Open(t.TempDir(), testConfiguration())
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := opTime(3)
+	checkpoint := Checkpoint{Fetched: last, Buffered: last, Written: last, Durable: last, Applied: last}
+	pending := PendingPublication{
+		ID: "applying", First: last, Last: last,
+		Databases: []string{"orders"}, Commits: make(map[string]string), Checkpoint: checkpoint,
+	}
+	if err := store.BeginPublication(pending); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordPublicationCommit(pending.ID, "orders", "commit"); err == nil {
+		t.Fatal("applying publication accepted a commit")
+	}
+	if err := store.AbortPublication(pending.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BeginPublication(pending); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkPublicationReady(pending.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AbortPublication(pending.ID); err == nil {
+		t.Fatal("ready publication was aborted")
 	}
 }
