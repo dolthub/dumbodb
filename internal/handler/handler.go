@@ -294,6 +294,12 @@ func (h *Handler) SessionRegistry() *sqlctx.SessionRegistry {
 // can say so the way MongoDB does. Callers match it with errors.Is.
 var ErrWriteRefused = errors.New("write refused at its reconciliation boundary")
 
+// ErrWriteRaced reports that a write could not be published because the branch
+// moved after the write read it. Like a refusal it is answered by running the
+// operation again against the new tip, but the two are kept apart because a
+// refusal is a decision the merge mode made and a race is only bad luck.
+var ErrWriteRaced = errors.New("write raced another publish on its branch")
+
 // ReconcileWriteBoundary reconciles the connection's pending writes against
 // the current tip and publishes them. This is the same reconciliation an
 // explicit commitTransaction performs; the only thing that varies by mode is
@@ -307,6 +313,9 @@ func (h *Handler) ReconcileWriteBoundary(ctx context.Context) error {
 			var refusal *backends.MergeConflictError
 			if errors.As(err, &refusal) {
 				return fmt.Errorf("%w: %w", ErrWriteRefused, err)
+			}
+			if errors.Is(err, backends.ErrWriteRaced) {
+				return fmt.Errorf("%w: %w", ErrWriteRaced, err)
 			}
 			if backends.ErrorCodeIs(err, backends.ErrorCodeWriteConflict) {
 				return common.TranslateBackendWriteError(err)

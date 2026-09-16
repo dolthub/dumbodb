@@ -105,6 +105,12 @@ func (err *Error) Error() string {
 	return fmt.Sprintf("%s: %v", err.code, err.err)
 }
 
+// ErrWriteRaced reports that a write could not be published because the branch
+// moved after the write read it. It is not a failure and not a refusal: the
+// write is still valid, it just has to be reconciled against the new tip and
+// tried again. Callers match it with errors.Is.
+var ErrWriteRaced = errors.New("write raced another publish on this branch")
+
 // ErrorCodeIs reports whether err (or any error it wraps) is *Error with one
 // of the given error codes. Uses errors.As, so callers that wrap with
 // lazyerrors / fmt.Errorf still match.

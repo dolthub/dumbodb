@@ -682,13 +682,20 @@ func (state *dbState) reconcileBranchForSession(
 	if err != nil {
 		return nil, nil, fmt.Errorf("resolving theirs WS for %q: %w", branch, err)
 	}
+	// The fork point: what the branch held when this reconcile read it. The
+	// publish below may only replace exactly this, or the merge it produced is
+	// answering a question about a branch that has already moved on.
+	forkPoint, err := theirs.HashOf()
+	if err != nil {
+		return nil, nil, fmt.Errorf("hashing theirs WS for %q: %w", branch, err)
+	}
 
 	merged, unresolved, err := state.reconcileWorkingSets(sqlCtx, branch, baseWS, ours, theirs)
 	if err != nil {
 		return nil, unresolved, err
 	}
 
-	if err := updateWorkingSet(sqlCtx, state.doltDB, merged, branch); err != nil {
+	if err := publishWorkingSet(sqlCtx, state.doltDB, merged, branch, forkPoint); err != nil {
 		return nil, nil, fmt.Errorf("persisting WS for %q: %w", branch, err)
 	}
 	if err := sess.SetWorkingSet(sqlCtx, qualified, merged); err != nil {

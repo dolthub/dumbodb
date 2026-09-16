@@ -182,7 +182,11 @@ func TestUpdateBranchWS_OptimisticLockFailure(t *testing.T) {
 	wsRef := doltref.NewWorkingSetRef("heads/" + defaultBranch)
 	current, err := state.doltDB.ResolveWorkingSet(ctx, wsRef)
 	require.NoError(t, err)
-	require.NoError(t, updateWorkingSet(ctx, state.doltDB, mutateWS(t, state, current, "race"), defaultBranch))
+	currentHash, err := current.HashOf()
+	require.NoError(t, err)
+	// A legitimate concurrent writer: it publishes against the fork point it
+	// read, which is the current state, so its publish lands.
+	require.NoError(t, publishWorkingSet(ctx, state.doltDB, mutateWS(t, state, current, "race"), defaultBranch, currentHash))
 
 	// Now updateBranchWS should fail its optimistic-lock check.
 	err = state.updateBranchWS(ctx, defaultBranch, func(cur *doltdb.WorkingSet) (*doltdb.WorkingSet, error) {
@@ -255,5 +259,5 @@ func makeBranch(ctx context.Context, state *dbState, name string) error {
 	}
 	newRef := doltref.NewWorkingSetRef("heads/" + name)
 	newWS := doltdb.EmptyWorkingSet(newRef).WithWorkingRoot(mainWS.WorkingRoot()).WithStagedRoot(mainWS.StagedRoot())
-	return updateWorkingSet(ctx, state.doltDB, newWS, name)
+	return initializeWorkingSet(ctx, state.doltDB, newWS, name)
 }

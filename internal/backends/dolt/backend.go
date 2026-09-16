@@ -1024,7 +1024,7 @@ func (b *Backend) getOrOpenDBLocked(ctx context.Context, dbName string, create b
 	// If the working set was not on disk (new database or first open after migration),
 	// persist it now so that dolt CLI tools can read it.
 	if wsErr != nil {
-		if persistErr := updateWorkingSet(ctx, doltDB, mainWS, defaultBranch); persistErr != nil {
+		if persistErr := initializeWorkingSet(ctx, doltDB, mainWS, defaultBranch); persistErr != nil {
 			b.l.Warn("could not persist initial working set", "db", dbName, "err", persistErr)
 		}
 	}
@@ -1227,11 +1227,36 @@ func workingSetForBranch(branch string) string {
 // The RTVL chunk for workingAM must already be in the value store (written by the
 // caller via vs.WriteValue). The staged RTVL is recomputed from stagedAM and its
 // chunk must also be present in the store (e.g. written by a prior commit).
-func updateWorkingSet(ctx context.Context, ddb *doltdb.DoltDB, ws *doltdb.WorkingSet, branch string) error {
+// publishWorkingSet writes ws to branch, but only if the branch still holds
+// forkPoint -- the working set whose contents ws was derived from.
+//
+// That precondition is the whole of the optimistic lock, and it has to be
+// supplied by the caller. A working set built in memory with WithWorkingRoot
+// cannot hash itself, so the fork point must be captured when the branch is
+// READ and carried here; resolving a hash at publish time asserts only that
+// the branch is whatever it is at this instant, which is always true and lets
+// a writer that reconciled against a stale branch overwrite whoever published
+// in between. Both writers have been told their write succeeded by then.
+//
+// A racing publish comes back wrapping backends.ErrWriteRaced, so the caller
+// can reconcile against the new tip and try again instead of reporting.
+func publishWorkingSet(ctx context.Context, ddb *doltdb.DoltDB, ws *doltdb.WorkingSet, branch string, forkPoint hash.Hash) error {
 	wsRef := doltref.NewWorkingSetRef("heads/" + branch)
-	// Use the current on-disk working set hash as the optimistic-lock prevHash.
-	// ws.HashOf() returns an error for in-memory WS created via WithWorkingRoot,
-	// so we resolve from disk instead.
+	meta := doltdb.TodoWorkingSetMeta()
+	var rsc doltdb.ReplicationStatusController
+	err := ddb.UpdateWorkingSet(ctx, wsRef, ws, forkPoint, meta, &rsc)
+	if errors.Is(err, datas.ErrOptimisticLockFailed) {
+		return fmt.Errorf("%w: %q moved since this write read it", backends.ErrWriteRaced, branch)
+	}
+	return err
+}
+
+// initializeWorkingSet creates a branch's working set ref unconditionally. Its
+// callers are establishing a ref that should not exist yet -- a new database, a
+// new branch, a clone -- so there is no fork point to hold them to. Anything
+// that reconciles against existing contents must use publishWorkingSet.
+func initializeWorkingSet(ctx context.Context, ddb *doltdb.DoltDB, ws *doltdb.WorkingSet, branch string) error {
+	wsRef := doltref.NewWorkingSetRef("heads/" + branch)
 	var prevHash hash.Hash
 	if cur, resolveErr := ddb.ResolveWorkingSet(ctx, wsRef); resolveErr == nil {
 		prevHash, _ = cur.HashOf()
@@ -1502,7 +1527,7 @@ func dumboDBBranchCreate(ctx context.Context, db *dbState, params *backends.Bran
 		if rv, rvErr := headCommit.GetRootValue(ctx); rvErr == nil {
 			wsRef := doltref.NewWorkingSetRef("heads/" + params.Name)
 			emptyWS := doltdb.EmptyWorkingSet(wsRef).WithWorkingRoot(rv).WithStagedRoot(rv)
-			_ = updateWorkingSet(ctx, db.doltDB, emptyWS, params.Name)
+			_ = initializeWorkingSet(ctx, db.doltDB, emptyWS, params.Name)
 		}
 	}
 
