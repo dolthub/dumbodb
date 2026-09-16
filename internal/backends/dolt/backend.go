@@ -242,8 +242,9 @@ type Backend struct {
 	autoCommit       bool // when true, each write auto-creates a Dolt commit
 	sessionIsolation bool // when true, writes auto-fork into per-conn overlay and doltCommit merges
 
-	mu  sync.RWMutex
-	dbs map[string]*dbState // dbName -> dbState
+	mu       sync.RWMutex
+	dbs      map[string]*dbState // dbName -> dbState
+	branchMu sync.Mutex
 
 	provider *dumbodbProvider
 
@@ -1433,6 +1434,8 @@ func (b *Backend) DumboDBBranch(ctx context.Context, params *backends.BranchPara
 		return nil, backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
 			fmt.Errorf("DumboDBBranch: database %q does not exist", params.DBName))
 	}
+	b.branchMu.Lock()
+	defer b.branchMu.Unlock()
 	if params.Action == "list" {
 		return dumboDBBranchList(ctx, db)
 	}
@@ -1498,7 +1501,7 @@ func dumboDBBranchCreate(ctx context.Context, db *dbState, params *backends.Bran
 
 	res := &backends.BranchResult{Branch: params.Name}
 	if params.ConfigUpdate != nil {
-		cfg, cfgErr := db.backend.applyBranchConfig(ctx, db.name, params.Name, params.ConfigUpdate)
+		cfg, cfgErr := applyBranchConfigForLockedDatabase(ctx, db, params.Name, params.ConfigUpdate)
 		if cfgErr != nil {
 			_, _ = dumboDBBranchDelete(ctx, db, &backends.BranchParams{
 				DBName: params.DBName, From: params.From, Name: params.Name, Force: true,
@@ -1580,7 +1583,7 @@ func dumboDBBranchConfigure(ctx context.Context, db *dbState, params *backends.B
 			fmt.Errorf("DumboDBBranch: branch %q does not exist", params.Name))
 	}
 
-	cfg, err := db.backend.applyBranchConfig(ctx, db.name, params.Name, params.ConfigUpdate)
+	cfg, err := applyBranchConfigForLockedDatabase(ctx, db, params.Name, params.ConfigUpdate)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBBranch: %w", err)
 	}
@@ -1702,11 +1705,31 @@ func dumboDBBranchDelete(ctx context.Context, db *dbState, params *backends.Bran
 
 	db.clearBranchWS(params.Name)
 
-	if err := db.backend.writeBranchConfig(ctx, db.name, params.Name, branchConfig{}); err != nil {
+	if err := clearBranchConfigForLockedDatabase(ctx, db, params.Name); err != nil {
 		return nil, fmt.Errorf("DumboDBBranch: clearing config for deleted branch %q: %w", params.Name, err)
 	}
 
 	return &backends.BranchResult{Branch: params.Name}, nil
+}
+
+func applyBranchConfigForLockedDatabase(ctx context.Context, db *dbState, branch string, update *backends.BranchConfigUpdate) (branchConfig, error) {
+	if db.name != "admin" {
+		return db.backend.applyBranchConfig(ctx, db.name, branch, update)
+	}
+	db.mu.Unlock()
+	config, err := db.backend.applyBranchConfig(ctx, db.name, branch, update)
+	db.mu.Lock()
+	return config, err
+}
+
+func clearBranchConfigForLockedDatabase(ctx context.Context, db *dbState, branch string) error {
+	if db.name != "admin" {
+		return db.backend.writeBranchConfig(ctx, db.name, branch, branchConfig{})
+	}
+	db.mu.Unlock()
+	err := db.backend.writeBranchConfig(ctx, db.name, branch, branchConfig{})
+	db.mu.Lock()
+	return err
 }
 
 // refLabel describes a refspec the way git describes merge sources in commit

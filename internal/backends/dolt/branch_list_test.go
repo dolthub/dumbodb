@@ -40,3 +40,60 @@ func TestDumboDBBranchListAdmin(t *testing.T) {
 		t.Fatalf("admin branches = %+v, want main", result.Branches)
 	}
 }
+
+func TestDumboDBBranchConfigurationOnAdmin(t *testing.T) {
+	ctx := context.Background()
+	backend := newTestBackend(t)
+	database, err := backend.Database("admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.CreateCollection(ctx, &backends.CreateCollectionParams{Name: "events"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := backend.DumboDBRemote(ctx, &backends.RemoteParams{
+		DBName: "admin", Action: "add", Name: "origin", URL: "file://" + t.TempDir(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	pullRemote := "origin"
+	pullBranch := "main"
+	if _, err := backend.DumboDBBranch(ctx, &backends.BranchParams{
+		DBName: "admin", Action: "add", From: "main", Name: "feature",
+		ConfigUpdate: &backends.BranchConfigUpdate{PullRemote: &pullRemote, PullBranch: &pullBranch},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	pushRemote := "origin"
+	pushBranch := "feature"
+	if _, err := backend.DumboDBBranch(ctx, &backends.BranchParams{
+		DBName: "admin", Action: "update", Name: "feature",
+		ConfigUpdate: &backends.BranchConfigUpdate{PushRemote: &pushRemote, PushBranch: &pushBranch},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := backend.DumboDBBranch(ctx, &backends.BranchParams{
+		DBName: "admin", Action: "remove", From: "main", Name: "feature", Force: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := backend.readBranchConfig(ctx, "admin", "feature"); err != nil || ok {
+		t.Fatalf("deleted admin branch config remains: ok=%v, err=%v", ok, err)
+	}
+	rebase := "true"
+	if _, err := backend.DumboDBBranch(ctx, &backends.BranchParams{
+		DBName: "admin", Action: "add", From: "main", Name: "invalid",
+		ConfigUpdate: &backends.BranchConfigUpdate{PullRebase: &rebase},
+	}); err == nil {
+		t.Fatal("admin branch with invalid configuration succeeded")
+	}
+	branches, err := backend.DumboDBBranch(ctx, &backends.BranchParams{DBName: "admin", Action: "list"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, branch := range branches.Branches {
+		if branch.Name == "invalid" {
+			t.Fatal("failed configured branch creation left the branch behind")
+		}
+	}
+}
