@@ -13,15 +13,17 @@ on:
     branches: [main]
     paths:
       - "internal/replication/**"
-      - "internal/handler/msg_replication.go"
+      - "internal/handler/msg_replication*.go"
       - "internal/handler/msg_hello.go"
+      - "internal/handler/msg_serverstatus.go"
       - ".github/workflows/replication.yml"
   pull_request:
     branches: [main]
     paths:
       - "internal/replication/**"
-      - "internal/handler/msg_replication.go"
+      - "internal/handler/msg_replication*.go"
       - "internal/handler/msg_hello.go"
+      - "internal/handler/msg_serverstatus.go"
       - ".github/workflows/replication.yml"
   workflow_dispatch:
 
