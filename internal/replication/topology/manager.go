@@ -536,6 +536,14 @@ func (m *Manager) ObserveSourceOplogWindow(oldest, newest control.OpTime) {
 	}
 }
 
+func (m *Manager) ObserveSourceOplogOldest(source string, oldest control.OpTime) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if source == m.state.SyncSource {
+		m.state.Runtime.SourceOplogOldest = oldest
+	}
+}
+
 func (m *Manager) MarkMemberDown(memberID int) error {
 	m.mu.Lock()
 	previous := cloneSnapshot(m.state)

@@ -182,11 +182,7 @@ func (f *Fetcher) fetchFrom(ctx context.Context, state topology.Snapshot, positi
 	client := f.newClient(source, state.MemberHost)
 	defer client.Close()
 	if f.observeWindow {
-		oldest, err := fetchOldestOplogEntry(ctx, client)
-		if err != nil {
-			return err
-		}
-		f.manager.ObserveSourceOplogWindow(oldest, control.OpTime{})
+		go f.observeSourceOplogWindow(ctx, source, state.MemberHost)
 	}
 	rbid, err := fetchRollbackID(ctx, client)
 	if err != nil {
@@ -240,6 +236,20 @@ func (f *Fetcher) fetchFrom(ctx context.Context, state topology.Snapshot, positi
 		return ErrTooStale
 	}
 	return io.EOF
+}
+
+func (f *Fetcher) observeSourceOplogWindow(ctx context.Context, source, memberHost string) {
+	f.manager.ObserveSourceOplogOldest(source, control.OpTime{})
+	client := f.newClient(source, memberHost)
+	defer client.Close()
+	observationContext, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	oldest, err := fetchOldestOplogEntry(observationContext, client)
+	if err != nil {
+		f.logger.Debug("source oplog window unavailable", "source", source, "err", err)
+		return
+	}
+	f.manager.ObserveSourceOplogOldest(source, oldest)
 }
 
 func (f *Fetcher) consumeResponse(ctx context.Context, source string, response *wire.OpMsg, expected control.OpTime, continuityPending *bool) (int64, error) {
@@ -366,11 +376,20 @@ func fetchOldestOplogEntry(ctx context.Context, client fetchClient) (control.OpT
 	if len(entries) != 1 {
 		return control.OpTime{}, fmt.Errorf("oldest oplog query returned %d entries, want 1", len(entries))
 	}
-	entry, err := ParseEntry(entries[0])
-	if err != nil {
-		return control.OpTime{}, fmt.Errorf("parsing oldest oplog entry: %w", err)
+	timestampValue, _ := entries[0].Get("ts")
+	timestamp, ok := timestampValue.(types.Timestamp)
+	if !ok {
+		return control.OpTime{}, fmt.Errorf("oldest oplog entry ts has type %T, want timestamp", timestampValue)
 	}
-	return entry.OpTime, nil
+	term := int64(-1)
+	termValue, _ := entries[0].Get("t")
+	if termValue != nil {
+		term, err = entryInteger(termValue)
+		if err != nil {
+			return control.OpTime{}, fmt.Errorf("oldest oplog entry t: %w", err)
+		}
+	}
+	return control.OpTime{Seconds: uint32(uint64(timestamp) >> 32), Increment: uint32(timestamp), Term: term}, nil
 }
 
 func secondaryPreferredReadPreference() *wirebson.Document {
