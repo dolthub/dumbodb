@@ -36,6 +36,14 @@ Every verify doc has a matching automated test in `tests/verify/` (package
 | index-merge.md | index_merge_test.go | TestIndexMergeVerify |
 | view-merge.md | view_merge_test.go | TestViewMergeVerify |
 
+Replication is the exception to the table above. Its automated analog lives
+in `dolthub/dumbodb-parity-testing` rather than `tests/verify/`, because it
+needs a real MongoDB replica set to replicate from:
+
+| Document | Automated analog |
+|----------|------------------|
+| replication.md | `go test -tags replication ./harness/ ./tests/` in dumbodb-parity-testing |
+
 Run all verify tests:
 
 ```bash
