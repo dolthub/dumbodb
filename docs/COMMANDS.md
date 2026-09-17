@@ -59,7 +59,7 @@ When the server runs with `--auth`, the identity comes from the authenticated us
 
 ## Available Commands
 
-Every `dumbo*` command has an identical `dolt*` alias:
+Every version-control `dumbo*` command has an identical `dolt*` alias:
 
 | Primary | Alias |
 |---------|-------|
@@ -84,6 +84,66 @@ Every `dumbo*` command has an identical `dolt*` alias:
 | `dumboPush` | `doltPush` |
 | `dumboFetch` | `doltFetch` |
 | `dumboPull` | `doltPull` |
+
+Replication operator commands have no `dolt*` aliases:
+
+| Command | Purpose |
+|---------|---------|
+| `dumboReplicationStatus` | Reports replication state, progress, lag, failures, buffer use, rates, and commit provenance. |
+| `dumboReplicationDetach` | Stops replication while preserving `main` history and provenance. |
+
+---
+
+## dumboReplicationStatus
+
+Returns the operator view for a server started with `--replSet`. Run it against
+the `admin` database:
+
+```js
+db.getSiblingDB("admin").runCommand({dumboReplicationStatus: 1})
+```
+
+The response includes member and configuration identity, runtime and initial-sync
+phase, source and source-change history, durable replication positions, lag and
+source-window budget, buffer occupancy, process-lifetime apply rates, recent
+failure classifications, retry count, and retained provenance size. The numeric
+alerting subset is also available as `serverStatus.replication`.
+
+The optional lookup forms map source history to DumboDB history:
+
+```js
+db.getSiblingDB("admin").runCommand({
+  dumboReplicationStatus: 1,
+  sourceOpTime: {ts: Timestamp(100, 2), t: NumberLong(3)}
+})
+
+db.getSiblingDB("admin").runCommand({
+  dumboReplicationStatus: 1,
+  commitID: "<publication-commit>"
+})
+
+db.getSiblingDB("admin").runCommand({
+  dumboReplicationStatus: 1,
+  database: "orders",
+  commitID: "<database-commit>"
+})
+```
+
+`provenanceLookup.found` is `false` when the requested source position or commit
+is not in the active retained generation.
+
+## dumboReplicationDetach
+
+Stops replication without deleting data, commit history, or source provenance:
+
+```js
+db.getSiblingDB("admin").runCommand({dumboReplicationDetach: 1})
+```
+
+The member immediately reports `REMOVED`, clears its sync source, and persists the
+detached lifecycle. Removal from the MongoDB replica-set configuration performs
+the same transition automatically. Re-adding the same member identity to the same
+replica set activates it again; a different replica-set identity is rejected.
 
 ---
 

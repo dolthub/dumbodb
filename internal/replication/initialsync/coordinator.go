@@ -152,7 +152,11 @@ func (c *Coordinator) Run(ctx context.Context) (result InitialSyncResult, err er
 		return result, err
 	}
 	result.Catalog, err = MaterializeOrdinaryCatalog(fetchContext, c.options.Client, c.options.Catalog, databases,
-		attempt.BeginApply, c.options.LoaderLimits)
+		attempt.BeginApply, c.options.LoaderLimits, func(progress MaterializationProgress) {
+			c.options.Manager.ObserveInitialSyncProgress(
+				progress.CollectionsTotal, progress.CollectionsCompleted, progress.Documents, progress.CurrentNamespace,
+			)
+		})
 	if err != nil {
 		return result, err
 	}

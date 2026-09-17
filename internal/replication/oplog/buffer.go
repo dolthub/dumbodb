@@ -155,6 +155,12 @@ func (b *Buffer) Stats() BufferStats {
 	return BufferStats{Entries: len(b.entries), Bytes: b.bytes}
 }
 
+func (b *Buffer) Limits() BufferLimits {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.limits
+}
+
 // Reset discards buffered entries and wakes blocked producers.
 func (b *Buffer) Reset() BufferStats {
 	b.mu.Lock()

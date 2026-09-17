@@ -24,6 +24,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/dolthub/dumbodb/internal/backends"
 )
@@ -214,6 +215,20 @@ type InitialSyncFailure struct {
 	Message   string `json:"message"`
 }
 
+type SourceChange struct {
+	AtUnixMilli int64  `json:"at_unix_milli"`
+	Previous    string `json:"previous"`
+	Current     string `json:"current"`
+}
+
+type ReplicationFailure struct {
+	AtUnixMilli    int64  `json:"at_unix_milli"`
+	Stage          string `json:"stage"`
+	Classification string `json:"classification"`
+	Message        string `json:"message"`
+	Retryable      bool   `json:"retryable"`
+}
+
 type State struct {
 	Configuration       Configuration                        `json:"configuration"`
 	Lifecycle           Lifecycle                            `json:"lifecycle"`
@@ -224,6 +239,9 @@ type State struct {
 	InitialSyncPhase    InitialSyncPhase                     `json:"initial_sync_phase"`
 	InitialSyncAttempt  *InitialSyncAttempt                  `json:"initial_sync_attempt,omitempty"`
 	InitialSyncFailure  *InitialSyncFailure                  `json:"initial_sync_failure,omitempty"`
+	SourceChanges       []SourceChange                       `json:"source_changes,omitempty"`
+	FailureHistory      []ReplicationFailure                 `json:"failure_history,omitempty"`
+	RetryCount          int64                                `json:"retry_count"`
 	Checkpoint          Checkpoint                           `json:"checkpoint"`
 	CommitLogGeneration uint64                               `json:"commit_log_generation"`
 	CommitIntervals     []CommitInterval                     `json:"commit_intervals,omitempty"`
@@ -336,8 +354,8 @@ func (s *Store) InstallMember(identity Identity, member MemberConfiguration) err
 }
 
 func (s *Store) InstallReplicaConfiguration(configuration ReplicaConfiguration, currentTerm int64) error {
-	if configuration.SetName == "" || configuration.ReplicaSetID == "" || len(configuration.Members) == 0 {
-		return errors.New("replica configuration set name, replica set ID, and members are required")
+	if err := validateReplicaConfiguration(configuration); err != nil {
+		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -352,7 +370,27 @@ func (s *Store) InstallReplicaConfiguration(configuration ReplicaConfiguration, 
 		}
 	}
 	if ownMember == nil {
-		return fmt.Errorf("replica configuration does not contain member %q", s.state.Configuration.MemberHost)
+		if s.state.Identity == nil {
+			return fmt.Errorf("replica configuration does not contain member %q", s.state.Configuration.MemberHost)
+		}
+		identity := *s.state.Identity
+		if identity.ReplicaSetID != configuration.ReplicaSetID {
+			return fmt.Errorf("replica set ID changed from %q to %q", identity.ReplicaSetID, configuration.ReplicaSetID)
+		}
+		candidate := Identity{
+			ReplicaSetID: configuration.ReplicaSetID, MemberID: identity.MemberID,
+			ConfigVersion: configuration.Version, ConfigTerm: configuration.Term, Term: max(identity.Term, currentTerm),
+		}
+		if compareConfiguration(candidate, identity) < 0 {
+			return fmt.Errorf("refusing stale replica configuration term %d version %d", configuration.Term, configuration.Version)
+		}
+		configuration.Members = append([]MemberConfiguration(nil), configuration.Members...)
+		configuration.RawBSON = append([]byte(nil), configuration.RawBSON...)
+		s.state.Identity = &candidate
+		s.state.ReplicaConfig = &configuration
+		s.state.Lifecycle = LifecycleDetached
+		s.recordSourceChangeLocked("")
+		return s.persistLocked()
 	}
 	identity := Identity{
 		ReplicaSetID:  configuration.ReplicaSetID,
@@ -382,6 +420,7 @@ func (s *Store) InstallReplicaConfiguration(configuration ReplicaConfiguration, 
 	configuration.RawBSON = append([]byte(nil), configuration.RawBSON...)
 	s.state.Identity = &identity
 	s.state.ReplicaConfig = &configuration
+	s.state.Lifecycle = LifecycleActive
 	return s.persistLocked()
 }
 
@@ -404,7 +443,7 @@ func (s *Store) SetSource(host string, rbid int64) error {
 	if s.state.Lifecycle != LifecycleActive {
 		return errors.New("cannot set a sync source for a detached member")
 	}
-	s.state.CurrentSource = host
+	s.recordSourceChangeLocked(host)
 	s.state.CurrentRBID = rbid
 	return s.persistLocked()
 }
@@ -474,6 +513,23 @@ func (s *Store) RecordInitialSyncFailure(failure InitialSyncFailure) error {
 	}
 	copy := failure
 	s.state.InitialSyncFailure = &copy
+	s.recordFailureLocked(ReplicationFailure{
+		AtUnixMilli: time.Now().UnixMilli(), Stage: "initial_sync",
+		Classification: "unsupported_bson_type", Message: failure.Message,
+	})
+	return s.persistLocked()
+}
+
+func (s *Store) RecordFailure(failure ReplicationFailure) error {
+	if failure.Stage == "" || failure.Classification == "" || failure.Message == "" {
+		return errors.New("replication failure requires stage, classification, and message")
+	}
+	if failure.AtUnixMilli == 0 {
+		failure.AtUnixMilli = time.Now().UnixMilli()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.recordFailureLocked(failure)
 	return s.persistLocked()
 }
 
@@ -940,7 +996,7 @@ func (s *Store) Detach() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.state.Lifecycle = LifecycleDetached
-	s.state.CurrentSource = ""
+	s.recordSourceChangeLocked("")
 	return s.persistLocked()
 }
 
@@ -949,6 +1005,34 @@ func (s *Store) Activate() error {
 	defer s.mu.Unlock()
 	s.state.Lifecycle = LifecycleActive
 	return s.persistLocked()
+}
+
+const replicationHistoryLimit = 32
+
+func (s *Store) recordSourceChangeLocked(source string) {
+	if source == s.state.CurrentSource {
+		return
+	}
+	s.state.SourceChanges = appendBounded(s.state.SourceChanges, SourceChange{
+		AtUnixMilli: time.Now().UnixMilli(), Previous: s.state.CurrentSource, Current: source,
+	})
+	s.state.CurrentSource = source
+}
+
+func (s *Store) recordFailureLocked(failure ReplicationFailure) {
+	if failure.Retryable {
+		s.state.RetryCount++
+	}
+	s.state.FailureHistory = appendBounded(s.state.FailureHistory, failure)
+}
+
+func appendBounded[T any](values []T, value T) []T {
+	if len(values) == replicationHistoryLimit {
+		copy(values, values[1:])
+		values[len(values)-1] = value
+		return values
+	}
+	return append(values, value)
 }
 
 func validateConfiguration(configuration Configuration) error {
@@ -967,6 +1051,34 @@ func validateMember(configuration Configuration, identity Identity, member Membe
 	}
 	if !member.Hidden || member.Priority != 0 || member.Votes != 0 {
 		return fmt.Errorf("replication member %q must be hidden=true, priority=0, votes=0", member.Host)
+	}
+	return nil
+}
+
+func validateReplicaConfiguration(configuration ReplicaConfiguration) error {
+	if configuration.SetName == "" || configuration.ReplicaSetID == "" || len(configuration.Members) == 0 {
+		return errors.New("replica configuration set name, replica set ID, and members are required")
+	}
+	if configuration.Version <= 0 {
+		return errors.New("replica configuration version must be positive")
+	}
+	if configuration.ProtocolVersion != 1 {
+		return fmt.Errorf("unsupported replica-set protocol version %d", configuration.ProtocolVersion)
+	}
+	memberIDs := make(map[int]struct{}, len(configuration.Members))
+	hosts := make(map[string]struct{}, len(configuration.Members))
+	for _, member := range configuration.Members {
+		if member.MemberID < 0 || member.Host == "" || member.Priority < 0 || member.Votes < 0 || member.Votes > 1 {
+			return fmt.Errorf("invalid replica configuration member %d at %q", member.MemberID, member.Host)
+		}
+		if _, ok := memberIDs[member.MemberID]; ok {
+			return fmt.Errorf("replica configuration repeats member ID %d", member.MemberID)
+		}
+		if _, ok := hosts[member.Host]; ok {
+			return fmt.Errorf("replica configuration repeats member host %q", member.Host)
+		}
+		memberIDs[member.MemberID] = struct{}{}
+		hosts[member.Host] = struct{}{}
 	}
 	return nil
 }

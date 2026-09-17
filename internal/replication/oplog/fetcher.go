@@ -82,12 +82,13 @@ func (c *connectorFetchClient) Close() error {
 }
 
 type Fetcher struct {
-	manager   *topology.Manager
-	buffer    *Buffer
-	logger    *slog.Logger
-	newClient func(string, string) fetchClient
-	exhaust   bool
-	retryWait time.Duration
+	manager       *topology.Manager
+	buffer        *Buffer
+	logger        *slog.Logger
+	newClient     func(string, string) fetchClient
+	exhaust       bool
+	observeWindow bool
+	retryWait     time.Duration
 }
 
 func NewFetcher(manager *topology.Manager, buffer *Buffer, logger *slog.Logger) (*Fetcher, error) {
@@ -103,12 +104,13 @@ func NewFetcher(manager *topology.Manager, buffer *Buffer, logger *slog.Logger) 
 		}
 	}
 	return &Fetcher{
-		manager:   manager,
-		buffer:    buffer,
-		logger:    logger,
-		newClient: newConnectorFetchClient,
-		exhaust:   true,
-		retryWait: time.Second,
+		manager:       manager,
+		buffer:        buffer,
+		logger:        logger,
+		newClient:     newConnectorFetchClient,
+		exhaust:       true,
+		observeWindow: true,
+		retryWait:     time.Second,
 	}, nil
 }
 
@@ -131,7 +133,20 @@ func (f *Fetcher) Run(ctx context.Context) error {
 		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 			return ctx.Err()
 		case errors.Is(err, ErrSourceChanged):
+			state := f.manager.Snapshot()
+			if state.State == topology.StateRemoved || state.SyncSource == "" {
+				return err
+			}
 		default:
+			classification := "transient"
+			if errors.Is(err, context.DeadlineExceeded) {
+				classification = "timeout"
+			}
+			if recordErr := f.manager.RecordFailure(control.ReplicationFailure{
+				Stage: "oplog_fetch", Classification: classification, Message: err.Error(), Retryable: true,
+			}); recordErr != nil {
+				return errors.Join(err, recordErr)
+			}
 			f.logger.Warn("oplog fetch failed; retrying", "err", err)
 		}
 		timer := time.NewTimer(f.retryWait)
@@ -166,6 +181,13 @@ func (f *Fetcher) fetchFrom(ctx context.Context, state topology.Snapshot, positi
 	}
 	client := f.newClient(source, state.MemberHost)
 	defer client.Close()
+	if f.observeWindow {
+		oldest, err := fetchOldestOplogEntry(ctx, client)
+		if err != nil {
+			return err
+		}
+		f.manager.ObserveSourceOplogWindow(oldest, control.OpTime{})
+	}
 	rbid, err := fetchRollbackID(ctx, client)
 	if err != nil {
 		return err
@@ -232,6 +254,11 @@ func (f *Fetcher) consumeResponse(ctx context.Context, source string, response *
 	if err != nil {
 		return 0, err
 	}
+	newest := metadata.LastWritten
+	if metadata.LastApplied.Compare(newest) > 0 {
+		newest = metadata.LastApplied
+	}
+	f.manager.ObserveSourceOplogWindow(control.OpTime{}, newest)
 	if err := f.manager.ObserveSourceRBID(source, metadata.RBID); err != nil {
 		return 0, err
 	}
@@ -314,6 +341,42 @@ func fetchRollbackID(ctx context.Context, client fetchClient) (int64, error) {
 		return 0, fmt.Errorf("replSetGetRBID rbid: %w", err)
 	}
 	return rbid, nil
+}
+
+func fetchOldestOplogEntry(ctx context.Context, client fetchClient) (control.OpTime, error) {
+	sortDocument := wirebson.MakeDocument(1)
+	_ = sortDocument.Add("$natural", int32(1))
+	readConcern := wirebson.MakeDocument(1)
+	_ = readConcern.Add("level", "local")
+	response, err := client.Request(ctx, wire.MustOpMsg(
+		"find", "oplog.rs", "sort", sortDocument, "limit", int32(1),
+		"readConcern", readConcern, "$readPreference", secondaryPreferredReadPreference(), "$db", "local",
+	))
+	if err != nil {
+		return control.OpTime{}, err
+	}
+	document, err := decodeResponse(response)
+	if err != nil {
+		return control.OpTime{}, err
+	}
+	_, entries, err := responseBatch(document)
+	if err != nil {
+		return control.OpTime{}, err
+	}
+	if len(entries) != 1 {
+		return control.OpTime{}, fmt.Errorf("oldest oplog query returned %d entries, want 1", len(entries))
+	}
+	entry, err := ParseEntry(entries[0])
+	if err != nil {
+		return control.OpTime{}, fmt.Errorf("parsing oldest oplog entry: %w", err)
+	}
+	return entry.OpTime, nil
+}
+
+func secondaryPreferredReadPreference() *wirebson.Document {
+	readPreference := wirebson.MakeDocument(1)
+	_ = readPreference.Add("mode", "secondaryPreferred")
+	return readPreference
 }
 
 func oplogFindRequest(position control.OpTime, term int64) *wire.OpMsg {

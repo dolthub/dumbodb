@@ -94,6 +94,24 @@ type MemberStatus struct {
 	Committed     control.OpTime
 }
 
+type RuntimeStatus struct {
+	Phase                           string
+	PhaseSince                      time.Time
+	StartedAt                       time.Time
+	BufferEntries                   int
+	BufferBytes                     int64
+	BufferEntryLimit                int
+	BufferByteLimit                 int64
+	AppliedOperations               int64
+	PublishedCommits                int64
+	InitialSyncDocuments            int64
+	InitialSyncCollectionsTotal     int
+	InitialSyncCollectionsCompleted int
+	InitialSyncCurrentNamespace     string
+	SourceOplogOldest               control.OpTime
+	SourceOplogNewest               control.OpTime
+}
+
 type Snapshot struct {
 	SetName            string
 	MemberHost         string
@@ -109,6 +127,7 @@ type Snapshot struct {
 	LastCommitted      control.OpTime
 	InitialSyncFailure *control.InitialSyncFailure
 	Members            map[int]MemberStatus
+	Runtime            RuntimeStatus
 }
 
 type Manager struct {
@@ -121,6 +140,7 @@ type Manager struct {
 
 func New(store *control.Store) *Manager {
 	persisted := store.Snapshot()
+	now := time.Now()
 	state := Snapshot{
 		SetName:            persisted.Configuration.SetName,
 		MemberHost:         persisted.Configuration.MemberHost,
@@ -131,6 +151,7 @@ func New(store *control.Store) *Manager {
 		Checkpoint:         persisted.Checkpoint,
 		InitialSyncFailure: cloneInitialSyncFailure(persisted.InitialSyncFailure),
 		Members:            make(map[int]MemberStatus),
+		Runtime:            RuntimeStatus{Phase: "starting", PhaseSince: now, StartedAt: now},
 	}
 	if persisted.Identity != nil {
 		state.MemberID = persisted.Identity.MemberID
@@ -148,10 +169,27 @@ func New(store *control.Store) *Manager {
 	}
 	if persisted.Lifecycle == control.LifecycleDetached {
 		state.State = StateRemoved
+		state.Runtime.Phase = "detached"
 	} else if persisted.PendingRollback != nil || persisted.InitialSyncFailure != nil {
 		state.State = StateRecovering
 	}
 	return &Manager{store: store, state: state}
+}
+
+func (m *Manager) ControlSnapshot() control.State {
+	return m.store.Snapshot()
+}
+
+func (m *Manager) CommitFor(opTime control.OpTime) (control.CommitInterval, bool) {
+	return m.store.CommitFor(opTime)
+}
+
+func (m *Manager) CommitForID(commitID string) (control.CommitInterval, bool) {
+	return m.store.CommitForID(commitID)
+}
+
+func (m *Manager) CommitForDatabaseCommit(database, commitID string) (control.CommitInterval, bool) {
+	return m.store.CommitForDatabaseCommit(database, commitID)
 }
 
 func (m *Manager) SetChangeListener(listener func()) {
@@ -207,9 +245,11 @@ func (m *Manager) InstallConfiguration(configuration control.ReplicaConfiguratio
 	m.state.Configuration = cloneConfiguration(&configuration)
 	m.state.Term = max(m.state.Term, term)
 	configuredMembers := make(map[int]MemberStatus, len(configuration.Members))
+	ownMemberFound := false
 	for _, member := range configuration.Members {
 		if member.Host == m.state.MemberHost {
 			m.state.MemberID = member.MemberID
+			ownMemberFound = true
 			continue
 		}
 		status, exists := m.state.Members[member.MemberID]
@@ -221,7 +261,18 @@ func (m *Manager) InstallConfiguration(configuration control.ReplicaConfiguratio
 		configuredMembers[member.MemberID] = status
 	}
 	m.state.Members = configuredMembers
-	if m.state.State == StateStartup {
+	if !ownMemberFound {
+		m.state.State = StateRemoved
+		m.state.SyncSource = ""
+		m.setRuntimePhaseLocked("detached")
+	} else if m.state.State == StateRemoved {
+		persisted := m.store.Snapshot()
+		m.state.State = StateStartup2
+		if persisted.InitialSyncPhase == control.InitialSyncComplete {
+			m.state.State = StateSecondary
+		}
+		m.setRuntimePhaseLocked("waiting_for_source")
+	} else if m.state.State == StateStartup {
 		m.state.State = StateStartup2
 	}
 	listener := m.changeListenerLocked(previous)
@@ -275,6 +326,8 @@ func (m *Manager) ObserveHeartbeat(host string, heartbeat Heartbeat) error {
 	if m.state.SyncSource != previous.SyncSource {
 		m.state.RBID = 0
 		m.state.LastCommitted = control.OpTime{}
+		m.state.Runtime.SourceOplogOldest = control.OpTime{}
+		m.state.Runtime.SourceOplogNewest = control.OpTime{}
 		if err := m.store.SetSource(m.state.SyncSource, 0); err != nil {
 			m.state = previous
 			m.mu.Unlock()
@@ -321,6 +374,8 @@ func (m *Manager) ObserveMemberContact(host string, memberID int, term int64, pr
 	if m.state.SyncSource != previous.SyncSource {
 		m.state.RBID = 0
 		m.state.LastCommitted = control.OpTime{}
+		m.state.Runtime.SourceOplogOldest = control.OpTime{}
+		m.state.Runtime.SourceOplogNewest = control.OpTime{}
 		if err := m.store.SetSource(m.state.SyncSource, 0); err != nil {
 			m.state = previous
 			m.mu.Unlock()
@@ -410,6 +465,77 @@ func (m *Manager) MarkInitialSyncFailed(failure control.InitialSyncFailure) erro
 	return nil
 }
 
+func (m *Manager) RecordFailure(failure control.ReplicationFailure) error {
+	return m.store.RecordFailure(failure)
+}
+
+func (m *Manager) Detach() error {
+	if err := m.store.Detach(); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	previous := cloneSnapshot(m.state)
+	m.state.State = StateRemoved
+	m.state.SyncSource = ""
+	m.setRuntimePhaseLocked("detached")
+	listener := m.changeListenerLocked(previous)
+	m.mu.Unlock()
+	if listener != nil {
+		listener()
+	}
+	return nil
+}
+
+func (m *Manager) SetRuntimePhase(phase string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.setRuntimePhaseLocked(phase)
+}
+
+func (m *Manager) setRuntimePhaseLocked(phase string) {
+	if phase == "" || phase == m.state.Runtime.Phase {
+		return
+	}
+	m.state.Runtime.Phase = phase
+	m.state.Runtime.PhaseSince = time.Now()
+}
+
+func (m *Manager) ObserveBuffer(entries int, bytes int64, entryLimit int, byteLimit int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.state.Runtime.BufferEntries = entries
+	m.state.Runtime.BufferBytes = bytes
+	m.state.Runtime.BufferEntryLimit = entryLimit
+	m.state.Runtime.BufferByteLimit = byteLimit
+}
+
+func (m *Manager) RecordAppliedOperation() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.state.Runtime.AppliedOperations++
+	m.state.Runtime.PublishedCommits++
+}
+
+func (m *Manager) ObserveInitialSyncProgress(total, completed int, documents int64, namespace string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.state.Runtime.InitialSyncCollectionsTotal = total
+	m.state.Runtime.InitialSyncCollectionsCompleted = completed
+	m.state.Runtime.InitialSyncDocuments = documents
+	m.state.Runtime.InitialSyncCurrentNamespace = namespace
+}
+
+func (m *Manager) ObserveSourceOplogWindow(oldest, newest control.OpTime) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if oldest != (control.OpTime{}) {
+		m.state.Runtime.SourceOplogOldest = oldest
+	}
+	if newest.Compare(m.state.Runtime.SourceOplogNewest) > 0 {
+		m.state.Runtime.SourceOplogNewest = newest
+	}
+}
+
 func (m *Manager) MarkMemberDown(memberID int) error {
 	m.mu.Lock()
 	previous := cloneSnapshot(m.state)
@@ -429,6 +555,8 @@ func (m *Manager) MarkMemberDown(memberID int) error {
 	if m.state.SyncSource != previous.SyncSource {
 		m.state.RBID = 0
 		m.state.LastCommitted = control.OpTime{}
+		m.state.Runtime.SourceOplogOldest = control.OpTime{}
+		m.state.Runtime.SourceOplogNewest = control.OpTime{}
 		if err := m.store.SetSource(m.state.SyncSource, 0); err != nil {
 			m.state = previous
 			m.mu.Unlock()
@@ -566,6 +694,9 @@ func (m *Manager) CompleteRollback(commitID, source string, rbid int64) error {
 }
 
 func (m *Manager) selectSourceLocked() string {
+	if m.state.State == StateRemoved {
+		return ""
+	}
 	if primary, ok := m.state.Members[m.state.PrimaryID]; ok && primary.Healthy {
 		return primary.Host
 	}

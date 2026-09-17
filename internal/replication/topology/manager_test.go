@@ -287,6 +287,44 @@ func TestManagerRejectsStaleOrConflictingConfiguration(t *testing.T) {
 	}
 }
 
+func TestManagerDetachesWhenRemovedFromConfiguration(t *testing.T) {
+	store := openControlStore(t, t.TempDir())
+	manager := New(store)
+	configuration := testReplicaConfiguration()
+	if err := manager.InstallConfiguration(configuration, 8); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.ObserveHeartbeat("primary.example:27017", Heartbeat{
+		SetName: "rs0", MemberID: 1, State: StatePrimary, Term: 8, PrimaryID: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	removed := configuration
+	removed.Version++
+	removed.Members = append([]control.MemberConfiguration(nil), configuration.Members[:2]...)
+	if err := manager.InstallConfiguration(removed, 8); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot := manager.Snapshot(); snapshot.State != StateRemoved || snapshot.SyncSource != "" {
+		t.Fatalf("removed member topology = %+v", snapshot)
+	}
+	if persisted := store.Snapshot(); persisted.Lifecycle != control.LifecycleDetached || persisted.CurrentSource != "" {
+		t.Fatalf("removed member control state = %+v", persisted)
+	}
+
+	readded := configuration
+	readded.Version = removed.Version + 1
+	if err := manager.InstallConfiguration(readded, 8); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot := manager.Snapshot(); snapshot.State != StateStartup2 {
+		t.Fatalf("readded member state = %s, want STARTUP2", snapshot.State)
+	}
+	if persisted := store.Snapshot(); persisted.Lifecycle != control.LifecycleActive {
+		t.Fatalf("readded lifecycle = %q, want active", persisted.Lifecycle)
+	}
+}
+
 func openControlStore(t *testing.T, dir string) *control.Store {
 	t.Helper()
 	topologyControlBackends.Lock()

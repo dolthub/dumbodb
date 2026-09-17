@@ -193,6 +193,20 @@ func TestFetcherStopsWhenSourceChanges(t *testing.T) {
 	}
 }
 
+func TestFetchOldestOplogEntryReportsSourceWindowBoundary(t *testing.T) {
+	client := &fakeFetchClient{responses: []*wire.OpMsg{
+		testOplogResponse(t, 0, 5, testOplogDocument(4, 7)),
+	}}
+	oldest, err := fetchOldestOplogEntry(context.Background(), client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := control.OpTime{Seconds: 100, Increment: 4, Term: 7}
+	if oldest != want {
+		t.Fatalf("oldest oplog entry = %+v, want %+v", oldest, want)
+	}
+}
+
 type fakeFetchClient struct {
 	responses []*wire.OpMsg
 	err       error
@@ -231,6 +245,7 @@ func testFetcher(t *testing.T, manager *topology.Manager, buffer *Buffer, client
 		t.Fatal(err)
 	}
 	fetcher.exhaust = false
+	fetcher.observeWindow = false
 	fetcher.newClient = func(string, string) fetchClient { return client }
 	return fetcher
 }

@@ -108,6 +108,47 @@ func TestStorePersistsRecoveryState(t *testing.T) {
 	}
 }
 
+func TestStorePersistsReplicationDiagnostics(t *testing.T) {
+	directory := t.TempDir()
+	configuration := testConfiguration()
+	store, err := openTestStore(t, directory, configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetSource("primary.example:27017", 4); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetSource("secondary.example:27017", 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordFailure(ReplicationFailure{
+		Stage: "steady replication", Classification: "timeout", Message: "source timed out", Retryable: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Detach(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := openTestStore(t, directory, configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := reopened.Snapshot()
+	if state.RetryCount != 1 || len(state.FailureHistory) != 1 {
+		t.Fatalf("failure diagnostics = count %d, history %+v", state.RetryCount, state.FailureHistory)
+	}
+	if len(state.SourceChanges) != 3 || state.SourceChanges[2].Current != "" {
+		t.Fatalf("source changes = %+v", state.SourceChanges)
+	}
+	if state.Lifecycle != LifecycleDetached {
+		t.Fatalf("lifecycle = %q, want detached", state.Lifecycle)
+	}
+}
+
 func TestInitialSyncAttemptLifecycleIsAtomicAndPersistent(t *testing.T) {
 	dir := t.TempDir()
 	configuration := testConfiguration()
@@ -974,6 +1015,42 @@ func TestStoreRejectsReplicaConfigurationWithoutSafeMember(t *testing.T) {
 	configuration.Members[0] = MemberConfiguration{MemberID: 4, Host: "other.example:27017", Hidden: true}
 	if err := store.InstallReplicaConfiguration(configuration, 1); err == nil {
 		t.Fatal("InstallReplicaConfiguration accepted a configuration without this member")
+	}
+}
+
+func TestStoreRejectsMalformedReplicaConfiguration(t *testing.T) {
+	base := ReplicaConfiguration{
+		SetName: "rs0", Version: 2, Term: 1, ProtocolVersion: 1, ReplicaSetID: "set-id",
+		Members: []MemberConfiguration{
+			{MemberID: 1, Host: "primary.example:27017", Priority: 1, Votes: 1},
+			{MemberID: 3, Host: "dumbo.example:27017", Hidden: true, Priority: 0, Votes: 0},
+		},
+	}
+	tests := []struct {
+		name   string
+		mutate func(*ReplicaConfiguration)
+	}{
+		{name: "non-positive version", mutate: func(configuration *ReplicaConfiguration) { configuration.Version = 0 }},
+		{name: "unsupported protocol", mutate: func(configuration *ReplicaConfiguration) { configuration.ProtocolVersion = 2 }},
+		{name: "duplicate member ID", mutate: func(configuration *ReplicaConfiguration) { configuration.Members[1].MemberID = 1 }},
+		{name: "duplicate host", mutate: func(configuration *ReplicaConfiguration) {
+			configuration.Members[1].Host = configuration.Members[0].Host
+		}},
+		{name: "invalid votes", mutate: func(configuration *ReplicaConfiguration) { configuration.Members[0].Votes = 2 }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store, err := openTestStore(t, t.TempDir(), testConfiguration())
+			if err != nil {
+				t.Fatal(err)
+			}
+			configuration := base
+			configuration.Members = append([]MemberConfiguration(nil), base.Members...)
+			test.mutate(&configuration)
+			if err := store.InstallReplicaConfiguration(configuration, 1); err == nil {
+				t.Fatalf("InstallReplicaConfiguration accepted %+v", configuration)
+			}
+		})
 	}
 }
 

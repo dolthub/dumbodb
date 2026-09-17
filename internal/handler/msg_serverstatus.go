@@ -80,11 +80,16 @@ func (h *Handler) MsgServerStatus(connCtx context.Context, msg *wire.OpMsg) (*wi
 		)),
 		"ok", float64(1),
 	))
+	if h.ReplicationTopology != nil {
+		res.Set("replication", replicationServerStatusDocument(
+			h.ReplicationTopology.Snapshot(), h.ReplicationTopology.ControlSnapshot(),
+		))
+	}
 
 	// Honor section include/exclude filters: {serverStatus: 1, <section>: 0}
 	// omits that section, matching MongoDB. Only the sub-document sections are
 	// excludable; the scalar top-level fields are always present.
-	for _, section := range []string{"metrics", "catalogStats"} {
+	for _, section := range []string{"metrics", "catalogStats", "replication"} {
 		if serverStatusSectionExcluded(document, section) {
 			res.Remove(section)
 		}

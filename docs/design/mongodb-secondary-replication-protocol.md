@@ -806,9 +806,9 @@ detached state without deleting `main` history. An administrative
 preserving the history and its source-optime provenance. Reattaching to a different
 replica-set ID requires a new initial sync; identities cannot be spliced. **DESIGN**
 
-`replSetGetStatus` will provide MongoDB-compatible member and operator inspection.
-`serverStatus` will also expose a `replication` section, and a DumboDB-native
-`dumboReplicationStatus` will add commit-history details. Together they report:
+`replSetGetStatus` provides MongoDB-compatible member and operator inspection.
+`serverStatus` exposes a numeric `replication` section, and the DumboDB-native
+`dumboReplicationStatus` adds commit-history details. Together they report:
 
 - member state, set/member/config identity, and initial-sync phase/progress;
 - current source, source changes, source RBID, primary belief, and last heartbeat;
@@ -818,9 +818,14 @@ replica-set ID requires a new initial sync; identities cannot be spliced. **DESI
 - current buffer bytes/entries and apply/commit rates;
 - the DumboDB commit for a source optime, and the source interval for a commit.
 
-Metrics expose the numeric subset for alerting. Status is read from the same durable
-control records used for recovery, so it cannot report progress ahead of durable
-state. Secrets and authentication payloads are never included. **DESIGN**
+The control store retains the 32 most recent source changes and failures, plus a
+monotonic retry count. Runtime-only buffer occupancy and process-lifetime rates are
+identified separately from durable positions. The fetcher samples the oldest source
+oplog entry and combines it with the observed source head to report total and
+remaining continuity windows. `serverStatus.replication` exposes the numeric subset
+for alerting. Status is read from the same durable control records used for recovery,
+so it cannot report progress ahead of durable state. Secrets and authentication
+payloads are never included. **DESIGN**
 
 ## Commit granularity and back-pressure boundary
 

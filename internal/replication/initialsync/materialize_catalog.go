@@ -29,6 +29,14 @@ type CatalogMaterialization struct {
 	SpecialDatabases []Database
 }
 
+// MaterializationProgress reports completed ordinary collection clone work.
+type MaterializationProgress struct {
+	CollectionsTotal     int
+	CollectionsCompleted int
+	Documents            int64
+	CurrentNamespace     string
+}
+
 // MaterializeOrdinaryCatalog preflights and clones every ordinary source collection in stable catalog order.
 func MaterializeOrdinaryCatalog(
 	ctx context.Context,
@@ -37,11 +45,13 @@ func MaterializeOrdinaryCatalog(
 	databases []Database,
 	createOpTime control.OpTime,
 	limits LoaderLimits,
+	progress func(MaterializationProgress),
 ) (CatalogMaterialization, error) {
 	if client == nil || catalogApplier == nil || createOpTime == (control.OpTime{}) {
 		return CatalogMaterialization{}, errors.New("catalog materialization requires client, catalog applier, and create optime")
 	}
 	result := CatalogMaterialization{}
+	collectionsTotal := 0
 	for _, database := range databases {
 		if database.Name == "" {
 			return CatalogMaterialization{}, errors.New("source catalog contains an unnamed database")
@@ -51,21 +61,43 @@ func MaterializeOrdinaryCatalog(
 			continue
 		}
 		for _, collection := range database.Collections {
+			collectionsTotal++
 			if _, err := catalog.PreflightCollection(database.Name, collection.Name, collection.Options, collection.Indexes); err != nil {
 				return CatalogMaterialization{}, fmt.Errorf("preflighting initial sync catalog: %w", err)
 			}
 		}
 	}
+	if progress != nil {
+		progress(MaterializationProgress{CollectionsTotal: collectionsTotal})
+	}
+	collectionsCompleted := 0
+	var completedDocuments int64
 	for _, database := range databases {
 		if database.Special {
 			continue
 		}
 		for _, collection := range database.Collections {
-			materialized, err := MaterializeCollection(ctx, client, catalogApplier, database.Name, collection, createOpTime, limits, nil)
+			namespace := database.Name + "." + collection.Name
+			materialized, err := MaterializeCollection(ctx, client, catalogApplier, database.Name, collection, createOpTime, limits, nil, func(stats LoaderStats) {
+				if progress != nil {
+					progress(MaterializationProgress{
+						CollectionsTotal: collectionsTotal, CollectionsCompleted: collectionsCompleted,
+						Documents: completedDocuments + stats.Documents, CurrentNamespace: namespace,
+					})
+				}
+			})
 			if err != nil {
 				return result, err
 			}
 			result.Collections = append(result.Collections, materialized)
+			collectionsCompleted++
+			completedDocuments += materialized.Loader.Documents
+			if progress != nil {
+				progress(MaterializationProgress{
+					CollectionsTotal: collectionsTotal, CollectionsCompleted: collectionsCompleted,
+					Documents: completedDocuments,
+				})
+			}
 		}
 	}
 	return result, nil

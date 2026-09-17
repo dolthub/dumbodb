@@ -16,16 +16,21 @@ package handler
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"testing"
 	"time"
 
 	"github.com/FerretDB/wire"
+	"github.com/FerretDB/wire/wirebson"
 
+	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/replication/control"
 	"github.com/dolthub/dumbodb/internal/replication/testutil"
 	"github.com/dolthub/dumbodb/internal/replication/topology"
 	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/state"
 )
 
 func TestReplicationInspectionCommands(t *testing.T) {
@@ -297,9 +302,156 @@ func TestReplSetUpdatePositionIsExplicitlyUnsupported(t *testing.T) {
 	}
 }
 
+func TestDumboReplicationStatusReportsDiagnosticsAndProvenance(t *testing.T) {
+	handler := configuredReplicationHandler(t)
+	first := control.OpTime{Seconds: 100, Increment: 1, Term: 3}
+	last := control.OpTime{Seconds: 100, Increment: 2, Term: 3}
+	checkpoint := control.Checkpoint{Fetched: last, Buffered: last, Written: last, Durable: last, Applied: last}
+	if err := handler.ReplicationTopology.MarkInitialSyncComplete(control.Checkpoint{
+		Fetched: first, Buffered: first, Written: first, Durable: first, Applied: first,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	interval := control.CommitInterval{
+		First: first, Last: last, CommitID: "publication-two",
+		Commits: []control.DatabaseCommit{{Database: "accounts", CommitID: "accounts-two"}},
+	}
+	if err := handler.ReplicationTopology.PublishCommit(interval, checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	if err := handler.ReplicationTopology.ObserveHeartbeat("primary.example:27017", topology.Heartbeat{
+		SetName: "rs0", MemberID: 1, State: topology.StatePrimary, Term: 3, PrimaryID: 1,
+		Applied:   control.OpTime{Seconds: 105, Increment: 1, Term: 3},
+		Committed: control.OpTime{Seconds: 104, Increment: 1, Term: 3},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	handler.ReplicationTopology.SetRuntimePhase("steady")
+	handler.ReplicationTopology.ObserveBuffer(7, 4096, 50000, 256<<20)
+	handler.ReplicationTopology.ObserveSourceOplogWindow(
+		control.OpTime{Seconds: 80, Increment: 1, Term: 2},
+		control.OpTime{Seconds: 105, Increment: 1, Term: 3},
+	)
+	handler.ReplicationTopology.RecordAppliedOperation()
+	if err := handler.ReplicationTopology.RecordFailure(control.ReplicationFailure{
+		Stage: "fetch", Classification: "timeout", Message: "source request timed out", Retryable: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	request := wire.MustOpMsg(
+		"dumboReplicationStatus", int32(1),
+		"sourceOpTime", wirebson.MustDocument(
+			"ts", wirebson.Timestamp(uint64(last.Seconds)<<32|uint64(last.Increment)), "t", last.Term,
+		),
+		"$db", "admin",
+	)
+	response, err := handler.MsgDumboReplicationStatus(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := opMsgDocument(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	member := responseValue(document, "member").(*types.Document)
+	if responseValue(member, "stateStr") != "SECONDARY" {
+		t.Fatalf("member = %v", member)
+	}
+	buffer := responseValue(document, "buffer").(*types.Document)
+	if responseValue(buffer, "entries") != int64(7) || responseValue(buffer, "bytes") != int64(4096) {
+		t.Fatalf("buffer = %v", buffer)
+	}
+	positions := responseValue(document, "positions").(*types.Document)
+	committed := responseValue(positions, "committed").(*types.Document)
+	wantCommittedTimestamp := types.Timestamp(uint64(last.Seconds)<<32 | uint64(last.Increment))
+	if responseValue(committed, "ts") != wantCommittedTimestamp {
+		t.Fatalf("committed position = %v, want durable position %v", committed, last)
+	}
+	lag := responseValue(document, "lag").(*types.Document)
+	if responseValue(lag, "oplogSeconds") != int64(5) || responseValue(lag, "remainingSourceWindowSeconds") != int64(20) {
+		t.Fatalf("lag = %v", lag)
+	}
+	failures := responseValue(document, "failures").(*types.Document)
+	if responseValue(failures, "retryCount") != int64(1) {
+		t.Fatalf("failures = %v", failures)
+	}
+	lookup := responseValue(document, "provenanceLookup").(*types.Document)
+	if responseValue(lookup, "found") != true || responseValue(lookup, "commitID") != interval.CommitID {
+		t.Fatalf("provenance lookup = %v", lookup)
+	}
+
+	commitRequest := wire.MustOpMsg(
+		"dumboReplicationStatus", int32(1),
+		"commitID", "accounts-two", "database", "accounts", "$db", "admin",
+	)
+	commitResponse, err := handler.MsgDumboReplicationStatus(context.Background(), commitRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitDocument, err := opMsgDocument(commitResponse)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitLookup := responseValue(commitDocument, "provenanceLookup").(*types.Document)
+	if responseValue(commitLookup, "commitID") != interval.CommitID {
+		t.Fatalf("database commit lookup = %v", commitLookup)
+	}
+
+	connectionInfo := conninfo.New()
+	connectionInfo.SetBypassBackendAuth()
+	serverContext := conninfo.Ctx(context.Background(), connectionInfo)
+	serverResponse, err := handler.MsgServerStatus(serverContext, wire.MustOpMsg("serverStatus", int32(1), "$db", "admin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverDocument, err := opMsgDocument(serverResponse)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metrics := responseValue(serverDocument, "replication").(*types.Document)
+	if responseValue(metrics, "oplogLagSeconds") != int64(5) || responseValue(metrics, "bufferEntries") != int64(7) {
+		t.Fatalf("serverStatus replication = %v", metrics)
+	}
+}
+
+func TestDumboReplicationDetachStopsMemberAndPersistsLifecycle(t *testing.T) {
+	handler := configuredReplicationHandler(t)
+	if err := handler.ReplicationTopology.ObserveHeartbeat("primary.example:27017", topology.Heartbeat{
+		SetName: "rs0", MemberID: 1, State: topology.StatePrimary, Term: 3, PrimaryID: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	response, err := handler.MsgDumboReplicationDetach(context.Background(), wire.MustOpMsg(
+		"dumboReplicationDetach", int32(1), "$db", "admin",
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := opMsgDocument(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if responseValue(document, "state") != "detached" {
+		t.Fatalf("detach response = %v", document)
+	}
+	if snapshot := handler.ReplicationTopology.Snapshot(); snapshot.State != topology.StateRemoved || snapshot.SyncSource != "" {
+		t.Fatalf("detached topology = %+v", snapshot)
+	}
+	persisted := handler.ReplicationTopology.ControlSnapshot()
+	if persisted.Lifecycle != control.LifecycleDetached || persisted.CurrentSource != "" {
+		t.Fatalf("detached control state = %+v", persisted)
+	}
+	if _, err := handler.MsgDumboReplicationDetach(context.Background(), wire.MustOpMsg(
+		"dumboReplicationDetach", int32(1), "$db", "app",
+	)); err == nil {
+		t.Fatal("detach succeeded outside admin database")
+	}
+}
+
 func configuredReplicationHandler(t *testing.T) *Handler {
 	t.Helper()
-	_, store := testutil.NewControlStore(t, control.Configuration{
+	backend, store := testutil.NewControlStore(t, control.Configuration{
 		SetName: "rs0", MemberHost: "dumbo.example:27017",
 	})
 	manager := topology.New(store)
@@ -315,9 +467,13 @@ func configuredReplicationHandler(t *testing.T) *Handler {
 	}
 	return &Handler{
 		NewOpts: &NewOpts{
+			Backend:             backend,
 			ReplSetName:         "rs0",
 			ReplicationTopology: manager,
+			StateProvider:       state.NewProvider(),
+			L:                   slog.New(slog.NewTextHandler(io.Discard, nil)),
 		},
+		b:               backend,
 		processID:       types.NewObjectID(),
 		topologyChanged: make(chan struct{}),
 	}

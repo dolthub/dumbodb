@@ -49,8 +49,10 @@ func TestMaterializeOrdinaryCatalogClonesMultipleDatabasesAndReportsSpecialDatab
 		{Name: "config", Special: true, Collections: []Collection{{Name: "transactions"}}},
 		{Name: "orders", Collections: []Collection{cloneTestCollection("items", secondUUID)}},
 	}
+	var progress []MaterializationProgress
 	result, err := MaterializeOrdinaryCatalog(ctx, client, catalogApplier, databases,
-		control.OpTime{Seconds: 100, Increment: 2, Term: 8}, LoaderLimits{Documents: 10, Bytes: 4096})
+		control.OpTime{Seconds: 100, Increment: 2, Term: 8}, LoaderLimits{Documents: 10, Bytes: 4096},
+		func(update MaterializationProgress) { progress = append(progress, update) })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,6 +69,22 @@ func TestMaterializeOrdinaryCatalogClonesMultipleDatabasesAndReportsSpecialDatab
 	}
 	assertCommand(t, client.requests[0], "find", "accounts")
 	assertCommand(t, client.requests[1], "find", "orders")
+	if len(progress) == 0 {
+		t.Fatal("catalog materialization did not report progress")
+	}
+	last := progress[len(progress)-1]
+	if last.CollectionsTotal != 2 || last.CollectionsCompleted != 2 || last.Documents != 2 || last.CurrentNamespace != "" {
+		t.Fatalf("final materialization progress = %+v", last)
+	}
+	activeNamespaceReported := false
+	for _, update := range progress {
+		if update.CurrentNamespace == "accounts.customers" && update.Documents == 1 {
+			activeNamespaceReported = true
+		}
+	}
+	if !activeNamespaceReported {
+		t.Fatalf("materialization progress did not report active namespace: %+v", progress)
+	}
 }
 
 func TestMaterializeOrdinaryCatalogPreflightsBeforeMutation(t *testing.T) {
@@ -79,7 +97,7 @@ func TestMaterializeOrdinaryCatalogPreflightsBeforeMutation(t *testing.T) {
 	_, err := MaterializeOrdinaryCatalog(ctx, &boundaryClient{}, catalogApplier, []Database{
 		{Name: "accounts", Collections: []Collection{cloneTestCollection("customers", firstUUID)}},
 		{Name: "logs", Collections: []Collection{unsupported}},
-	}, control.OpTime{Seconds: 100, Increment: 2, Term: 8}, LoaderLimits{Documents: 10, Bytes: 4096})
+	}, control.OpTime{Seconds: 100, Increment: 2, Term: 8}, LoaderLimits{Documents: 10, Bytes: 4096}, nil)
 	if err == nil {
 		t.Fatal("expected unsupported catalog error")
 	}

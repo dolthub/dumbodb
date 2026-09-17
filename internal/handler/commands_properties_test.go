@@ -61,7 +61,7 @@ func TestCommands_BlockedInTxnFlag(t *testing.T) {
 	h := handlerForTest(t)
 	cmds := h.Commands()
 
-	blockedNames := []string{"drop", "dropDatabase", "createIndexes", "renameCollection", "collMod"}
+	blockedNames := []string{"drop", "dropDatabase", "createIndexes", "renameCollection", "collMod", "dumboReplicationDetach"}
 	for _, n := range blockedNames {
 		cmd, ok := cmds[n]
 		assert.True(t, ok, "command %q must be registered", n)

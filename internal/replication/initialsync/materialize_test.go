@@ -66,7 +66,7 @@ func TestMaterializeCollectionLoadsAndIndexesMain(t *testing.T) {
 	result, err := MaterializeCollection(ctx, client, catalogApplier, "orders", Collection{
 		Name: "items", SourceUUID: sourceUUID.String(), UUIDBinary: types.Binary{Subtype: types.BinaryUUID, B: sourceUUID[:]},
 		Options: must.NotFail(types.NewDocument()), Indexes: indexes,
-	}, control.OpTime{Seconds: 100, Increment: 1, Term: 8}, LoaderLimits{Documents: 2, Bytes: 1024}, nil)
+	}, control.OpTime{Seconds: 100, Increment: 1, Term: 8}, LoaderLimits{Documents: 2, Bytes: 1024}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

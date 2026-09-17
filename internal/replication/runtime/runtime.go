@@ -84,7 +84,14 @@ func New(
 }
 
 func (r *Runtime) Run(ctx context.Context) {
+	r.manager.SetRuntimePhase("starting")
+	defer func() {
+		if ctx.Err() != nil {
+			r.manager.SetRuntimePhase("stopped")
+		}
+	}()
 	if failure := r.store.Snapshot().InitialSyncFailure; failure != nil {
+		r.manager.SetRuntimePhase("failed")
 		r.logger.Error("MongoDB replication stopped by terminal initial-sync failure", "err", failure.Message)
 		return
 	}
@@ -93,6 +100,7 @@ func (r *Runtime) Run(ctx context.Context) {
 	reporter := topology.NewProgressReporter(r.manager, r.logger)
 	go reporter.Run(reportContext)
 	for ctx.Err() == nil {
+		r.manager.SetRuntimePhase("recovering")
 		if err := r.recoverPublication(ctx); err != nil {
 			r.retry(ctx, "recovering replication publication", err)
 			continue
@@ -108,6 +116,7 @@ func (r *Runtime) Run(ctx context.Context) {
 			return
 		}
 		if r.store.Snapshot().InitialSyncPhase != control.InitialSyncComplete {
+			r.manager.SetRuntimePhase("initial_sync")
 			if err := r.runInitialSync(ctx, state.SyncSource); err != nil {
 				if failure, terminal := terminalInitialSyncFailure(err); terminal {
 					if recordErr := r.manager.MarkInitialSyncFailed(failure); recordErr != nil {
@@ -115,15 +124,20 @@ func (r *Runtime) Run(ctx context.Context) {
 						return
 					}
 					r.logger.Error("MongoDB replication stopped by terminal initial-sync failure", "err", failure.Message)
+					r.manager.SetRuntimePhase("failed")
 					return
 				}
 				r.retry(ctx, "initial sync failed", err)
 				continue
 			}
 		}
+		r.manager.SetRuntimePhase("steady")
 		if err := r.runSteady(ctx); err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return
+			}
+			if errors.Is(err, oplog.ErrSourceChanged) {
+				continue
 			}
 			if errors.Is(err, oplog.ErrTooStale) || errors.Is(err, oplog.ErrContinuityLost) ||
 				errors.Is(err, topology.ErrSourceRollbackIDChanged) {
@@ -158,6 +172,8 @@ func (r *Runtime) runInitialSync(ctx context.Context, source string) error {
 	if err != nil {
 		return err
 	}
+	stopMonitoring := r.monitorBuffer(ctx, buffer)
+	defer stopMonitoring()
 	fetcher, err := oplog.NewFetcher(r.manager, buffer, r.logger)
 	if err != nil {
 		return err
@@ -202,6 +218,8 @@ func (r *Runtime) runSteady(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	stopMonitoring := r.monitorBuffer(ctx, buffer)
+	defer stopMonitoring()
 	fetcher, err := oplog.NewFetcher(r.manager, buffer, r.logger)
 	if err != nil {
 		return err
@@ -298,6 +316,7 @@ func (r *Runtime) applyEntry(ctx context.Context, applier *oplog.Applier, entry 
 	if err := r.publisher.Complete(ctx, publicationID); err != nil {
 		return err
 	}
+	r.manager.RecordAppliedOperation()
 	return nil
 }
 
@@ -364,7 +383,12 @@ func (r *Runtime) waitForSource(ctx context.Context) (topology.Snapshot, error) 
 	defer ticker.Stop()
 	for {
 		state := r.manager.Snapshot()
-		if state.Configuration != nil && state.SyncSource != "" {
+		if state.State == topology.StateRemoved {
+			r.manager.SetRuntimePhase("detached")
+		} else {
+			r.manager.SetRuntimePhase("waiting_for_source")
+		}
+		if state.State != topology.StateRemoved && state.Configuration != nil && state.SyncSource != "" {
 			return state, nil
 		}
 		select {
@@ -379,11 +403,63 @@ func (r *Runtime) retry(ctx context.Context, message string, err error) {
 	if ctx.Err() != nil {
 		return
 	}
+	r.manager.SetRuntimePhase("retrying")
+	failure := control.ReplicationFailure{
+		Stage: message, Classification: classifyReplicationFailure(err), Message: err.Error(), Retryable: true,
+	}
+	if recordErr := r.manager.RecordFailure(failure); recordErr != nil {
+		r.logger.Error("recording replication failure", "err", recordErr)
+	}
 	r.logger.Warn(message, "err", err)
 	timer := time.NewTimer(time.Second)
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
 	case <-timer.C:
+	}
+}
+
+func classifyReplicationFailure(err error) string {
+	switch {
+	case errors.Is(err, oplog.ErrTooStale):
+		return "oplog_too_stale"
+	case errors.Is(err, oplog.ErrContinuityLost):
+		return "oplog_continuity_lost"
+	case errors.Is(err, topology.ErrSourceRollbackIDChanged):
+		return "source_rollback"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	default:
+		return "transient"
+	}
+}
+
+func (r *Runtime) monitorBuffer(ctx context.Context, buffer *oplog.Buffer) func() {
+	monitorContext, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	update := func() {
+		stats := buffer.Stats()
+		limits := buffer.Limits()
+		r.manager.ObserveBuffer(stats.Entries, stats.Bytes, limits.Entries, limits.Bytes)
+	}
+	update()
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(250 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-monitorContext.Done():
+				return
+			case <-ticker.C:
+				update()
+			}
+		}
+	}()
+	return func() {
+		cancel()
+		<-done
+		limits := buffer.Limits()
+		r.manager.ObserveBuffer(0, 0, limits.Entries, limits.Bytes)
 	}
 }

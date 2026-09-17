@@ -41,6 +41,7 @@ func MaterializeCollection(
 	createOpTime control.OpTime,
 	limits LoaderLimits,
 	resumeAfter *types.Document,
+	progress func(LoaderStats),
 ) (MaterializeResult, error) {
 	if client == nil || catalogApplier == nil || database == "" || collection.Name == "" || collection.SourceUUID == "" {
 		return MaterializeResult{}, errors.New("collection materialization requires client, catalog applier, database, name, and UUID")
@@ -70,7 +71,13 @@ func MaterializeCollection(
 				return err
 			}
 		}
-		return loader.Flush(ctx)
+		if err := loader.Flush(ctx); err != nil {
+			return err
+		}
+		if progress != nil {
+			progress(loader.Stats())
+		}
+		return nil
 	})
 	result.ResumeToken = resumeToken
 	result.Loader = loader.Stats()
