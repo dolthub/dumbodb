@@ -344,6 +344,34 @@ func TestApplierAssemblesTransactionsWithAtomicVisibility(t *testing.T) {
 	}
 }
 
+func TestApplierAppliesChainedBatchedWritesWithoutTransactionAssembly(t *testing.T) {
+	ctx := context.Background()
+	backend, applier, sourceUUID := newTestApplier(t)
+	createTestCollection(t, ctx, backend, applier, sourceUUID, "orders", "items")
+
+	firstDocument := must.NotFail(types.NewDocument("_id", int32(1), "value", "first"))
+	first := makeTransactionEntry(t, 12, 23, nullOpTimeDocument(), false, false,
+		embeddedOperation("i", "orders.items", sourceUUID, firstDocument, nil),
+	)
+	if err := applier.Apply(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+
+	secondDocument := must.NotFail(types.NewDocument("_id", int32(2), "value", "second"))
+	second := makeTransactionEntry(t, 13, 23, opTimeDocument(first.OpTime), false, false,
+		embeddedOperation("i", "orders.items", sourceUUID, secondDocument, nil),
+	)
+	if err := applier.Apply(ctx, second); err != nil {
+		t.Fatal(err)
+	}
+
+	assertStoredDocument(t, ctx, backend, "orders", "items", firstDocument)
+	assertStoredDocument(t, ctx, backend, "orders", "items", secondDocument)
+	if len(applier.store.Snapshot().TransactionParts) != 0 {
+		t.Fatal("batched write created a transaction fragment")
+	}
+}
+
 func TestApplierCreatesCollectionsInsideApplyOps(t *testing.T) {
 	ctx := context.Background()
 	backend, applier, _ := newTestApplier(t)

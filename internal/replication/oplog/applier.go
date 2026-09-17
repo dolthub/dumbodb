@@ -509,17 +509,17 @@ func (a *Applier) applyTransactionEntry(ctx context.Context, entry Entry, docume
 		if err != nil {
 			return err
 		}
-		if partial || prepare || hasTransaction {
+		fragment, hasFragment := a.store.Snapshot().TransactionParts[key]
+		if partial || prepare || hasFragment {
 			if !hasTransaction {
 				return errors.New("transactional applyOps has no session and transaction number")
 			}
-			fragment, exists := a.store.Snapshot().TransactionParts[key]
-			if err := validateTransactionLink(document, fragment, exists); err != nil {
+			if err := validateTransactionLink(document, fragment, hasFragment); err != nil {
 				return err
 			}
 			payload := encodeTransactionPayload(entry.RawBSON)
 			first := entry.OpTime
-			if exists {
+			if hasFragment {
 				payload = append(fragment.Payload, payload...)
 				first = fragment.First
 			}
