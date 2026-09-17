@@ -3372,8 +3372,11 @@ func (b *Backend) replayRemainingCommits(ctx context.Context, db *dbState, ms *m
 		}
 
 		// 3-way merge: apply pick's diff (base->from) onto the current rebased tip (into).
-		// Sides are swapped so the replayed commit presents as "ours" and the
-		// onto/tip as "theirs" (a rebase moves the user's commits onto a base).
+		// The pick is passed as the "into" side so that the commit being replayed
+		// presents as "ours" and the onto branch as "theirs". That argument order
+		// is what holds the labels steady: a caller's own work is "ours" for a
+		// rebase just as it is for a merge, rather than changing sides because of
+		// how the replay happens to be implemented.
 		mergedAM, conflicts, viewConflicts, metaConflicts, err := mergeAddressMapsWithConflicts(ctx, db, fromAM, intoAM, baseAM, pickHash, pickBaseHash,
 			fmt.Sprintf("commit '%s' (ours)", pickHash.String()), fmt.Sprintf("branch '%s' (theirs)", ms.ontoBranch))
 		if err != nil {

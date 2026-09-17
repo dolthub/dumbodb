@@ -78,8 +78,9 @@ func TestAutoCommit_ConflictWindow_Merge(t *testing.T) {
 // diverges _id:1 of "items" and leaves its operation paused on that document,
 // so one resolution table can be run against all of them.
 //
-// oursV and theirsV are the values the two sides carry. A rebase swaps them:
-// the replayed commit presents as ours and the onto branch as theirs.
+// oursV and theirsV are the values the two sides carry. For a rebase ours is
+// the commit being replayed and theirs is the branch it lands on: a caller's own
+// work stays on the "ours" side for every operation here.
 type conflictOp struct {
 	name        string
 	oursV       string
@@ -158,8 +159,8 @@ func conflictOps() []conflictOp {
 			},
 		},
 		{
-			// A rebase replays the feature commit onto main, so the replayed
-			// commit is ours and the onto branch is theirs.
+			// The feature commit is replayed onto main, so the feature edit is
+			// ours and main's is theirs.
 			name: "rebase", oursV: "feat", theirsV: "main",
 			continueCmd: bson.D{{Key: "dumboRebase", Value: int32(1)}, {Key: "onto", Value: "main"}, {Key: "continue", Value: int32(1)}},
 			pause: func(t *testing.T, env *dumboDBTestEnv, dbName string) *mongo.Database {

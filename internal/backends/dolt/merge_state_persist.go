@@ -552,8 +552,9 @@ func loadNamespaceConflicts(ctx context.Context, state *dbState, ms *mergeInProg
 }
 
 // operationSides returns the three AddressMaps the operation merged, in the
-// same roles it gave them: ours, theirs, and the common base. A rebase swaps
-// the first two, presenting the replayed commit as ours.
+// same roles it gave them: ours, theirs, and the common base. For a rebase ours
+// is the commit being replayed and theirs is the branch it lands on, so the
+// caller's own work sits on the same side it would for a merge.
 func operationSides(ctx context.Context, state *dbState, ms *mergeInProgress) (intoAM, fromAM, baseAM prolly.AddressMap, err error) {
 	amFor := func(h hash.Hash) (prolly.AddressMap, error) {
 		if h.IsEmpty() {
