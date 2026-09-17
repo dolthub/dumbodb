@@ -52,7 +52,11 @@ import (
 // originalMsg holds the original commit message of the cherry-picked commit for
 // the default annotation.
 type mergeInProgress struct {
-	fromBranch string
+	// fromLabel is the merge source as it is named to the user, e.g.
+	// "branch 'feature'". It is rendered once when the merge starts and then
+	// carried, because refLabel resolves against the live ref namespace and
+	// would re-word itself if the source ref were removed mid-merge.
+	fromLabel  string
 	intoBranch string
 	premergeAM prolly.AddressMap // ours branch AM before the operation started (used to abort)
 	fromHash   hash.Hash         // fromBranch HEAD hash at merge time (merge commit parent 2)

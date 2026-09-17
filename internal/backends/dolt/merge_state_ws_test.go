@@ -128,8 +128,10 @@ func TestPausedMergeLivesInWorkingSet(t *testing.T) {
 	if ws.MergeState().IsCherryPick() || ws.MergeState().IsRevert() {
 		t.Fatal("a plain merge must not be recorded as a cherry-pick or revert")
 	}
-	if spec := ws.MergeState().CommitSpecStr(); spec != "feature" {
-		t.Fatalf("merge source spec = %q, want \"feature\"", spec)
+	// The slot carries the rendered label, not the bare refspec, so the wording
+	// of a paused conflict does not depend on the ref still existing.
+	if spec := ws.MergeState().CommitSpecStr(); spec != "branch 'feature'" {
+		t.Fatalf("merge source label = %q, want \"branch 'feature'\"", spec)
 	}
 	if ws.MergeState().PreMergeWorkingRoot() == nil {
 		t.Fatal("the pre-merge root must be reachable from the working set")
@@ -243,5 +245,115 @@ func TestPausedMergeReloadsOnOpen(t *testing.T) {
 	gotMsg := after.Collections[0].Conflicts[0].Reason.Message
 	if gotMsg != wantMsg {
 		t.Fatalf("conflict reason changed across reopen:\n before %q\n after  %q", wantMsg, gotMsg)
+	}
+}
+
+// An operation's commit and the working set it settles must land together. If
+// they were two updates, a crash in between would leave the commit on the
+// branch while the working set still advertised the operation, and the branch
+// could then be neither continued (its head has moved past the parents the
+// retry wants) nor sensibly aborted.
+func TestOperationCommitAndSettleAreOneUpdate(t *testing.T) {
+	b, dir := newBackendForTest(t)
+	defer os.RemoveAll(dir)
+	ctx := context.Background()
+
+	conflictedMerge(t, b, "wsatomic")
+	db, err := b.getOrOpenDB(ctx, "wsatomic", false)
+	if err != nil {
+		t.Fatalf("getOrOpenDB: %v", err)
+	}
+	ms := db.mergeState
+
+	confl, err := b.DumboDBConflicts(ctx, &backends.ConflictsParams{DBName: "wsatomic", Branch: "main"})
+	if err != nil {
+		t.Fatalf("DumboDBConflicts: %v", err)
+	}
+	if _, err := b.DumboDBResolveConflict(ctx, &backends.ResolveConflictParams{
+		DBName: "wsatomic", Branch: "main", Collection: "col",
+		ConflictID: confl.Collections[0].Conflicts[0].ConflictID, Resolution: "ours",
+	}); err != nil {
+		t.Fatalf("DumboDBResolveConflict: %v", err)
+	}
+
+	// Exactly the commit half of continue, with nothing after it. Whatever the
+	// merge commit made durable, the working set has to have settled with it.
+	db.mu.Lock()
+	if err := clearConflictArtifacts(ctx, db, ms); err != nil {
+		db.mu.Unlock()
+		t.Fatalf("clearConflictArtifacts: %v", err)
+	}
+	res, err := b.commitMerge(ctx, db, ms.fromLabel, ms.intoBranch, ms.intoHash, ms.fromHash, ms.resolvedAM, "merged", "t <t@e>", "")
+	if err != nil {
+		db.mu.Unlock()
+		t.Fatalf("commitMerge: %v", err)
+	}
+	db.mu.Unlock()
+
+	b.Close()
+	reopened := &Backend{
+		dataDir: dir,
+		l:       slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		dbs:     make(map[string]*dbState),
+	}
+	defer reopened.Close()
+
+	db2, err := reopened.getOrOpenDB(ctx, "wsatomic", false)
+	if err != nil {
+		t.Fatalf("getOrOpenDB after reopen: %v", err)
+	}
+	if db2.mergeState != nil {
+		t.Fatal("the merge commit landed, so reopening must not find the merge still in progress")
+	}
+
+	head, err := branchHeadHash(ctx, db2, "main")
+	if err != nil {
+		t.Fatalf("branchHeadHash: %v", err)
+	}
+	if head.String() != res.CommitID {
+		t.Fatalf("HEAD = %s, want the merge commit %s", head.String(), res.CommitID)
+	}
+	if n := artifactCount(t, reopened, "wsatomic", "main", "col"); n != 0 {
+		t.Fatalf("working root still carries %d conflict artifacts", n)
+	}
+}
+
+// refLabel resolves against the live ref namespace, so the wording of a paused
+// conflict has to be captured when the merge starts rather than re-derived on
+// reload: a source branch removed mid-merge would otherwise re-word the reason
+// from "branch 'feature'" to "commit 'feature'".
+func TestConflictReasonSurvivesSourceBranchRemoval(t *testing.T) {
+	b, dir := newBackendForTest(t)
+	defer os.RemoveAll(dir)
+	ctx := context.Background()
+
+	conflictedMerge(t, b, "wslabel")
+	before, err := b.DumboDBConflicts(ctx, &backends.ConflictsParams{DBName: "wslabel", Branch: "main"})
+	if err != nil {
+		t.Fatalf("DumboDBConflicts: %v", err)
+	}
+	want := before.Collections[0].Conflicts[0].Reason.Message
+
+	if _, err := b.DumboDBBranch(ctx, &backends.BranchParams{
+		DBName: "wslabel", Action: "remove", Name: "feature", Force: true,
+	}); err != nil {
+		t.Fatalf("removing the merge source branch: %v", err)
+	}
+	b.Close()
+
+	reopened := &Backend{
+		dataDir: dir,
+		l:       slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		dbs:     make(map[string]*dbState),
+	}
+	defer reopened.Close()
+
+	after, err := reopened.DumboDBConflicts(ctx, &backends.ConflictsParams{DBName: "wslabel", Branch: "main"})
+	if err != nil {
+		t.Fatalf("DumboDBConflicts after reopen: %v", err)
+	}
+	got := after.Collections[0].Conflicts[0].Reason.Message
+	if got != want {
+		t.Fatalf("conflict reason changed when the source branch went away:\n before %q\n after  %q", want, got)
 	}
 }

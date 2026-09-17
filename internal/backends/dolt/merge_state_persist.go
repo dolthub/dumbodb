@@ -91,18 +91,21 @@ func (m *mergeInProgress) preOpHeadHash() hash.Hash {
 	return m.intoHash
 }
 
-// sourceSpec is the refspec the operation names its source by.
+// sourceSpec is how the operation names its source. A merge stores the rendered
+// label rather than the bare refspec so the wording survives the pause: refLabel
+// re-reads the ref namespace, so a source branch deleted while the merge sits
+// paused would otherwise turn "branch 'feature'" into "commit 'feature'".
 func (m *mergeInProgress) sourceSpec() string {
 	if m.isRebase {
 		return m.ontoBranch
 	}
-	return m.fromBranch
+	return m.fromLabel
 }
 
 // sideDescriptions renders the "ours" and "theirs" labels used in conflict
 // reason messages. It reproduces the labels the operation passed to
 // mergeAddressMapsWithConflicts, so reason text is stable across a restart.
-func (m *mergeInProgress) sideDescriptions(ctx context.Context, state *dbState) (ours, theirs string) {
+func (m *mergeInProgress) sideDescriptions() (ours, theirs string) {
 	switch {
 	case m.isRebase:
 		return fmt.Sprintf("commit '%s' (ours)", m.rebaseCurrentPick.String()),
@@ -112,7 +115,7 @@ func (m *mergeInProgress) sideDescriptions(ctx context.Context, state *dbState) 
 			fmt.Sprintf("commit '%s' (theirs)", m.pickHash.String())
 	default:
 		return fmt.Sprintf("branch '%s' (ours)", m.intoBranch),
-			fmt.Sprintf("%s (theirs)", refLabel(ctx, state, m.fromBranch))
+			fmt.Sprintf("%s (theirs)", m.fromLabel)
 	}
 }
 
@@ -226,6 +229,41 @@ func persistConflictState(ctx context.Context, state *dbState, ms *mergeInProgre
 	}
 	state.pushWSToSession(ctx, ms.intoBranch, newWS)
 	return nil
+}
+
+// commitAndClear publishes an operation's final commit and a working set with
+// no operation metadata left on it, in one update. The caller must hold state.mu.
+func commitAndClear(ctx context.Context, state *dbState, branch string, finalAM prolly.AddressMap, parents []hash.Hash, cm *datas.CommitMeta) (hash.Hash, error) {
+	rv, err := amToRootValue(ctx, state, finalAM)
+	if err != nil {
+		return hash.Hash{}, fmt.Errorf("building commit root value: %w", err)
+	}
+	return state.commitBranchRoot(ctx, branch, rv, parents, cm, func(ws *doltdb.WorkingSet) (*doltdb.WorkingSet, error) {
+		return ws.ClearMerge().ClearRebase(), nil
+	})
+}
+
+// commitAndAdvance publishes a replayed commit together with the operation
+// state the branch is left in, in one update, so a rebase interrupted between
+// picks is found at the pick it actually reached rather than one it has already
+// applied. ms must already describe the state after this commit lands. The
+// caller must hold state.mu.
+func commitAndAdvance(ctx context.Context, state *dbState, ms *mergeInProgress, commitAM prolly.AddressMap, parents []hash.Hash, cm *datas.CommitMeta) (hash.Hash, error) {
+	rv, err := amToRootValue(ctx, state, commitAM)
+	if err != nil {
+		return hash.Hash{}, fmt.Errorf("building commit root value: %w", err)
+	}
+	premergeRV, err := amToRootValue(ctx, state, ms.premergeAM)
+	if err != nil {
+		return hash.Hash{}, fmt.Errorf("building pre-operation root value: %w", err)
+	}
+	return state.commitBranchRoot(ctx, ms.intoBranch, rv, parents, cm, func(ws *doltdb.WorkingSet) (*doltdb.WorkingSet, error) {
+		stamped, stampErr := withOperationState(ctx, state, ws.WithWorkingRoot(premergeRV).WithStagedRoot(premergeRV), ms, premergeRV)
+		if stampErr != nil {
+			return nil, stampErr
+		}
+		return stamped.WithWorkingRoot(rv).WithStagedRoot(rv), nil
+	})
 }
 
 // settleMergeState points branch's working set at finalAM and drops the
@@ -369,11 +407,11 @@ func mergeStateFromWS(ctx context.Context, state *dbState, branch string, ws *do
 			return nil, err
 		}
 	default:
-		ms.fromBranch = stored.CommitSpecStr()
+		ms.fromLabel = stored.CommitSpecStr()
 		ms.fromHash = sourceHash
 	}
 
-	oursDesc, theirsDesc := ms.sideDescriptions(ctx, state)
+	oursDesc, theirsDesc := ms.sideDescriptions()
 
 	ms.conflicts, err = loadDocumentConflicts(ctx, state, resolvedAM, oursDesc, theirsDesc)
 	if err != nil {
