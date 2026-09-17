@@ -55,7 +55,6 @@ func (h *Handler) MsgReplSetGetConfig(_ context.Context, _ *wire.OpMsg) (*wire.O
 	}
 	return documentOpMsg(must.NotFail(types.NewDocument(
 		"config", replicaConfigurationDocument(*state.Configuration),
-		"commitmentStatus", false,
 		"ok", float64(1),
 	)))
 }
@@ -214,7 +213,6 @@ func (h *Handler) MsgReplSetHeartbeat(_ context.Context, msg *wire.OpMsg) (*wire
 		"v", configurationVersion(state.Configuration),
 		"configTerm", configurationTerm(state.Configuration),
 		"primaryId", int32(state.PrimaryID),
-		"time", time.Now().Unix(),
 		"opTime", opTimeDocument(state.Checkpoint.Applied),
 		"wallTime", opTimeDate(state.Checkpoint.Applied),
 		"writtenOpTime", opTimeDocument(state.Checkpoint.Written),
@@ -226,15 +224,29 @@ func (h *Handler) MsgReplSetHeartbeat(_ context.Context, msg *wire.OpMsg) (*wire
 	if state.SyncSource != "" {
 		response.Set("syncingTo", state.SyncSource)
 	}
-	requestVersion := configVersion
-	requestTerm, err := optionalIntegerValue(request, "configTerm", -1)
+	requesterHasStaleConfiguration, err := heartbeatRequesterHasStaleConfiguration(request, configVersion, state.Configuration)
 	if err != nil {
 		return nil, err
 	}
-	if state.Configuration != nil && (requestTerm < state.Configuration.Term || requestTerm == state.Configuration.Term && requestVersion < state.Configuration.Version) {
+	if requesterHasStaleConfiguration {
 		response.Set("config", replicaConfigurationDocument(*state.Configuration))
 	}
 	return documentOpMsg(response)
+}
+
+func heartbeatRequesterHasStaleConfiguration(request *types.Document, requestVersion int64, configuration *control.ReplicaConfiguration) (bool, error) {
+	if configuration == nil {
+		return false, nil
+	}
+	requestTermValue, _ := request.Get("configTerm")
+	if requestTermValue == nil {
+		return requestVersion < configuration.Version, nil
+	}
+	requestTerm, err := optionalIntegerValue(request, "configTerm", -1)
+	if err != nil {
+		return false, err
+	}
+	return requestTerm < configuration.Term || requestTerm == configuration.Term && requestVersion < configuration.Version, nil
 }
 
 func (h *Handler) MsgReplSetUpdatePositionUnsupported(_ context.Context, _ *wire.OpMsg) (*wire.OpMsg, error) {

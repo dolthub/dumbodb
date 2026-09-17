@@ -45,6 +45,9 @@ func TestReplicationInspectionCommands(t *testing.T) {
 	if _, ok := responseValue(configDocument, "config").(*types.Document); !ok {
 		t.Fatalf("config = %T", responseValue(configDocument, "config"))
 	}
+	if responseValue(configDocument, "commitmentStatus") != nil {
+		t.Fatal("replSetGetConfig returned commitmentStatus")
+	}
 
 	rbidResponse, err := handler.MsgReplSetGetRBID(context.Background(), wire.MustOpMsg("replSetGetRBID", int32(1), "$db", "admin"))
 	if err != nil {
@@ -157,6 +160,9 @@ func TestReplicationHeartbeatReturnsNewerConfigAndTracksPrimary(t *testing.T) {
 	if _, ok := responseValue(document, "config").(*types.Document); !ok {
 		t.Fatalf("heartbeat config = %T", responseValue(document, "config"))
 	}
+	if responseValue(document, "time") != nil {
+		t.Fatal("heartbeat returned time")
+	}
 	wallTimes := map[string]uint32{
 		"wallTime":        checkpoint.Applied.Seconds,
 		"writtenWallTime": checkpoint.Written.Seconds,
@@ -180,6 +186,33 @@ func TestReplicationHeartbeatReturnsNewerConfigAndTracksPrimary(t *testing.T) {
 	state := handler.ReplicationTopology.Snapshot()
 	if state.Term != 9 || state.PrimaryID != 1 || state.PrimaryHost != "primary.example:27017" {
 		t.Fatalf("heartbeat topology = %+v", state)
+	}
+}
+
+func TestReplicationHeartbeatOmitsCurrentConfigurationWithoutConfigTerm(t *testing.T) {
+	handler := configuredReplicationHandler(t)
+	request := wire.MustOpMsg(
+		"replSetHeartbeat", "rs0",
+		"configVersion", int64(4),
+		"from", "primary.example:27017",
+		"fromId", int32(1),
+		"term", int64(9),
+		"primaryId", int32(1),
+		"$db", "admin",
+	)
+	response, err := handler.MsgReplSetHeartbeat(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := opMsgDocument(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if responseValue(document, "config") != nil {
+		t.Fatal("heartbeat returned the requester's current configuration")
+	}
+	if responseValue(document, "time") != nil {
+		t.Fatal("heartbeat returned time")
 	}
 }
 
