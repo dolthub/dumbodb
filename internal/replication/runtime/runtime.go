@@ -43,13 +43,14 @@ type versionedBackend interface {
 }
 
 type Runtime struct {
-	backend   versionedBackend
-	store     *control.Store
-	manager   *topology.Manager
-	logger    *slog.Logger
-	bumpAuth  func()
-	publisher *publication.Publisher
-	recovery  *recovery.Recovery
+	backend               versionedBackend
+	store                 *control.Store
+	manager               *topology.Manager
+	logger                *slog.Logger
+	bumpAuth              func()
+	publisher             *publication.Publisher
+	recovery              *recovery.Recovery
+	counterOperationKinds func(oplog.Entry) ([]string, error)
 }
 
 func New(
@@ -80,6 +81,7 @@ func New(
 	return &Runtime{
 		backend: versioned, store: store, manager: manager, logger: logger,
 		bumpAuth: bumpAuthGeneration, publisher: publisher, recovery: recoveryManager,
+		counterOperationKinds: oplog.CounterOperationKinds,
 	}, nil
 }
 
@@ -295,10 +297,6 @@ func (r *Runtime) runSteady(ctx context.Context) error {
 }
 
 func (r *Runtime) applyEntry(ctx context.Context, applier *oplog.Applier, entry oplog.Entry) error {
-	operationKinds, err := oplog.CounterOperationKinds(entry)
-	if err != nil {
-		return err
-	}
 	if entry.Operation == "n" {
 		if err := applier.Apply(ctx, entry); err != nil {
 			return err
@@ -306,7 +304,7 @@ func (r *Runtime) applyEntry(ctx context.Context, applier *oplog.Applier, entry 
 		if err := r.manager.AdvanceApplied(entry.OpTime); err != nil {
 			return err
 		}
-		r.manager.RecordAppliedEntry(operationKinds)
+		r.recordAppliedEntry(entry)
 		return nil
 	}
 	databases, err := r.publicationDatabases(ctx, entry)
@@ -336,9 +334,18 @@ func (r *Runtime) applyEntry(ctx context.Context, applier *oplog.Applier, entry 
 	if err := r.publisher.Complete(ctx, publicationID); err != nil {
 		return err
 	}
-	r.manager.RecordAppliedEntry(operationKinds)
+	r.recordAppliedEntry(entry)
 	r.manager.RecordPublishedCommit()
 	return nil
+}
+
+func (r *Runtime) recordAppliedEntry(entry oplog.Entry) {
+	operationKinds, err := r.counterOperationKinds(entry)
+	if err != nil {
+		r.logger.Warn("counting replicated operations failed", "opTime", entry.OpTime, "err", err)
+		operationKinds = nil
+	}
+	r.manager.RecordAppliedEntry(operationKinds)
 }
 
 func (r *Runtime) recoverPublication(ctx context.Context) error {

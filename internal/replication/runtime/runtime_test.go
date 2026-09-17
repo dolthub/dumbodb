@@ -67,6 +67,9 @@ func TestApplyNoopAdvancesCheckpointWithoutCommit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	replicationRuntime.counterOperationKinds = func(oplog.Entry) ([]string, error) {
+		return nil, errors.New("injected counter failure")
+	}
 	if err := replicationRuntime.manager.AdvanceFetched(entry.OpTime, entry.OpTime); err != nil {
 		t.Fatal(err)
 	}
