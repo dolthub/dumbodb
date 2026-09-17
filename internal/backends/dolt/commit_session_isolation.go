@@ -125,8 +125,10 @@ func (b *Backend) doltCommitSessionIsolation(ctx context.Context, params *backen
 		if err != nil {
 			return nil, err
 		}
+		if err := clearMergeState(ctx, db, branch); err != nil {
+			return nil, fmt.Errorf("DumboDBCommit: clearing merge state on %q: %w", branch, err)
+		}
 		db.mergeState = nil
-		_ = clearMergeState(db)
 		return res, nil
 	}
 

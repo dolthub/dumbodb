@@ -16,358 +16,675 @@ package dolt
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
+	"sort"
+	"strings"
 
 	"github.com/dolthub/dolt/go/gen/fb/serial"
+	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
+	doltref "github.com/dolthub/dolt/go/libraries/doltcore/ref"
+	"github.com/dolthub/dolt/go/store/datas"
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/prolly"
-	"github.com/dolthub/dolt/go/store/prolly/tree"
 	dolttypes "github.com/dolthub/dolt/go/store/types"
 	"github.com/dolthub/dolt/go/store/val"
+	"github.com/dolthub/go-mysql-server/sql"
 )
 
-const mergeStateFileName = ".dumbodb_merge_state.json"
+// An in-progress merge, cherry-pick, revert, or rebase lives in the branch
+// working set's Dolt MergeState/RebaseState. The working set carries both the
+// conflicted root value -- whose DTBLs hold the conflict artifacts -- and the
+// metadata describing the operation, and one UpdateWorkingSet publishes them
+// together, so the two can never disagree after a crash.
+//
+// Working set slots:
+//
+//	intoBranch              the working set's own branch
+//	resolvedAM              working root (and staged, so the tree reads clean)
+//	premergeAM              MergeState.PreMergeWorkingRoot
+//	fromHash / pickHash /
+//	  rebaseBranchHash      MergeState.Commit, the content being applied
+//	fromBranch / ontoBranch MergeState.CommitSpecStr
+//	intoHash                MergeState.PreMergeHeadCommit; during a rebase that
+//	                        slot holds rebaseBranchHash and intoHash is the
+//	                        branch HEAD the replay has advanced to
+//	rebaseOntoHash          RebaseState.OntoCommit
+//	rebaseCommitsReplayed   RebaseState.LastAttemptedStep
+//	conflicts               ArtifactMaps inside the conflicting DTBLs
+//	viewConflicts,
+//	  metaConflicts         MergeState.TablesWithSchemaConflicts -- namespace
+//	                        entries no document-level merge can settle
+//
+// A rebase puts its PRE-REBASE TIP in MergeState.Commit rather than the pick it
+// paused on, because that slot and MergeState.PreMergeWorkingRoot are the only
+// two a working set exposes to the chunk walker (see SerialMessage.WalkAddrs).
+// The replay moves the branch HEAD off the original commits, so pinning the tip
+// is what keeps the whole run -- the paused pick and every pick still queued
+// behind it -- reachable through a GC. The pick it paused on is not stored: the
+// plan is recomputed with findCommitsToReplay over the same two commits it was
+// computed from at the start, and RebaseState.LastAttemptedStep says how far
+// into that plan the replay got.
+//
+// The rest is derived when the state is read back: originalMsg from the picked
+// commit, and a revert's fromHash from that commit's first parent.
 
-// mergeStateDisk is the JSON-serializable form of mergeInProgress.
-// Only operation metadata is stored; conflict entries are reconstructed
-// from the ArtifactMap stored in the DTBL for each conflicting collection.
-type mergeStateDisk struct {
-	Operation  string `json:"op"` // "merge", "cherry-pick", "rebase"
-	IntoBranch string `json:"into"`
-	FromBranch string `json:"from,omitempty"` // merge only
-	OntoBranch string `json:"onto,omitempty"` // rebase only
-	FromHash   string `json:"fromHash,omitempty"`
-	IntoHash   string `json:"intoHash"`
-	PremergeAM string `json:"premergeAM"` // hash of the premerge AddressMap RTVL
-
-	// Cherry-pick specific.
-	PickHash    string `json:"pickHash,omitempty"`
-	OriginalMsg string `json:"originalMsg,omitempty"`
-
-	// Rebase specific.
-	RebaseBranchHash      string   `json:"rebaseBranchHash,omitempty"`
-	RebaseRemainingHashes []string `json:"rebaseRemaining,omitempty"`
-	RebaseCurrentPick     string   `json:"rebaseCurrentPick,omitempty"`
-	RebaseCommitsReplayed int      `json:"rebaseReplayed,omitempty"`
-
-	// Collections that have conflict artifacts in the working set.
-	ConflictCollections []string `json:"conflictCols"`
-
-	ViewConflicts []viewConflictDisk `json:"viewConflicts,omitempty"`
-
-	MetaConflicts []metaConflictDisk `json:"metaConflicts,omitempty"`
-}
-
-type metaConflictDisk struct {
-	Coll          string `json:"coll"`
-	ID            string `json:"id"`
-	OurDiff       string `json:"ourDiff"`
-	TheirDiff     string `json:"theirDiff"`
-	ReasonCode    string `json:"reasonCode,omitempty"`
-	ReasonMessage string `json:"reasonMessage,omitempty"`
-	Resolved      bool   `json:"resolved"`
-	BaseHex       string `json:"base,omitempty"`
-	OursHex       string `json:"ours,omitempty"`
-	TheirsHex     string `json:"theirs,omitempty"`
-}
-
-type viewConflictDisk struct {
-	Name      string `json:"name"`
-	ID        string `json:"id"`
-	OurDiff   string `json:"ourDiff"`
-	TheirDiff string `json:"theirDiff"`
-	Resolved  bool   `json:"resolved"`
-	BaseHex   string `json:"base,omitempty"`
-	OursHex   string `json:"ours,omitempty"`
-	TheirsHex string `json:"theirs,omitempty"`
-}
-
-func (state *dbState) mergeStateFilePath() string {
-	return filepath.Join(state.dbDir, mergeStateFileName)
-}
-
-// saveMergeState writes the merge state to disk. It also updates the working set
-// to reflect the partial merged AM (so dolt_conflicts SQL tables are readable).
-// The caller must hold state.mu (write lock).
-func saveMergeState(ctx context.Context, state *dbState, ms *mergeInProgress) error {
-	var op string
+// sourceHash is the commit stored as the merge state's "from" commit: the
+// commit whose content the operation is applying. For a rebase that is the
+// pre-rebase tip, which keeps the whole run of picks reachable.
+func (m *mergeInProgress) sourceHash() hash.Hash {
 	switch {
-	case ms.isRebase:
-		op = "rebase"
-	case ms.isCherryPick:
-		op = "cherry-pick"
-	case ms.isRevert:
-		op = "revert"
+	case m.isRebase:
+		return m.rebaseBranchHash
+	case m.isCherryPick, m.isRevert:
+		return m.pickHash
 	default:
-		op = "merge"
+		return m.fromHash
 	}
-
-	// Collect names of collections with unresolved conflicts.
-	var conflictCols []string
-	for name := range ms.conflicts {
-		conflictCols = append(conflictCols, name)
-	}
-
-	// Write the premerge AM to the value store so we can reload it on restart.
-	preMergeRtvl := buildRootValueFlatbuffer(ms.premergeAM)
-	preMergeRef, err := state.vs.WriteValue(ctx, dolttypes.SerialMessage(preMergeRtvl))
-	if err != nil {
-		return fmt.Errorf("writing premerge AM RTVL: %w", err)
-	}
-
-	disk := mergeStateDisk{
-		Operation:             op,
-		IntoBranch:            ms.intoBranch,
-		FromBranch:            ms.fromBranch,
-		OntoBranch:            ms.ontoBranch,
-		FromHash:              ms.fromHash.String(),
-		IntoHash:              ms.intoHash.String(),
-		PremergeAM:            preMergeRef.TargetHash().String(),
-		PickHash:              ms.pickHash.String(),
-		OriginalMsg:           ms.originalMsg,
-		RebaseCommitsReplayed: ms.rebaseCommitsReplayed,
-		ConflictCollections:   conflictCols,
-	}
-
-	for _, v := range ms.viewConflicts {
-		vd := viewConflictDisk{Name: v.name, ID: v.id, OurDiff: v.ourDiff, TheirDiff: v.theirDiff, Resolved: v.resolved}
-		if v.base != nil {
-			if vd.BaseHex, err = viewMetaToBSONHex(v.base); err != nil {
-				return fmt.Errorf("encoding base view conflict %q: %w", v.name, err)
-			}
-		}
-		if v.ours != nil {
-			if vd.OursHex, err = viewMetaToBSONHex(v.ours); err != nil {
-				return fmt.Errorf("encoding ours view conflict %q: %w", v.name, err)
-			}
-		}
-		if v.theirs != nil {
-			if vd.TheirsHex, err = viewMetaToBSONHex(v.theirs); err != nil {
-				return fmt.Errorf("encoding theirs view conflict %q: %w", v.name, err)
-			}
-		}
-		disk.ViewConflicts = append(disk.ViewConflicts, vd)
-	}
-
-	for _, mc := range ms.metaConflicts {
-		md := metaConflictDisk{Coll: mc.coll, ID: mc.id, OurDiff: mc.ourDiff, TheirDiff: mc.theirDiff, ReasonCode: mc.reasonCode, ReasonMessage: mc.reasonMessage, Resolved: mc.resolved}
-		if mc.base != nil {
-			if md.BaseHex, err = collMetaToBSONHex(mc.coll, mc.base); err != nil {
-				return fmt.Errorf("encoding base metadata conflict %q: %w", mc.coll, err)
-			}
-		}
-		if mc.ours != nil {
-			if md.OursHex, err = collMetaToBSONHex(mc.coll, mc.ours); err != nil {
-				return fmt.Errorf("encoding ours metadata conflict %q: %w", mc.coll, err)
-			}
-		}
-		if mc.theirs != nil {
-			if md.TheirsHex, err = collMetaToBSONHex(mc.coll, mc.theirs); err != nil {
-				return fmt.Errorf("encoding theirs metadata conflict %q: %w", mc.coll, err)
-			}
-		}
-		disk.MetaConflicts = append(disk.MetaConflicts, md)
-	}
-
-	if ms.isRebase {
-		disk.RebaseBranchHash = ms.rebaseBranchHash.String()
-		disk.RebaseCurrentPick = ms.rebaseCurrentPick.String()
-		for _, h := range ms.rebaseRemainingHashes {
-			disk.RebaseRemainingHashes = append(disk.RebaseRemainingHashes, h.String())
-		}
-	}
-
-	data, err := json.MarshalIndent(disk, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshaling merge state: %w", err)
-	}
-
-	if err := os.WriteFile(state.mergeStateFilePath(), data, 0o644); err != nil {
-		return fmt.Errorf("writing merge state file: %w", err)
-	}
-	return nil
 }
 
-// clearMergeState removes the merge state file from disk.
-// The caller must hold state.mu (write lock).
-func clearMergeState(state *dbState) error {
-	path := state.mergeStateFilePath()
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("removing merge state file: %w", err)
+// preOpHeadHash is the branch HEAD as it stood before the operation started.
+func (m *mergeInProgress) preOpHeadHash() hash.Hash {
+	if m.isRebase {
+		return m.rebaseBranchHash
 	}
-	return nil
+	return m.intoHash
 }
 
-// loadMergeState loads a previously persisted merge state from disk, reconstructing
-// the mergeInProgress struct by reading conflict entries from the ArtifactMaps
-// stored in the working set's DTBLs. Returns (nil, nil) if no state file exists.
-// The caller must NOT hold state.mu (it is called from getOrOpenDB before the lock).
-func loadMergeState(ctx context.Context, state *dbState) (*mergeInProgress, error) {
-	path := state.mergeStateFilePath()
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
+// sourceSpec is the refspec the operation names its source by.
+func (m *mergeInProgress) sourceSpec() string {
+	if m.isRebase {
+		return m.ontoBranch
+	}
+	return m.fromBranch
+}
+
+// sideDescriptions renders the "ours" and "theirs" labels used in conflict
+// reason messages. It reproduces the labels the operation passed to
+// mergeAddressMapsWithConflicts, so reason text is stable across a restart.
+func (m *mergeInProgress) sideDescriptions(ctx context.Context, state *dbState) (ours, theirs string) {
+	switch {
+	case m.isRebase:
+		return fmt.Sprintf("commit '%s' (ours)", m.rebaseCurrentPick.String()),
+			fmt.Sprintf("branch '%s' (theirs)", m.ontoBranch)
+	case m.isCherryPick, m.isRevert:
+		return fmt.Sprintf("branch '%s' (ours)", m.intoBranch),
+			fmt.Sprintf("commit '%s' (theirs)", m.pickHash.String())
+	default:
+		return fmt.Sprintf("branch '%s' (ours)", m.intoBranch),
+			fmt.Sprintf("%s (theirs)", refLabel(ctx, state, m.fromBranch))
+	}
+}
+
+// unsettledNamespaceEntries lists the collections and views whose conflict is
+// at the namespace level rather than the document level, and which the user has
+// not resolved yet.
+func unsettledNamespaceEntries(ms *mergeInProgress) []string {
+	names := make([]string, 0, len(ms.viewConflicts)+len(ms.metaConflicts))
+	for name, vce := range ms.viewConflicts {
+		if !vce.resolved {
+			names = append(names, name)
+		}
+	}
+	for name, mce := range ms.metaConflicts {
+		if !mce.resolved {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+func commitForHash(ctx context.Context, state *dbState, h hash.Hash) (*doltdb.Commit, error) {
+	if h.IsEmpty() {
 		return nil, nil
 	}
+	optional, err := state.doltDB.ReadCommit(ctx, h)
 	if err != nil {
-		return nil, fmt.Errorf("reading merge state file: %w", err)
+		return nil, fmt.Errorf("reading commit %q: %w", h.String(), err)
+	}
+	commit, ok := optional.ToCommit()
+	if !ok {
+		return nil, fmt.Errorf("commit %q is not present", h.String())
+	}
+	return commit, nil
+}
+
+// withOperationState stamps ms onto ws. The Start* helpers snapshot the working
+// root as the pre-operation root, so ws must arrive holding premergeRV.
+func withOperationState(ctx context.Context, state *dbState, ws *doltdb.WorkingSet, ms *mergeInProgress, premergeRV doltdb.RootValue) (*doltdb.WorkingSet, error) {
+	head, err := commitForHash(ctx, state, ms.preOpHeadHash())
+	if err != nil {
+		return nil, err
+	}
+	source, err := commitForHash(ctx, state, ms.sourceHash())
+	if err != nil {
+		return nil, err
+	}
+	if source == nil {
+		return nil, fmt.Errorf("operation on branch %q has no source commit", ms.intoBranch)
 	}
 
-	var disk mergeStateDisk
-	if err := json.Unmarshal(data, &disk); err != nil {
-		return nil, fmt.Errorf("parsing merge state file: %w", err)
+	switch {
+	case ms.isCherryPick:
+		ws = ws.StartCherryPick(head, source, ms.sourceSpec())
+	case ms.isRevert:
+		ws = ws.StartRevert(head, source, ms.sourceSpec(), nil)
+	default:
+		ws = ws.StartMerge(head, source, ms.sourceSpec())
+	}
+	ws = ws.WithUnmergableTables(doltdb.ToTableNames(unsettledNamespaceEntries(ms), doltdb.DefaultSchemaName))
+
+	if !ms.isRebase {
+		return ws.ClearRebase(), nil
 	}
 
-	// Read the current working set AM (the resolved AM from before the crash).
-	resolvedAM, err := readAMFromWorkingSet(ctx, state.datasDB, state.cs, state.ns)
+	onto, err := commitForHash(ctx, state, ms.rebaseOntoHash)
 	if err != nil {
-		return nil, fmt.Errorf("reading working set AM: %w", err)
+		return nil, err
+	}
+	if onto == nil {
+		return nil, fmt.Errorf("rebase on branch %q has no onto commit", ms.intoBranch)
+	}
+	ws, err = ws.StartRebase(sql.NewContext(ctx), onto, ms.intoBranch, premergeRV,
+		doltdb.ErrorOnEmptyCommit, doltdb.ErrorOnEmptyCommit, false)
+	if err != nil {
+		return nil, fmt.Errorf("recording rebase state for %q: %w", ms.intoBranch, err)
+	}
+	return ws.WithRebaseState(
+		ws.RebaseState().WithRebasingStarted(true).WithLastAttemptedStep(float32(ms.rebaseCommitsReplayed)),
+	), nil
+}
+
+// persistConflictState publishes the paused operation: the partially merged
+// root (carrying the conflict artifacts in its DTBLs) and the operation
+// metadata go out in a single working set update. The caller must hold
+// state.mu (write lock).
+func persistConflictState(ctx context.Context, state *dbState, ms *mergeInProgress) error {
+	premergeRV, err := amToRootValue(ctx, state, ms.premergeAM)
+	if err != nil {
+		return fmt.Errorf("building pre-operation root value: %w", err)
+	}
+	conflictRV, err := amToRootValue(ctx, state, ms.resolvedAM)
+	if err != nil {
+		return fmt.Errorf("building conflict root value: %w", err)
 	}
 
-	// Reconstruct the premerge AM from its stored RTVL hash.
-	preMergeAM, err := loadAMFromRTVLHash(ctx, state, disk.PremergeAM)
+	var newWS *doltdb.WorkingSet
+	if err := state.updateBranchWS(ctx, ms.intoBranch, func(cur *doltdb.WorkingSet) (*doltdb.WorkingSet, error) {
+		seeded := cur.WithWorkingRoot(premergeRV).WithStagedRoot(premergeRV)
+		stamped, stampErr := withOperationState(ctx, state, seeded, ms, premergeRV)
+		if stampErr != nil {
+			return nil, stampErr
+		}
+		// Working and staged both carry the conflicted root so `dolt checkout`
+		// sees no uncommitted diff; the artifacts ride inside its DTBLs.
+		newWS = stamped.WithWorkingRoot(conflictRV).WithStagedRoot(conflictRV)
+		return newWS, nil
+	}); err != nil {
+		return fmt.Errorf("persisting merge state for %q: %w", ms.intoBranch, err)
+	}
+	state.pushWSToSession(ctx, ms.intoBranch, newWS)
+	return nil
+}
+
+// settleMergeState points branch's working set at finalAM and drops the
+// operation metadata in one update, so a completed operation cannot leave a
+// conflicted root or stale metadata behind. The caller must hold state.mu.
+func settleMergeState(ctx context.Context, state *dbState, branch string, finalAM prolly.AddressMap) error {
+	finalRV, err := amToRootValue(ctx, state, finalAM)
 	if err != nil {
-		return nil, fmt.Errorf("loading premerge AM: %w", err)
+		return fmt.Errorf("building settled root value: %w", err)
+	}
+	var newWS *doltdb.WorkingSet
+	if err := state.updateBranchWS(ctx, branch, func(cur *doltdb.WorkingSet) (*doltdb.WorkingSet, error) {
+		newWS = cur.WithWorkingRoot(finalRV).WithStagedRoot(finalRV).ClearMerge().ClearRebase()
+		return newWS, nil
+	}); err != nil {
+		return fmt.Errorf("clearing merge state for %q: %w", branch, err)
+	}
+	state.pushWSToSession(ctx, branch, newWS)
+	return nil
+}
+
+// clearMergeState drops any operation metadata from branch's working set,
+// leaving its roots alone. The caller must hold state.mu.
+func clearMergeState(ctx context.Context, state *dbState, branch string) error {
+	var newWS *doltdb.WorkingSet
+	if err := state.updateBranchWS(ctx, branch, func(cur *doltdb.WorkingSet) (*doltdb.WorkingSet, error) {
+		newWS = cur.ClearMerge().ClearRebase()
+		return newWS, nil
+	}); err != nil {
+		return fmt.Errorf("clearing merge state for %q: %w", branch, err)
+	}
+	state.pushWSToSession(ctx, branch, newWS)
+	return nil
+}
+
+// abortMergeState restores the pre-operation root and drops the operation
+// metadata in one update. The caller must hold state.mu.
+func abortMergeState(ctx context.Context, state *dbState, ms *mergeInProgress) error {
+	return settleMergeState(ctx, state, ms.intoBranch, ms.premergeAM)
+}
+
+// loadMergeState rebuilds the operation paused on any branch of state, or
+// returns (nil, nil) when no branch has one. Called from getOrOpenDB before
+// state.mu is taken.
+func loadMergeState(ctx context.Context, state *dbState) (*mergeInProgress, error) {
+	dsMap, err := state.datasDB.Datasets(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("listing datasets: %w", err)
+	}
+
+	var branches []string
+	if iterErr := dsMap.IterAll(ctx, func(id string, _ hash.Hash) error {
+		if strings.HasPrefix(id, branchRefPrefix) {
+			branches = append(branches, strings.TrimPrefix(id, branchRefPrefix))
+		}
+		return nil
+	}); iterErr != nil {
+		return nil, fmt.Errorf("iterating datasets: %w", iterErr)
+	}
+	sort.Strings(branches)
+
+	for _, branch := range branches {
+		// Resolved straight from disk rather than through loadBranchWS: opening
+		// a database must leave the branch working set cache cold, so paths
+		// that advance a working set out of band (clone, fetch) are not read
+		// back through a snapshot taken here.
+		ws, wsErr := state.doltDB.ResolveWorkingSet(ctx, doltref.NewWorkingSetRef("heads/"+branch))
+		if wsErr != nil || ws == nil || !ws.MergeActive() {
+			continue
+		}
+		ms, msErr := mergeStateFromWS(ctx, state, branch, ws)
+		if msErr != nil {
+			return nil, fmt.Errorf("restoring operation on branch %q: %w", branch, msErr)
+		}
+		return ms, nil
+	}
+	return nil, nil
+}
+
+func mergeStateFromWS(ctx context.Context, state *dbState, branch string, ws *doltdb.WorkingSet) (*mergeInProgress, error) {
+	stored := ws.MergeState()
+
+	premergeAM, err := amFromWorkingRoot(ctx, stored.PreMergeWorkingRoot(), state.ns)
+	if err != nil {
+		return nil, fmt.Errorf("reading pre-operation AM: %w", err)
+	}
+	resolvedAM, err := amFromWorkingRoot(ctx, ws.WorkingRoot(), state.ns)
+	if err != nil {
+		return nil, fmt.Errorf("reading working AM: %w", err)
+	}
+	sourceHash, err := stored.Commit().HashOf()
+	if err != nil {
+		return nil, fmt.Errorf("hashing source commit: %w", err)
+	}
+	var preOpHead hash.Hash
+	if head := stored.PreMergeHeadCommit(); head != nil {
+		if preOpHead, err = head.HashOf(); err != nil {
+			return nil, fmt.Errorf("hashing pre-operation head commit: %w", err)
+		}
 	}
 
 	ms := &mergeInProgress{
-		intoBranch:            disk.IntoBranch,
-		fromBranch:            disk.FromBranch,
-		ontoBranch:            disk.OntoBranch,
-		premergeAM:            preMergeAM,
-		resolvedAM:            resolvedAM,
-		isCherryPick:          disk.Operation == "cherry-pick",
-		isRebase:              disk.Operation == "rebase",
-		isRevert:              disk.Operation == "revert",
-		originalMsg:           disk.OriginalMsg,
-		rebaseCommitsReplayed: disk.RebaseCommitsReplayed,
+		intoBranch:   branch,
+		premergeAM:   premergeAM,
+		resolvedAM:   resolvedAM,
+		intoHash:     preOpHead,
+		isCherryPick: stored.IsCherryPick(),
+		isRevert:     stored.IsRevert(),
+		isRebase:     ws.RebaseActive(),
 	}
 
-	if h, ok := hash.MaybeParse(disk.FromHash); ok {
-		ms.fromHash = h
-	}
-	if h, ok := hash.MaybeParse(disk.IntoHash); ok {
-		ms.intoHash = h
-	}
-	if h, ok := hash.MaybeParse(disk.PickHash); ok {
-		ms.pickHash = h
-	}
-	if ms.isRebase {
-		if h, ok := hash.MaybeParse(disk.RebaseBranchHash); ok {
-			ms.rebaseBranchHash = h
+	switch {
+	case ms.isRebase:
+		ms.ontoBranch = stored.CommitSpecStr()
+		ms.rebaseBranchHash = sourceHash
+		ms.rebaseCommitsReplayed = int(ws.RebaseState().LastAttemptedStep())
+		if ms.rebaseOntoHash, err = ws.RebaseState().OntoCommit().HashOf(); err != nil {
+			return nil, fmt.Errorf("hashing rebase onto commit: %w", err)
 		}
-		if h, ok := hash.MaybeParse(disk.RebaseCurrentPick); ok {
-			ms.rebaseCurrentPick = h
+		// The replay has moved the branch HEAD; that tip is the "into" side of
+		// the paused pick.
+		if ms.intoHash, err = branchHeadHash(ctx, state, branch); err != nil {
+			return nil, err
 		}
-		for _, hs := range disk.RebaseRemainingHashes {
-			if h, ok := hash.MaybeParse(hs); ok {
-				ms.rebaseRemainingHashes = append(ms.rebaseRemainingHashes, h)
-			}
+		if err = restoreRebasePlan(ctx, state, ms); err != nil {
+			return nil, err
 		}
-	}
-
-	// Reconstruct conflict entries from ArtifactMaps in the working set.
-	ms.conflicts = make(map[string][]*conflictEntry)
-	for _, collName := range disk.ConflictCollections {
-		entries, err := loadConflictEntriesFromArtifacts(ctx, state, resolvedAM, collName, ms)
-		if err != nil {
-			return nil, fmt.Errorf("loading conflicts for %q from artifacts: %w", collName, err)
+	case ms.isCherryPick:
+		ms.pickHash = sourceHash
+		if ms.originalMsg, err = commitDescription(ctx, state, sourceHash); err != nil {
+			return nil, err
 		}
-		if len(entries) > 0 {
-			ms.conflicts[collName] = entries
+	case ms.isRevert:
+		ms.pickHash = sourceHash
+		if ms.originalMsg, err = commitDescription(ctx, state, sourceHash); err != nil {
+			return nil, err
 		}
-	}
-
-	if len(disk.ViewConflicts) > 0 {
-		ms.viewConflicts = make(map[string]*viewConflictEntry, len(disk.ViewConflicts))
-		for _, vd := range disk.ViewConflicts {
-			vce := &viewConflictEntry{name: vd.Name, id: vd.ID, ourDiff: vd.OurDiff, theirDiff: vd.TheirDiff, resolved: vd.Resolved}
-			if vd.BaseHex != "" {
-				if vce.base, err = viewMetaFromBSONHex(vd.BaseHex); err != nil {
-					return nil, fmt.Errorf("decoding base view conflict %q: %w", vd.Name, err)
-				}
-			}
-			if vd.OursHex != "" {
-				if vce.ours, err = viewMetaFromBSONHex(vd.OursHex); err != nil {
-					return nil, fmt.Errorf("decoding ours view conflict %q: %w", vd.Name, err)
-				}
-			}
-			if vd.TheirsHex != "" {
-				if vce.theirs, err = viewMetaFromBSONHex(vd.TheirsHex); err != nil {
-					return nil, fmt.Errorf("decoding theirs view conflict %q: %w", vd.Name, err)
-				}
-			}
-			ms.viewConflicts[vd.Name] = vce
+		// "Theirs" for a revert is the state being restored: the parent of the
+		// reverted commit.
+		if ms.fromHash, err = firstParentHash(ctx, state, sourceHash); err != nil {
+			return nil, err
 		}
+	default:
+		ms.fromBranch = stored.CommitSpecStr()
+		ms.fromHash = sourceHash
 	}
 
-	if len(disk.MetaConflicts) > 0 {
-		ms.metaConflicts = make(map[string]*metaConflictEntry, len(disk.MetaConflicts))
-		for _, md := range disk.MetaConflicts {
-			mce := &metaConflictEntry{coll: md.Coll, id: md.ID, ourDiff: md.OurDiff, theirDiff: md.TheirDiff, reasonCode: md.ReasonCode, reasonMessage: md.ReasonMessage, resolved: md.Resolved}
-			if md.BaseHex != "" {
-				if mce.base, err = collMetaFromBSONHex(md.BaseHex); err != nil {
-					return nil, fmt.Errorf("decoding base metadata conflict %q: %w", md.Coll, err)
-				}
-			}
-			if md.OursHex != "" {
-				if mce.ours, err = collMetaFromBSONHex(md.OursHex); err != nil {
-					return nil, fmt.Errorf("decoding ours metadata conflict %q: %w", md.Coll, err)
-				}
-			}
-			if md.TheirsHex != "" {
-				if mce.theirs, err = collMetaFromBSONHex(md.TheirsHex); err != nil {
-					return nil, fmt.Errorf("decoding theirs metadata conflict %q: %w", md.Coll, err)
-				}
-			}
-			ms.metaConflicts[md.Coll] = mce
-		}
-	}
+	oursDesc, theirsDesc := ms.sideDescriptions(ctx, state)
 
+	ms.conflicts, err = loadDocumentConflicts(ctx, state, resolvedAM, oursDesc, theirsDesc)
+	if err != nil {
+		return nil, err
+	}
+	if err := loadNamespaceConflicts(ctx, state, ms, doltdb.FlattenTableNames(stored.TablesWithSchemaConflicts()), oursDesc, theirsDesc); err != nil {
+		return nil, err
+	}
 	return ms, nil
 }
 
-// loadAMFromRTVLHash reads a collections AddressMap from the RTVL chunk at addr.
-func loadAMFromRTVLHash(ctx context.Context, state *dbState, addrStr string) (prolly.AddressMap, error) {
-	if addrStr == "" {
-		return prolly.NewEmptyAddressMap(state.ns)
-	}
-	h, ok := hash.MaybeParse(addrStr)
-	if !ok || h.IsEmpty() {
-		return prolly.NewEmptyAddressMap(state.ns)
-	}
-
-	v, err := state.vs.ReadValue(ctx, h)
+func branchHeadHash(ctx context.Context, state *dbState, branch string) (hash.Hash, error) {
+	ds, err := state.datasDB.GetDataset(ctx, branchRefPrefix+branch)
 	if err != nil {
-		return prolly.AddressMap{}, fmt.Errorf("reading RTVL at %q: %w", addrStr, err)
+		return hash.Hash{}, fmt.Errorf("resolving branch %q: %w", branch, err)
 	}
-
-	msg, msgOK := v.(dolttypes.SerialMessage)
-	if !msgOK {
-		return prolly.AddressMap{}, fmt.Errorf("unexpected value type at %q: %T", addrStr, v)
+	h, ok := ds.MaybeHeadAddr()
+	if !ok {
+		return hash.Hash{}, fmt.Errorf("branch %q has no head address", branch)
 	}
-
-	rtvl, parseErr := serial.TryGetRootAsRootValue([]byte(msg), serial.MessagePrefixSz)
-	if parseErr != nil {
-		return prolly.AddressMap{}, fmt.Errorf("parsing RTVL at %q: %w", addrStr, parseErr)
-	}
-
-	amNode, _, nodeErr := tree.NodeFromBytes(rtvl.TablesBytes())
-	if nodeErr != nil {
-		return prolly.AddressMap{}, fmt.Errorf("parsing AM from RTVL at %q: %w", addrStr, nodeErr)
-	}
-
-	return prolly.NewAddressMap(amNode, state.ns)
+	return h, nil
 }
 
-// loadConflictEntriesFromArtifacts reads the ArtifactMap for collName from the
-// working set AM and reconstructs conflict entries. For each conflict artifact,
-// it looks up base/ours/theirs values from the stored commit hashes.
-func loadConflictEntriesFromArtifacts(ctx context.Context, state *dbState, resolvedAM prolly.AddressMap, collName string, ms *mergeInProgress) ([]*conflictEntry, error) {
-	artMap, err := openCollectionArtifacts(ctx, state, resolvedAM, collName)
+func commitDescription(ctx context.Context, state *dbState, h hash.Hash) (string, error) {
+	commit, err := datas.LoadCommitAddr(ctx, state.vs, h)
+	if err != nil {
+		return "", fmt.Errorf("loading commit %q: %w", h.String(), err)
+	}
+	meta, err := datas.GetCommitMeta(ctx, commit.NomsValue())
+	if err != nil {
+		return "", fmt.Errorf("reading meta for commit %q: %w", h.String(), err)
+	}
+	return meta.Description, nil
+}
+
+// firstParentHash returns the commit's first parent, or the zero hash for a
+// root commit.
+func firstParentHash(ctx context.Context, state *dbState, h hash.Hash) (hash.Hash, error) {
+	commit, err := datas.LoadCommitAddr(ctx, state.vs, h)
+	if err != nil {
+		return hash.Hash{}, fmt.Errorf("loading commit %q: %w", h.String(), err)
+	}
+	parents, err := dolttypes.SerialCommitParentAddrs(dolttypes.Format_DOLT, commit.NomsValue().(dolttypes.SerialMessage))
+	if err != nil {
+		return hash.Hash{}, fmt.Errorf("reading parents of commit %q: %w", h.String(), err)
+	}
+	if len(parents) == 0 {
+		return hash.Hash{}, nil
+	}
+	return parents[0], nil
+}
+
+// restoreRebasePlan recomputes the run of commits the rebase set out to replay
+// and splits it at the step the replay reached, recovering the paused pick and
+// the picks still queued behind it.
+func restoreRebasePlan(ctx context.Context, state *dbState, ms *mergeInProgress) error {
+	plan, err := findCommitsToReplay(ctx, state, ms.rebaseBranchHash, ms.rebaseOntoHash)
+	if err != nil {
+		return fmt.Errorf("recomputing the rebase plan: %w", err)
+	}
+	if ms.rebaseCommitsReplayed < 0 || ms.rebaseCommitsReplayed >= len(plan) {
+		return fmt.Errorf("rebase on %q is paused at step %d of a %d-commit plan",
+			ms.intoBranch, ms.rebaseCommitsReplayed, len(plan))
+	}
+	ms.rebaseCurrentPick = plan[ms.rebaseCommitsReplayed]
+	ms.rebaseRemainingHashes = plan[ms.rebaseCommitsReplayed+1:]
+	return nil
+}
+
+// loadDocumentConflicts rebuilds the per-collection conflict entries from the
+// ArtifactMaps embedded in the working root's DTBLs.
+func loadDocumentConflicts(ctx context.Context, state *dbState, workingAM prolly.AddressMap, oursDesc, theirsDesc string) (map[string][]*conflictEntry, error) {
+	conflicts := make(map[string][]*conflictEntry)
+	names, err := collectionsWithArtifacts(ctx, state, workingAM)
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range names {
+		entries, entryErr := loadConflictEntriesFromArtifacts(ctx, state, workingAM, name, oursDesc, theirsDesc)
+		if entryErr != nil {
+			return nil, fmt.Errorf("loading conflicts for %q from artifacts: %w", name, entryErr)
+		}
+		if len(entries) > 0 {
+			conflicts[name] = entries
+		}
+	}
+	return conflicts, nil
+}
+
+// collectionsWithArtifacts lists the collections in am whose DTBL carries a
+// non-empty ArtifactMap.
+func collectionsWithArtifacts(ctx context.Context, state *dbState, am prolly.AddressMap) ([]string, error) {
+	var names []string
+	if err := am.IterAll(ctx, func(name string, h hash.Hash) error {
+		// Catalog divergence is a metadata conflict, surfaced on the owning
+		// collection; the internal name must never reach ms.conflicts.
+		if h.IsEmpty() || name == reservedCatalogName {
+			return nil
+		}
+		chunk, err := state.cs.Get(ctx, h)
+		if err != nil {
+			return fmt.Errorf("reading chunk for %q: %w", name, err)
+		}
+		if serial.GetFileID(chunk.Data()) != serial.TableFileID {
+			return nil
+		}
+		tbl, err := serial.TryGetRootAsTable(chunk.Data(), serial.MessagePrefixSz)
+		if err != nil {
+			return fmt.Errorf("parsing DTBL for %q: %w", name, err)
+		}
+		if !hash.New(tbl.ArtifactsBytes()).IsEmpty() {
+			names = append(names, name)
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
+// loadNamespaceConflicts rebuilds the view and collection-metadata conflicts
+// named in the merge state by re-reading the three sides of the operation.
+func loadNamespaceConflicts(ctx context.Context, state *dbState, ms *mergeInProgress, names []string, oursDesc, theirsDesc string) error {
+	if len(names) == 0 {
+		return nil
+	}
+	intoAM, fromAM, baseAM, err := operationSides(ctx, state, ms)
+	if err != nil {
+		return err
+	}
+
+	for _, name := range names {
+		intoH, err := intoAM.Get(ctx, name)
+		if err != nil {
+			return fmt.Errorf("reading ours entry for %q: %w", name, err)
+		}
+		fromH, err := fromAM.Get(ctx, name)
+		if err != nil {
+			return fmt.Errorf("reading theirs entry for %q: %w", name, err)
+		}
+		baseH, err := baseAM.Get(ctx, name)
+		if err != nil {
+			return fmt.Errorf("reading base entry for %q: %w", name, err)
+		}
+
+		isView, err := anyIsViewEntry(ctx, state, intoH, fromH, baseH)
+		if err != nil {
+			return err
+		}
+		if isView {
+			vce, vErr := buildViewConflict(ctx, state, name, intoH, fromH, baseH, ms.theirHash())
+			if vErr != nil {
+				return vErr
+			}
+			if ms.viewConflicts == nil {
+				ms.viewConflicts = map[string]*viewConflictEntry{}
+			}
+			ms.viewConflicts[name] = vce
+			continue
+		}
+
+		mce, mErr := buildMetaConflict(ctx, state, name, intoAM, fromAM, baseAM, ms.theirHash(), oursDesc, theirsDesc)
+		if mErr != nil {
+			return mErr
+		}
+		if mce == nil {
+			continue
+		}
+		if ms.metaConflicts == nil {
+			ms.metaConflicts = map[string]*metaConflictEntry{}
+		}
+		ms.metaConflicts[name] = mce
+	}
+	return nil
+}
+
+// operationSides returns the three AddressMaps the operation merged, in the
+// same roles it gave them: ours, theirs, and the common base. A rebase swaps
+// the first two, presenting the replayed commit as ours.
+func operationSides(ctx context.Context, state *dbState, ms *mergeInProgress) (intoAM, fromAM, baseAM prolly.AddressMap, err error) {
+	amFor := func(h hash.Hash) (prolly.AddressMap, error) {
+		if h.IsEmpty() {
+			return prolly.NewEmptyAddressMap(state.ns)
+		}
+		return amFromCommitHash(ctx, state, h.String())
+	}
+
+	var oursHash, theirsHash, baseHash hash.Hash
+	switch {
+	case ms.isRebase:
+		oursHash = ms.rebaseCurrentPick
+		theirsHash = ms.intoHash
+		if baseHash, err = firstParentHash(ctx, state, ms.rebaseCurrentPick); err != nil {
+			return
+		}
+	case ms.isCherryPick:
+		oursHash = ms.intoHash
+		theirsHash = ms.pickHash
+		if baseHash, err = firstParentHash(ctx, state, ms.pickHash); err != nil {
+			return
+		}
+	case ms.isRevert:
+		oursHash = ms.intoHash
+		theirsHash = ms.fromHash
+		baseHash = ms.pickHash
+	default:
+		oursHash = ms.intoHash
+		theirsHash = ms.fromHash
+		oursCommit, cErr := datas.LoadCommitAddr(ctx, state.vs, oursHash)
+		if cErr != nil {
+			err = fmt.Errorf("loading ours commit: %w", cErr)
+			return
+		}
+		theirsCommit, cErr := datas.LoadCommitAddr(ctx, state.vs, theirsHash)
+		if cErr != nil {
+			err = fmt.Errorf("loading theirs commit: %w", cErr)
+			return
+		}
+		var hasBase bool
+		baseHash, hasBase, err = datas.FindCommonAncestor(ctx, oursCommit, theirsCommit, state.vs, state.vs, state.ns, state.ns)
+		if err != nil {
+			err = fmt.Errorf("finding common ancestor: %w", err)
+			return
+		}
+		if !hasBase {
+			err = fmt.Errorf("no common ancestor for the paused merge on %q", ms.intoBranch)
+			return
+		}
+	}
+
+	if intoAM, err = amFor(oursHash); err != nil {
+		return
+	}
+	if fromAM, err = amFor(theirsHash); err != nil {
+		return
+	}
+	baseAM, err = amFor(baseHash)
+	return
+}
+
+func anyIsViewEntry(ctx context.Context, state *dbState, hashes ...hash.Hash) (bool, error) {
+	for _, h := range hashes {
+		isView, err := isViewEntry(ctx, state.cs, h)
+		if err != nil {
+			return false, err
+		}
+		if isView {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// buildMetaConflict reconstructs the collection-metadata conflict for coll from
+// the catalog document each side holds.
+func buildMetaConflict(ctx context.Context, state *dbState, coll string, intoAM, fromAM, baseAM prolly.AddressMap, theirHash hash.Hash, oursDesc, theirsDesc string) (*metaConflictEntry, error) {
+	key, err := catalogKey(coll)
+	if err != nil {
+		return nil, err
+	}
+
+	sideValue := func(am prolly.AddressMap) (val.Tuple, error) {
+		catMap, mapErr := catalogMapFromAM(ctx, state, am)
+		if mapErr != nil {
+			return nil, mapErr
+		}
+		var found val.Tuple
+		if getErr := catMap.Get(ctx, key, func(_, v val.Tuple) error {
+			found = v
+			return nil
+		}); getErr != nil {
+			return nil, getErr
+		}
+		return found, nil
+	}
+
+	baseVal, err := sideValue(baseAM)
+	if err != nil {
+		return nil, fmt.Errorf("reading base metadata for %q: %w", coll, err)
+	}
+	oursVal, err := sideValue(intoAM)
+	if err != nil {
+		return nil, fmt.Errorf("reading ours metadata for %q: %w", coll, err)
+	}
+	theirsVal, err := sideValue(fromAM)
+	if err != nil {
+		return nil, fmt.Errorf("reading theirs metadata for %q: %w", coll, err)
+	}
+
+	entry := &conflictEntry{
+		id:            conflictID(reservedCatalogName, key, theirHash),
+		rawKey:        key,
+		baseRawVal:    baseVal,
+		oursRawVal:    oursVal,
+		theirsRawVal:  theirsVal,
+		ourDiffType:   computeDiffType(baseVal, oursVal),
+		theirDiffType: computeDiffType(baseVal, theirsVal),
+	}
+	conflicts, err := metaConflictsFromCatalog(ctx, state, []*conflictEntry{entry}, oursDesc, theirsDesc)
+	if err != nil {
+		return nil, fmt.Errorf("rebuilding metadata conflict for %q: %w", coll, err)
+	}
+	return conflicts[coll], nil
+}
+
+// loadConflictEntriesFromArtifacts reads collName's ArtifactMap from am and
+// rebuilds its conflict entries, looking base and theirs values up in the
+// commits the artifacts name.
+func loadConflictEntriesFromArtifacts(ctx context.Context, state *dbState, am prolly.AddressMap, collName, oursDesc, theirsDesc string) ([]*conflictEntry, error) {
+	artMap, err := openCollectionArtifacts(ctx, state, am, collName)
 	if err != nil {
 		return nil, fmt.Errorf("opening artifacts for %q: %w", collName, err)
 	}
@@ -377,8 +694,7 @@ func loadConflictEntriesFromArtifacts(ctx context.Context, state *dbState, resol
 		return nil, nil
 	}
 
-	// Load the collection map from the resolved AM for "ours" values.
-	oursMap, err := collectionMapFromAM(ctx, state, resolvedAM, collName)
+	oursMap, err := collectionMapFromAM(ctx, state, am, collName)
 	if err != nil {
 		return nil, fmt.Errorf("opening ours collection map for %q: %w", collName, err)
 	}
@@ -402,58 +718,78 @@ func loadConflictEntriesFromArtifacts(ctx context.Context, state *dbState, resol
 		baseH := ca.Metadata.BaseRootIsh
 		rawKey := val.Tuple(ca.Key)
 
-		// Ours: look up in the current working AM for this collection.
 		var oursVal val.Tuple
 		_ = oursMap.Get(ctx, rawKey, func(k, v val.Tuple) error {
 			oursVal = v
 			return nil
 		})
 
-		// Theirs: navigate to theirH commit -> collection map -> look up key.
-		var theirsVal val.Tuple
-		if !theirH.IsEmpty() {
-			theirAM, amErr := amFromCommitHash(ctx, state, theirH.String())
-			if amErr == nil {
-				theirCollMap, cmErr := collectionMapFromAM(ctx, state, theirAM, collName)
-				if cmErr == nil {
-					_ = theirCollMap.Get(ctx, rawKey, func(k, v val.Tuple) error {
-						theirsVal = v
-						return nil
-					})
-				}
-			}
+		theirsVal, err := valueAtCommit(ctx, state, theirH, collName, rawKey)
+		if err != nil {
+			return nil, err
+		}
+		baseVal, err := valueAtCommit(ctx, state, baseH, collName, rawKey)
+		if err != nil {
+			return nil, err
 		}
 
-		// Base: navigate to baseH commit -> collection map -> look up key.
-		var baseVal val.Tuple
-		if !baseH.IsEmpty() {
-			baseAM, amErr := amFromCommitHash(ctx, state, baseH.String())
-			if amErr == nil {
-				baseCollMap, cmErr := collectionMapFromAM(ctx, state, baseAM, collName)
-				if cmErr == nil {
-					_ = baseCollMap.Get(ctx, rawKey, func(k, v val.Tuple) error {
-						baseVal = v
-						return nil
-					})
-				}
-			}
-		}
-
-		ourDiffType := computeDiffType(baseVal, oursVal)
-		theirDiffType := computeDiffType(baseVal, theirsVal)
-
-		entries = append(entries, &conflictEntry{
+		entry := &conflictEntry{
 			id:            conflictID(collName, rawKey, theirH),
+			typ:           "documentEdit",
 			rawKey:        rawKey,
 			baseRawVal:    baseVal,
 			oursRawVal:    oursVal,
 			theirsRawVal:  theirsVal,
-			ourDiffType:   ourDiffType,
-			theirDiffType: theirDiffType,
-		})
+			ourDiffType:   computeDiffType(baseVal, oursVal),
+			theirDiffType: computeDiffType(baseVal, theirsVal),
+		}
+		entry.reasonCode = documentEditReasonCode(entry.ourDiffType, entry.theirDiffType)
+		entry.reasonMessage = documentEditReasonMessage(entry.reasonCode, conflictDocID(ctx, state, entry), oursDesc, theirsDesc)
+		entries = append(entries, entry)
 	}
 
 	return entries, nil
+}
+
+// valueAtCommit reads the value stored under rawKey in collName as of commit h.
+// A missing commit, collection, or key reads as absent: the side deleted the
+// document, or never had it.
+func valueAtCommit(ctx context.Context, state *dbState, h hash.Hash, collName string, rawKey val.Tuple) (val.Tuple, error) {
+	if h.IsEmpty() {
+		return nil, nil
+	}
+	am, err := amFromCommitHash(ctx, state, h.String())
+	if err != nil {
+		return nil, nil
+	}
+	collMap, err := collectionMapFromAM(ctx, state, am, collName)
+	if err != nil {
+		return nil, nil
+	}
+	var found val.Tuple
+	_ = collMap.Get(ctx, rawKey, func(_, v val.Tuple) error {
+		found = v
+		return nil
+	})
+	return found, nil
+}
+
+// conflictDocID decodes the document _id for a conflict's reason message,
+// falling back to nil when no side holds a readable document.
+func conflictDocID(ctx context.Context, state *dbState, entry *conflictEntry) any {
+	for _, v := range []val.Tuple{entry.oursRawVal, entry.theirsRawVal, entry.baseRawVal} {
+		if v == nil {
+			continue
+		}
+		doc, err := readDocFromValue(ctx, state.ns, v)
+		if err != nil {
+			continue
+		}
+		if id, idErr := doc.Get("_id"); idErr == nil {
+			return id
+		}
+	}
+	return nil
 }
 
 // computeDiffType returns the diff type string based on base and current values.
@@ -466,21 +802,6 @@ func computeDiffType(base, current val.Tuple) string {
 	default:
 		return "modified"
 	}
-}
-
-// persistConflictState writes the working set to reflect the partial merged AM
-// (with ArtifactMaps in conflicting collection DTBLs) and saves the merge state
-// JSON file. The caller must hold state.mu (write lock).
-func persistConflictState(ctx context.Context, state *dbState, ms *mergeInProgress) error {
-	// Persist the conflict state as the branch working set with working == staged
-	// so `dolt checkout <branch>` sees no uncommitted diff. The conflict artifacts
-	// are embedded in the resolvedAM DTBL chunks visible to `dolt sql dolt_conflicts_*`.
-	if wsErr := state.persistAM(ctx, ms.intoBranch, ms.resolvedAM); wsErr != nil {
-		return fmt.Errorf("updating working set: %w", wsErr)
-	}
-
-	// Save merge state to disk.
-	return saveMergeState(ctx, state, ms)
 }
 
 // clearConflictArtifacts rebuilds all conflicting collection DTBLs without artifacts

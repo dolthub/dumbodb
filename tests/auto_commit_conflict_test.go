@@ -74,6 +74,188 @@ func TestAutoCommit_ConflictWindow_Merge(t *testing.T) {
 	assert.Equal(t, resumed+1, acCommitCount(t, main), "auto-commit must resume after --continue")
 }
 
+// conflictWindowDB builds a database whose main and feature branches edit _id:1
+// differently, starts the merge that conflicts on it, and inserts _id:99 while
+// the merge is paused. It returns the main-branch handle.
+func conflictWindowDB(t *testing.T, env *dumboDBTestEnv, prefix string) *mongo.Database {
+	t.Helper()
+	ctx := context.Background()
+	dbName := fmt.Sprintf("%s_%d", prefix, rand.Int64N(1_000_000))
+
+	main := env.Client.Database(dbName + "@main")
+	feat := env.Client.Database(dbName + "@feature")
+
+	_, err := main.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}, {Key: "v", Value: "base"}})
+	require.NoError(t, err)
+	require.NoError(t, main.RunCommand(ctx, bson.D{{Key: "doltBranch", Value: int32(1)}, {Key: "action", Value: "add"}, {Key: "branch", Value: "feature"}}).Err())
+
+	_, err = feat.Collection("items").UpdateOne(ctx, bson.D{{Key: "_id", Value: int32(1)}}, bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: "feat"}}}})
+	require.NoError(t, err)
+	_, err = main.Collection("items").UpdateOne(ctx, bson.D{{Key: "_id", Value: int32(1)}}, bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: "main"}}}})
+	require.NoError(t, err)
+
+	raw := runCommandRaw(t, main, bson.D{{Key: "doltMerge", Value: int32(1)}, {Key: "mergeIn", Value: "feature"}})
+	require.EqualValues(t, 0, raw["ok"], "merge must conflict on _id:1")
+
+	_, err = main.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(99)}, {Key: "v", Value: "during"}})
+	require.NoError(t, err)
+
+	return main
+}
+
+// Unlike "ours", the resolutions that rewrite the conflicted document have to
+// merge their edit into the branch's live root rather than stamp the root
+// staged when the merge paused back over it. Both must leave the unrelated
+// write made during the conflict window alone.
+func TestAutoCommit_ConflictWindow_RewritingResolutions(t *testing.T) {
+	cases := []struct {
+		resolution string
+		wantV      string
+	}{
+		{resolution: "theirs", wantV: "feat"},
+		{resolution: "custom", wantV: "resolved"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.resolution, func(t *testing.T) {
+			env := startDumboDB(t, "--auto-commit")
+			ctx := context.Background()
+			main := conflictWindowDB(t, env, "acmr"+tc.resolution)
+
+			cid := soleConflictID(t, main)
+			cmd := bson.D{
+				{Key: "doltResolveConflict", Value: int32(1)},
+				{Key: "collection", Value: "items"},
+				{Key: "conflictId", Value: cid},
+				{Key: "resolution", Value: tc.resolution},
+			}
+			if tc.resolution == "custom" {
+				cmd = append(cmd, bson.E{Key: "value", Value: bson.D{
+					{Key: "_id", Value: int32(1)},
+					{Key: "v", Value: tc.wantV},
+				}})
+			}
+			var resolveRaw bson.M
+			require.NoError(t, main.RunCommand(ctx, cmd).Decode(&resolveRaw))
+			require.EqualValues(t, 1, resolveRaw["ok"])
+
+			assert.True(t, docExists(t, main.Collection("items"), 99),
+				"edit during conflict must survive the resolution itself")
+
+			mergeContinue(t, main)
+			assert.True(t, docExists(t, main.Collection("items"), 99),
+				"edit during conflict must survive --continue")
+
+			var doc bson.M
+			require.NoError(t, main.Collection("items").FindOne(ctx, bson.D{{Key: "_id", Value: int32(1)}}).Decode(&doc))
+			assert.Equal(t, tc.wantV, doc["v"], "the resolution must still have been applied")
+		})
+	}
+}
+
+// A view or collection-metadata conflict is resolved through the same working
+// set as a document conflict, so those two paths must leave a write made during
+// the conflict window alone as well.
+func TestAutoCommit_ConflictWindow_NamespaceResolutions(t *testing.T) {
+	cases := []struct {
+		name string
+		// diverge makes main and feature disagree about something that
+		// conflicts at the namespace level rather than the document level.
+		diverge func(t *testing.T, main, feat *mongo.Database)
+		// entry is the name doltConflicts reports the conflict against.
+		entry string
+	}{
+		{
+			name:  "view",
+			entry: "v1",
+			diverge: func(t *testing.T, main, feat *mongo.Database) {
+				createView := func(db *mongo.Database, match string) {
+					require.NoError(t, db.RunCommand(context.Background(), bson.D{
+						{Key: "create", Value: "v1"},
+						{Key: "viewOn", Value: "items"},
+						{Key: "pipeline", Value: bson.A{
+							bson.D{{Key: "$match", Value: bson.D{{Key: "v", Value: match}}}},
+						}},
+					}).Err())
+				}
+				createView(main, "main")
+				createView(feat, "feat")
+			},
+		},
+		{
+			name:  "metadata",
+			entry: "orders",
+			diverge: func(t *testing.T, main, feat *mongo.Database) {
+				ctx := context.Background()
+				require.NoError(t, main.RunCommand(ctx, bson.D{
+					{Key: "collMod", Value: "orders"},
+					{Key: "validationLevel", Value: "strict"},
+				}).Err())
+				require.NoError(t, feat.RunCommand(ctx, bson.D{
+					{Key: "collMod", Value: "orders"},
+					{Key: "validationLevel", Value: "moderate"},
+				}).Err())
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env := startDumboDB(t, "--auto-commit")
+			ctx := context.Background()
+			dbName := fmt.Sprintf("acmn%s_%d", tc.name, rand.Int64N(1_000_000))
+
+			main := env.Client.Database(dbName + "@main")
+			_, err := main.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}, {Key: "v", Value: "base"}})
+			require.NoError(t, err)
+			require.NoError(t, main.RunCommand(ctx, bson.D{{Key: "create", Value: "orders"}}).Err())
+			require.NoError(t, main.RunCommand(ctx, bson.D{
+				{Key: "doltBranch", Value: int32(1)},
+				{Key: "action", Value: "add"},
+				{Key: "branch", Value: "feature"},
+			}).Err())
+
+			tc.diverge(t, main, env.Client.Database(dbName+"@feature"))
+
+			raw := runCommandRaw(t, main, bson.D{{Key: "doltMerge", Value: int32(1)}, {Key: "mergeIn", Value: "feature"}})
+			require.EqualValues(t, 0, raw["ok"], "merge must conflict on %s", tc.entry)
+
+			_, err = main.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(99)}, {Key: "v", Value: "during"}})
+			require.NoError(t, err)
+
+			cid := soleConflictID(t, main)
+			var resolveRaw bson.M
+			require.NoError(t, main.RunCommand(ctx, bson.D{
+				{Key: "doltResolveConflict", Value: int32(1)},
+				{Key: "collection", Value: tc.entry},
+				{Key: "conflictId", Value: cid},
+				{Key: "resolution", Value: "theirs"},
+			}).Decode(&resolveRaw))
+			require.EqualValues(t, 1, resolveRaw["ok"])
+
+			assert.True(t, docExists(t, main.Collection("items"), 99),
+				"edit during conflict must survive a %s resolution", tc.name)
+
+			mergeContinue(t, main)
+			assert.True(t, docExists(t, main.Collection("items"), 99),
+				"edit during conflict must survive --continue")
+		})
+	}
+}
+
+// soleConflictID returns the id of the single conflict reported on db.
+func soleConflictID(t *testing.T, db *mongo.Database) string {
+	t.Helper()
+	var raw bson.M
+	require.NoError(t, db.RunCommand(context.Background(), bson.D{
+		{Key: "doltConflicts", Value: int32(1)},
+	}).Decode(&raw))
+	conflicts, ok := raw["conflicts"].(bson.A)
+	require.True(t, ok, "conflicts must be an array, got %T", raw["conflicts"])
+	require.Len(t, conflicts, 1, "expected exactly one conflict")
+	return conflicts[0].(bson.M)["conflictId"].(string)
+}
+
 func acHeadHash(t *testing.T, db *mongo.Database) string {
 	t.Helper()
 	var raw bson.M

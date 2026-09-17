@@ -1745,10 +1745,10 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 			return nil, fmt.Errorf("DumboDBMerge: cherry-pick in progress on branch %q; use dumboCherryPick abort instead", params.Into)
 		}
 		ms := db.mergeState
+		if err := abortMergeState(ctx, db, ms); err != nil {
+			return nil, fmt.Errorf("DumboDBMerge: abort: %w", err)
+		}
 		db.mergeState = nil
-
-		db.setAM(ctx, ms.intoBranch, ms.premergeAM)
-		_ = clearMergeState(db) // best-effort: ignore error on abort
 
 		return &backends.MergeResult{Message: "merge aborted"}, nil
 	}
@@ -1780,22 +1780,27 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 			return nil, fmt.Errorf("DumboDBMerge: continue: resolving branch %q: %w", ms.intoBranch, err)
 		}
 
-		// Clear artifact maps from all conflicting collections before committing.
-		if clearErr := clearConflictArtifacts(ctx, db, ms); clearErr != nil {
-			return nil, fmt.Errorf("DumboDBMerge: continue: clearing artifacts: %w", clearErr)
-		}
-
+		// Adopt anything written to the branch during the conflict window, then
+		// sweep the artifacts off that root so the merge commits neither the
+		// conflict markers nor a stale view of the data.
 		contAM, amErr := b.currentWorkingAM(ctx, db, ms.intoBranch)
 		if amErr != nil {
 			return nil, fmt.Errorf("DumboDBMerge: continue: %w", amErr)
 		}
-		mergeRes, err := b.commitMerge(ctx, db, ms.fromBranch, ms.intoBranch, intoBranchDS, ms.intoHash, ms.fromHash, contAM, params.Message, params.Author, params.Committer)
+		ms.resolvedAM = contAM
+		if clearErr := clearConflictArtifacts(ctx, db, ms); clearErr != nil {
+			return nil, fmt.Errorf("DumboDBMerge: continue: clearing artifacts: %w", clearErr)
+		}
+
+		mergeRes, err := b.commitMerge(ctx, db, ms.fromBranch, ms.intoBranch, intoBranchDS, ms.intoHash, ms.fromHash, ms.resolvedAM, params.Message, params.Author, params.Committer)
 		if err != nil {
 			return nil, fmt.Errorf("DumboDBMerge: continue: %w", err)
 		}
 
+		if err := settleMergeState(ctx, db, ms.intoBranch, ms.resolvedAM); err != nil {
+			return nil, fmt.Errorf("DumboDBMerge: continue: %w", err)
+		}
 		db.mergeState = nil
-		_ = clearMergeState(db) // best-effort
 		return mergeRes, nil
 	}
 
@@ -2045,10 +2050,10 @@ func (b *Backend) DumboDBCherryPick(ctx context.Context, params *backends.Cherry
 			return nil, fmt.Errorf("DumboDBCherryPick: no cherry-pick in progress to abort")
 		}
 		ms := db.mergeState
+		if err := abortMergeState(ctx, db, ms); err != nil {
+			return nil, fmt.Errorf("DumboDBCherryPick: abort: %w", err)
+		}
 		db.mergeState = nil
-
-		db.setAM(ctx, ms.intoBranch, ms.premergeAM)
-		_ = clearMergeState(db)
 
 		return &backends.CherryPickResult{Message: "cherry-pick aborted"}, nil
 	}
@@ -2067,6 +2072,11 @@ func (b *Backend) DumboDBCherryPick(ctx context.Context, params *backends.Cherry
 			return nil, fmt.Errorf("DumboDBCherryPick: continue: resolving branch %q: %w", ms.intoBranch, dsErr)
 		}
 
+		contAM, contAMErr := b.currentWorkingAM(ctx, db, ms.intoBranch)
+		if contAMErr != nil {
+			return nil, fmt.Errorf("DumboDBCherryPick: continue: %w", contAMErr)
+		}
+		ms.resolvedAM = contAM
 		if clearErr := clearConflictArtifacts(ctx, db, ms); clearErr != nil {
 			return nil, fmt.Errorf("DumboDBCherryPick: continue: clearing artifacts: %w", clearErr)
 		}
@@ -2081,17 +2091,15 @@ func (b *Backend) DumboDBCherryPick(ctx context.Context, params *backends.Cherry
 			return nil, fmt.Errorf("DumboDBCherryPick: continue: reading pick commit meta: %w", contMetaErr)
 		}
 
-		contAM, contAMErr := b.currentWorkingAM(ctx, db, ms.intoBranch)
-		if contAMErr != nil {
-			return nil, fmt.Errorf("DumboDBCherryPick: continue: %w", contAMErr)
-		}
-		pickRes, pickErr := b.commitCherryPick(ctx, db, ms.intoBranch, intoBranchDS, ms.intoHash, ms.pickHash, contAM, contPickMeta, ms.originalMsg, params.Message, params.Committer)
+		pickRes, pickErr := b.commitCherryPick(ctx, db, ms.intoBranch, intoBranchDS, ms.intoHash, ms.pickHash, ms.resolvedAM, contPickMeta, ms.originalMsg, params.Message, params.Committer)
 		if pickErr != nil {
 			return nil, fmt.Errorf("DumboDBCherryPick: continue: %w", pickErr)
 		}
 
+		if err := settleMergeState(ctx, db, ms.intoBranch, ms.resolvedAM); err != nil {
+			return nil, fmt.Errorf("DumboDBCherryPick: continue: %w", err)
+		}
 		db.mergeState = nil
-		_ = clearMergeState(db)
 		return pickRes, nil
 	}
 
@@ -3130,7 +3138,6 @@ func (b *Backend) DumboDBRebase(ctx context.Context, params *backends.RebasePara
 			return nil, fmt.Errorf("DumboDBRebase: no rebase in progress to abort")
 		}
 		ms := db.mergeState
-		db.mergeState = nil
 
 		// Restore the branch HEAD in doltDB to the pre-rebase commit.
 		branchDS, dsErr := db.datasDB.GetDataset(ctx, "refs/heads/"+ms.intoBranch)
@@ -3140,8 +3147,10 @@ func (b *Backend) DumboDBRebase(ctx context.Context, params *backends.RebasePara
 		if _, setErr := db.datasDB.SetHead(ctx, branchDS, ms.rebaseBranchHash, ""); setErr != nil {
 			return nil, fmt.Errorf("DumboDBRebase: abort: resetting branch %q to pre-rebase hash: %w", ms.intoBranch, setErr)
 		}
-		db.setAM(ctx, ms.intoBranch, ms.premergeAM)
-		_ = clearMergeState(db)
+		if err := abortMergeState(ctx, db, ms); err != nil {
+			return nil, fmt.Errorf("DumboDBRebase: abort: %w", err)
+		}
+		db.mergeState = nil
 
 		return &backends.RebaseResult{
 			CommitsReplayed: 0,
@@ -3158,7 +3167,14 @@ func (b *Backend) DumboDBRebase(ctx context.Context, params *backends.RebasePara
 		}
 		ms := db.mergeState
 
-		// Clear artifact maps for the paused conflict before committing.
+		// Clear artifact maps for the paused conflict before committing, taking
+		// the branch's current root so writes made during the conflict window
+		// are carried into the replayed commit.
+		contAM, contAMErr := b.currentWorkingAM(ctx, db, ms.intoBranch)
+		if contAMErr != nil {
+			return nil, fmt.Errorf("DumboDBRebase: continue: %w", contAMErr)
+		}
+		ms.resolvedAM = contAM
 		if clearErr := clearConflictArtifacts(ctx, db, ms); clearErr != nil {
 			return nil, fmt.Errorf("DumboDBRebase: continue: clearing artifacts: %w", clearErr)
 		}
@@ -3172,11 +3188,7 @@ func (b *Backend) DumboDBRebase(ctx context.Context, params *backends.RebasePara
 			return nil, fmt.Errorf("DumboDBRebase: continue: reading meta for paused commit: %w", metaErr)
 		}
 
-		contAM, contAMErr := b.currentWorkingAM(ctx, db, ms.intoBranch)
-		if contAMErr != nil {
-			return nil, fmt.Errorf("DumboDBRebase: continue: %w", contAMErr)
-		}
-		newTipHash, commitErr := b.commitRebasedPick(ctx, db, ms.intoBranch, ms.intoHash, ms.rebaseCurrentPick, contAM, pickMeta, rebaserName, rebaserEmail)
+		newTipHash, commitErr := b.commitRebasedPick(ctx, db, ms.intoBranch, ms.intoHash, ms.rebaseCurrentPick, ms.resolvedAM, pickMeta, rebaserName, rebaserEmail)
 		if commitErr != nil {
 			return nil, fmt.Errorf("DumboDBRebase: continue: committing paused commit: %w", commitErr)
 		}
@@ -3189,7 +3201,6 @@ func (b *Backend) DumboDBRebase(ctx context.Context, params *backends.RebasePara
 		}
 		if result != nil {
 			db.mergeState = nil
-			_ = clearMergeState(db)
 			return result, nil
 		}
 		// Another conflict was encountered; mergeState updated by replayRemainingCommits.
@@ -3287,6 +3298,7 @@ func (b *Backend) DumboDBRebase(ctx context.Context, params *backends.RebasePara
 		premergeAM:            preRebaseAM,
 		intoHash:              ontoHead,
 		isRebase:              true,
+		rebaseOntoHash:        ontoHead,
 		rebaseBranchHash:      branchHead,
 		rebaseRemainingHashes: toReplay,
 		rebaseCommitsReplayed: 0,
@@ -3400,8 +3412,8 @@ func (b *Backend) replayRemainingCommits(ctx context.Context, db *dbState, ms *m
 	if err != nil {
 		return nil, fmt.Errorf("replayRemainingCommits: loading final AM: %w", err)
 	}
-	if err := db.persistAM(ctx, ms.intoBranch, finalAM); err != nil {
-		return nil, fmt.Errorf("replayRemainingCommits: persisting final AM: %w", err)
+	if err := settleMergeState(ctx, db, ms.intoBranch, finalAM); err != nil {
+		return nil, fmt.Errorf("replayRemainingCommits: settling rebase: %w", err)
 	}
 
 	return &backends.RebaseResult{
@@ -3541,10 +3553,10 @@ func (b *Backend) DumboDBRevert(ctx context.Context, params *backends.RevertPara
 			return nil, fmt.Errorf("DumboDBRevert: no revert in progress to abort")
 		}
 		ms := db.mergeState
+		if err := abortMergeState(ctx, db, ms); err != nil {
+			return nil, fmt.Errorf("DumboDBRevert: abort: %w", err)
+		}
 		db.mergeState = nil
-
-		db.setAM(ctx, ms.intoBranch, ms.premergeAM)
-		_ = clearMergeState(db)
 
 		return &backends.RevertResult{Message: "revert aborted"}, nil
 	}
@@ -3563,22 +3575,25 @@ func (b *Backend) DumboDBRevert(ctx context.Context, params *backends.RevertPara
 			return nil, fmt.Errorf("DumboDBRevert: continue: resolving branch %q: %w", ms.intoBranch, dsErr)
 		}
 
+		contAM, contAMErr := b.currentWorkingAM(ctx, db, ms.intoBranch)
+		if contAMErr != nil {
+			return nil, fmt.Errorf("DumboDBRevert: continue: %w", contAMErr)
+		}
+		ms.resolvedAM = contAM
 		if clearErr := clearConflictArtifacts(ctx, db, ms); clearErr != nil {
 			return nil, fmt.Errorf("DumboDBRevert: continue: clearing artifacts: %w", clearErr)
 		}
 
 		// pickHash is the commit being reverted; fromHash is the parent hash.
-		contAM, contAMErr := b.currentWorkingAM(ctx, db, ms.intoBranch)
-		if contAMErr != nil {
-			return nil, fmt.Errorf("DumboDBRevert: continue: %w", contAMErr)
-		}
-		revertRes, revertErr := b.commitRevert(ctx, db, ms.intoBranch, intoBranchDS, ms.intoHash, ms.pickHash, contAM, ms.originalMsg, params.Message, params.Author)
+		revertRes, revertErr := b.commitRevert(ctx, db, ms.intoBranch, intoBranchDS, ms.intoHash, ms.pickHash, ms.resolvedAM, ms.originalMsg, params.Message, params.Author)
 		if revertErr != nil {
 			return nil, fmt.Errorf("DumboDBRevert: continue: %w", revertErr)
 		}
 
+		if err := settleMergeState(ctx, db, ms.intoBranch, ms.resolvedAM); err != nil {
+			return nil, fmt.Errorf("DumboDBRevert: continue: %w", err)
+		}
 		db.mergeState = nil
-		_ = clearMergeState(db)
 		return revertRes, nil
 	}
 

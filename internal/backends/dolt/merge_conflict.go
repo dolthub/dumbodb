@@ -83,6 +83,7 @@ type mergeInProgress struct {
 	// intoHash (above) tracks the current rebased tip hash and is updated as commits are replayed.
 	isRebase              bool
 	ontoBranch            string      // the branch being rebased onto (the "theirs" side in conflict messages)
+	rebaseOntoHash        hash.Hash   // ontoBranch HEAD when the rebase started (the replay base)
 	rebaseBranchHash      hash.Hash   // branch HEAD before rebase started (used to reset branch on abort)
 	rebaseRemainingHashes []hash.Hash // commits yet to replay (oldest-first), not including the current paused one
 	rebaseCurrentPick     hash.Hash   // commit currently being replayed (paused on conflict)
@@ -168,6 +169,47 @@ type viewConflictEntry struct {
 	ourDiff   string
 	theirDiff string
 	resolved  bool
+}
+
+// buildViewConflict describes a namespace entry that conflicts because at least
+// one side holds a view there. The three hashes are that entry in the ours,
+// theirs, and base AddressMaps.
+func buildViewConflict(ctx context.Context, state *dbState, name string, intoH, fromH, baseH, theirHash hash.Hash) (*viewConflictEntry, error) {
+	intoIsView, err := isViewEntry(ctx, state.cs, intoH)
+	if err != nil {
+		return nil, err
+	}
+	fromIsView, err := isViewEntry(ctx, state.cs, fromH)
+	if err != nil {
+		return nil, err
+	}
+	baseIsView, err := isViewEntry(ctx, state.cs, baseH)
+	if err != nil {
+		return nil, err
+	}
+
+	vce := &viewConflictEntry{
+		name:      name,
+		id:        conflictID(name, val.Tuple(name), theirHash),
+		ourDiff:   viewSideDiff(baseIsView, intoIsView),
+		theirDiff: viewSideDiff(baseIsView, fromIsView),
+	}
+	if intoIsView {
+		if vm, rerr := readViewChunk(ctx, state.ns, intoH); rerr == nil {
+			vce.ours = vm
+		}
+	}
+	if fromIsView {
+		if vm, rerr := readViewChunk(ctx, state.ns, fromH); rerr == nil {
+			vce.theirs = vm
+		}
+	}
+	if baseIsView {
+		if vm, rerr := readViewChunk(ctx, state.ns, baseH); rerr == nil {
+			vce.base = vm
+		}
+	}
+	return vce, nil
 }
 
 func viewSideDiff(baseIsView, sideIsView bool) string {
@@ -450,6 +492,13 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 		return nil, fmt.Errorf("DumboDBResolveConflict: no merge or cherry-pick in progress on branch %q", params.Branch)
 	}
 
+	// Build on whatever has been written to the branch since the operation
+	// paused, so resolving one conflict does not stamp the staged root back
+	// over unrelated writes made during the conflict window.
+	if err := b.adoptBranchWrites(ctx, db, ms); err != nil {
+		return nil, err
+	}
+
 	// Collection is optional: the conflict id alone identifies the conflict
 	// unless two collections share one.
 	if params.Collection == "" {
@@ -516,8 +565,21 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 			}
 		}
 
+		// Keeping ours leaves the documents and indexes as the partial merge
+		// already staged them, so only the artifact has to go. It still has to
+		// go through the tree: the artifact is the sole record that this
+		// document was ever in conflict, and leaving it behind would resurrect
+		// the conflict on the next open.
 		if params.Resolution == "ours" {
+			clearedAM, rmErr := removeConflictArtifact(ctx, db, ms.resolvedAM, params.Collection, target.rawKey, ms.theirHash())
+			if rmErr != nil {
+				return nil, fmt.Errorf("DumboDBResolveConflict: updating artifact map for %q: %w", params.Collection, rmErr)
+			}
+			ms.resolvedAM = clearedAM
 			target.resolved = true
+			if err := b.applyResolvedAM(ctx, db, ms, clearedAM); err != nil {
+				return nil, err
+			}
 			return &backends.ResolveConflictResult{}, nil
 		}
 
@@ -772,6 +834,9 @@ func (b *Backend) resolveViewConflict(ctx context.Context, db *dbState, ms *merg
 
 	if params.Resolution == "ours" {
 		vce.resolved = true
+		if err := b.applyResolvedAM(ctx, db, ms, ms.resolvedAM); err != nil {
+			return nil, err
+		}
 		return &backends.ResolveConflictResult{}, nil
 	}
 
@@ -1497,26 +1562,9 @@ func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, 
 			return prolly.AddressMap{}, nil, nil, nil, err
 		}
 		if intoIsView || fromIsView || baseIsView {
-			vce := &viewConflictEntry{
-				name:      name,
-				id:        conflictID(name, val.Tuple(name), theirHash),
-				ourDiff:   viewSideDiff(baseIsView, intoIsView),
-				theirDiff: viewSideDiff(baseIsView, fromIsView),
-			}
-			if intoIsView {
-				if vm, rerr := readViewChunk(ctx, state.ns, intoH); rerr == nil {
-					vce.ours = vm
-				}
-			}
-			if fromIsView {
-				if vm, rerr := readViewChunk(ctx, state.ns, fromH); rerr == nil {
-					vce.theirs = vm
-				}
-			}
-			if baseIsView {
-				if vm, rerr := readViewChunk(ctx, state.ns, baseH); rerr == nil {
-					vce.base = vm
-				}
+			vce, vErr := buildViewConflict(ctx, state, name, intoH, fromH, baseH, theirHash)
+			if vErr != nil {
+				return prolly.AddressMap{}, nil, nil, nil, vErr
 			}
 			viewConflicts[name] = vce
 			continue
