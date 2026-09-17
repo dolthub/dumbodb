@@ -193,70 +193,6 @@ func TestFetcherStopsWhenSourceChanges(t *testing.T) {
 	}
 }
 
-func TestFetchOldestOplogEntryReportsSourceWindowBoundary(t *testing.T) {
-	client := &fakeFetchClient{responses: []*wire.OpMsg{
-		testOplogResponse(t, 0, 5, testOplogDocument(4, 7)),
-	}}
-	oldest, err := fetchOldestOplogEntry(context.Background(), client)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := control.OpTime{Seconds: 100, Increment: 4, Term: 7}
-	if oldest != want {
-		t.Fatalf("oldest oplog entry = %+v, want %+v", oldest, want)
-	}
-}
-
-func TestFetchOldestOplogEntryAcceptsMissingTerm(t *testing.T) {
-	entry := must.NotFail(types.NewDocument(
-		"ts", types.Timestamp(uint64(100)<<32|4),
-		"op", "n",
-		"ns", "",
-		"o", must.NotFail(types.NewDocument("msg", "initiating set")),
-	))
-	client := &fakeFetchClient{responses: []*wire.OpMsg{testOplogResponse(t, 0, 5, entry)}}
-	oldest, err := fetchOldestOplogEntry(context.Background(), client)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := control.OpTime{Seconds: 100, Increment: 4, Term: -1}
-	if oldest != want {
-		t.Fatalf("oldest oplog entry = %+v, want %+v", oldest, want)
-	}
-}
-
-func TestSourceWindowObservationFailureDoesNotAffectFetching(t *testing.T) {
-	manager := configuredFetcherManager(t, testFetchOpTime(1))
-	buffer := must.NotFail(NewBuffer(BufferLimits{Entries: 10, Bytes: 1024 * 1024}))
-	windowRequested := make(chan struct{})
-	windowClient := &fakeFetchClient{
-		responses: []*wire.OpMsg{testOplogResponse(t, 0, 5, must.NotFail(types.NewDocument("op", "n")))},
-		onRequest: func(int) { close(windowRequested) },
-	}
-	operationalClient := &fakeFetchClient{responses: []*wire.OpMsg{
-		wire.MustOpMsg("rbid", int32(5), "ok", float64(1)),
-		testOplogResponse(t, 0, 5, testOplogDocument(1, 8), testOplogDocument(2, 8)),
-	}}
-	fetcher := must.NotFail(NewFetcher(manager, buffer, nil))
-	fetcher.exhaust = false
-	clients := make(chan fetchClient, 2)
-	clients <- operationalClient
-	clients <- windowClient
-	fetcher.newClient = func(string, string) fetchClient { return <-clients }
-	if err := fetcher.Fetch(context.Background()); !errors.Is(err, io.EOF) {
-		t.Fatalf("Fetch error = %v, want EOF", err)
-	}
-	select {
-	case <-windowRequested:
-	case <-time.After(time.Second):
-		t.Fatal("source-window observation did not run")
-	}
-	entries := buffer.Drain(10, 1024*1024)
-	if len(entries) != 1 || entries[0].OpTime != testFetchOpTime(2) {
-		t.Fatalf("buffered entries = %+v", entries)
-	}
-}
-
 type fakeFetchClient struct {
 	responses []*wire.OpMsg
 	err       error
@@ -295,7 +231,6 @@ func testFetcher(t *testing.T, manager *topology.Manager, buffer *Buffer, client
 		t.Fatal(err)
 	}
 	fetcher.exhaust = false
-	fetcher.observeWindow = false
 	fetcher.newClient = func(string, string) fetchClient { return client }
 	return fetcher
 }

@@ -108,7 +108,6 @@ var commandPrivileges = map[string][]commandPrivilege{
 	"revokeRolesFromRole":      {{authz.ActionRevokeRole, scopeDatabase}},
 
 	"serverStatus":           {{authz.ActionServerStatus, scopeCluster}},
-	"dumboReplicationStatus": {{authz.ActionServerStatus, scopeCluster}},
 	"dumboReplicationDetach": {{authz.ActionSetParameter, scopeCluster}},
 	"listDatabases":          {{authz.ActionListDatabases, scopeCluster}},
 	"getParameter":           {{authz.ActionGetParameter, scopeCluster}},

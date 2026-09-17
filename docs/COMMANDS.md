@@ -89,48 +89,25 @@ Replication operator commands have no `dolt*` aliases:
 
 | Command | Purpose |
 |---------|---------|
-| `dumboReplicationStatus` | Reports replication state, progress, lag, failures, buffer use, rates, and commit provenance. |
 | `dumboReplicationDetach` | Stops replication while preserving `main` history and provenance. |
 
 ---
 
-## dumboReplicationStatus
+## Replication status
 
-Returns the operator view for a server started with `--replSet`. Run it against
+Replication status uses MongoDB's standard operator interfaces. Run them against
 the `admin` database:
 
 ```js
-db.getSiblingDB("admin").runCommand({dumboReplicationStatus: 1})
+db.getSiblingDB("admin").runCommand({replSetGetStatus: 1})
+db.getSiblingDB("admin").runCommand({serverStatus: 1})
 ```
 
-The response includes member and configuration identity, runtime and initial-sync
-phase, source and source-change history, durable replication positions, lag and
-source-window budget, buffer occupancy, process-lifetime apply rates, recent
-failure classifications, retry count, and retained provenance size. The numeric
-alerting subset is also available as `serverStatus.replication`.
-
-The optional lookup forms map source history to DumboDB history:
-
-```js
-db.getSiblingDB("admin").runCommand({
-  dumboReplicationStatus: 1,
-  sourceOpTime: {ts: Timestamp(100, 2), t: NumberLong(3)}
-})
-
-db.getSiblingDB("admin").runCommand({
-  dumboReplicationStatus: 1,
-  commitID: "<publication-commit>"
-})
-
-db.getSiblingDB("admin").runCommand({
-  dumboReplicationStatus: 1,
-  database: "orders",
-  commitID: "<database-commit>"
-})
-```
-
-`provenanceLookup.found` is `false` when the requested source position or commit
-is not in the active retained generation.
+`replSetGetStatus` reports member state and durable optimes. `serverStatus.repl`
+reports replica-set identity and role, `serverStatus.metrics.repl` reports apply,
+buffer, initial-sync, network, and sync-source counters, and the top-level
+`serverStatus.opcountersRepl` reports replicated operation counts. Commit
+provenance remains internal recovery metadata and is not exposed as a command.
 
 ## dumboReplicationDetach
 

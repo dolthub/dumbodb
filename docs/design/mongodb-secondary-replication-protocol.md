@@ -806,25 +806,15 @@ detached state without deleting `main` history. An administrative
 preserving the history and its source-optime provenance. Reattaching to a different
 replica-set ID requires a new initial sync; identities cannot be spliced. **DESIGN**
 
-`replSetGetStatus` provides MongoDB-compatible member and operator inspection.
-`serverStatus` exposes a numeric `replication` section, and the DumboDB-native
-`dumboReplicationStatus` adds commit-history details. Together they report:
-
-- member state, set/member/config identity, and initial-sync phase/progress;
-- current source, source changes, source RBID, primary belief, and last heartbeat;
-- last fetched, buffered, written, durable, applied, and committed optimes;
-- oplog-time and wall-time lag, retained source window, and remaining lag budget;
-- retry counts and the complete last failure classification;
-- current buffer bytes/entries and apply/commit rates;
-- the DumboDB commit for a source optime, and the source interval for a commit.
-
-The control store retains the 32 most recent source changes and failures, plus a
-monotonic retry count. Runtime-only buffer occupancy and process-lifetime rates are
-identified separately from durable positions. The fetcher samples the oldest source
-oplog entry and combines it with the observed source head to report total and
-remaining continuity windows. `serverStatus.replication` exposes the numeric subset
-for alerting. Status is read from the same durable control records used for recovery,
-so it cannot report progress ahead of durable state. Secrets and authentication
+`replSetGetStatus` provides MongoDB-compatible member status and durable optimes.
+`serverStatus.repl` reports replica-set identity and role,
+`serverStatus.metrics.repl` reports apply, buffer, initial-sync, network, and
+sync-source counters, and top-level `serverStatus.opcountersRepl` reports replicated
+operation counts. These are the existing MongoDB monitoring surfaces; replication
+does not add a DumboDB-specific status command. The internal source-optime-to-commit
+mapping remains recovery metadata and is not exposed publicly. Durable positions are
+read from the same control records used for recovery, while process-lifetime counters
+are identified by their standard `serverStatus` placement. Secrets and authentication
 payloads are never included. **DESIGN**
 
 ## Commit granularity and back-pressure boundary

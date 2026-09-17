@@ -316,7 +316,7 @@ func (r *Runtime) applyEntry(ctx context.Context, applier *oplog.Applier, entry 
 	if err := r.publisher.Complete(ctx, publicationID); err != nil {
 		return err
 	}
-	r.manager.RecordAppliedOperation()
+	r.manager.RecordAppliedOperation(entry.Operation)
 	return nil
 }
 

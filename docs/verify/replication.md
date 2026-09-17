@@ -192,26 +192,17 @@ replicated data, only the readability of the history.
 
 ```js
 // mongosh --port 27018
-db.adminCommand({ replSetGetStatus: 1 }).optimes
-// Expected: appliedOpTime, durableOpTime, writtenOpTime, all non-zero
-```
-
-```js
-db.adminCommand({ dumboReplicationStatus: 1 })
+status = db.adminCommand({ replSetGetStatus: 1 })
+server = db.adminCommand({ serverStatus: 1 })
 ```
 
 Key checks:
-- `runtime.phase` is `steady` on a caught-up member. `initial_sync`,
-  `retrying` or `failed` mean it is not.
-- `positions.written` is non-zero and advances as the primary takes writes.
-- `lag.sourceWindowAvailable` reports whether the source oplog window is
-  known; when it is, `remainingSourceWindowSeconds` is the headroom before
-  this member would fall too far behind to catch up.
-
-Note: the shape of this surface is being aligned with MongoDB's
-`serverStatus.repl` and `serverStatus.metrics.repl`, and
-`dumboReplicationDetach` is being removed in favour of standard member
-removal. See `workspace-nbk`, `workspace-moa` and `workspace-7rh`.
+- `status.myState` is `2` (`SECONDARY`) after initial sync completes.
+- `status.optimes.appliedOpTime`, `durableOpTime`, and `writtenOpTime` are
+  non-zero and advance as the primary accepts writes.
+- `server.repl.secondary` agrees with `status.myState`.
+- `server.metrics.repl.buffer`, `apply`, `network`, and `syncSource` contain
+  numeric counters, and `server.opcountersRepl` counts applied operation types.
 
 ## Scenario 5: Stop replicating, keep the history
 

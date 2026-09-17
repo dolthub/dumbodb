@@ -104,11 +104,20 @@ type RuntimeStatus struct {
 	BufferByteLimit                 int64
 	AppliedOperations               int64
 	PublishedCommits                int64
+	ReplicatedInserts               int64
+	ReplicatedUpdates               int64
+	ReplicatedDeletes               int64
+	ReplicatedCommands              int64
+	FetchedOperations               int64
+	OplogReadersCreated             int64
+	SourceSelections                int64
+	SourceSelectionsSame            int64
+	SourceSelectionsDifferent       int64
+	SourceSelectionsUnavailable     int64
 	InitialSyncDocuments            int64
 	InitialSyncCollectionsTotal     int
 	InitialSyncCollectionsCompleted int
 	InitialSyncCurrentNamespace     string
-	SourceOplogOldest               control.OpTime
 	SourceOplogNewest               control.OpTime
 }
 
@@ -178,18 +187,6 @@ func New(store *control.Store) *Manager {
 
 func (m *Manager) ControlSnapshot() control.State {
 	return m.store.Snapshot()
-}
-
-func (m *Manager) CommitFor(opTime control.OpTime) (control.CommitInterval, bool) {
-	return m.store.CommitFor(opTime)
-}
-
-func (m *Manager) CommitForID(commitID string) (control.CommitInterval, bool) {
-	return m.store.CommitForID(commitID)
-}
-
-func (m *Manager) CommitForDatabaseCommit(database, commitID string) (control.CommitInterval, bool) {
-	return m.store.CommitForDatabaseCommit(database, commitID)
 }
 
 func (m *Manager) SetChangeListener(listener func()) {
@@ -323,10 +320,10 @@ func (m *Manager) ObserveHeartbeat(host string, heartbeat Heartbeat) error {
 		m.state.PrimaryHost = ""
 	}
 	m.state.SyncSource = m.selectSourceLocked()
+	m.recordSourceSelectionLocked(previous.SyncSource, m.state.SyncSource)
 	if m.state.SyncSource != previous.SyncSource {
 		m.state.RBID = 0
 		m.state.LastCommitted = control.OpTime{}
-		m.state.Runtime.SourceOplogOldest = control.OpTime{}
 		m.state.Runtime.SourceOplogNewest = control.OpTime{}
 		if err := m.store.SetSource(m.state.SyncSource, 0); err != nil {
 			m.state = previous
@@ -371,10 +368,10 @@ func (m *Manager) ObserveMemberContact(host string, memberID int, term int64, pr
 		m.state.PrimaryHost = m.memberHostLocked(primaryID)
 	}
 	m.state.SyncSource = m.selectSourceLocked()
+	m.recordSourceSelectionLocked(previous.SyncSource, m.state.SyncSource)
 	if m.state.SyncSource != previous.SyncSource {
 		m.state.RBID = 0
 		m.state.LastCommitted = control.OpTime{}
-		m.state.Runtime.SourceOplogOldest = control.OpTime{}
 		m.state.Runtime.SourceOplogNewest = control.OpTime{}
 		if err := m.store.SetSource(m.state.SyncSource, 0); err != nil {
 			m.state = previous
@@ -509,11 +506,33 @@ func (m *Manager) ObserveBuffer(entries int, bytes int64, entryLimit int, byteLi
 	m.state.Runtime.BufferByteLimit = byteLimit
 }
 
-func (m *Manager) RecordAppliedOperation() {
+func (m *Manager) RecordAppliedOperation(operation string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.state.Runtime.AppliedOperations++
 	m.state.Runtime.PublishedCommits++
+	switch operation {
+	case "i":
+		m.state.Runtime.ReplicatedInserts++
+	case "u":
+		m.state.Runtime.ReplicatedUpdates++
+	case "d":
+		m.state.Runtime.ReplicatedDeletes++
+	case "c":
+		m.state.Runtime.ReplicatedCommands++
+	}
+}
+
+func (m *Manager) RecordFetchedOperation() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.state.Runtime.FetchedOperations++
+}
+
+func (m *Manager) RecordOplogReaderCreated() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.state.Runtime.OplogReadersCreated++
 }
 
 func (m *Manager) ObserveInitialSyncProgress(total, completed int, documents int64, namespace string) {
@@ -525,22 +544,11 @@ func (m *Manager) ObserveInitialSyncProgress(total, completed int, documents int
 	m.state.Runtime.InitialSyncCurrentNamespace = namespace
 }
 
-func (m *Manager) ObserveSourceOplogWindow(oldest, newest control.OpTime) {
+func (m *Manager) ObserveSourceOplogHead(newest control.OpTime) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if oldest != (control.OpTime{}) {
-		m.state.Runtime.SourceOplogOldest = oldest
-	}
 	if newest.Compare(m.state.Runtime.SourceOplogNewest) > 0 {
 		m.state.Runtime.SourceOplogNewest = newest
-	}
-}
-
-func (m *Manager) ObserveSourceOplogOldest(source string, oldest control.OpTime) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if source == m.state.SyncSource {
-		m.state.Runtime.SourceOplogOldest = oldest
 	}
 }
 
@@ -560,10 +568,10 @@ func (m *Manager) MarkMemberDown(memberID int) error {
 		m.state.PrimaryHost = ""
 	}
 	m.state.SyncSource = m.selectSourceLocked()
+	m.recordSourceSelectionLocked(previous.SyncSource, m.state.SyncSource)
 	if m.state.SyncSource != previous.SyncSource {
 		m.state.RBID = 0
 		m.state.LastCommitted = control.OpTime{}
-		m.state.Runtime.SourceOplogOldest = control.OpTime{}
 		m.state.Runtime.SourceOplogNewest = control.OpTime{}
 		if err := m.store.SetSource(m.state.SyncSource, 0); err != nil {
 			m.state = previous
@@ -718,6 +726,18 @@ func (m *Manager) selectSourceLocked() string {
 		}
 	}
 	return selected.Host
+}
+
+func (m *Manager) recordSourceSelectionLocked(previous, current string) {
+	m.state.Runtime.SourceSelections++
+	switch {
+	case current == "":
+		m.state.Runtime.SourceSelectionsUnavailable++
+	case current == previous:
+		m.state.Runtime.SourceSelectionsSame++
+	default:
+		m.state.Runtime.SourceSelectionsDifferent++
+	}
 }
 
 func (m *Manager) memberHostLocked(memberID int) string {

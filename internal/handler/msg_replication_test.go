@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/FerretDB/wire"
-	"github.com/FerretDB/wire/wirebson"
 
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
@@ -302,21 +301,11 @@ func TestReplSetUpdatePositionIsExplicitlyUnsupported(t *testing.T) {
 	}
 }
 
-func TestDumboReplicationStatusReportsDiagnosticsAndProvenance(t *testing.T) {
+func TestServerStatusReportsMongoReplicationSections(t *testing.T) {
 	handler := configuredReplicationHandler(t)
-	first := control.OpTime{Seconds: 100, Increment: 1, Term: 3}
 	last := control.OpTime{Seconds: 100, Increment: 2, Term: 3}
 	checkpoint := control.Checkpoint{Fetched: last, Buffered: last, Written: last, Durable: last, Applied: last}
-	if err := handler.ReplicationTopology.MarkInitialSyncComplete(control.Checkpoint{
-		Fetched: first, Buffered: first, Written: first, Durable: first, Applied: first,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	interval := control.CommitInterval{
-		First: first, Last: last, CommitID: "publication-two",
-		Commits: []control.DatabaseCommit{{Database: "accounts", CommitID: "accounts-two"}},
-	}
-	if err := handler.ReplicationTopology.PublishCommit(interval, checkpoint); err != nil {
+	if err := handler.ReplicationTopology.MarkInitialSyncComplete(checkpoint); err != nil {
 		t.Fatal(err)
 	}
 	if err := handler.ReplicationTopology.ObserveHeartbeat("primary.example:27017", topology.Heartbeat{
@@ -328,75 +317,10 @@ func TestDumboReplicationStatusReportsDiagnosticsAndProvenance(t *testing.T) {
 	}
 	handler.ReplicationTopology.SetRuntimePhase("steady")
 	handler.ReplicationTopology.ObserveBuffer(7, 4096, 50000, 256<<20)
-	handler.ReplicationTopology.ObserveSourceOplogWindow(
-		control.OpTime{Seconds: 80, Increment: 1, Term: 2},
-		control.OpTime{Seconds: 105, Increment: 1, Term: 3},
-	)
-	handler.ReplicationTopology.RecordAppliedOperation()
-	if err := handler.ReplicationTopology.RecordFailure(control.ReplicationFailure{
-		Stage: "fetch", Classification: "timeout", Message: "source request timed out", Retryable: true,
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	request := wire.MustOpMsg(
-		"dumboReplicationStatus", int32(1),
-		"sourceOpTime", wirebson.MustDocument(
-			"ts", wirebson.Timestamp(uint64(last.Seconds)<<32|uint64(last.Increment)), "t", last.Term,
-		),
-		"$db", "admin",
-	)
-	response, err := handler.MsgDumboReplicationStatus(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	document, err := opMsgDocument(response)
-	if err != nil {
-		t.Fatal(err)
-	}
-	member := responseValue(document, "member").(*types.Document)
-	if responseValue(member, "stateStr") != "SECONDARY" {
-		t.Fatalf("member = %v", member)
-	}
-	buffer := responseValue(document, "buffer").(*types.Document)
-	if responseValue(buffer, "entries") != int64(7) || responseValue(buffer, "bytes") != int64(4096) {
-		t.Fatalf("buffer = %v", buffer)
-	}
-	positions := responseValue(document, "positions").(*types.Document)
-	committed := responseValue(positions, "committed").(*types.Document)
-	wantCommittedTimestamp := types.Timestamp(uint64(last.Seconds)<<32 | uint64(last.Increment))
-	if responseValue(committed, "ts") != wantCommittedTimestamp {
-		t.Fatalf("committed position = %v, want durable position %v", committed, last)
-	}
-	lag := responseValue(document, "lag").(*types.Document)
-	if responseValue(lag, "oplogSeconds") != int64(5) || responseValue(lag, "remainingSourceWindowSeconds") != int64(20) {
-		t.Fatalf("lag = %v", lag)
-	}
-	failures := responseValue(document, "failures").(*types.Document)
-	if responseValue(failures, "retryCount") != int64(1) {
-		t.Fatalf("failures = %v", failures)
-	}
-	lookup := responseValue(document, "provenanceLookup").(*types.Document)
-	if responseValue(lookup, "found") != true || responseValue(lookup, "commitID") != interval.CommitID {
-		t.Fatalf("provenance lookup = %v", lookup)
-	}
-
-	commitRequest := wire.MustOpMsg(
-		"dumboReplicationStatus", int32(1),
-		"commitID", "accounts-two", "database", "accounts", "$db", "admin",
-	)
-	commitResponse, err := handler.MsgDumboReplicationStatus(context.Background(), commitRequest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	commitDocument, err := opMsgDocument(commitResponse)
-	if err != nil {
-		t.Fatal(err)
-	}
-	commitLookup := responseValue(commitDocument, "provenanceLookup").(*types.Document)
-	if responseValue(commitLookup, "commitID") != interval.CommitID {
-		t.Fatalf("database commit lookup = %v", commitLookup)
-	}
+	handler.ReplicationTopology.ObserveSourceOplogHead(control.OpTime{Seconds: 105, Increment: 1, Term: 3})
+	handler.ReplicationTopology.RecordAppliedOperation("i")
+	handler.ReplicationTopology.RecordFetchedOperation()
+	handler.ReplicationTopology.RecordOplogReaderCreated()
 
 	connectionInfo := conninfo.New()
 	connectionInfo.SetBypassBackendAuth()
@@ -409,9 +333,62 @@ func TestDumboReplicationStatusReportsDiagnosticsAndProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	metrics := responseValue(serverDocument, "replication").(*types.Document)
-	if responseValue(metrics, "oplogLagSeconds") != int64(5) || responseValue(metrics, "bufferEntries") != int64(7) {
-		t.Fatalf("serverStatus replication = %v", metrics)
+	repl := responseValue(serverDocument, "repl").(*types.Document)
+	if responseValue(repl, "setName") != "rs0" || responseValue(repl, "secondary") != true || responseValue(repl, "primary") != "primary.example:27017" {
+		t.Fatalf("serverStatus repl = %v", repl)
+	}
+	metrics := responseValue(responseValue(serverDocument, "metrics").(*types.Document), "repl").(*types.Document)
+	apply := responseValue(metrics, "apply").(*types.Document)
+	if responseValue(apply, "ops") != int64(1) {
+		t.Fatalf("serverStatus metrics.repl.apply = %v", apply)
+	}
+	buffer := responseValue(responseValue(metrics, "buffer").(*types.Document), "apply").(*types.Document)
+	if responseValue(buffer, "count") != int64(7) || responseValue(buffer, "sizeBytes") != int64(4096) {
+		t.Fatalf("serverStatus metrics.repl.buffer.apply = %v", buffer)
+	}
+	network := responseValue(metrics, "network").(*types.Document)
+	if responseValue(network, "ops") != int64(1) || responseValue(network, "readersCreated") != int64(1) {
+		t.Fatalf("serverStatus metrics.repl.network = %v", network)
+	}
+	opcounters := responseValue(serverDocument, "opcountersRepl").(*types.Document)
+	if responseValue(opcounters, "insert") != int64(1) {
+		t.Fatalf("serverStatus opcountersRepl = %v", opcounters)
+	}
+	if value, _ := serverDocument.Get("replication"); value != nil {
+		t.Fatalf("serverStatus retained non-MongoDB replication section: %v", value)
+	}
+	if _, ok := handler.Commands()["dumboReplicationStatus"]; ok {
+		t.Fatal("dumboReplicationStatus remains registered")
+	}
+	statusResponse, err := handler.MsgReplSetGetStatus(serverContext, wire.MustOpMsg(
+		"replSetGetStatus", int32(1), "$db", "admin",
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	statusDocument, err := opMsgDocument(statusResponse)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if responseValue(statusDocument, "myState") != int32(topology.StateSecondary) {
+		t.Fatalf("replSetGetStatus myState = %v", responseValue(statusDocument, "myState"))
+	}
+
+	filteredResponse, err := handler.MsgServerStatus(serverContext, wire.MustOpMsg(
+		"serverStatus", int32(1), "repl", int32(0), "metrics", false,
+		"opcountersRepl", int64(0), "$db", "admin",
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	filteredDocument, err := opMsgDocument(filteredResponse)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, section := range []string{"repl", "metrics", "opcountersRepl"} {
+		if value, _ := filteredDocument.Get(section); value != nil {
+			t.Fatalf("excluded serverStatus section %s = %v", section, value)
+		}
 	}
 }
 

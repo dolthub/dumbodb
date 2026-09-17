@@ -23,6 +23,8 @@ import (
 	"github.com/FerretDB/wire"
 
 	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/replication/control"
+	"github.com/dolthub/dumbodb/internal/replication/topology"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 	"github.com/dolthub/dumbodb/internal/util/must"
@@ -50,7 +52,8 @@ func (h *Handler) MsgServerStatus(connCtx context.Context, msg *wire.OpMsg) (*wi
 
 	uptime := time.Since(h.StateProvider.Get().Start)
 
-	metricsDoc := types.MakeDocument(0)
+	commandMetrics := types.MakeDocument(0)
+	metrics := must.NotFail(types.NewDocument("commands", commandMetrics))
 
 	stats, err := h.b.Status(connCtx, new(backends.StatusParams))
 	if err != nil {
@@ -66,9 +69,7 @@ func (h *Handler) MsgServerStatus(connCtx context.Context, msg *wire.OpMsg) (*wi
 		"uptimeMillis", uptime.Milliseconds(),
 		"uptimeEstimate", int64(uptime.Seconds()),
 		"localTime", time.Now(),
-		"metrics", must.NotFail(types.NewDocument(
-			"commands", metricsDoc,
-		)),
+		"metrics", metrics,
 		"catalogStats", must.NotFail(types.NewDocument(
 			"collections", int32(stats.CountCollections),
 			"capped", stats.CountCappedCollections,
@@ -81,15 +82,17 @@ func (h *Handler) MsgServerStatus(connCtx context.Context, msg *wire.OpMsg) (*wi
 		"ok", float64(1),
 	))
 	if h.ReplicationTopology != nil {
-		res.Set("replication", replicationServerStatusDocument(
-			h.ReplicationTopology.Snapshot(), h.ReplicationTopology.ControlSnapshot(),
-		))
+		snapshot := h.ReplicationTopology.Snapshot()
+		persisted := h.ReplicationTopology.ControlSnapshot()
+		res.Set("repl", h.replicationServerStatusRepl(snapshot))
+		metrics.Set("repl", replicationServerStatusMetrics(snapshot, persisted))
+		res.Set("opcountersRepl", replicationOperationCounters(snapshot.Runtime))
 	}
 
 	// Honor section include/exclude filters: {serverStatus: 1, <section>: 0}
 	// omits that section, matching MongoDB. Only the sub-document sections are
 	// excludable; the scalar top-level fields are always present.
-	for _, section := range []string{"metrics", "catalogStats", "replication"} {
+	for _, section := range []string{"metrics", "catalogStats", "repl", "opcountersRepl"} {
 		if serverStatusSectionExcluded(document, section) {
 			res.Remove(section)
 		}
@@ -98,6 +101,111 @@ func (h *Handler) MsgServerStatus(connCtx context.Context, msg *wire.OpMsg) (*wi
 	return documentOpMsg(
 		res,
 	)
+}
+
+func (h *Handler) replicationServerStatusRepl(state topology.Snapshot) *types.Document {
+	document := must.NotFail(types.NewDocument(
+		"topologyVersion", h.topologyVersionDocument(),
+		"isWritablePrimary", false,
+		"secondary", state.State == topology.StateSecondary,
+		"primaryOnlyServices", types.MakeDocument(0),
+		"rbid", state.RBID,
+		"userWriteBlockMode", int32(1),
+		"userWriteBlockReason", int32(0),
+		"userWriteBlockModeCounters", must.NotFail(types.NewDocument(
+			"Unspecified", int64(0),
+			"ClusterToClusterMigrationInProgress", int64(0),
+			"DiskUseThresholdExceeded", int64(0),
+		)),
+	))
+	if state.Configuration == nil {
+		document.Set("isreplicaset", true)
+		document.Set("info", "Does not have a valid replica set config")
+		return document
+	}
+	document.Set("setName", state.SetName)
+	document.Set("me", state.MemberHost)
+	appendReplicaSetHello(document, state)
+	return document
+}
+
+func replicationServerStatusMetrics(state topology.Snapshot, persisted control.State) *types.Document {
+	runtime := state.Runtime
+	applyBuffer := must.NotFail(types.NewDocument(
+		"count", int64(runtime.BufferEntries),
+		"maxCount", int64(runtime.BufferEntryLimit),
+		"maxSizeBytes", runtime.BufferByteLimit,
+		"sizeBytes", runtime.BufferBytes,
+	))
+	writeBuffer := must.NotFail(types.NewDocument(
+		"count", int64(0),
+		"maxSizeBytes", int64(0),
+		"sizeBytes", int64(0),
+	))
+	failedInitialSyncAttempts := int64(initialSyncFailureCount(persisted.FailureHistory))
+	completedInitialSyncs := int64(0)
+	if persisted.InitialSyncPhase == control.InitialSyncComplete {
+		completedInitialSyncs = 1
+	}
+	return must.NotFail(types.NewDocument(
+		"apply", must.NotFail(types.NewDocument(
+			"batchSize", runtime.AppliedOperations,
+			"batches", must.NotFail(types.NewDocument(
+				"num", runtime.PublishedCommits,
+				"totalMillis", int64(0),
+			)),
+			"ops", runtime.AppliedOperations,
+		)),
+		"buffer", must.NotFail(types.NewDocument(
+			"apply", applyBuffer,
+			"write", writeBuffer,
+			"count", int64(runtime.BufferEntries),
+			"maxSizeBytes", runtime.BufferByteLimit,
+			"sizeBytes", runtime.BufferBytes,
+		)),
+		"initialSync", must.NotFail(types.NewDocument(
+			"completed", completedInitialSyncs,
+			"failedAttempts", failedInitialSyncAttempts,
+			"failures", failedInitialSyncAttempts,
+		)),
+		"network", must.NotFail(types.NewDocument(
+			"ops", runtime.FetchedOperations,
+			"readersCreated", runtime.OplogReadersCreated,
+			"oplogFetcherHighestFetchedOptime", opTimeDocument(persisted.Checkpoint.Fetched),
+			"oplogFetcherLagSeconds", opTimeLagSeconds(runtime.SourceOplogNewest, persisted.Checkpoint.Fetched),
+		)),
+		"syncSource", must.NotFail(types.NewDocument(
+			"numSelections", runtime.SourceSelections,
+			"numTimesChoseSame", runtime.SourceSelectionsSame,
+			"numTimesChoseDifferent", runtime.SourceSelectionsDifferent,
+			"numTimesCouldNotFind", runtime.SourceSelectionsUnavailable,
+		)),
+		"write", must.NotFail(types.NewDocument(
+			"batchSize", runtime.AppliedOperations,
+			"batches", must.NotFail(types.NewDocument(
+				"num", runtime.PublishedCommits,
+				"totalMillis", int64(0),
+			)),
+		)),
+	))
+}
+
+func replicationOperationCounters(runtime topology.RuntimeStatus) *types.Document {
+	return must.NotFail(types.NewDocument(
+		"insert", runtime.ReplicatedInserts,
+		"query", int64(0),
+		"update", runtime.ReplicatedUpdates,
+		"delete", runtime.ReplicatedDeletes,
+		"getmore", int64(0),
+		"command", runtime.ReplicatedCommands,
+	))
+}
+
+func opTimeLagSeconds(newest, fetched control.OpTime) int64 {
+	if newest.Seconds <= fetched.Seconds {
+		return 0
+	}
+	return int64(newest.Seconds - fetched.Seconds)
 }
 
 // serverStatusSectionExcluded reports whether the serverStatus command
