@@ -74,81 +74,162 @@ func TestAutoCommit_ConflictWindow_Merge(t *testing.T) {
 	assert.Equal(t, resumed+1, acCommitCount(t, main), "auto-commit must resume after --continue")
 }
 
-// conflictWindowDB builds a database whose main and feature branches edit _id:1
-// differently, starts the merge that conflicts on it, and inserts _id:99 while
-// the merge is paused. It returns the main-branch handle.
-func conflictWindowDB(t *testing.T, env *dumboDBTestEnv, prefix string) *mongo.Database {
-	t.Helper()
-	ctx := context.Background()
-	dbName := fmt.Sprintf("%s_%d", prefix, rand.Int64N(1_000_000))
-
-	main := env.Client.Database(dbName + "@main")
-	feat := env.Client.Database(dbName + "@feature")
-
-	_, err := main.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}, {Key: "v", Value: "base"}})
-	require.NoError(t, err)
-	require.NoError(t, main.RunCommand(ctx, bson.D{{Key: "doltBranch", Value: int32(1)}, {Key: "action", Value: "add"}, {Key: "branch", Value: "feature"}}).Err())
-
-	_, err = feat.Collection("items").UpdateOne(ctx, bson.D{{Key: "_id", Value: int32(1)}}, bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: "feat"}}}})
-	require.NoError(t, err)
-	_, err = main.Collection("items").UpdateOne(ctx, bson.D{{Key: "_id", Value: int32(1)}}, bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: "main"}}}})
-	require.NoError(t, err)
-
-	raw := runCommandRaw(t, main, bson.D{{Key: "doltMerge", Value: int32(1)}, {Key: "mergeIn", Value: "feature"}})
-	require.EqualValues(t, 0, raw["ok"], "merge must conflict on _id:1")
-
-	_, err = main.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(99)}, {Key: "v", Value: "during"}})
-	require.NoError(t, err)
-
-	return main
+// conflictOp is one of the four operations that can pause on a conflict. Each
+// diverges _id:1 of "items" and leaves its operation paused on that document,
+// so one resolution table can be run against all of them.
+//
+// oursV and theirsV are the values the two sides carry. A rebase swaps them:
+// the replayed commit presents as ours and the onto branch as theirs.
+type conflictOp struct {
+	name        string
+	oursV       string
+	theirsV     string
+	continueCmd bson.D
+	// pause diverges the branches and starts the operation, returning the
+	// database handle the operation is paused on.
+	pause func(t *testing.T, env *dumboDBTestEnv, dbName string) *mongo.Database
 }
 
-// Unlike "ours", the resolutions that rewrite the conflicted document have to
-// merge their edit into the branch's live root rather than stamp the root
-// staged when the merge paused back over it. Both must leave the unrelated
-// write made during the conflict window alone.
-func TestAutoCommit_ConflictWindow_RewritingResolutions(t *testing.T) {
-	cases := []struct {
-		resolution string
-		wantV      string
-	}{
-		{resolution: "theirs", wantV: "feat"},
-		{resolution: "custom", wantV: "resolved"},
+func acSetV(t *testing.T, db *mongo.Database, v string) {
+	t.Helper()
+	_, err := db.Collection("items").UpdateOne(context.Background(),
+		bson.D{{Key: "_id", Value: int32(1)}},
+		bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: v}}}})
+	require.NoError(t, err)
+}
+
+func acSeedBranches(t *testing.T, env *dumboDBTestEnv, dbName string) (main, feat *mongo.Database) {
+	t.Helper()
+	main = env.Client.Database(dbName + "@main")
+	_, err := main.Collection("items").InsertOne(context.Background(),
+		bson.D{{Key: "_id", Value: int32(1)}, {Key: "v", Value: "base"}})
+	require.NoError(t, err)
+	require.NoError(t, main.RunCommand(context.Background(), bson.D{
+		{Key: "doltBranch", Value: int32(1)},
+		{Key: "action", Value: "add"},
+		{Key: "branch", Value: "feature"},
+	}).Err())
+	return main, env.Client.Database(dbName + "@feature")
+}
+
+func conflictOps() []conflictOp {
+	return []conflictOp{
+		{
+			name: "merge", oursV: "main", theirsV: "feat",
+			continueCmd: bson.D{{Key: "doltMerge", Value: int32(1)}, {Key: "continue", Value: int32(1)}, {Key: "author", Value: "tester"}},
+			pause: func(t *testing.T, env *dumboDBTestEnv, dbName string) *mongo.Database {
+				main, feat := acSeedBranches(t, env, dbName)
+				acSetV(t, feat, "feat")
+				acSetV(t, main, "main")
+				raw := runCommandRaw(t, main, bson.D{{Key: "doltMerge", Value: int32(1)}, {Key: "mergeIn", Value: "feature"}})
+				require.EqualValues(t, 0, raw["ok"], "merge must conflict on _id:1")
+				return main
+			},
+		},
+		{
+			name: "cherry-pick", oursV: "main", theirsV: "feat",
+			continueCmd: bson.D{{Key: "dumboCherryPick", Value: int32(1)}, {Key: "continue", Value: int32(1)}},
+			pause: func(t *testing.T, env *dumboDBTestEnv, dbName string) *mongo.Database {
+				main, feat := acSeedBranches(t, env, dbName)
+				acSetV(t, feat, "feat")
+				pickHash := acHeadHash(t, feat)
+				acSetV(t, main, "main")
+				raw := runCommandRaw(t, main, bson.D{{Key: "dumboCherryPick", Value: int32(1)}, {Key: "commit", Value: pickHash}})
+				require.EqualValues(t, 0, raw["ok"], "cherry-pick must conflict on _id:1")
+				return main
+			},
+		},
+		{
+			// Reverting the commit that set v2 restores v1, so "theirs" is the
+			// state being restored and "ours" is the later v3.
+			name: "revert", oursV: "v3", theirsV: "v1",
+			continueCmd: bson.D{{Key: "dumboRevert", Value: int32(1)}, {Key: "continue", Value: int32(1)}},
+			pause: func(t *testing.T, env *dumboDBTestEnv, dbName string) *mongo.Database {
+				main := env.Client.Database(dbName + "@main")
+				_, err := main.Collection("items").InsertOne(context.Background(),
+					bson.D{{Key: "_id", Value: int32(1)}, {Key: "v", Value: "v1"}})
+				require.NoError(t, err)
+				acSetV(t, main, "v2")
+				revertHash := acHeadHash(t, main)
+				acSetV(t, main, "v3")
+				raw := runCommandRaw(t, main, bson.D{{Key: "dumboRevert", Value: int32(1)}, {Key: "commit", Value: revertHash}})
+				require.EqualValues(t, 0, raw["ok"], "revert must conflict on _id:1")
+				return main
+			},
+		},
+		{
+			// A rebase replays the feature commit onto main, so the replayed
+			// commit is ours and the onto branch is theirs.
+			name: "rebase", oursV: "feat", theirsV: "main",
+			continueCmd: bson.D{{Key: "dumboRebase", Value: int32(1)}, {Key: "onto", Value: "main"}, {Key: "continue", Value: int32(1)}},
+			pause: func(t *testing.T, env *dumboDBTestEnv, dbName string) *mongo.Database {
+				main, feat := acSeedBranches(t, env, dbName)
+				acSetV(t, main, "main")
+				acSetV(t, feat, "feat")
+				raw := runCommandRaw(t, feat, bson.D{{Key: "dumboRebase", Value: int32(1)}, {Key: "onto", Value: "main"}})
+				require.EqualValues(t, 0, raw["ok"], "rebase must conflict on _id:1")
+				return feat
+			},
+		},
 	}
+}
 
-	for _, tc := range cases {
-		t.Run(tc.resolution, func(t *testing.T) {
-			env := startDumboDB(t, "--auto-commit")
-			ctx := context.Background()
-			main := conflictWindowDB(t, env, "acmr"+tc.resolution)
+// Every resolution is written through the branch working set, so each must
+// merge its edit into the branch's live root rather than stamp the root staged
+// when the operation paused back over it. Run against all four operations
+// because each one has its own continue path publishing that root.
+//
+// "ours" is covered per-operation by the contract tests below; these are the
+// resolutions that rewrite the conflicted document.
+func TestAutoCommit_ConflictWindow_RewritingResolutions(t *testing.T) {
+	resolutions := []string{"theirs", "custom"}
 
-			cid := soleConflictID(t, main)
-			cmd := bson.D{
-				{Key: "doltResolveConflict", Value: int32(1)},
-				{Key: "collection", Value: "items"},
-				{Key: "conflictId", Value: cid},
-				{Key: "resolution", Value: tc.resolution},
+	for _, op := range conflictOps() {
+		t.Run(op.name, func(t *testing.T) {
+			for _, resolution := range resolutions {
+				t.Run(resolution, func(t *testing.T) {
+					env := startDumboDB(t, "--auto-commit")
+					ctx := context.Background()
+					dbName := fmt.Sprintf("cw%s_%d", resolution, rand.Int64N(1_000_000))
+					opDB := op.pause(t, env, dbName)
+
+					_, err := opDB.Collection("items").InsertOne(ctx,
+						bson.D{{Key: "_id", Value: int32(99)}, {Key: "v", Value: "during"}})
+					require.NoError(t, err)
+
+					wantV := op.theirsV
+					cmd := bson.D{
+						{Key: "doltResolveConflict", Value: int32(1)},
+						{Key: "collection", Value: "items"},
+						{Key: "conflictId", Value: soleConflictID(t, opDB)},
+						{Key: "resolution", Value: resolution},
+					}
+					if resolution == "custom" {
+						wantV = "resolved"
+						cmd = append(cmd, bson.E{Key: "value", Value: bson.D{
+							{Key: "_id", Value: int32(1)},
+							{Key: "v", Value: wantV},
+						}})
+					}
+					var resolveRaw bson.M
+					require.NoError(t, opDB.RunCommand(ctx, cmd).Decode(&resolveRaw))
+					require.EqualValues(t, 1, resolveRaw["ok"])
+
+					assert.True(t, docExists(t, opDB.Collection("items"), 99),
+						"edit during conflict must survive the resolution itself")
+
+					contRaw := runCommandRaw(t, opDB, op.continueCmd)
+					require.EqualValues(t, 1, contRaw["ok"], "continue must succeed")
+
+					assert.True(t, docExists(t, opDB.Collection("items"), 99),
+						"edit during conflict must survive continue")
+
+					var doc bson.M
+					require.NoError(t, opDB.Collection("items").FindOne(ctx,
+						bson.D{{Key: "_id", Value: int32(1)}}).Decode(&doc))
+					assert.Equal(t, wantV, doc["v"], "the resolution must still have been applied")
+				})
 			}
-			if tc.resolution == "custom" {
-				cmd = append(cmd, bson.E{Key: "value", Value: bson.D{
-					{Key: "_id", Value: int32(1)},
-					{Key: "v", Value: tc.wantV},
-				}})
-			}
-			var resolveRaw bson.M
-			require.NoError(t, main.RunCommand(ctx, cmd).Decode(&resolveRaw))
-			require.EqualValues(t, 1, resolveRaw["ok"])
-
-			assert.True(t, docExists(t, main.Collection("items"), 99),
-				"edit during conflict must survive the resolution itself")
-
-			mergeContinue(t, main)
-			assert.True(t, docExists(t, main.Collection("items"), 99),
-				"edit during conflict must survive --continue")
-
-			var doc bson.M
-			require.NoError(t, main.Collection("items").FindOne(ctx, bson.D{{Key: "_id", Value: int32(1)}}).Decode(&doc))
-			assert.Equal(t, tc.wantV, doc["v"], "the resolution must still have been applied")
 		})
 	}
 }
