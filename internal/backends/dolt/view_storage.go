@@ -16,7 +16,6 @@ package dolt
 
 import (
 	"context"
-	"encoding/hex"
 	"fmt"
 	"sort"
 
@@ -65,53 +64,6 @@ func writeViewChunk(ctx context.Context, ns tree.NodeStore, vm *viewMeta) (hash.
 		return hash.Hash{}, fmt.Errorf("writing view metadata chunk: %w", err)
 	}
 	return addr, nil
-}
-
-func viewMetaToBSONHex(vm *viewMeta) (string, error) {
-	pipeline := vm.Pipeline
-	if pipeline == nil {
-		pipeline = types.MakeArray(0)
-	}
-	var collation any = types.Null
-	if vm.Collation != nil {
-		collation = vm.Collation
-	}
-	doc, err := types.NewDocument(
-		nsMetaTypeKey, nsMetaTypeView,
-		viewOnKey, vm.ViewOn,
-		viewPipelineKey, pipeline,
-		viewCollationKey, collation,
-	)
-	if err != nil {
-		return "", err
-	}
-	stored, err := docToBSON(doc)
-	if err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(stored), nil
-}
-
-func viewMetaFromBSONHex(s string) (*viewMeta, error) {
-	stored, err := hex.DecodeString(s)
-	if err != nil {
-		return nil, err
-	}
-	doc, err := bsonToDoc(stored)
-	if err != nil {
-		return nil, err
-	}
-	vm := &viewMeta{}
-	if v, err := doc.Get(viewOnKey); err == nil {
-		vm.ViewOn, _ = v.(string)
-	}
-	if p, err := doc.Get(viewPipelineKey); err == nil {
-		vm.Pipeline, _ = p.(*types.Array)
-	}
-	if c, err := doc.Get(viewCollationKey); err == nil {
-		vm.Collation, _ = c.(*types.Document)
-	}
-	return vm, nil
 }
 
 func readViewChunk(ctx context.Context, ns tree.NodeStore, h hash.Hash) (*viewMeta, error) {

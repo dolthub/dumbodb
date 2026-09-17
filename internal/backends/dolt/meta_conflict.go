@@ -16,7 +16,6 @@ package dolt
 
 import (
 	"context"
-	"encoding/hex"
 	"fmt"
 
 	"github.com/dolthub/dolt/go/store/prolly"
@@ -26,30 +25,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/types"
 )
-
-func collMetaToBSONHex(coll string, m *collMeta) (string, error) {
-	doc, err := collMetaToDoc(coll, m)
-	if err != nil {
-		return "", err
-	}
-	stored, err := docToBSON(doc)
-	if err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(stored), nil
-}
-
-func collMetaFromBSONHex(s string) (*collMeta, error) {
-	stored, err := hex.DecodeString(s)
-	if err != nil {
-		return nil, err
-	}
-	doc, err := bsonToDoc(stored)
-	if err != nil {
-		return nil, err
-	}
-	return docToCollMeta(doc), nil
-}
 
 // metaConflictEntry is a collection-metadata merge conflict, surfaced on the
 // OWNING collection -- the internal __dumbo_catalog__ name is never exposed.
@@ -216,9 +191,27 @@ func (b *Backend) reconcileMetaCollExistence(ctx context.Context, db *dbState, m
 	return nil
 }
 
+// adoptBranchWrites refreshes ms.resolvedAM from the branch's working root so a
+// resolution edits the live state of the branch rather than the root staged
+// when the operation paused. A --session-isolation merge has no shared branch
+// root to adopt: its state stays in ms.resolvedAM until the finalizing commit.
+func (b *Backend) adoptBranchWrites(ctx context.Context, db *dbState, ms *mergeInProgress) error {
+	if ms.isSessionCommit {
+		return nil
+	}
+	liveAM, err := b.currentWorkingAM(ctx, db, ms.intoBranch)
+	if err != nil {
+		return fmt.Errorf("DumboDBResolveConflict: %w", err)
+	}
+	ms.resolvedAM = liveAM
+	return nil
+}
+
 // applyResolvedAM reflects a resolved AddressMap into the shared branch working
-// set. For a --session-isolation commit it is a NO-OP (the resolution stays in
-// ms.resolvedAM until finalize commits it). Callers hold db.mu.
+// set, republishing the operation metadata alongside it so the resolution and
+// the shrinking conflict set land together. For a --session-isolation commit it
+// is a NO-OP (the resolution stays in ms.resolvedAM until finalize commits it).
+// Callers hold db.mu.
 func (b *Backend) applyResolvedAM(ctx context.Context, db *dbState, ms *mergeInProgress, finalAM prolly.AddressMap) error {
 	if ms.isSessionCommit {
 		return nil
@@ -228,7 +221,7 @@ func (b *Backend) applyResolvedAM(ctx context.Context, db *dbState, ms *mergeInP
 	if _, err := db.vs.WriteValue(ctx, dolttypes.SerialMessage(workingRtvl)); err != nil {
 		return fmt.Errorf("DumboDBResolveConflict: writing working RTVL: %w", err)
 	}
-	if err := db.persistAM(ctx, ms.intoBranch, finalAM); err != nil {
+	if err := persistConflictState(ctx, db, ms); err != nil {
 		return fmt.Errorf("DumboDBResolveConflict: updating working set: %w", err)
 	}
 	return nil

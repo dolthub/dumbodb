@@ -22,6 +22,7 @@ import (
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	doltref "github.com/dolthub/dolt/go/libraries/doltcore/ref"
+	"github.com/dolthub/dolt/go/store/datas"
 	"github.com/dolthub/dolt/go/store/hash"
 )
 
@@ -216,6 +217,120 @@ func (s *dbState) updateBranchWS(
 	e.ws = persisted
 	e.wsHash = newHash
 	return nil
+}
+
+// commitBranchRoot publishes commitRV as a new commit on branch together with
+// the working set fn returns it, in a single atomic update. Version-control
+// operations finish through here rather than committing and then updating the
+// working set separately: a crash between two such writes leaves a finished
+// commit on a branch whose working set still advertises the operation, and
+// neither continue nor abort can make sense of that afterwards.
+//
+// parents is the new commit's complete parent list. fn receives the working set
+// already pointed at commitRV and returns the one to publish with the commit.
+// Caller must hold state.mu.
+func (s *dbState) commitBranchRoot(
+	ctx context.Context,
+	branch string,
+	commitRV doltdb.RootValue,
+	parents []hash.Hash,
+	cm *datas.CommitMeta,
+	fn func(*doltdb.WorkingSet) (*doltdb.WorkingSet, error),
+) (hash.Hash, error) {
+	commitHash, published, err := s.commitBranchRootLocked(ctx, branch, commitRV, parents, cm, fn)
+	if err != nil {
+		return hash.Hash{}, err
+	}
+	s.pushWSToSession(ctx, branch, published)
+	return commitHash, nil
+}
+
+func (s *dbState) commitBranchRootLocked(
+	ctx context.Context,
+	branch string,
+	commitRV doltdb.RootValue,
+	parents []hash.Hash,
+	cm *datas.CommitMeta,
+	fn func(*doltdb.WorkingSet) (*doltdb.WorkingSet, error),
+) (hash.Hash, *doltdb.WorkingSet, error) {
+	e := s.branchEntry(branch)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	wsRef := doltref.NewWorkingSetRef("heads/" + branch)
+	if e.ws == nil {
+		ws, err := s.doltDB.ResolveWorkingSet(ctx, wsRef)
+		if err != nil {
+			// A branch whose working set never reached disk still has to be
+			// committable; an empty one anchors the optimistic lock at zero.
+			e.ws = doltdb.EmptyWorkingSet(wsRef).WithWorkingRoot(commitRV).WithStagedRoot(commitRV)
+			e.wsHash = hash.Hash{}
+		} else {
+			h, hErr := ws.HashOf()
+			if hErr != nil {
+				return hash.Hash{}, nil, fmt.Errorf("commitBranchRoot: hashing %q: %w", branch, hErr)
+			}
+			e.ws = ws
+			e.wsHash = h
+		}
+	}
+
+	headRoot, err := headRootValueForBranch(ctx, s, branch)
+	if err != nil {
+		return hash.Hash{}, nil, fmt.Errorf("commitBranchRoot: reading HEAD root for %q: %w", branch, err)
+	}
+
+	parentCommits := make([]*doltdb.Commit, 0, len(parents))
+	for _, p := range parents {
+		c, cErr := commitForHash(ctx, s, p)
+		if cErr != nil {
+			return hash.Hash{}, nil, fmt.Errorf("commitBranchRoot: %w", cErr)
+		}
+		if c != nil {
+			parentCommits = append(parentCommits, c)
+		}
+	}
+
+	pending, err := s.doltDB.NewPendingCommit(ctx, doltdb.Roots{
+		Head:    headRoot,
+		Working: commitRV,
+		Staged:  commitRV,
+	}, parentCommits, hash.Hash{}, cm)
+	if err != nil {
+		return hash.Hash{}, nil, fmt.Errorf("commitBranchRoot: pending commit for %q: %w", branch, err)
+	}
+
+	newWS, err := fn(e.ws.WithWorkingRoot(commitRV).WithStagedRoot(commitRV))
+	if err != nil {
+		return hash.Hash{}, nil, err
+	}
+
+	headRef, err := wsRef.ToHeadRef()
+	if err != nil {
+		return hash.Hash{}, nil, fmt.Errorf("commitBranchRoot: head ref for %q: %w", branch, err)
+	}
+	var rsc doltdb.ReplicationStatusController
+	commit, err := s.doltDB.CommitWithWorkingSet(ctx, headRef, wsRef, pending, newWS, e.wsHash, doltdb.TodoWorkingSetMeta(), &rsc)
+	if err != nil {
+		return hash.Hash{}, nil, fmt.Errorf("commitBranchRoot: committing %q: %w", branch, err)
+	}
+
+	persisted, err := s.doltDB.ResolveWorkingSet(ctx, wsRef)
+	if err != nil {
+		return hash.Hash{}, nil, fmt.Errorf("commitBranchRoot: post-commit resolve for %q: %w", branch, err)
+	}
+	newHash, err := persisted.HashOf()
+	if err != nil {
+		return hash.Hash{}, nil, fmt.Errorf("commitBranchRoot: post-commit hash for %q: %w", branch, err)
+	}
+	e.ws = persisted
+	e.wsHash = newHash
+
+	commitHash, err := commit.HashOf()
+	if err != nil {
+		return hash.Hash{}, nil, fmt.Errorf("commitBranchRoot: hashing new commit on %q: %w", branch, err)
+	}
+	return commitHash, persisted, nil
 }
 
 // commitBranchWS commits branch's working root as one Dolt commit, or returns

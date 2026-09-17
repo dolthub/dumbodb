@@ -125,8 +125,10 @@ func (b *Backend) doltCommitSessionIsolation(ctx context.Context, params *backen
 		if err != nil {
 			return nil, err
 		}
+		if err := clearMergeState(ctx, db, branch); err != nil {
+			return nil, fmt.Errorf("DumboDBCommit: clearing merge state on %q: %w", branch, err)
+		}
 		db.mergeState = nil
-		_ = clearMergeState(db)
 		return res, nil
 	}
 
@@ -173,7 +175,7 @@ func (b *Backend) doltCommitSessionIsolation(ctx context.Context, params *backen
 	if len(conflicts) > 0 || len(viewConflicts) > 0 || len(metaConflicts) > 0 {
 		db.mergeState = &mergeInProgress{
 			intoBranch:      branch,
-			fromBranch:      branch,
+			fromLabel:       fmt.Sprintf("branch '%s'", branch),
 			premergeAM:      oursAM,
 			intoHash:        theirHash,
 			fromHash:        theirHash,

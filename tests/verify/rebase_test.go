@@ -365,8 +365,8 @@ func TestRebaseVerify(t *testing.T) {
 		})
 		require.EqualValues(t, 0, raw["ok"], "rebase must conflict on F3")
 
-		// After the rebase swap, "theirs" is the onto/main side (v:200); "ours"
-		// would be the replayed feature commit (v:100).
+		// The replayed feature commit is "ours" (v:100) and the branch it is
+		// landing on is "theirs" (v:200), the same sides a merge would report.
 		var conflictsRes bson.M
 		require.NoError(t, featDB.RunCommand(ctx, bson.D{
 			{Key: "doltConflicts", Value: int32(1)},
@@ -507,8 +507,8 @@ func TestRebaseVerify(t *testing.T) {
 		require.NotEmpty(t, conflictID, "conflictId must not be empty")
 		assert.Equal(t, fmt.Sprintf("commit '%s' (ours) and branch 'main' (theirs) both modified document 1", featModHash),
 			firstConflict["reason"].(bson.M)["message"])
-		// After the rebase swap, "ours" is the replayed feature commit (v:200),
-		// "theirs" is the onto/main value (v:100).
+		// The replayed feature commit is "ours" (v:200) and the branch it is
+		// landing on is "theirs" (v:100), the same sides a merge would report.
 		assert.EqualValues(t, 200, firstConflict["ours"].(bson.M)["doc"].(bson.M)["v"], "ours = replayed feature commit")
 		assert.EqualValues(t, 100, firstConflict["theirs"].(bson.M)["doc"].(bson.M)["v"], "theirs = onto/main")
 
