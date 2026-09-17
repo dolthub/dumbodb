@@ -709,8 +709,13 @@ func (c *conn) dispatchThroughSession(connCtx context.Context, msg *wire.OpMsg, 
 	// by Sweep or End. Another connection arriving on this lsid no longer
 	// evicts this one, so there is no supersede to distinguish.
 	shadow, cachedKey := ci.CachedShadow()
+	// A non-transactional command may reconnect if its session was reaped: it
+	// carries no cross-command state, so a fresh session is equivalent. A
+	// command inside a client transaction or under --session-isolation cannot,
+	// because the reaped session held its uncommitted work.
+	mayReconnect := !c.h.SessionIsolation() && !ci.InTransaction()
 	staleReap := shadow != nil && cachedKey == sessKey && !shadow.Active() &&
-		shadow.Purged() && !c.h.SessionIsolation() && !ci.InTransaction()
+		shadow.Purged() && mayReconnect
 	if shadow == nil || cachedKey != sessKey || staleReap {
 		if cachedKey != "" && cachedKey != sessKey {
 			reg.End(cachedKey)
@@ -836,6 +841,24 @@ func (c *conn) dispatchThroughSession(connCtx context.Context, msg *wire.OpMsg, 
 		// unlucky writer can starve. Waiting a random slice of a growing
 		// window lets them land one at a time.
 		sleepBeforeReplay(attempt)
+	}
+	// The idle sweep can reap a pooled session in the window between the active
+	// check above and run() taking the command latch. run() rechecks under the
+	// latch and returns ErrShadowInvalidated before the command begins, so
+	// nothing ran. For a reconnectable command that is not a lost transaction,
+	// it is a reaped-then-reused session: reconnect and run once more against a
+	// fresh session rather than aborting an active client with code 251.
+	if errors.Is(runErr, sqlctx.ErrShadowInvalidated) && mayReconnect {
+		s, err := reg.Connect(sessKey)
+		if err != nil {
+			return nil, fmt.Errorf("session registry: reconnect for %q: %w", sessKey, err)
+		}
+		ci.SetCachedShadow(sessKey, s)
+		reRun := s.Use
+		if reconcileAtCommandEnd || cmd != nil && cmd.Durable {
+			reRun = s.Commit
+		}
+		runErr = reRun(time.Now(), attemptWrite)
 	}
 	if errors.Is(runErr, sqlctx.ErrShadowInvalidated) {
 		return nil, shadowGoneError(shadow)
