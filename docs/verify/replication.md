@@ -9,8 +9,10 @@ Unlike the other verify documents, this one needs more than a running
 dumbodb: it needs a real MongoDB replica set for DumboDB to follow. The
 setup below builds one from scratch.
 
-Everything here was walked through against `mongod 8.0.28` and dumbodb
-`v0.6.3-54-g3587423`. The automated analog is the replication suite in
+Everything here was walked through in `mongosh 2.3.1` against `mongod 8.0.28`
+and dumbodb `v0.6.3-61-g193c6f7`. The stamp is part of the content: if you
+change a command or an expected output, re-walk the document and update it in
+the same commit. The automated analog is the replication suite in
 `dolthub/dumbodb-parity-testing` (`go test -tags replication ./tests/`).
 
 ## Setup
