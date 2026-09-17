@@ -26,6 +26,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends/dolt"
 	"github.com/dolthub/dumbodb/internal/replication/control"
 	"github.com/dolthub/dumbodb/internal/replication/initialsync"
+	"github.com/dolthub/dumbodb/internal/replication/oplog"
 	"github.com/dolthub/dumbodb/internal/replication/topology"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
@@ -42,6 +43,57 @@ func TestTerminalInitialSyncFailureClassifiesUnsupportedBSON(t *testing.T) {
 	}
 	if failure, terminal := terminalInitialSyncFailure(errors.New("connection reset")); terminal || failure != (control.InitialSyncFailure{}) {
 		t.Fatalf("transient failure = %+v, %v", failure, terminal)
+	}
+}
+
+func TestApplyNoopAdvancesCheckpointWithoutCommit(t *testing.T) {
+	ctx := context.Background()
+	replicationRuntime, backend, store := newRecoveryRuntime(t)
+	recoveryCollection(t, ctx, backend)
+	commitRecoveryDatabase(t, ctx, backend, "base")
+	versioned := backend.(backends.VersioningBackend)
+	before, err := versioned.DumboDBLog(ctx, &backends.LogParams{DBName: "recovery", Branch: "main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := must.NotFail(types.NewDocument(
+		"ts", types.Timestamp(uint64(100)<<32|1),
+		"t", int64(2),
+		"op", "n",
+		"ns", "",
+		"o", must.NotFail(types.NewDocument("msg", "periodic noop")),
+	))
+	entry, err := oplog.ParseEntry(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := replicationRuntime.manager.AdvanceFetched(entry.OpTime, entry.OpTime); err != nil {
+		t.Fatal(err)
+	}
+	applier, _, _, err := replicationRuntime.appliers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := replicationRuntime.applyEntry(ctx, applier, entry); err != nil {
+		t.Fatal(err)
+	}
+	after, err := versioned.DumboDBLog(ctx, &backends.LogParams{DBName: "recovery", Branch: "main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after.Commits) != len(before.Commits) {
+		t.Fatalf("noop changed commit count from %d to %d", len(before.Commits), len(after.Commits))
+	}
+	checkpoint := store.Snapshot().Checkpoint
+	if checkpoint.Written != entry.OpTime || checkpoint.Durable != entry.OpTime || checkpoint.Applied != entry.OpTime {
+		t.Fatalf("noop checkpoint = %+v, want applied %+v", checkpoint, entry.OpTime)
+	}
+	if _, ok := store.CommitFor(entry.OpTime); ok {
+		t.Fatal("noop created commit provenance")
+	}
+	runtimeStatus := replicationRuntime.manager.Snapshot().Runtime
+	if runtimeStatus.AppliedOperations != 1 || runtimeStatus.PublishedCommits != 0 {
+		t.Fatalf("noop runtime counters = %+v", runtimeStatus)
 	}
 }
 

@@ -493,7 +493,6 @@ func (m *Manager) RecordAppliedOperation(operation string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.state.Runtime.AppliedOperations++
-	m.state.Runtime.PublishedCommits++
 	switch operation {
 	case "i":
 		m.state.Runtime.ReplicatedInserts++
@@ -504,6 +503,12 @@ func (m *Manager) RecordAppliedOperation(operation string) {
 	case "c":
 		m.state.Runtime.ReplicatedCommands++
 	}
+}
+
+func (m *Manager) RecordPublishedCommit() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.state.Runtime.PublishedCommits++
 }
 
 func (m *Manager) RecordFetchedOperation() {
@@ -602,6 +607,26 @@ func (m *Manager) AdvanceFetched(fetched, buffered control.OpTime) error {
 		return err
 	}
 	m.state.Checkpoint = checkpoint
+	return nil
+}
+
+// AdvanceApplied records an applied oplog entry that did not change versioned data.
+func (m *Manager) AdvanceApplied(applied control.OpTime) error {
+	m.mu.Lock()
+	checkpoint := m.state.Checkpoint
+	checkpoint.Written = applied
+	checkpoint.Durable = applied
+	checkpoint.Applied = applied
+	if err := m.store.SetCheckpoint(checkpoint); err != nil {
+		m.mu.Unlock()
+		return err
+	}
+	m.state.Checkpoint = checkpoint
+	listener := m.onProgress
+	m.mu.Unlock()
+	if listener != nil {
+		listener()
+	}
 	return nil
 }
 

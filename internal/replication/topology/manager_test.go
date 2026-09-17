@@ -241,6 +241,31 @@ func TestManagerPublishesCommitBeforeNotifyingProgress(t *testing.T) {
 	}
 }
 
+func TestManagerAdvancesAppliedWithoutCommit(t *testing.T) {
+	store := openControlStore(t, t.TempDir())
+	manager := New(store)
+	position := testOpTime(8)
+	if err := manager.AdvanceFetched(position, position); err != nil {
+		t.Fatal(err)
+	}
+	notifications := 0
+	manager.SetProgressListener(func() { notifications++ })
+	if err := manager.AdvanceApplied(position); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint := manager.Snapshot().Checkpoint
+	if checkpoint.Fetched != position || checkpoint.Buffered != position || checkpoint.Written != position ||
+		checkpoint.Durable != position || checkpoint.Applied != position {
+		t.Fatalf("checkpoint = %+v, want all positions at %+v", checkpoint, position)
+	}
+	if len(store.CommitIntervals()) != 0 {
+		t.Fatalf("non-mutating progress created commit provenance: %+v", store.CommitIntervals())
+	}
+	if notifications != 1 {
+		t.Fatalf("progress notifications = %d, want 1", notifications)
+	}
+}
+
 func TestManagerPublishCommitPreservesConcurrentFetchProgress(t *testing.T) {
 	store := openControlStore(t, t.TempDir())
 	base := testOpTime(5)

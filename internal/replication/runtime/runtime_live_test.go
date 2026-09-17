@@ -97,6 +97,12 @@ func TestLiveRuntimeInitialSyncSteadyApplyAndRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitForRuntimeDocuments(t, ctx, backend, 2)
+	beforeIdleCommits := runtimeCommitCount(t, ctx, backend)
+	beforeIdlePosition := manager.Snapshot().Checkpoint.Applied
+	waitForRuntimeAppliedAfter(t, ctx, manager, beforeIdlePosition)
+	if afterIdleCommits := runtimeCommitCount(t, ctx, backend); afterIdleCommits != beforeIdleCommits {
+		t.Fatalf("idle primary changed commit count from %d to %d", beforeIdleCommits, afterIdleCommits)
+	}
 	stopRuntime()
 	select {
 	case <-runtimeDone:
@@ -238,6 +244,17 @@ func waitForRuntimePhase(t *testing.T, ctx context.Context, manager *topology.Ma
 	}
 }
 
+func waitForRuntimeAppliedAfter(t *testing.T, ctx context.Context, manager *topology.Manager, previous control.OpTime) {
+	t.Helper()
+	for manager.Snapshot().Checkpoint.Applied.Compare(previous) <= 0 {
+		select {
+		case <-ctx.Done():
+			t.Fatalf("waiting for idle oplog progress after %+v: %v", previous, ctx.Err())
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
 func runtimeDocumentCount(t *testing.T, ctx context.Context, backend backends.Backend) int64 {
 	t.Helper()
 	database, err := backend.Database("runtime_test")
@@ -253,6 +270,16 @@ func runtimeDocumentCount(t *testing.T, ctx context.Context, backend backends.Ba
 		t.Fatal(err)
 	}
 	return result.Count
+}
+
+func runtimeCommitCount(t *testing.T, ctx context.Context, backend backends.Backend) int {
+	t.Helper()
+	versioned := backend.(backends.VersioningBackend)
+	result, err := versioned.DumboDBLog(ctx, &backends.LogParams{DBName: "runtime_test", Branch: "main", Limit: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(result.Commits)
 }
 
 func freeRuntimeAddress(t *testing.T) string {

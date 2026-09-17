@@ -319,6 +319,7 @@ func TestServerStatusReportsMongoReplicationSections(t *testing.T) {
 	handler.ReplicationTopology.ObserveBuffer(7, 4096, 50000, 256<<20)
 	handler.ReplicationTopology.ObserveSourceOplogHead(control.OpTime{Seconds: 105, Increment: 1, Term: 3})
 	handler.ReplicationTopology.RecordAppliedOperation("i")
+	handler.ReplicationTopology.RecordPublishedCommit()
 	handler.ReplicationTopology.RecordFetchedOperation()
 	handler.ReplicationTopology.RecordOplogReaderCreated()
 

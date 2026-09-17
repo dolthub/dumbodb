@@ -295,6 +295,16 @@ func (r *Runtime) runSteady(ctx context.Context) error {
 }
 
 func (r *Runtime) applyEntry(ctx context.Context, applier *oplog.Applier, entry oplog.Entry) error {
+	if entry.Operation == "n" {
+		if err := applier.Apply(ctx, entry); err != nil {
+			return err
+		}
+		if err := r.manager.AdvanceApplied(entry.OpTime); err != nil {
+			return err
+		}
+		r.manager.RecordAppliedOperation(entry.Operation)
+		return nil
+	}
 	databases, err := r.publicationDatabases(ctx, entry)
 	if err != nil {
 		return err
@@ -323,6 +333,7 @@ func (r *Runtime) applyEntry(ctx context.Context, applier *oplog.Applier, entry 
 		return err
 	}
 	r.manager.RecordAppliedOperation(entry.Operation)
+	r.manager.RecordPublishedCommit()
 	return nil
 }
 

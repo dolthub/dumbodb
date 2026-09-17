@@ -177,16 +177,12 @@ The pair that carried the insert shows it as an addition:
     "documents": { "added": [ { "_id": 4, "name": "item-4", "qty": 40 } ] } } ]
 ```
 
-### Known wrinkle: most commits are empty
+### Idle history check
 
-DumboDB currently commits on a timer rather than only when something
-changed, so an idle replica keeps producing commits with no content. In a
-short session most adjacent pairs diff to `[]`, and only a few carry real
-changes. Finding the interesting commit means walking pairs until one is
-non-empty.
-
-This is tracked as `workspace-6d0`. It does not affect correctness of the
-replicated data, only the readability of the history.
+Leave the primary idle for at least 20 seconds, then run `dumboLog` again.
+The commit count must be unchanged. MongoDB periodically writes no-op oplog
+entries; DumboDB advances its durable replication checkpoint for those entries
+without adding empty commits to the versioned history.
 
 ## Scenario 4: Inspect replication health
 
