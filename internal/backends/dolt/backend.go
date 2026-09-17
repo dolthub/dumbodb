@@ -302,7 +302,18 @@ func (b *Backend) OnSessionEnd(owner string) {
 }
 
 func (b *Backend) OnTransactionCommit(ctx context.Context, owner string) error {
-	sess := b.sessionForOwner(owner)
+	// Reconcile the session the write actually ran on -- the one the
+	// connection holds via its cached shadow -- not a fresh registry lookup.
+	// Under a shared lsid (pooled driver sessions), another connection can
+	// clear this owner's registry entry between the write and its boundary;
+	// sessionForOwner would then return nil, the boundary would publish
+	// nothing, and the write's already-acknowledged n:1 would stand with no
+	// durable increment behind it. The cached shadow still points at the
+	// session that carries the overlay, so it is the authority here.
+	sess := sessionFromContext(ctx)
+	if sess == nil {
+		sess = b.sessionForOwner(owner)
+	}
 	if sess == nil {
 		b.releaseLocksForOwner(owner)
 		return nil
