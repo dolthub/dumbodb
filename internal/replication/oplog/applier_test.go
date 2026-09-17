@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"testing"
 	"time"
 
@@ -362,6 +363,34 @@ func TestApplierCreatesCollectionsInsideApplyOps(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertStoredDocument(t, ctx, backend, "orders", "events", document)
+}
+
+func TestCounterOperationKindsUnwrapsApplyOps(t *testing.T) {
+	sourceUUID := "12345678-1234-4234-9234-123456789abc"
+	entry := makeTransactionEntry(t, 12, 23, nullOpTimeDocument(), false, false,
+		embeddedOperation("i", "orders.items", sourceUUID, must.NotFail(types.NewDocument("_id", int32(1))), nil),
+		embeddedOperation("u", "orders.items", sourceUUID, must.NotFail(types.NewDocument("$set", must.NotFail(types.NewDocument("value", int32(2))))), must.NotFail(types.NewDocument("_id", int32(1)))),
+		embeddedOperation("d", "orders.items", sourceUUID, must.NotFail(types.NewDocument("_id", int32(1))), nil),
+		embeddedOperation("c", "orders.$cmd", sourceUUID, must.NotFail(types.NewDocument("create", "events")), nil),
+		embeddedOperation("n", "", sourceUUID, must.NotFail(types.NewDocument("msg", "noop")), nil),
+	)
+	kinds, err := CounterOperationKinds(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"i", "u", "d", "c"}
+	if !slices.Equal(kinds, want) {
+		t.Fatalf("counter operation kinds = %v, want %v", kinds, want)
+	}
+
+	command := makeOplogEntry(t, 13, "c", "orders.$cmd", sourceUUID, must.NotFail(types.NewDocument("create", "items")), nil)
+	kinds, err = CounterOperationKinds(command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(kinds, []string{"c"}) {
+		t.Fatalf("command counter operation kinds = %v, want [c]", kinds)
+	}
 }
 
 func TestApplierPreparedCommitAndAbort(t *testing.T) {

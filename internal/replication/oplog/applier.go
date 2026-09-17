@@ -95,6 +95,68 @@ func (a *Applier) Apply(ctx context.Context, entry Entry) error {
 	return a.applyOperation(ctx, operation, entry.OpTime)
 }
 
+// CounterOperationKinds returns the operation kinds represented by one oplog entry.
+func CounterOperationKinds(entry Entry) ([]string, error) {
+	document, err := bson.ToDocument(wirebson.RawDocument(entry.RawBSON))
+	if err != nil {
+		return nil, fmt.Errorf("decoding oplog entry at %v: %w", entry.OpTime, err)
+	}
+	operation, err := parseOperation(document)
+	if err != nil {
+		return nil, fmt.Errorf("parsing oplog entry at %v: %w", entry.OpTime, err)
+	}
+	if operation.Kind != entry.Operation || operation.Namespace != entry.Namespace {
+		return nil, errors.New("oplog entry fields disagree with parsed raw BSON")
+	}
+	return counterOperationKinds(operation)
+}
+
+func counterOperationKinds(operation operation) ([]string, error) {
+	if operation.Kind == "n" {
+		return nil, nil
+	}
+	if operation.Kind != "c" {
+		return []string{operation.Kind}, nil
+	}
+	commandName, _, err := firstField(operation.Object)
+	if err != nil {
+		return nil, err
+	}
+	if commandName != "applyOps" {
+		return []string{operation.Kind}, nil
+	}
+	value, _ := operation.Object.Get("applyOps")
+	operations, ok := value.(*types.Array)
+	if !ok {
+		return nil, fmt.Errorf("applyOps has type %T, want array", value)
+	}
+	kinds := make([]string, 0, operations.Len())
+	iter := operations.Iterator()
+	defer iter.Close()
+	for {
+		_, value, err := iter.Next()
+		if errors.Is(err, iterator.ErrIteratorDone) {
+			return kinds, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		document, ok := value.(*types.Document)
+		if !ok {
+			return nil, fmt.Errorf("applyOps element has type %T, want document", value)
+		}
+		inner, err := parseOperation(document)
+		if err != nil {
+			return nil, err
+		}
+		innerKinds, err := counterOperationKinds(inner)
+		if err != nil {
+			return nil, err
+		}
+		kinds = append(kinds, innerKinds...)
+	}
+}
+
 type operation struct {
 	Kind       string
 	Namespace  string

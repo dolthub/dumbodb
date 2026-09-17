@@ -295,6 +295,10 @@ func (r *Runtime) runSteady(ctx context.Context) error {
 }
 
 func (r *Runtime) applyEntry(ctx context.Context, applier *oplog.Applier, entry oplog.Entry) error {
+	operationKinds, err := oplog.CounterOperationKinds(entry)
+	if err != nil {
+		return err
+	}
 	if entry.Operation == "n" {
 		if err := applier.Apply(ctx, entry); err != nil {
 			return err
@@ -302,7 +306,7 @@ func (r *Runtime) applyEntry(ctx context.Context, applier *oplog.Applier, entry 
 		if err := r.manager.AdvanceApplied(entry.OpTime); err != nil {
 			return err
 		}
-		r.manager.RecordAppliedOperation(entry.Operation)
+		r.manager.RecordAppliedEntry(operationKinds)
 		return nil
 	}
 	databases, err := r.publicationDatabases(ctx, entry)
@@ -332,7 +336,7 @@ func (r *Runtime) applyEntry(ctx context.Context, applier *oplog.Applier, entry 
 	if err := r.publisher.Complete(ctx, publicationID); err != nil {
 		return err
 	}
-	r.manager.RecordAppliedOperation(entry.Operation)
+	r.manager.RecordAppliedEntry(operationKinds)
 	r.manager.RecordPublishedCommit()
 	return nil
 }

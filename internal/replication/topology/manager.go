@@ -489,19 +489,21 @@ func (m *Manager) ObserveBuffer(entries int, bytes int64, entryLimit int, byteLi
 	m.state.Runtime.BufferByteLimit = byteLimit
 }
 
-func (m *Manager) RecordAppliedOperation(operation string) {
+func (m *Manager) RecordAppliedEntry(operationKinds []string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.state.Runtime.AppliedOperations++
-	switch operation {
-	case "i":
-		m.state.Runtime.ReplicatedInserts++
-	case "u":
-		m.state.Runtime.ReplicatedUpdates++
-	case "d":
-		m.state.Runtime.ReplicatedDeletes++
-	case "c":
-		m.state.Runtime.ReplicatedCommands++
+	for _, operation := range operationKinds {
+		switch operation {
+		case "i":
+			m.state.Runtime.ReplicatedInserts++
+		case "u":
+			m.state.Runtime.ReplicatedUpdates++
+		case "d":
+			m.state.Runtime.ReplicatedDeletes++
+		case "c":
+			m.state.Runtime.ReplicatedCommands++
+		}
 	}
 }
 
