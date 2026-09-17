@@ -392,40 +392,6 @@ func TestServerStatusReportsMongoReplicationSections(t *testing.T) {
 	}
 }
 
-func TestDumboReplicationDetachStopsMemberAndPersistsLifecycle(t *testing.T) {
-	handler := configuredReplicationHandler(t)
-	if err := handler.ReplicationTopology.ObserveHeartbeat("primary.example:27017", topology.Heartbeat{
-		SetName: "rs0", MemberID: 1, State: topology.StatePrimary, Term: 3, PrimaryID: 1,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	response, err := handler.MsgDumboReplicationDetach(context.Background(), wire.MustOpMsg(
-		"dumboReplicationDetach", int32(1), "$db", "admin",
-	))
-	if err != nil {
-		t.Fatal(err)
-	}
-	document, err := opMsgDocument(response)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if responseValue(document, "state") != "detached" {
-		t.Fatalf("detach response = %v", document)
-	}
-	if snapshot := handler.ReplicationTopology.Snapshot(); snapshot.State != topology.StateRemoved || snapshot.SyncSource != "" {
-		t.Fatalf("detached topology = %+v", snapshot)
-	}
-	persisted := handler.ReplicationTopology.ControlSnapshot()
-	if persisted.Lifecycle != control.LifecycleDetached || persisted.CurrentSource != "" {
-		t.Fatalf("detached control state = %+v", persisted)
-	}
-	if _, err := handler.MsgDumboReplicationDetach(context.Background(), wire.MustOpMsg(
-		"dumboReplicationDetach", int32(1), "$db", "app",
-	)); err == nil {
-		t.Fatal("detach succeeded outside admin database")
-	}
-}
-
 func configuredReplicationHandler(t *testing.T) *Handler {
 	t.Helper()
 	backend, store := testutil.NewControlStore(t, control.Configuration{

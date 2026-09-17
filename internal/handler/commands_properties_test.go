@@ -61,7 +61,7 @@ func TestCommands_BlockedInTxnFlag(t *testing.T) {
 	h := handlerForTest(t)
 	cmds := h.Commands()
 
-	blockedNames := []string{"drop", "dropDatabase", "createIndexes", "renameCollection", "collMod", "dumboReplicationDetach"}
+	blockedNames := []string{"drop", "dropDatabase", "createIndexes", "renameCollection", "collMod"}
 	for _, n := range blockedNames {
 		cmd, ok := cmds[n]
 		assert.True(t, ok, "command %q must be registered", n)
@@ -124,6 +124,15 @@ func TestCommands_NoCommandHasBothFlags(t *testing.T) {
 	for name, cmd := range h.Commands() {
 		assert.False(t, cmd.Durable && cmd.BlockedInTxn,
 			"command %q has both Durable and BlockedInTxn", name)
+	}
+}
+
+func TestCommands_NoCustomReplicationCommands(t *testing.T) {
+	h := handlerForTest(t)
+	for _, name := range []string{"dumboReplicationDetach", "dumboReplicationStatus"} {
+		if _, ok := h.Commands()[name]; ok {
+			t.Fatalf("custom replication command %q is registered", name)
+		}
 	}
 }
 

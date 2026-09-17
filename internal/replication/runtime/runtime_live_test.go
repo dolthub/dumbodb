@@ -108,13 +108,50 @@ func TestLiveRuntimeInitialSyncSteadyApplyAndRestart(t *testing.T) {
 	reopenedBackend, reopenedManager, reopenedRuntime := newLiveRuntime(t, dataDirectory, controlDirectory, mongoAddress)
 	defer reopenedBackend.Close()
 	restartContext, stopRestart := context.WithCancel(ctx)
-	defer stopRestart()
-	go reopenedRuntime.Run(restartContext)
+	restartDone := make(chan struct{})
+	go func() {
+		reopenedRuntime.Run(restartContext)
+		close(restartDone)
+	}()
+	defer func() {
+		stopRestart()
+		select {
+		case <-restartDone:
+		case <-time.After(5 * time.Second):
+			t.Error("replication runtime did not stop after cancellation")
+		}
+	}()
 	waitForRuntimeState(t, ctx, reopenedManager, topology.StateSecondary)
 	if _, err := collection.InsertOne(ctx, mongobson.D{{Key: "_id", Value: 3}, {Key: "value", Value: "restart"}}); err != nil {
 		t.Fatal(err)
 	}
 	waitForRuntimeDocuments(t, ctx, reopenedBackend, 3)
+
+	beforeRemoval := reopenedManager.ControlSnapshot()
+	removedConfiguration := *reopenedManager.Snapshot().Configuration
+	removedConfiguration.Version++
+	removedConfiguration.Members = append([]control.MemberConfiguration(nil), removedConfiguration.Members[:1]...)
+	if err := reopenedManager.InstallConfiguration(removedConfiguration, reopenedManager.Snapshot().Term); err != nil {
+		t.Fatal(err)
+	}
+	waitForRuntimeState(t, ctx, reopenedManager, topology.StateRemoved)
+	waitForRuntimePhase(t, ctx, reopenedManager, "detached")
+	if _, err := collection.InsertOne(ctx, mongobson.D{{Key: "_id", Value: 4}, {Key: "value", Value: "after-removal"}}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(2 * time.Second)
+	if count := runtimeDocumentCount(t, ctx, reopenedBackend); count != 3 {
+		t.Fatalf("removed member replicated post-removal write: document count = %d, want 3", count)
+	}
+	afterRemoval := reopenedManager.ControlSnapshot()
+	if afterRemoval.Checkpoint != beforeRemoval.Checkpoint || len(afterRemoval.CommitIntervals) != len(beforeRemoval.CommitIntervals) {
+		t.Fatalf("removal changed replicated history: before=%+v after=%+v", beforeRemoval, afterRemoval)
+	}
+	select {
+	case <-restartDone:
+		t.Fatal("replication runtime stopped when the member was removed")
+	default:
+	}
 }
 
 func newLiveRuntime(t *testing.T, dataDirectory, _ string, source string) (backends.Backend, *topology.Manager, *Runtime) {
@@ -188,6 +225,34 @@ func waitForRuntimeState(t *testing.T, ctx context.Context, manager *topology.Ma
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
+}
+
+func waitForRuntimePhase(t *testing.T, ctx context.Context, manager *topology.Manager, phase string) {
+	t.Helper()
+	for manager.Snapshot().Runtime.Phase != phase {
+		select {
+		case <-ctx.Done():
+			t.Fatalf("waiting for replication phase %s: %v", phase, ctx.Err())
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
+func runtimeDocumentCount(t *testing.T, ctx context.Context, backend backends.Backend) int64 {
+	t.Helper()
+	database, err := backend.Database("runtime_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	collection, err := database.Collection("events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := collection.Count(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result.Count
 }
 
 func freeRuntimeAddress(t *testing.T) string {

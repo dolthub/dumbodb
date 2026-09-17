@@ -299,6 +299,14 @@ func TestManagerDetachesWhenRemovedFromConfiguration(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	interval := control.CommitInterval{
+		First:    control.OpTime{Seconds: 100, Increment: 1, Term: 8},
+		Last:     control.OpTime{Seconds: 100, Increment: 2, Term: 8},
+		CommitID: "replicated-history",
+	}
+	if err := store.RecordCommit(interval); err != nil {
+		t.Fatal(err)
+	}
 	removed := configuration
 	removed.Version++
 	removed.Members = append([]control.MemberConfiguration(nil), configuration.Members[:2]...)
@@ -310,6 +318,9 @@ func TestManagerDetachesWhenRemovedFromConfiguration(t *testing.T) {
 	}
 	if persisted := store.Snapshot(); persisted.Lifecycle != control.LifecycleDetached || persisted.CurrentSource != "" {
 		t.Fatalf("removed member control state = %+v", persisted)
+	}
+	if got, ok := store.CommitFor(interval.Last); !ok || got.CommitID != interval.CommitID {
+		t.Fatalf("removed member lost replicated history: %+v, %v", got, ok)
 	}
 
 	readded := configuration

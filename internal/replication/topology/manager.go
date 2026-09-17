@@ -466,23 +466,6 @@ func (m *Manager) RecordFailure(failure control.ReplicationFailure) error {
 	return m.store.RecordFailure(failure)
 }
 
-func (m *Manager) Detach() error {
-	if err := m.store.Detach(); err != nil {
-		return err
-	}
-	m.mu.Lock()
-	previous := cloneSnapshot(m.state)
-	m.state.State = StateRemoved
-	m.state.SyncSource = ""
-	m.setRuntimePhaseLocked("detached")
-	listener := m.changeListenerLocked(previous)
-	m.mu.Unlock()
-	if listener != nil {
-		listener()
-	}
-	return nil
-}
-
 func (m *Manager) SetRuntimePhase(phase string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

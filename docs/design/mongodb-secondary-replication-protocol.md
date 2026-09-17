@@ -801,10 +801,10 @@ for normal `rs.add` setup. It refuses to begin unless its member is `hidden: tru
 the current configuration before fetching. **DESIGN**
 
 Removing the member from the replica-set configuration stops fetching and enters a
-detached state without deleting `main` history. An administrative
-`dumboReplicationDetach` operation may then clear active replication ownership while
-preserving the history and its source-optime provenance. Reattaching to a different
-replica-set ID requires a new initial sync; identities cannot be spliced. **DESIGN**
+detached state without stopping the server or deleting `main` history. There is no
+member-side detach command: operators use MongoDB's standard replica-set
+reconfiguration on the primary. Reattaching to a different replica-set ID requires
+a new initial sync; identities cannot be spliced. **DESIGN**
 
 `replSetGetStatus` provides MongoDB-compatible member status and durable optimes.
 `serverStatus.repl` reports replica-set identity and role,

@@ -83,7 +83,6 @@ func (h *Handler) initCommands() {
 		"debugError":               {Handler: h.MsgDebugError, Help: "Returns error for debugging."},
 		"delete":                   {Handler: h.MsgDelete, Help: "Deletes documents matched by the query."},
 		"distinct":                 {Handler: h.MsgDistinct, Help: "Returns an array of distinct values for the given field."},
-		"dumboReplicationDetach":   {Handler: h.MsgDumboReplicationDetach, Help: "Stops replication while preserving replicated history.", BlockedInTxn: true},
 		"dropIndexes":              {Handler: h.MsgDropIndexes, Help: "Drops indexes on a collection."},
 		"explain":                  {Handler: h.MsgExplain, Help: "Returns the execution plan."},
 		"find":                     {Handler: h.MsgFind, Help: "Returns documents matched by the query."},

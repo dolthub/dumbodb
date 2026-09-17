@@ -249,6 +249,9 @@ func (r *Runtime) runSteady(ctx context.Context) error {
 		default:
 		}
 		state := r.manager.Snapshot().State
+		if state == topology.StateRemoved {
+			return oplog.ErrSourceChanged
+		}
 		if state == topology.StateRecovering || state == topology.StateStartup2 {
 			select {
 			case err := <-fetchDone:
@@ -281,6 +284,9 @@ func (r *Runtime) runSteady(ctx context.Context) error {
 				return ctx.Err()
 			}
 			continue
+		}
+		if r.manager.Snapshot().State == topology.StateRemoved {
+			return oplog.ErrSourceChanged
 		}
 		if err := r.applyEntry(ctx, applier, entries[0]); err != nil {
 			return err

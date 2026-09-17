@@ -36,9 +36,8 @@ func TestStorePersistsRecoveryState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	identity := Identity{ReplicaSetID: "set-id", MemberID: 3, ConfigVersion: 7, ConfigTerm: 4, Term: 9}
-	member := MemberConfiguration{MemberID: 3, Host: configuration.MemberHost, Hidden: true, Priority: 0, Votes: 0}
-	if err := store.InstallMember(identity, member); err != nil {
+	replicaConfiguration := testReplicaConfiguration()
+	if err := store.InstallReplicaConfiguration(replicaConfiguration, 9); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.SetSource("primary.example:27017", 18); err != nil {
@@ -76,9 +75,13 @@ func TestStorePersistsRecoveryState(t *testing.T) {
 	if err := store.PutTransactionFragment(fragment); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Detach(); err != nil {
+	removedConfiguration := replicaConfiguration
+	removedConfiguration.Version++
+	removedConfiguration.Members = append([]MemberConfiguration(nil), replicaConfiguration.Members[:1]...)
+	if err := store.InstallReplicaConfiguration(removedConfiguration, 9); err != nil {
 		t.Fatal(err)
 	}
+	identity := Identity{ReplicaSetID: "set-id", MemberID: 3, ConfigVersion: 8, ConfigTerm: 4, Term: 9}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -115,6 +118,10 @@ func TestStorePersistsReplicationDiagnostics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	replicaConfiguration := testReplicaConfiguration()
+	if err := store.InstallReplicaConfiguration(replicaConfiguration, 9); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.SetSource("primary.example:27017", 4); err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +133,10 @@ func TestStorePersistsReplicationDiagnostics(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Detach(); err != nil {
+	removedConfiguration := replicaConfiguration
+	removedConfiguration.Version++
+	removedConfiguration.Members = append([]MemberConfiguration(nil), replicaConfiguration.Members[:1]...)
+	if err := store.InstallReplicaConfiguration(removedConfiguration, 9); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {
@@ -1056,6 +1066,20 @@ func TestStoreRejectsMalformedReplicaConfiguration(t *testing.T) {
 
 func testConfiguration() Configuration {
 	return Configuration{SetName: "rs0", MemberHost: "dumbo.example:27017"}
+}
+
+func testReplicaConfiguration() ReplicaConfiguration {
+	return ReplicaConfiguration{
+		SetName:         "rs0",
+		Version:         7,
+		Term:            4,
+		ProtocolVersion: 1,
+		ReplicaSetID:    "set-id",
+		Members: []MemberConfiguration{
+			{MemberID: 1, Host: "primary.example:27017", Priority: 1, Votes: 1},
+			{MemberID: 3, Host: "dumbo.example:27017", Hidden: true, Priority: 0, Votes: 0},
+		},
+	}
 }
 
 func opTime(increment uint32) OpTime {

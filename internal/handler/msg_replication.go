@@ -25,7 +25,6 @@ import (
 	"github.com/FerretDB/wire/wirebson"
 
 	"github.com/dolthub/dumbodb/internal/bson"
-	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/replication/control"
 	"github.com/dolthub/dumbodb/internal/replication/topology"
@@ -133,38 +132,6 @@ func initialSyncFailureCount(history []control.ReplicationFailure) int32 {
 		}
 	}
 	return count
-}
-
-func (h *Handler) MsgDumboReplicationDetach(_ context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
-	document, err := opMsgDocument(msg)
-	if err != nil {
-		return nil, lazyerrors.Error(err)
-	}
-	if err := common.RejectUnknownFields(document); err != nil {
-		return nil, err
-	}
-	if err := requireAdminReplicationCommand(msg); err != nil {
-		return nil, err
-	}
-	if h.ReplicationTopology == nil {
-		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrorCode(76), "not running with --replSet")
-	}
-	if err := h.ReplicationTopology.Detach(); err != nil {
-		return nil, lazyerrors.Error(err)
-	}
-	return documentOpMsg(must.NotFail(types.NewDocument("state", "detached", "ok", float64(1))))
-}
-
-func requireAdminReplicationCommand(msg *wire.OpMsg) error {
-	command, database, _ := wireCommandTarget(msg)
-	if database == "admin" {
-		return nil
-	}
-	return handlererrors.NewCommandErrorMsgWithArgument(
-		handlererrors.ErrUnauthorized,
-		fmt.Sprintf("%s may only be run against the admin database", command),
-		command,
-	)
 }
 
 func replicaStatusOpTimes(state topology.Snapshot) *types.Document {

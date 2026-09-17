@@ -992,21 +992,6 @@ func (s *Store) DeleteTransactionFragment(key string) error {
 	return s.persistLocked()
 }
 
-func (s *Store) Detach() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.state.Lifecycle = LifecycleDetached
-	s.recordSourceChangeLocked("")
-	return s.persistLocked()
-}
-
-func (s *Store) Activate() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.state.Lifecycle = LifecycleActive
-	return s.persistLocked()
-}
-
 const replicationHistoryLimit = 32
 
 func (s *Store) recordSourceChangeLocked(source string) {

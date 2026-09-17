@@ -107,14 +107,13 @@ var commandPrivileges = map[string][]commandPrivilege{
 	"grantRolesToRole":         {{authz.ActionGrantRole, scopeDatabase}},
 	"revokeRolesFromRole":      {{authz.ActionRevokeRole, scopeDatabase}},
 
-	"serverStatus":           {{authz.ActionServerStatus, scopeCluster}},
-	"dumboReplicationDetach": {{authz.ActionSetParameter, scopeCluster}},
-	"listDatabases":          {{authz.ActionListDatabases, scopeCluster}},
-	"getParameter":           {{authz.ActionGetParameter, scopeCluster}},
-	"setParameter":           {{authz.ActionSetParameter, scopeCluster}},
-	"hostInfo":               {{authz.ActionHostInfo, scopeCluster}},
-	"top":                    {{authz.ActionTop, scopeCluster}},
-	"getLog":                 {{authz.ActionGetLog, scopeCluster}},
+	"serverStatus":  {{authz.ActionServerStatus, scopeCluster}},
+	"listDatabases": {{authz.ActionListDatabases, scopeCluster}},
+	"getParameter":  {{authz.ActionGetParameter, scopeCluster}},
+	"setParameter":  {{authz.ActionSetParameter, scopeCluster}},
+	"hostInfo":      {{authz.ActionHostInfo, scopeCluster}},
+	"top":           {{authz.ActionTop, scopeCluster}},
+	"getLog":        {{authz.ActionGetLog, scopeCluster}},
 }
 
 func (h *Handler) authorize(ctx context.Context, msg *wire.OpMsg) error {

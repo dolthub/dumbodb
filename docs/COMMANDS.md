@@ -85,12 +85,6 @@ Every version-control `dumbo*` command has an identical `dolt*` alias:
 | `dumboFetch` | `doltFetch` |
 | `dumboPull` | `doltPull` |
 
-Replication operator commands have no `dolt*` aliases:
-
-| Command | Purpose |
-|---------|---------|
-| `dumboReplicationDetach` | Stops replication while preserving `main` history and provenance. |
-
 ---
 
 ## Replication status
@@ -109,18 +103,11 @@ buffer, initial-sync, network, and sync-source counters, and the top-level
 `serverStatus.opcountersRepl` reports replicated operation counts. Commit
 provenance remains internal recovery metadata and is not exposed as a command.
 
-## dumboReplicationDetach
-
-Stops replication without deleting data, commit history, or source provenance:
-
-```js
-db.getSiblingDB("admin").runCommand({dumboReplicationDetach: 1})
-```
-
-The member immediately reports `REMOVED`, clears its sync source, and persists the
-detached lifecycle. Removal from the MongoDB replica-set configuration performs
-the same transition automatically. Re-adding the same member identity to the same
-replica set activates it again; a different replica-set identity is rejected.
+To stop replication, remove the member through MongoDB's standard replica-set
+reconfiguration on the primary. The removed DumboDB process remains available,
+reports `REMOVED`, and preserves its data and commit history. Re-adding the same
+member identity to the same replica set activates it again; a different replica-set
+identity is rejected.
 
 ---
 
