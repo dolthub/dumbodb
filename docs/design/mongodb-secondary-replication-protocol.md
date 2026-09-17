@@ -495,9 +495,29 @@ replica does not preserve the source document's BSON bytes or presentation order
 This deviation can affect behavior, not only presentation. MongoDB compares whole
 embedded documents in field order, so equality, range, sort, grouping, distinct,
 and index behavior involving embedded-document values may differ after
-canonicalization. Differential tests must measure those cases explicitly. State
-comparison may ignore object field order, but must remain exact for field names,
-values, BSON types, arrays, and `_id`. **DESIGN**
+canonicalization. Differential testing against MongoDB 8.0.28 measured the
+deviation in eight of nine cases:
+
+| Case | Result |
+|---|---|
+| Stored embedded-document field order | Observable |
+| Whole-document equality match | Observable |
+| Sort by an embedded document, collection scan | Observable |
+| Sort by an embedded document, index hinted | Observable |
+| `$group` with a document-valued `_id` | Observable |
+| `distinct` over embedded documents | Observable |
+| `$min` and `$max` over embedded documents | Observable |
+| Match against an array of embedded documents | Observable |
+| Two top-level `_id` documents differing only in field order | Preserved as distinct |
+
+The deviation is therefore not cosmetic: it reaches equality, ordering, grouping,
+and deduplication because DumboDB does not canonicalize the query operand to match
+the stored value. For example, an embedded-document equality query written in one
+field order does not match a source document that was written in another order and
+then canonicalized during replication. The top-level `_id` exemption preserves
+MongoDB identity behavior. State comparison may ignore object field order generally,
+but must remain order-sensitive within `_id` and exact for field names, values, BSON
+types, and arrays. **TEST/DESIGN** [Field-order differential tests][field-order-tests]
 
 ### Version 2 update diffs
 
@@ -1012,6 +1032,7 @@ Primary sources were preferred throughout:
 - [MongoDB 8.0.28 sync-source selection][topology]
 - [MongoDB 8.0.28 replication metadata][metadata]
 - [MongoDB 8.0.28 vector-clock implementation][vector-clock]
+- [DumboDB field-order differential tests][field-order-tests]
 
 The MongoDB wire-protocol manual page carries a CC BY-NC-SA notice. This document
 summarizes observed and source-derived behavior and does not reproduce that page.
@@ -1035,3 +1056,4 @@ behavioral tests and independently written code rather than copying server code.
 [topology]: https://github.com/mongodb/mongo/blob/r8.0.28/src/mongo/db/repl/topology_coordinator.cpp
 [metadata]: https://github.com/mongodb/mongo/tree/r8.0.28/src/mongo/rpc/metadata
 [vector-clock]: https://github.com/mongodb/mongo/blob/r8.0.28/src/mongo/db/vector_clock.cpp
+[field-order-tests]: https://github.com/dolthub/dumbodb-parity-testing/blob/82bdc68ea757abf1c1015a651616138ff52819b4/tests/field_order_test.go
