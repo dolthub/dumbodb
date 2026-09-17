@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package verify
+package tests
 
 // In-progress merge, cherry-pick, revert, and rebase state lives in the branch
 // working set inside the Dolt tree. These tests kill the server mid-operation

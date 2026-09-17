@@ -328,14 +328,7 @@ func TestAutoCommit_ConflictWindow_NamespaceResolutions(t *testing.T) {
 // soleConflictID returns the id of the single conflict reported on db.
 func soleConflictID(t *testing.T, db *mongo.Database) string {
 	t.Helper()
-	var raw bson.M
-	require.NoError(t, db.RunCommand(context.Background(), bson.D{
-		{Key: "doltConflicts", Value: int32(1)},
-	}).Decode(&raw))
-	conflicts, ok := raw["conflicts"].(bson.A)
-	require.True(t, ok, "conflicts must be an array, got %T", raw["conflicts"])
-	require.Len(t, conflicts, 1, "expected exactly one conflict")
-	return conflicts[0].(bson.M)["conflictId"].(string)
+	return soleConflict(t, db)["conflictId"].(string)
 }
 
 func acHeadHash(t *testing.T, db *mongo.Database) string {
