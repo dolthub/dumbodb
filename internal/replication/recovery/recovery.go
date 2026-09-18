@@ -136,8 +136,9 @@ func (r *Recovery) plan(ctx context.Context, source string, rbid int64, common c
 	if err != nil {
 		return control.RollbackAttempt{}, err
 	}
-	targets := make(map[string]string, len(common.Commits))
-	for _, commit := range common.Commits {
+	heads := r.store.DatabaseHeadsAt(common.Last)
+	targets := make(map[string]string, len(heads))
+	for _, commit := range heads {
 		targets[commit.Database] = commit.CommitID
 	}
 	databases := make([]control.RollbackDatabase, 0, len(result.Databases))

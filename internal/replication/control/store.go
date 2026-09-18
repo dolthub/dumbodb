@@ -778,6 +778,29 @@ func (s *Store) CommitForDatabaseCommit(database, commitID string) (CommitInterv
 	return CommitInterval{}, false
 }
 
+// DatabaseHeadsAt returns the newest retained commit for each database at or before opTime.
+func (s *Store) DatabaseHeadsAt(opTime OpTime) []DatabaseCommit {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	heads := make(map[string]string)
+	for _, interval := range s.state.CommitIntervals {
+		if interval.Last.Compare(opTime) > 0 {
+			break
+		}
+		for _, commit := range interval.Commits {
+			heads[commit.Database] = commit.CommitID
+		}
+	}
+	result := make([]DatabaseCommit, 0, len(heads))
+	for database, commitID := range heads {
+		result = append(result, DatabaseCommit{Database: database, CommitID: commitID})
+	}
+	slices.SortFunc(result, func(left, right DatabaseCommit) int {
+		return compareStrings(left.Database, right.Database)
+	})
+	return result
+}
+
 func (s *Store) CommitIntervals() []CommitInterval {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

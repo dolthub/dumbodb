@@ -173,6 +173,89 @@ func TestRecoveryResumesPendingRollbackAfterRestart(t *testing.T) {
 	}
 }
 
+func TestRecoveryPlanCarriesForwardSparseDatabaseHeads(t *testing.T) {
+	ctx := context.Background()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	backend, err := dolt.NewBackend(t.TempDir(), logger, false, false, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(backend.Close)
+	store, err := control.Open(backend, replicationConfiguration())
+	if err != nil {
+		t.Fatal(err)
+	}
+	versioned := backend.(backends.VersioningBackend)
+	commitDocument := func(databaseName, collectionName string, id int32) string {
+		database, err := backend.Database(databaseName)
+		if err != nil {
+			t.Fatal(err)
+		}
+		collections, err := database.ListCollections(ctx, &backends.ListCollectionsParams{Name: collectionName})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(collections.Collections) == 0 {
+			if err := database.CreateCollection(ctx, &backends.CreateCollectionParams{Name: collectionName}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		collection, err := database.Collection(collectionName)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := collection.InsertAll(ctx, &backends.InsertAllParams{
+			Docs: []*types.Document{must.NotFail(types.NewDocument("_id", id))},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		result, err := versioned.DumboDBCommit(ctx, &backends.CommitParams{
+			DBName: databaseName, Branch: "main", Message: "replication", Author: "Test <test@example.com>",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result.CommitID
+	}
+
+	accountsFirst := commitDocument("accounts", "customers", 1)
+	ordersFirst := commitDocument("orders", "items", 1)
+	accountsSecond := commitDocument("accounts", "customers", 2)
+	intervals := []control.CommitInterval{
+		{First: recoveryOpTime(1), Last: recoveryOpTime(1), CommitID: "publication-1", Commits: []control.DatabaseCommit{{Database: "accounts", CommitID: accountsFirst}}},
+		{First: recoveryOpTime(2), Last: recoveryOpTime(2), CommitID: "publication-2", Commits: []control.DatabaseCommit{{Database: "orders", CommitID: ordersFirst}}},
+		{First: recoveryOpTime(3), Last: recoveryOpTime(3), CommitID: "publication-3", Commits: []control.DatabaseCommit{{Database: "accounts", CommitID: accountsSecond}}},
+	}
+	for _, interval := range intervals {
+		checkpoint := control.Checkpoint{
+			Fetched: interval.Last, Buffered: interval.Last, Written: interval.Last,
+			Durable: interval.Last, Applied: interval.Last,
+		}
+		if err := store.PublishCommit(interval, checkpoint); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	recoveryManager, err := New(backend, store, topology.New(store))
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, err := recoveryManager.plan(ctx, "source.example:27017", 12, intervals[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	targets := make(map[string]string)
+	for _, database := range attempt.Databases {
+		targets[database.Database] = database.CommitID
+	}
+	if targets["accounts"] != accountsFirst {
+		t.Fatalf("accounts rollback target = %q, want carried-forward commit %q", targets["accounts"], accountsFirst)
+	}
+	if targets["orders"] != ordersFirst {
+		t.Fatalf("orders rollback target = %q, want %q", targets["orders"], ordersFirst)
+	}
+}
+
 func recoveryFixture(t *testing.T, ctx context.Context) (backends.Backend, *control.Store, *topology.Manager, []control.CommitInterval, string) {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -244,6 +327,10 @@ func recoveryFixture(t *testing.T, ctx context.Context) (backends.Backend, *cont
 
 func replicationConfiguration() control.Configuration {
 	return control.Configuration{SetName: "rs0", MemberHost: "dumbo.example:27017"}
+}
+
+func recoveryOpTime(increment uint32) control.OpTime {
+	return control.OpTime{Seconds: 100, Increment: increment, Term: 1}
 }
 
 func recoveryDocumentCount(t *testing.T, ctx context.Context, backend backends.Backend) int64 {

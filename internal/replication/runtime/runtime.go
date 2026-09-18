@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/dolthub/dumbodb/internal/backends"
@@ -314,7 +313,7 @@ func (r *Runtime) applyEntry(ctx context.Context, applier *oplog.Applier, entry 
 		r.recordAppliedEntry(entry)
 		return nil
 	}
-	databases, err := r.publicationDatabases(ctx, entry)
+	databases, err := applier.AffectedDatabases(ctx, entry)
 	if err != nil {
 		return err
 	}
@@ -342,7 +341,9 @@ func (r *Runtime) applyEntry(ctx context.Context, applier *oplog.Applier, entry 
 		return err
 	}
 	r.recordAppliedEntry(entry)
-	r.manager.RecordPublishedCommit()
+	if len(databases) != 0 {
+		r.manager.RecordPublishedCommit()
+	}
 	return nil
 }
 
@@ -378,23 +379,6 @@ func (r *Runtime) abortApplyingPublication(ctx context.Context, publicationID st
 		return err
 	}
 	return r.manager.ResetFetchProgress()
-}
-
-func (r *Runtime) publicationDatabases(ctx context.Context, entry oplog.Entry) ([]string, error) {
-	result, err := r.backend.ListDatabases(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	databases := make([]string, 0, len(result.Databases)+1)
-	for _, database := range result.Databases {
-		if database.Name != "config" && database.Name != "local" {
-			databases = append(databases, database.Name)
-		}
-	}
-	if database, _, ok := strings.Cut(entry.Namespace, "."); ok && database != "" && database != "config" && database != "local" {
-		databases = append(databases, database)
-	}
-	return databases, nil
 }
 
 func (r *Runtime) appliers() (*oplog.Applier, *catalog.Applier, *special.Applier, error) {

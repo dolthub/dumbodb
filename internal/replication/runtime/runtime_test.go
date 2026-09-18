@@ -22,6 +22,8 @@ import (
 	"log/slog"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/backends/dolt"
 	"github.com/dolthub/dumbodb/internal/replication/catalog"
@@ -105,6 +107,115 @@ func TestApplyNoopAdvancesCheckpointWithoutCommit(t *testing.T) {
 	runtimeStatus := replicationRuntime.manager.Snapshot().Runtime
 	if runtimeStatus.AppliedOperations != 1 || runtimeStatus.PublishedCommits != 0 {
 		t.Fatalf("noop runtime counters = %+v", runtimeStatus)
+	}
+}
+
+func TestApplyEntryCommitsOnlyAffectedDatabase(t *testing.T) {
+	ctx := context.Background()
+	replicationRuntime, backend, store := newRecoveryRuntime(t)
+	catalogApplier, err := catalog.NewApplier(backend, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceUUID := uuid.MustParse("12345678-1234-4234-9234-123456789abc")
+	if _, err := catalogApplier.Create(ctx, "orders", backends.CreateCollectionParams{Name: "items"}, sourceUUID.String(), control.OpTime{Seconds: 99, Increment: 1, Term: 2}); err != nil {
+		t.Fatal(err)
+	}
+	archive, err := backend.Database("archive")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := archive.CreateCollection(ctx, &backends.CreateCollectionParams{Name: "events"}); err != nil {
+		t.Fatal(err)
+	}
+	versioned := backend.(backends.VersioningBackend)
+	for _, database := range []string{"archive", "orders"} {
+		if _, err := versioned.DumboDBCommit(ctx, &backends.CommitParams{
+			DBName: database, Branch: "main", Message: "base", Author: "Test <test@example.com>",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	beforeArchive, err := versioned.DumboDBLog(ctx, &backends.LogParams{DBName: "archive", Branch: "main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeOrders, err := versioned.DumboDBLog(ctx, &backends.LogParams{DBName: "orders", Branch: "main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := must.NotFail(types.NewDocument(
+		"ts", types.Timestamp(uint64(100)<<32|1), "t", int64(2),
+		"op", "i", "ns", "orders.items",
+		"ui", types.Binary{Subtype: types.BinaryUUID, B: sourceUUID[:]},
+		"o", must.NotFail(types.NewDocument("_id", int32(1))),
+	))
+	entry, err := oplog.ParseEntry(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := replicationRuntime.manager.AdvanceFetched(entry.OpTime, entry.OpTime); err != nil {
+		t.Fatal(err)
+	}
+	applier, _, _, err := replicationRuntime.appliers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := replicationRuntime.applyEntry(ctx, applier, entry); err != nil {
+		t.Fatal(err)
+	}
+	afterArchive, err := versioned.DumboDBLog(ctx, &backends.LogParams{DBName: "archive", Branch: "main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterOrders, err := versioned.DumboDBLog(ctx, &backends.LogParams{DBName: "orders", Branch: "main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(afterArchive.Commits) != len(beforeArchive.Commits) {
+		t.Fatalf("unaffected archive history grew from %d to %d commits", len(beforeArchive.Commits), len(afterArchive.Commits))
+	}
+	if len(afterOrders.Commits) != len(beforeOrders.Commits)+1 {
+		t.Fatalf("orders history grew from %d to %d commits, want one", len(beforeOrders.Commits), len(afterOrders.Commits))
+	}
+	interval, ok := store.CommitFor(entry.OpTime)
+	if !ok || len(interval.Commits) != 1 || interval.Commits[0].Database != "orders" {
+		t.Fatalf("published interval = %+v, %v", interval, ok)
+	}
+	if published := replicationRuntime.manager.Snapshot().Runtime.PublishedCommits; published != 1 {
+		t.Fatalf("published commits = %d, want 1", published)
+	}
+}
+
+func TestApplyIgnoredEntryAdvancesWithoutDatabaseCommit(t *testing.T) {
+	ctx := context.Background()
+	replicationRuntime, _, store := newRecoveryRuntime(t)
+	document := must.NotFail(types.NewDocument(
+		"ts", types.Timestamp(uint64(100)<<32|1), "t", int64(2),
+		"op", "i", "ns", "admin.system.keys",
+		"o", must.NotFail(types.NewDocument("_id", int64(7))),
+	))
+	entry, err := oplog.ParseEntry(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := replicationRuntime.manager.AdvanceFetched(entry.OpTime, entry.OpTime); err != nil {
+		t.Fatal(err)
+	}
+	applier, _, _, err := replicationRuntime.appliers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := replicationRuntime.applyEntry(ctx, applier, entry); err != nil {
+		t.Fatal(err)
+	}
+	interval, ok := store.CommitFor(entry.OpTime)
+	if !ok || len(interval.Commits) != 0 {
+		t.Fatalf("ignored entry interval = %+v, %v, want no database commits", interval, ok)
+	}
+	status := replicationRuntime.manager.Snapshot().Runtime
+	if status.AppliedOperations != 1 || status.PublishedCommits != 0 {
+		t.Fatalf("ignored entry runtime counters = %+v", status)
 	}
 }
 
