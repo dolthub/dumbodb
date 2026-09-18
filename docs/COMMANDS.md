@@ -59,7 +59,7 @@ When the server runs with `--auth`, the identity comes from the authenticated us
 
 ## Available Commands
 
-Every version-control `dumbo*` command has an identical `dolt*` alias:
+Every `dumbo*` command has an identical `dolt*` alias:
 
 | Primary | Alias |
 |---------|-------|
@@ -84,30 +84,6 @@ Every version-control `dumbo*` command has an identical `dolt*` alias:
 | `dumboPush` | `doltPush` |
 | `dumboFetch` | `doltFetch` |
 | `dumboPull` | `doltPull` |
-
----
-
-## Replication status
-
-Replication status uses MongoDB's standard operator interfaces. Run them against
-the `admin` database:
-
-```js
-db.getSiblingDB("admin").runCommand({replSetGetStatus: 1})
-db.getSiblingDB("admin").runCommand({serverStatus: 1})
-```
-
-`replSetGetStatus` reports member state and durable optimes. `serverStatus.repl`
-reports replica-set identity and role, `serverStatus.metrics.repl` reports apply,
-buffer, initial-sync, network, and sync-source counters, and the top-level
-`serverStatus.opcountersRepl` reports replicated operation counts. Commit
-provenance remains internal recovery metadata and is not exposed as a command.
-
-To stop replication, remove the member through MongoDB's standard replica-set
-reconfiguration on the primary. The removed DumboDB process remains available,
-reports `REMOVED`, and preserves its data and commit history. Re-adding the same
-member identity to the same replica set activates it again; a different replica-set
-identity is rejected.
 
 ---
 
