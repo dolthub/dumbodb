@@ -17,6 +17,7 @@ package initialsync
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/FerretDB/wire"
@@ -109,6 +110,50 @@ func TestMaterializeOrdinaryCatalogPreflightsBeforeMutation(t *testing.T) {
 		if database.Name == "accounts" || database.Name == "logs" {
 			t.Fatalf("preflight failure created database %q", database.Name)
 		}
+	}
+}
+
+func TestMaterializeOrdinaryCatalogRejectsUnsupportedCatalogKinds(t *testing.T) {
+	tests := []struct {
+		name       string
+		collection Collection
+		want       string
+	}{
+		{
+			name: "view",
+			collection: Collection{Name: "active_orders", Type: "view", Options: must.NotFail(types.NewDocument(
+				"viewOn", "orders", "pipeline", must.NotFail(types.NewArray()),
+			))},
+			want: "replication rejected sales.active_orders option \"viewOn\": view replication is unsupported",
+		},
+		{
+			name: "time series",
+			collection: Collection{Name: "samples", Type: "timeseries", Options: must.NotFail(types.NewDocument(
+				"timeseries", must.NotFail(types.NewDocument("timeField", "at", "granularity", "seconds")),
+			))},
+			want: "replication rejected sales.samples option \"timeseries\": time-series replication is unsupported",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			backend, catalogApplier := newMaterializeCatalogTestApplier(t)
+			_, err := MaterializeOrdinaryCatalog(ctx, &boundaryClient{}, catalogApplier, []Database{
+				{Name: "sales", Collections: []Collection{test.collection}},
+			}, control.OpTime{Seconds: 100, Increment: 2, Term: 8}, LoaderLimits{Documents: 10, Bytes: 4096}, nil)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want %q", err, test.want)
+			}
+			databases, listErr := backend.ListDatabases(ctx, nil)
+			if listErr != nil {
+				t.Fatal(listErr)
+			}
+			for _, database := range databases.Databases {
+				if database.Name == "sales" {
+					t.Fatal("unsupported catalog kind created sales database")
+				}
+			}
+		})
 	}
 }
 

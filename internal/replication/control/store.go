@@ -211,7 +211,7 @@ type InitialSyncAttempt struct {
 
 type InitialSyncFailure struct {
 	Namespace string `json:"namespace"`
-	BSONType  string `json:"bson_type"`
+	BSONType  string `json:"bson_type,omitempty"`
 	Message   string `json:"message"`
 }
 
@@ -503,8 +503,8 @@ func (s *Store) SetInitialSyncStop(attemptID string, stop OpTime) error {
 }
 
 func (s *Store) RecordInitialSyncFailure(failure InitialSyncFailure) error {
-	if failure.Namespace == "" || failure.BSONType == "" || failure.Message == "" {
-		return errors.New("initial sync failure requires namespace, BSON type, and message")
+	if failure.Namespace == "" || failure.Message == "" {
+		return errors.New("initial sync failure requires namespace and message")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -513,9 +513,13 @@ func (s *Store) RecordInitialSyncFailure(failure InitialSyncFailure) error {
 	}
 	copy := failure
 	s.state.InitialSyncFailure = &copy
+	classification := "unsupported_catalog_feature"
+	if failure.BSONType != "" {
+		classification = "unsupported_bson_type"
+	}
 	s.recordFailureLocked(ReplicationFailure{
 		AtUnixMilli: time.Now().UnixMilli(), Stage: "initial_sync",
-		Classification: "unsupported_bson_type", Message: failure.Message,
+		Classification: classification, Message: failure.Message,
 	})
 	return s.persistLocked()
 }

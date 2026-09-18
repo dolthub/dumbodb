@@ -47,6 +47,12 @@ type CollectionPlan struct {
 func PreflightCollection(database, collection string, options *types.Document, indexDocuments []*types.Document) (CollectionPlan, error) {
 	plan := CollectionPlan{Create: backends.CreateCollectionParams{Name: collection}}
 	if options != nil {
+		if options.Has("viewOn") || options.Has("pipeline") {
+			return CollectionPlan{}, invalidOption(database, collection, "", "viewOn", "view replication is unsupported")
+		}
+		if options.Has("timeseries") {
+			return CollectionPlan{}, invalidOption(database, collection, "", "timeseries", "time-series replication is unsupported")
+		}
 		if err := applyCollectionOptions(database, collection, options, &plan.Create); err != nil {
 			return CollectionPlan{}, err
 		}
@@ -103,24 +109,6 @@ func applyCollectionOptions(database, collection string, options *types.Document
 			if params.Collation == nil {
 				return invalidOption(database, collection, "", option, "must be a document")
 			}
-		case "viewOn":
-			params.ViewOn, _ = value.(string)
-			if params.ViewOn == "" {
-				return invalidOption(database, collection, "", option, "must be a non-empty string")
-			}
-		case "pipeline":
-			params.ViewPipeline, _ = value.(*types.Array)
-			if params.ViewPipeline == nil {
-				return invalidOption(database, collection, "", option, "must be an array")
-			}
-		case "timeseries":
-			timeSeries, ok := value.(*types.Document)
-			if !ok {
-				return invalidOption(database, collection, "", option, "must be a document")
-			}
-			if err := applyTimeSeries(database, collection, timeSeries, params); err != nil {
-				return err
-			}
 		case "capped", "size", "max":
 			return invalidOption(database, collection, "", option, "capped collection semantics are unsupported")
 		case "expireAfterSeconds":
@@ -131,36 +119,6 @@ func applyCollectionOptions(database, collection string, options *types.Document
 			return invalidOption(database, collection, "", option, "change-stream pre-image retention is unsupported")
 		default:
 			return invalidOption(database, collection, "", option, "unknown collection option would be silently degraded")
-		}
-	}
-}
-
-func applyTimeSeries(database, collection string, document *types.Document, params *backends.CreateCollectionParams) error {
-	params.IsTimeSeries = true
-	iter := document.Iterator()
-	defer iter.Close()
-	for {
-		option, value, err := iter.Next()
-		if errors.Is(err, iterator.ErrIteratorDone) {
-			if params.TimeField == "" {
-				return invalidOption(database, collection, "", "timeseries.timeField", "is required")
-			}
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		switch option {
-		case "timeField":
-			params.TimeField, _ = value.(string)
-		case "metaField":
-			params.MetaField, _ = value.(string)
-		case "granularity":
-			params.Granularity, _ = value.(string)
-		case "bucketMaxSpanSeconds", "bucketRoundingSeconds":
-			return invalidOption(database, collection, "", "timeseries."+option, "custom bucket spans are not represented")
-		default:
-			return invalidOption(database, collection, "", "timeseries."+option, "unknown time-series option")
 		}
 	}
 }

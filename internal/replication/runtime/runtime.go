@@ -159,14 +159,21 @@ func (r *Runtime) Run(ctx context.Context) {
 
 func terminalInitialSyncFailure(err error) (control.InitialSyncFailure, bool) {
 	var unsupported *initialsync.UnsupportedBSONTypeError
-	if !errors.As(err, &unsupported) || unsupported.Namespace == "" || unsupported.BSONType == "" {
-		return control.InitialSyncFailure{}, false
+	if errors.As(err, &unsupported) && unsupported.Namespace != "" && unsupported.BSONType != "" {
+		return control.InitialSyncFailure{
+			Namespace: unsupported.Namespace,
+			BSONType:  unsupported.BSONType,
+			Message:   unsupported.Error(),
+		}, true
 	}
-	return control.InitialSyncFailure{
-		Namespace: unsupported.Namespace,
-		BSONType:  unsupported.BSONType,
-		Message:   unsupported.Error(),
-	}, true
+	var unsupportedCatalog *catalog.UnsupportedFeatureError
+	if errors.As(err, &unsupportedCatalog) && unsupportedCatalog.Database != "" && unsupportedCatalog.Collection != "" {
+		return control.InitialSyncFailure{
+			Namespace: unsupportedCatalog.Database + "." + unsupportedCatalog.Collection,
+			Message:   unsupportedCatalog.Error(),
+		}, true
+	}
+	return control.InitialSyncFailure{}, false
 }
 
 func (r *Runtime) runInitialSync(ctx context.Context, source string) error {

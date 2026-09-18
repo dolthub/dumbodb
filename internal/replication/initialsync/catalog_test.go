@@ -52,7 +52,7 @@ func TestDiscoverCatalogExcludesLocalAndUsesCollectionUUID(t *testing.T) {
 		t.Fatalf("catalog = %+v", catalog)
 	}
 	collection := catalog[0].Collections[0]
-	if collection.Name != "items" || collection.SourceUUID != sourceUUID.String() || types.Compare(collection.Options, options) != types.Equal {
+	if collection.Name != "items" || collection.Type != "collection" || collection.SourceUUID != sourceUUID.String() || types.Compare(collection.Options, options) != types.Equal {
 		t.Fatalf("collection = %+v", collection)
 	}
 	if len(collection.Indexes) != 1 || types.Compare(collection.Indexes[0], index) != types.Equal {
@@ -71,6 +71,60 @@ func TestDiscoverCatalogExcludesLocalAndUsesCollectionUUID(t *testing.T) {
 	}
 	if includeBuildUUIDs, _ := indexRequest.Get("includeBuildUUIDs"); includeBuildUUIDs != true {
 		t.Fatalf("includeBuildUUIDs = %v", includeBuildUUIDs)
+	}
+	listRequest := decodeRequest(t, client.requests[1])
+	if listRequest.Has("filter") {
+		t.Fatalf("listCollections request unexpectedly filters collection types: %v", listRequest)
+	}
+}
+
+func TestDiscoverCatalogIncludesViewsAndTimeSeriesForPreflight(t *testing.T) {
+	sourceUUID := uuid.MustParse("12345678-1234-4234-9234-123456789abc")
+	databases := must.NotFail(types.NewArray(must.NotFail(types.NewDocument("name", "sales"))))
+	viewOptions := must.NotFail(types.NewDocument(
+		"viewOn", "orders",
+		"pipeline", must.NotFail(types.NewArray(must.NotFail(types.NewDocument("$match", must.NotFail(types.NewDocument("active", true)))))),
+	))
+	timeSeriesOptions := must.NotFail(types.NewDocument(
+		"timeseries", must.NotFail(types.NewDocument("timeField", "at", "granularity", "seconds")),
+	))
+	collectionInfo := must.NotFail(types.NewDocument(
+		"name", "orders", "type", "collection", "options", must.NotFail(types.NewDocument()),
+		"info", must.NotFail(types.NewDocument("readOnly", false, "uuid", types.Binary{Subtype: types.BinaryUUID, B: sourceUUID[:]})),
+	))
+	viewInfo := must.NotFail(types.NewDocument(
+		"name", "active_orders", "type", "view", "options", viewOptions,
+		"info", must.NotFail(types.NewDocument("readOnly", true)),
+	))
+	timeSeriesInfo := must.NotFail(types.NewDocument(
+		"name", "samples", "type", "timeseries", "options", timeSeriesOptions,
+		"info", must.NotFail(types.NewDocument("readOnly", false)),
+	))
+	index := must.NotFail(types.NewDocument("v", int32(2), "key", must.NotFail(types.NewDocument("_id", int32(1))), "name", "_id_"))
+	client := &boundaryClient{responses: []*wire.OpMsg{
+		responseMessage(t, must.NotFail(types.NewDocument("databases", databases, "ok", float64(1)))),
+		cursorResponse(t, collectionInfo, viewInfo, timeSeriesInfo),
+		cursorResponse(t, index),
+	}}
+	discovered, err := DiscoverCatalog(context.Background(), client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(discovered) != 1 || len(discovered[0].Collections) != 3 {
+		t.Fatalf("catalog = %+v", discovered)
+	}
+	collections := discovered[0].Collections
+	if collections[0].Name != "active_orders" || collections[0].Type != "view" || collections[0].SourceUUID != "" {
+		t.Fatalf("view = %+v", collections[0])
+	}
+	if collections[1].Name != "orders" || collections[1].Type != "collection" || len(collections[1].Indexes) != 1 {
+		t.Fatalf("collection = %+v", collections[1])
+	}
+	if collections[2].Name != "samples" || collections[2].Type != "timeseries" || collections[2].SourceUUID != "" {
+		t.Fatalf("time series = %+v", collections[2])
+	}
+	if len(client.requests) != 3 {
+		t.Fatalf("request count = %d, want one listIndexes request for the physical collection", len(client.requests))
 	}
 }
 

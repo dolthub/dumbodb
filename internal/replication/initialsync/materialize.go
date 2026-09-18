@@ -43,12 +43,15 @@ func MaterializeCollection(
 	resumeAfter *types.Document,
 	progress func(LoaderStats),
 ) (MaterializeResult, error) {
-	if client == nil || catalogApplier == nil || database == "" || collection.Name == "" || collection.SourceUUID == "" {
-		return MaterializeResult{}, errors.New("collection materialization requires client, catalog applier, database, name, and UUID")
+	if client == nil || catalogApplier == nil || database == "" || collection.Name == "" {
+		return MaterializeResult{}, errors.New("collection materialization requires client, catalog applier, database, and name")
 	}
 	plan, err := catalog.PreflightCollection(database, collection.Name, collection.Options, collection.Indexes)
 	if err != nil {
 		return MaterializeResult{}, err
+	}
+	if collection.SourceUUID == "" {
+		return MaterializeResult{}, errors.New("collection materialization requires a source UUID")
 	}
 	location, err := catalogApplier.Create(ctx, database, plan.Create, collection.SourceUUID, createOpTime)
 	if err != nil {

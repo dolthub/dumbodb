@@ -27,23 +27,24 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// Collection describes source catalog state needed to clone one collection.
+// Collection describes source catalog state needed to preflight and clone one catalog entry.
 type Collection struct {
 	Name       string
+	Type       string
 	SourceUUID string
 	UUIDBinary types.Binary
 	Options    *types.Document
 	Indexes    []*types.Document
 }
 
-// Database describes the physical collections reported for one source database.
+// Database describes the catalog entries reported for one source database.
 type Database struct {
 	Name        string
 	Collections []Collection
 	Special     bool
 }
 
-// DiscoverCatalog enumerates every non-local source database and collection by UUID.
+// DiscoverCatalog enumerates every non-local source database and catalog entry.
 func DiscoverCatalog(ctx context.Context, client requestClient) ([]Database, error) {
 	databaseNames, err := listDatabaseNames(ctx, client)
 	if err != nil {
@@ -59,6 +60,9 @@ func DiscoverCatalog(ctx context.Context, client requestClient) ([]Database, err
 			return nil, fmt.Errorf("listing %s collections: %w", databaseName, err)
 		}
 		for index := range collections {
+			if collections[index].SourceUUID == "" {
+				continue
+			}
 			indexes, err := listIndexes(ctx, client, databaseName, collections[index].UUIDBinary)
 			if err != nil {
 				return nil, fmt.Errorf("listing %s.%s indexes: %w", databaseName, collections[index].Name, err)
@@ -106,20 +110,9 @@ func listDatabaseNames(ctx context.Context, client requestClient) ([]string, err
 }
 
 func listCollections(ctx context.Context, client requestClient, database string) ([]Collection, error) {
-	collectionType := wirebson.MakeDocument(1)
-	_ = collectionType.Add("type", "collection")
-	exists := wirebson.MakeDocument(1)
-	_ = exists.Add("$exists", false)
-	missingType := wirebson.MakeDocument(1)
-	_ = missingType.Add("type", exists)
-	or := wirebson.MakeArray(2)
-	_ = or.Add(collectionType)
-	_ = or.Add(missingType)
-	filter := wirebson.MakeDocument(1)
-	_ = filter.Add("$or", or)
 	cursor := wirebson.MakeDocument(0)
 	documents, err := readCommandCursor(ctx, client, wire.MustOpMsg(
-		"listCollections", int32(1), "filter", filter, "cursor", cursor,
+		"listCollections", int32(1), "cursor", cursor,
 		"$readPreference", secondaryPreferred(), "$db", database,
 	), database)
 	if err != nil {
@@ -132,6 +125,18 @@ func listCollections(ctx context.Context, client requestClient, database string)
 		if !ok || name == "" {
 			return nil, fmt.Errorf("listCollections name has type %T, want non-empty string", nameValue)
 		}
+		typeValue, typeErr := document.Get("type")
+		collectionType, ok := typeValue.(string)
+		if typeErr != nil {
+			collectionType = "collection"
+		} else if !ok || collectionType == "" {
+			return nil, fmt.Errorf("listCollections type has type %T, want non-empty string", typeValue)
+		}
+		switch collectionType {
+		case "collection", "view", "timeseries":
+		default:
+			return nil, fmt.Errorf("listCollections %s.%s has unsupported type %q", database, name, collectionType)
+		}
 		optionsValue, _ := document.Get("options")
 		options, ok := optionsValue.(*types.Document)
 		if !ok {
@@ -142,16 +147,21 @@ func listCollections(ctx context.Context, client requestClient, database string)
 		if !ok {
 			return nil, fmt.Errorf("listCollections info has type %T, want document", infoValue)
 		}
-		uuidValue, _ := info.Get("uuid")
-		uuidBinary, ok := uuidValue.(types.Binary)
-		if !ok || uuidBinary.Subtype != types.BinaryUUID || len(uuidBinary.B) != 16 {
-			return nil, fmt.Errorf("listCollections UUID has type %T, want UUID binary", uuidValue)
+		collection := Collection{Name: name, Type: collectionType, Options: options}
+		if collectionType == "collection" {
+			uuidValue, _ := info.Get("uuid")
+			uuidBinary, ok := uuidValue.(types.Binary)
+			if !ok || uuidBinary.Subtype != types.BinaryUUID || len(uuidBinary.B) != 16 {
+				return nil, fmt.Errorf("listCollections UUID has type %T, want UUID binary", uuidValue)
+			}
+			parsed, err := uuid.FromBytes(uuidBinary.B)
+			if err != nil {
+				return nil, err
+			}
+			collection.SourceUUID = parsed.String()
+			collection.UUIDBinary = uuidBinary
 		}
-		parsed, err := uuid.FromBytes(uuidBinary.B)
-		if err != nil {
-			return nil, err
-		}
-		collections = append(collections, Collection{Name: name, SourceUUID: parsed.String(), UUIDBinary: uuidBinary, Options: options})
+		collections = append(collections, collection)
 	}
 	sort.Slice(collections, func(i, j int) bool { return collections[i].Name < collections[j].Name })
 	return collections, nil

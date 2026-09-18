@@ -24,6 +24,7 @@ import (
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/backends/dolt"
+	"github.com/dolthub/dumbodb/internal/replication/catalog"
 	"github.com/dolthub/dumbodb/internal/replication/control"
 	"github.com/dolthub/dumbodb/internal/replication/initialsync"
 	"github.com/dolthub/dumbodb/internal/replication/oplog"
@@ -32,7 +33,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-func TestTerminalInitialSyncFailureClassifiesUnsupportedBSON(t *testing.T) {
+func TestTerminalInitialSyncFailureClassifiesUnsupportedData(t *testing.T) {
 	unsupported := &initialsync.UnsupportedBSONTypeError{
 		Namespace: "archive.items",
 		BSONType:  "JavaScript",
@@ -40,6 +41,13 @@ func TestTerminalInitialSyncFailureClassifiesUnsupportedBSON(t *testing.T) {
 	failure, terminal := terminalInitialSyncFailure(fmt.Errorf("initial sync: %w", unsupported))
 	if !terminal || failure.Namespace != unsupported.Namespace || failure.BSONType != unsupported.BSONType || failure.Message != unsupported.Error() {
 		t.Fatalf("terminal failure = %+v, %v", failure, terminal)
+	}
+	unsupportedCatalog := &catalog.UnsupportedFeatureError{
+		Database: "archive", Collection: "active_items", Option: "viewOn", Reason: "view replication is unsupported",
+	}
+	failure, terminal = terminalInitialSyncFailure(fmt.Errorf("initial sync: %w", unsupportedCatalog))
+	if !terminal || failure.Namespace != "archive.active_items" || failure.BSONType != "" || failure.Message != unsupportedCatalog.Error() {
+		t.Fatalf("terminal catalog failure = %+v, %v", failure, terminal)
 	}
 	if failure, terminal := terminalInitialSyncFailure(errors.New("connection reset")); terminal || failure != (control.InitialSyncFailure{}) {
 		t.Fatalf("transient failure = %+v, %v", failure, terminal)

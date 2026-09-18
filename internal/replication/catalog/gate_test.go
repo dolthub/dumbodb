@@ -51,28 +51,33 @@ func TestPreflightCollectionBuildsSupportedPlan(t *testing.T) {
 	}
 }
 
-func TestPreflightCollectionSupportsViewAndTimeSeries(t *testing.T) {
+func TestPreflightCollectionRejectsViewAndTimeSeries(t *testing.T) {
 	viewOptions := must.NotFail(types.NewDocument(
 		"viewOn", "orders",
 		"pipeline", must.NotFail(types.NewArray(must.NotFail(types.NewDocument("$match", must.NotFail(types.NewDocument("active", true)))))),
 		"collation", must.NotFail(types.NewDocument("locale", "en")),
 	))
-	view, err := PreflightCollection("sales", "active_orders", viewOptions, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if view.Create.ViewOn != "orders" || view.Create.ViewPipeline.Len() != 1 || view.Create.Collation == nil {
-		t.Fatalf("view plan = %+v", view.Create)
-	}
 	timeSeriesOptions := must.NotFail(types.NewDocument(
 		"timeseries", must.NotFail(types.NewDocument("timeField", "at", "metaField", "device", "granularity", "minutes")),
 	))
-	timeSeries, err := PreflightCollection("metrics", "samples", timeSeriesOptions, nil)
-	if err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		database   string
+		collection string
+		options    *types.Document
+		option     string
+	}{
+		{database: "sales", collection: "active_orders", options: viewOptions, option: "viewOn"},
+		{database: "metrics", collection: "samples", options: timeSeriesOptions, option: "timeseries"},
 	}
-	if !timeSeries.Create.IsTimeSeries || timeSeries.Create.TimeField != "at" || timeSeries.Create.MetaField != "device" {
-		t.Fatalf("time-series plan = %+v", timeSeries.Create)
+	for _, test := range tests {
+		_, err := PreflightCollection(test.database, test.collection, test.options, nil)
+		var unsupported *UnsupportedFeatureError
+		if !errors.As(err, &unsupported) {
+			t.Fatalf("%s.%s error = %v, want UnsupportedFeatureError", test.database, test.collection, err)
+		}
+		if unsupported.Database != test.database || unsupported.Collection != test.collection || unsupported.Option != test.option {
+			t.Fatalf("unsupported error = %+v", unsupported)
+		}
 	}
 }
 

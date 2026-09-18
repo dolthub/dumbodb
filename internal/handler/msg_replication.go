@@ -105,7 +105,9 @@ func (h *Handler) MsgReplSetGetStatus(_ context.Context, _ *wire.OpMsg) (*wire.O
 		if state.InitialSyncFailure != nil {
 			initialSync.Set("initialSyncFailure", state.InitialSyncFailure.Message)
 			initialSync.Set("namespace", state.InitialSyncFailure.Namespace)
-			initialSync.Set("bsonType", state.InitialSyncFailure.BSONType)
+			if state.InitialSyncFailure.BSONType != "" {
+				initialSync.Set("bsonType", state.InitialSyncFailure.BSONType)
+			}
 		}
 		if persisted.InitialSyncAttempt != nil {
 			initialSync.Set("beginFetchOpTime", opTimeDocument(persisted.InitialSyncAttempt.BeginFetch))

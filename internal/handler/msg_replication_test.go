@@ -127,6 +127,32 @@ func TestReplicationStatusReportsTerminalInitialSyncFailure(t *testing.T) {
 	}
 }
 
+func TestReplicationStatusReportsCatalogFailureWithoutBSONType(t *testing.T) {
+	handler := configuredReplicationHandler(t)
+	failure := control.InitialSyncFailure{
+		Namespace: "archive.active_items",
+		Message:   "replication rejected archive.active_items option \"viewOn\": view replication is unsupported",
+	}
+	if err := handler.ReplicationTopology.MarkInitialSyncFailed(failure); err != nil {
+		t.Fatal(err)
+	}
+	response, err := handler.MsgReplSetGetStatus(context.Background(), wire.MustOpMsg("replSetGetStatus", int32(1), "$db", "admin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := opMsgDocument(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := responseValue(document, "initialSyncStatus").(*types.Document)
+	if responseValue(status, "initialSyncFailure") != failure.Message || responseValue(status, "namespace") != failure.Namespace {
+		t.Fatalf("initialSyncStatus = %v", status)
+	}
+	if status.Has("bsonType") {
+		t.Fatalf("catalog failure has BSON type: %v", status)
+	}
+}
+
 func TestReplicationHeartbeatReturnsNewerConfigAndTracksPrimary(t *testing.T) {
 	handler := configuredReplicationHandler(t)
 	checkpoint := control.Checkpoint{

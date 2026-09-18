@@ -253,6 +253,28 @@ func TestInitialSyncFailurePersistsUntilReset(t *testing.T) {
 	}
 }
 
+func TestInitialSyncCatalogFailureDoesNotRequireBSONType(t *testing.T) {
+	dir := t.TempDir()
+	store, err := openTestStore(t, dir, testConfiguration())
+	if err != nil {
+		t.Fatal(err)
+	}
+	failure := InitialSyncFailure{
+		Namespace: "archive.active_items",
+		Message:   "replication rejected archive.active_items option \"viewOn\": view replication is unsupported",
+	}
+	if err := store.RecordInitialSyncFailure(failure); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.Snapshot().InitialSyncFailure; got == nil || *got != failure {
+		t.Fatalf("catalog failure = %+v", got)
+	}
+	history := store.Snapshot().FailureHistory
+	if len(history) != 1 || history[0].Classification != "unsupported_catalog_feature" {
+		t.Fatalf("failure history = %+v", history)
+	}
+}
+
 func TestInitialSyncAttemptRejectsInvalidBoundaries(t *testing.T) {
 	store, err := openTestStore(t, t.TempDir(), testConfiguration())
 	if err != nil {
