@@ -32,7 +32,6 @@ type topologyVersion struct {
 	counter   int64
 }
 
-// BumpTopologyVersion wakes awaitable hello requests after a topology change.
 func (h *Handler) BumpTopologyVersion() {
 	h.topologyMu.Lock()
 	defer h.topologyMu.Unlock()

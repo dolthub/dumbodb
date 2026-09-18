@@ -24,8 +24,6 @@ import (
 
 type dialFunc func(context.Context, string) (net.Conn, error)
 
-// Connector owns one negotiated member connection. Callers explicitly replace
-// a failed connection so an ambiguous write is never retried automatically.
 type Connector struct {
 	mu          sync.Mutex
 	address     string
@@ -69,8 +67,6 @@ func (c *Connector) Connection(ctx context.Context) (*Connection, error) {
 	return c.connectLocked(ctx)
 }
 
-// Replace closes failed and negotiates a fresh connection. If another caller
-// already replaced failed, Replace returns that newer connection.
 func (c *Connector) Replace(ctx context.Context, failed *Connection) (*Connection, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

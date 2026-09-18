@@ -1,30 +1,12 @@
 name: Replication Parity
 
-# The MongoDB secondary replication suite from dolthub/dumbodb-parity-testing.
-#
-# Separate from parity.yml because it is heavy: each case spawns its own
-# multi-member replica set and the suite runs for most of an hour. It is gated
-# on the replication code so unrelated changes do not pay for it, and it runs
-# here rather than in the parity repository because the subject is this repo --
-# a change here cannot trigger a workflow there.
 
 on:
   push:
     branches: [main]
     paths:
       - "internal/replication/**"
-      # internal/handler is the command dispatch layer, roughly a file per
-      # MongoDB command, so this triggers on nearly every change to server
-      # behavior rather than on replication changes alone. That is deliberate,
-      # by owner direction: the suite runs in under six minutes, and a
-      # replication regression reaching main unnoticed costs more than the
-      # runs this adds. Two of the four defects found in review this week
-      # lived outside internal/replication.
       - "internal/handler/**"
-      # Replication is built on these too: the storage the applier writes
-      # through, the BSON conversion every oplog entry passes through, the
-      # connection layer inbound member commands arrive on, and the wiring
-      # that turns on --replSet.
       - "internal/backends/**"
       - "internal/bson/**"
       - "internal/clientconn/**"
@@ -34,18 +16,7 @@ on:
     branches: [main]
     paths:
       - "internal/replication/**"
-      # internal/handler is the command dispatch layer, roughly a file per
-      # MongoDB command, so this triggers on nearly every change to server
-      # behavior rather than on replication changes alone. That is deliberate,
-      # by owner direction: the suite runs in under six minutes, and a
-      # replication regression reaching main unnoticed costs more than the
-      # runs this adds. Two of the four defects found in review this week
-      # lived outside internal/replication.
       - "internal/handler/**"
-      # Replication is built on these too: the storage the applier writes
-      # through, the BSON conversion every oplog entry passes through, the
-      # connection layer inbound member commands arrive on, and the wiring
-      # that turns on --replSet.
       - "internal/backends/**"
       - "internal/bson/**"
       - "internal/clientconn/**"
@@ -77,22 +48,14 @@ jobs:
           echo "deb [ signed-by=/usr/share/keyrings/mongodb-server-8.0.gpg ] https://repo.mongodb.org/apt/ubuntu ${codename}/mongodb-org/8.0 multiverse" \
             | sudo tee /etc/apt/sources.list.d/mongodb-org-8.0.list
           sudo apt-get update
-          # 8.0.28 is the oracle the replication design document is written
-          # against. The harness spawns its own replica sets from this binary.
           sudo apt-get install -y mongodb-org-server=8.0.28
           mongod --version
 
       - name: Build DumboDB
         run: |
-          # make build, not go build: the Makefile sets the -ldflags version
-          # stamp the binary reports through buildInfo.gitVersion. The harness
-          # fails any run it cannot attribute to a commit, and a plain go build
-          # reports "unknown".
           make build
           sudo cp .runtime/bin/dumbodb /usr/local/bin/dumbodb
 
-          # Refuse an unattributable binary here rather than let it surface as a
-          # confusing assertion failure later.
           reported=$(dumbodb --version | awk '{print $2}')
           echo "dumbodb reports: ${reported}"
           if [ -z "$reported" ] || [ "$reported" = "unknown" ]; then
@@ -107,8 +70,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           CANDIDATE: ${{ github.head_ref || github.ref_name }}
         run: |
-          # A same-named branch in the parity repo lets a change to the suite
-          # and a change to the subject be tested together.
           ref=main
           if [ -n "$CANDIDATE" ] && [ "$CANDIDATE" != "main" ] && \
              git ls-remote --exit-code --heads \
@@ -134,26 +95,11 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p results
-          # The replication cases live in the parity repository, and this
-          # workflow checks out a same-named branch there or falls back to its
-          # main. If that ref predates the move into tests/replication, go test
-          # reports "directory not found" and the reason is not obvious from
-          # the log. Say it plainly instead.
           if [ ! -d tests/replication ]; then
             echo "::error::tests/replication does not exist on parity-testing ref '${{ steps.parity_ref.outputs.ref }}'." >&2
             echo "The replication cases moved into that package. Merge the parity-testing change first, or push a branch named the same as this one." >&2
             exit 1
           fi
-          # ./tests/replication/ is the whole point: the replication cases live
-          # in their own package so this gate runs them and nothing else. The
-          # build tag controls COMPILATION of those files, not selection, so
-          # naming ./tests/ here would drag in the two thousand general parity
-          # cases that already run in parity.yml. That mistake cost about seven
-          # minutes a run and was invisible, because the suite passed either way.
-          #
-          # -parallel 4: each case owns an isolated replica set on random ports
-          # under its own temp directory, so they cannot collide. Serial, the
-          # suite took fifty three minutes.
           go test -tags replication ./harness/ ./tests/replication/ \
             -v -parallel 4 -timeout 40m -json | tee results/replication.json
 
@@ -168,9 +114,6 @@ jobs:
       - name: Dump member logs on failure
         if: failure()
         run: |
-          # The reason a subject stopped replicating is usually in its own log
-          # and not in the test output. Every replication defect found so far
-          # was diagnosed from these.
           for f in /tmp/dumbodb-member-*.log; do
             [ -f "$f" ] || continue
             echo "=============== $f ==============="

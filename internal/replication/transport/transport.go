@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package transport implements the client side of MongoDB member OP_MSG traffic.
 package transport
 
 import (
@@ -131,8 +130,6 @@ func (c *Connection) Close() error {
 	return c.connection.Close()
 }
 
-// Hello performs the unauthenticated member handshake. The response-selected
-// compressor is used only after this request has completed.
 func (c *Connection) Hello(ctx context.Context, compressors []string) (*wirebson.Document, error) {
 	return c.MemberHello(ctx, "", compressors)
 }
@@ -250,8 +247,6 @@ func compressionArray(value any) (*wirebson.Array, error) {
 	}
 }
 
-// Request serializes request/response pairs, checks response correlation, and
-// honors the deadline in ctx for both halves of the exchange.
 func (c *Connection) Request(ctx context.Context, message *wire.OpMsg) (*wire.OpMsg, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -270,9 +265,6 @@ func (c *Connection) Request(ctx context.Context, message *wire.OpMsg) (*wire.Op
 	return response, nil
 }
 
-// Exhaust sends an exhaust-enabled command and passes each response to consume.
-// The callback returns false to stop consuming and close the connection; doing
-// so is required because an exhaust stream owns the connection until completion.
 func (c *Connection) Exhaust(ctx context.Context, message *wire.OpMsg, consume func(*wire.OpMsg) (bool, error)) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()

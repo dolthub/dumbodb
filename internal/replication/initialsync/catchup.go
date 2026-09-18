@@ -23,26 +23,22 @@ import (
 	"github.com/dolthub/dumbodb/internal/replication/oplog"
 )
 
-// ErrStopPositionMissing means buffered oplog ordering passed the selected stop position.
 var ErrStopPositionMissing = errors.New("initial sync stop position is missing from the oplog buffer")
 
 type oplogEntryApplier interface {
 	Apply(context.Context, oplog.Entry) error
 }
 
-// CatchUpLimits bound one destructive read from the initial-sync oplog buffer.
 type CatchUpLimits struct {
 	Entries int
 	Bytes   int64
 }
 
-// CatchUpResult reports entries reconciled after the clone boundary.
 type CatchUpResult struct {
 	Applied int64
 	Last    control.OpTime
 }
 
-// ApplyBufferedThrough skips the clone boundary and applies later entries through stop.
 func ApplyBufferedThrough(
 	ctx context.Context,
 	buffer *oplog.Buffer,

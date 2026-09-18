@@ -34,7 +34,6 @@ type AutoCommitBackend interface {
 	AutoCommit(ctx context.Context, dbName, branch, message, author string) (bool, error)
 }
 
-// InitialSyncResetter discards an incomplete replica data set before another initial-sync attempt.
 type InitialSyncResetter interface {
 	ResetInitialSyncData(context.Context) error
 }

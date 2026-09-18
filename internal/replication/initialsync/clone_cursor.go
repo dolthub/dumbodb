@@ -27,14 +27,12 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// CloneCursor identifies a resumable collection scan by source UUID.
 type CloneCursor struct {
 	Database    string
 	SourceUUID  types.Binary
 	ResumeAfter *types.Document
 }
 
-// UnsupportedBSONTypeError reports a source value DumboDB cannot represent.
 type UnsupportedBSONTypeError struct {
 	Namespace string
 	BSONType  string
@@ -47,7 +45,6 @@ func (e *UnsupportedBSONTypeError) Error() string {
 	return fmt.Sprintf("DumboDB does not support BSON type %s while cloning %s", e.BSONType, e.Namespace)
 }
 
-// CloneDocuments scans a source collection in natural order and returns its final resume token.
 func CloneDocuments(ctx context.Context, client requestClient, cursor CloneCursor, consume func(*types.Document) error) (*types.Document, error) {
 	if consume == nil {
 		return nil, errors.New("collection clone requires a consumer")
@@ -62,7 +59,6 @@ func CloneDocuments(ctx context.Context, client requestClient, cursor CloneCurso
 	})
 }
 
-// CloneDocumentBatches advances its resume token only after a complete batch is consumed.
 func CloneDocumentBatches(ctx context.Context, client requestClient, cursor CloneCursor, consume func([]*types.Document, *types.Document) error) (*types.Document, error) {
 	if client == nil || cursor.Database == "" || cursor.SourceUUID.Subtype != types.BinaryUUID || len(cursor.SourceUUID.B) != 16 || consume == nil {
 		return nil, errors.New("collection clone requires client, database, UUID, and consumer")

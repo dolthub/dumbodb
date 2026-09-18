@@ -51,7 +51,6 @@ type Command struct {
 	// when ConnInfo.InTransaction(); the txn is then aborted server-side.
 	BlockedInTxn bool
 
-	// MutatesState reports whether the request changes database or version state.
 	MutatesState func(*wire.OpMsg) bool
 }
 

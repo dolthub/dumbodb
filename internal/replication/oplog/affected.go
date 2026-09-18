@@ -29,7 +29,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 )
 
-// AffectedDatabases returns the databases whose working roots Apply will mutate.
 func (a *Applier) AffectedDatabases(ctx context.Context, entry Entry) ([]string, error) {
 	document, operation, err := decodeEntryOperation(entry)
 	if err != nil {

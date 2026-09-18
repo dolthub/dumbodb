@@ -164,7 +164,6 @@ func (f *Fetcher) Fetch(ctx context.Context) error {
 	return f.fetchFrom(ctx, state, position)
 }
 
-// FetchFrom fetches inclusively from an explicit initial-sync continuity position.
 func (f *Fetcher) FetchFrom(ctx context.Context, position control.OpTime) error {
 	if position == (control.OpTime{}) {
 		return errors.New("explicit oplog fetch position is required")

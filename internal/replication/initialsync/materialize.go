@@ -24,14 +24,12 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// MaterializeResult reports durable clone progress for one collection.
 type MaterializeResult struct {
 	Location    catalog.Location
 	ResumeToken *types.Document
 	Loader      LoaderStats
 }
 
-// MaterializeCollection creates, loads, and indexes one ordinary source collection.
 func MaterializeCollection(
 	ctx context.Context,
 	client requestClient,

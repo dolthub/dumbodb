@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package initialsync clones a MongoDB source while retaining concurrent oplog history.
 package initialsync
 
 import (
@@ -33,7 +32,6 @@ type requestClient interface {
 	Request(context.Context, *wire.OpMsg) (*wire.OpMsg, error)
 }
 
-// DiscoverBoundaries records the source history needed to reconcile a logical clone.
 func DiscoverBoundaries(ctx context.Context, client requestClient, source string) (control.InitialSyncAttempt, error) {
 	if client == nil || source == "" {
 		return control.InitialSyncAttempt{}, errors.New("initial sync boundary discovery requires client and source")
@@ -70,7 +68,6 @@ func DiscoverBoundaries(ctx context.Context, client requestClient, source string
 	}, nil
 }
 
-// ReadStopPosition selects the inclusive oplog position used after cloning.
 func ReadStopPosition(ctx context.Context, client requestClient, beginApply control.OpTime) (control.OpTime, error) {
 	stop, err := newestOplogEntry(ctx, client)
 	if err != nil {
@@ -82,7 +79,6 @@ func ReadStopPosition(ctx context.Context, client requestClient, beginApply cont
 	return stop, nil
 }
 
-// VerifyRollbackID proves that the source did not roll back during the clone.
 func VerifyRollbackID(ctx context.Context, client requestClient, expected int64) error {
 	actual, err := rollbackID(ctx, client)
 	if err != nil {

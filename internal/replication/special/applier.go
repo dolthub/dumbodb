@@ -80,7 +80,6 @@ func IsSpecialNamespace(namespace string) bool {
 	return IsAuthNamespace(namespace) || metadata || namespace == ChangeStreamPreimagesNamespace
 }
 
-// IsIgnoredNamespace identifies source-local metadata that is not replicated application state.
 func IsIgnoredNamespace(namespace string) bool {
 	switch namespace {
 	case "admin.system.version", "admin.system.keys",

@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package topology tracks MongoDB replica-set configuration and member state.
 package topology
 
 import (
@@ -407,7 +406,6 @@ func (m *Manager) MarkInitialSyncComplete(checkpoint control.Checkpoint) error {
 	return nil
 }
 
-// CompleteInitialSync atomically validates the attempt and publishes its durable stop position.
 func (m *Manager) CompleteInitialSync(attemptID string, checkpoint control.Checkpoint, finalRBID int64) error {
 	if err := m.store.CompleteInitialSync(attemptID, checkpoint, finalRBID); err != nil {
 		return err
@@ -426,7 +424,6 @@ func (m *Manager) CompleteInitialSync(attemptID string, checkpoint control.Check
 	return nil
 }
 
-// ResetInitialSync clears failed-attempt progress and returns the member to STARTUP2.
 func (m *Manager) ResetInitialSync(attemptID string) error {
 	if err := m.store.ResetInitialSync(attemptID); err != nil {
 		return err
@@ -445,7 +442,6 @@ func (m *Manager) ResetInitialSync(attemptID string) error {
 	return nil
 }
 
-// MarkInitialSyncFailed records a terminal initial-sync failure and stops secondary claims.
 func (m *Manager) MarkInitialSyncFailed(failure control.InitialSyncFailure) error {
 	if err := m.store.RecordInitialSyncFailure(failure); err != nil {
 		return err
@@ -612,7 +608,6 @@ func (m *Manager) AdvanceFetched(fetched, buffered control.OpTime) error {
 	return nil
 }
 
-// AdvanceApplied records an applied oplog entry that did not change versioned data.
 func (m *Manager) AdvanceApplied(applied control.OpTime) error {
 	m.mu.Lock()
 	checkpoint := m.state.Checkpoint
@@ -632,7 +627,6 @@ func (m *Manager) AdvanceApplied(applied control.OpTime) error {
 	return nil
 }
 
-// PublishCommit atomically persists commit provenance and reportable progress.
 func (m *Manager) PublishCommit(interval control.CommitInterval, checkpoint control.Checkpoint) error {
 	m.mu.Lock()
 	if err := m.store.PublishCommit(interval, checkpoint); err != nil {
@@ -680,7 +674,6 @@ func (m *Manager) MarkContinuityLost(tooStale bool) error {
 	return nil
 }
 
-// MarkSteady returns a successfully publishing initialized member to SECONDARY.
 func (m *Manager) MarkSteady() error {
 	if m.store.Snapshot().InitialSyncPhase != control.InitialSyncComplete {
 		return errors.New("member cannot become secondary before initial sync completes")

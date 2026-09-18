@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package catalog applies MongoDB collection catalog changes using source UUID identity.
 package catalog
 
 import (
@@ -53,7 +52,6 @@ func (a *Applier) Resolve(ctx context.Context, sourceUUID string) (Location, err
 	return Resolve(ctx, a.backend, sourceUUID)
 }
 
-// ResolveCollection opens the UUID-identified collection.
 func (a *Applier) ResolveCollection(ctx context.Context, sourceUUID string) (Location, backends.Collection, error) {
 	location, err := a.Resolve(ctx, sourceUUID)
 	if err != nil {

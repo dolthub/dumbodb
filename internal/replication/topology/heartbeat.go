@@ -67,7 +67,6 @@ type heartbeatPeer struct {
 	lastSuccess time.Time
 }
 
-// HeartbeatMesh exchanges topology heartbeats with every known replica-set peer.
 type HeartbeatMesh struct {
 	manager   *Manager
 	logger    *slog.Logger

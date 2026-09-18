@@ -27,7 +27,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// Collection describes source catalog state needed to preflight and clone one catalog entry.
 type Collection struct {
 	Name       string
 	Type       string
@@ -37,14 +36,12 @@ type Collection struct {
 	Indexes    []*types.Document
 }
 
-// Database describes the catalog entries reported for one source database.
 type Database struct {
 	Name        string
 	Collections []Collection
 	Special     bool
 }
 
-// DiscoverCatalog enumerates every non-local source database and catalog entry.
 func DiscoverCatalog(ctx context.Context, client requestClient) ([]Database, error) {
 	databaseNames, err := listDatabaseNames(ctx, client)
 	if err != nil {

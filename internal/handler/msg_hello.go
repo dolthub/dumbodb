@@ -141,10 +141,6 @@ func (h *Handler) hello(ctx context.Context, doc *types.Document, tcpHost, name 
 	res.Set("minWireVersion", common.MinWireVersion)
 	res.Set("maxWireVersion", common.MaxWireVersion)
 	res.Set("readOnly", false)
-	// Outside replica-set mode topologyVersion remains absent so regular
-	// DumboDB clients continue to use polling monitoring. Replica-set mode
-	// implements the awaitable and exhaust forms before advertising it.
-
 	if resSupportedMechs != nil && resSupportedMechs.Len() != 0 {
 		res.Set("saslSupportedMechs", resSupportedMechs)
 	}

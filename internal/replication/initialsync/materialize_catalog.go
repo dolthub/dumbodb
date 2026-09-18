@@ -23,13 +23,11 @@ import (
 	"github.com/dolthub/dumbodb/internal/replication/control"
 )
 
-// CatalogMaterialization reports ordinary clone work and databases requiring special translation.
 type CatalogMaterialization struct {
 	Collections      []MaterializeResult
 	SpecialDatabases []Database
 }
 
-// MaterializationProgress reports completed ordinary collection clone work.
 type MaterializationProgress struct {
 	CollectionsTotal     int
 	CollectionsCompleted int
@@ -37,7 +35,6 @@ type MaterializationProgress struct {
 	CurrentNamespace     string
 }
 
-// MaterializeOrdinaryCatalog preflights and clones every ordinary source collection in stable catalog order.
 func MaterializeOrdinaryCatalog(
 	ctx context.Context,
 	client requestClient,

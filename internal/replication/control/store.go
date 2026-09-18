@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package control persists replication state outside replicated user data.
 package control
 
 import (
@@ -669,7 +668,6 @@ func (s *Store) RecordCommit(interval CommitInterval) error {
 	return fmt.Errorf("commit interval %v is not after retained history", interval)
 }
 
-// PublishCommit durably records a commit interval and the checkpoint it makes reportable.
 func (s *Store) PublishCommit(interval CommitInterval, checkpoint Checkpoint) error {
 	if interval.CommitID == "" {
 		return errors.New("commit ID is required")
@@ -778,7 +776,6 @@ func (s *Store) CommitForDatabaseCommit(database, commitID string) (CommitInterv
 	return CommitInterval{}, false
 }
 
-// DatabaseHeadsAt returns the newest retained commit for each database at or before opTime.
 func (s *Store) DatabaseHeadsAt(opTime OpTime) []DatabaseCommit {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

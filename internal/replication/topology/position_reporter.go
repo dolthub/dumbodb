@@ -33,7 +33,6 @@ const (
 	defaultPositionReportTimeout  = 15 * time.Second
 )
 
-// ProgressReporter sends durable replication positions to the current sync source.
 type ProgressReporter struct {
 	manager   *Manager
 	logger    *slog.Logger
@@ -65,7 +64,6 @@ func NewProgressReporter(manager *Manager, logger *slog.Logger) *ProgressReporte
 	return reporter
 }
 
-// Notify requests a report after a durable checkpoint changes.
 func (r *ProgressReporter) Notify() {
 	r.mu.Lock()
 	r.requested++

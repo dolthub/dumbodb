@@ -38,10 +38,8 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 )
 
-// ErrUnsupportedOplogOperation stops replication before an effect is silently lost.
 var ErrUnsupportedOplogOperation = errors.New("unsupported oplog operation")
 
-// Applier translates source oplog entries into local Prolly mutations.
 type Applier struct {
 	backend backends.Backend
 	catalog *catalog.Applier
@@ -49,12 +47,10 @@ type Applier struct {
 	store   *control.Store
 }
 
-// NewApplier binds oplog application to a backend and its replication control state.
 func NewApplier(backend backends.Backend, store *control.Store) (*Applier, error) {
 	return NewApplierWithAuthGeneration(backend, store, nil)
 }
 
-// NewApplierWithAuthGeneration invalidates cached authorization after replicated identity changes.
 func NewApplierWithAuthGeneration(backend backends.Backend, store *control.Store, bumpAuthGeneration func()) (*Applier, error) {
 	if backend == nil || store == nil {
 		return nil, errors.New("oplog applier requires backend and control store")
@@ -70,7 +66,6 @@ func NewApplierWithAuthGeneration(backend backends.Backend, store *control.Store
 	return &Applier{backend: backend, catalog: catalogApplier, special: specialApplier, store: store}, nil
 }
 
-// Apply applies one fetched oplog entry or durably stages its transaction fragment.
 func (a *Applier) Apply(ctx context.Context, entry Entry) error {
 	document, err := bson.ToDocument(wirebson.RawDocument(entry.RawBSON))
 	if err != nil {
@@ -95,7 +90,6 @@ func (a *Applier) Apply(ctx context.Context, entry Entry) error {
 	return a.applyOperation(ctx, operation, entry.OpTime)
 }
 
-// CounterOperationKinds returns the operation kinds represented by one oplog entry.
 func CounterOperationKinds(entry Entry) ([]string, error) {
 	document, err := bson.ToDocument(wirebson.RawDocument(entry.RawBSON))
 	if err != nil {

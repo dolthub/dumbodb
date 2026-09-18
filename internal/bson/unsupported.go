@@ -21,7 +21,6 @@ import (
 	"go.mongodb.org/mongo-driver/bson/bsontype"
 )
 
-// UnsupportedTypeName returns the first BSON type DumboDB cannot represent.
 func UnsupportedTypeName(raw []byte) (string, bool, error) {
 	return unsupportedTypeName(mongobson.Raw(raw))
 }

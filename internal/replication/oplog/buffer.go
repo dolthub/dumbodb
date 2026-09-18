@@ -79,7 +79,6 @@ func (b *Buffer) Drain(maxEntries int, maxBytes int64) []Entry {
 	return b.drain(maxEntries, maxBytes, nil)
 }
 
-// DrainThrough removes a bounded prefix whose entries do not follow stop.
 func (b *Buffer) DrainThrough(stop control.OpTime, maxEntries int, maxBytes int64) []Entry {
 	return b.drain(maxEntries, maxBytes, &stop)
 }
@@ -114,7 +113,6 @@ func (b *Buffer) drain(maxEntries int, maxBytes int64, stop *control.OpTime) []E
 	return result
 }
 
-// WaitForData blocks until the buffer contains at least one entry.
 func (b *Buffer) WaitForData(ctx context.Context) error {
 	for {
 		b.mu.Lock()
@@ -161,7 +159,6 @@ func (b *Buffer) Limits() BufferLimits {
 	return b.limits
 }
 
-// Reset discards buffered entries and wakes blocked producers.
 func (b *Buffer) Reset() BufferStats {
 	b.mu.Lock()
 	defer b.mu.Unlock()

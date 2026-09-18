@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package special translates MongoDB administrative replication records.
 package special
 
 import (
@@ -25,7 +24,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 )
 
-// UnsupportedAuthSemanticError stops replication before authorization is weakened.
 type UnsupportedAuthSemanticError struct {
 	Identity string
 	Field    string
@@ -36,13 +34,11 @@ func (e *UnsupportedAuthSemanticError) Error() string {
 	return fmt.Sprintf("replicated identity %q has unsupported %s: %s", e.Identity, e.Field, e.Reason)
 }
 
-// AuthDocument keeps source-owned authorization state separate from local administration.
 type AuthDocument struct {
 	Owner    string
 	Document *types.Document
 }
 
-// TranslateUser validates a MongoDB system.users record and marks its replication ownership domain.
 func TranslateUser(source *types.Document, owner string) (AuthDocument, error) {
 	identity, err := identityName(source, "user")
 	if err != nil {
@@ -102,7 +98,6 @@ func TranslateUser(source *types.Document, owner string) (AuthDocument, error) {
 	return AuthDocument{Owner: owner, Document: source.DeepCopy()}, nil
 }
 
-// TranslateRole validates a MongoDB system.roles record and marks its replication ownership domain.
 func TranslateRole(source *types.Document, owner string) (AuthDocument, error) {
 	identity, err := identityName(source, "role")
 	if err != nil {

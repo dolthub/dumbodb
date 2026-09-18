@@ -40,7 +40,6 @@ const ReservedMetadataIndexName = "__dumbo_metadata__"
 // version-control walks, and rejected as a user collection name.
 const ReservedCatalogName = "__dumbo_catalog__"
 
-// ReservedReplicationControlName stores local replica-member control state.
 const ReservedReplicationControlName = "system.dumbodb.replication"
 
 // Collection is a generic interface for all backends for accessing collection.
@@ -69,7 +68,6 @@ type Collection interface {
 	DropIndexes(context.Context, *DropIndexesParams) (*DropIndexesResult, error)
 }
 
-// InitialSyncCollection bulk-loads a disposable replica clone before indexes are built.
 type InitialSyncCollection interface {
 	BulkLoadInitialSync(context.Context, []*types.Document) error
 }

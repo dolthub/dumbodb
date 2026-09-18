@@ -24,13 +24,11 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// LoaderLimits bound one in-memory insert batch.
 type LoaderLimits struct {
 	Documents int
 	Bytes     int64
 }
 
-// LoaderStats reports completed loading work and peak buffering.
 type LoaderStats struct {
 	Documents         int64
 	Batches           int64
@@ -38,7 +36,6 @@ type LoaderStats struct {
 	PeakBufferedBytes int64
 }
 
-// BoundedCollectionLoader incrementally materializes one cloned collection.
 type BoundedCollectionLoader struct {
 	collection    backends.Collection
 	limits        LoaderLimits
@@ -47,7 +44,6 @@ type BoundedCollectionLoader struct {
 	stats         LoaderStats
 }
 
-// NewBoundedCollectionLoader creates an incremental loader for one destination collection.
 func NewBoundedCollectionLoader(collection backends.Collection, limits LoaderLimits) (*BoundedCollectionLoader, error) {
 	if collection == nil || limits.Documents <= 0 || limits.Bytes <= 0 {
 		return nil, errors.New("collection loader requires a collection and positive document/byte limits")
@@ -55,7 +51,6 @@ func NewBoundedCollectionLoader(collection backends.Collection, limits LoaderLim
 	return &BoundedCollectionLoader{collection: collection, limits: limits}, nil
 }
 
-// Add buffers a cloned document and flushes at either configured limit.
 func (l *BoundedCollectionLoader) Add(ctx context.Context, document *types.Document) error {
 	if document == nil {
 		return errors.New("cannot load a nil document")
@@ -83,7 +78,6 @@ func (l *BoundedCollectionLoader) Add(ctx context.Context, document *types.Docum
 	return nil
 }
 
-// Flush inserts the current batch atomically.
 func (l *BoundedCollectionLoader) Flush(ctx context.Context) error {
 	if len(l.documents) == 0 {
 		return nil
@@ -103,7 +97,6 @@ func (l *BoundedCollectionLoader) Flush(ctx context.Context) error {
 	return nil
 }
 
-// Stats returns completed and peak buffer counters.
 func (l *BoundedCollectionLoader) Stats() LoaderStats {
 	return l.stats
 }

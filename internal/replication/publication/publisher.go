@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package publication makes replicated Prolly roots durably reportable.
 package publication
 
 import (

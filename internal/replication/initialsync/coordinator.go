@@ -27,29 +27,24 @@ import (
 	"github.com/dolthub/dumbodb/internal/replication/topology"
 )
 
-// ErrSpecialDatabaseHandlerRequired prevents admin or config from being silently omitted.
 var ErrSpecialDatabaseHandlerRequired = errors.New("initial sync requires an admin/config translation handler")
 
 type initialSyncFetcher interface {
 	FetchFrom(context.Context, control.OpTime) error
 }
 
-// CompletionPublisher durably publishes reconciled replica state before progress is reported.
 type CompletionPublisher interface {
 	PublishInitialSync(context.Context, InitialSyncPublication) error
 }
 
-// InitialSyncPublication identifies the candidate state and source interval to publish.
 type InitialSyncPublication struct {
 	Attempt    control.InitialSyncAttempt
 	Catalog    CatalogMaterialization
 	Checkpoint control.Checkpoint
 }
 
-// SpecialDatabaseHandler translates admin and config without creating ordinary databases.
 type SpecialDatabaseHandler func(context.Context, requestClient, []Database, control.OpTime) error
 
-// CoordinatorOptions supplies one logical initial-sync attempt.
 type CoordinatorOptions struct {
 	Source        string
 	Client        requestClient
@@ -66,12 +61,10 @@ type CoordinatorOptions struct {
 	CatchUpLimits CatchUpLimits
 }
 
-// Coordinator runs source discovery, concurrent fetch, clone, catch-up, and publication.
 type Coordinator struct {
 	options CoordinatorOptions
 }
 
-// InitialSyncResult reports the boundaries and completed clone work.
 type InitialSyncResult struct {
 	Attempt    control.InitialSyncAttempt
 	Catalog    CatalogMaterialization
@@ -92,7 +85,6 @@ func NewCoordinator(options CoordinatorOptions) (*Coordinator, error) {
 	return &Coordinator{options: options}, nil
 }
 
-// Reset discards replica and control state from an incomplete or obsolete attempt.
 func (c *Coordinator) Reset(ctx context.Context) error {
 	state := c.options.Store.Snapshot()
 	if err := c.options.Resetter.ResetInitialSyncData(ctx); err != nil {
@@ -106,7 +98,6 @@ func (c *Coordinator) Reset(ctx context.Context) error {
 	return c.options.Manager.ResetInitialSync(attemptID)
 }
 
-// Run executes one disposable initial-sync attempt.
 func (c *Coordinator) Run(ctx context.Context) (result InitialSyncResult, err error) {
 	if phase := c.options.Store.Snapshot().InitialSyncPhase; phase != control.InitialSyncNotStarted {
 		return InitialSyncResult{}, fmt.Errorf("cannot start initial sync in phase %q", phase)
