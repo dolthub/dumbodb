@@ -10,10 +10,11 @@ dumbodb: it needs a real MongoDB replica set for DumboDB to follow. The
 setup below builds one from scratch.
 
 Everything here was walked through in `mongosh 2.3.1` against `mongod 8.0.28`
-and dumbodb `v0.6.3-61-g193c6f7`. The stamp is part of the content: if you
+and dumbodb `v0.6.3-85-g79b68f7`. The stamp is part of the content: if you
 change a command or an expected output, re-walk the document and update it in
 the same commit. The automated analog is the replication suite in
-`dolthub/dumbodb-parity-testing` (`go test -tags replication ./tests/`).
+`dolthub/dumbodb-parity-testing`
+(`go test -tags replication ./harness/ ./tests/replication/`).
 
 ## Setup
 
@@ -92,7 +93,26 @@ db.items.find().toArray()
 ```
 
 Key check: DumboDB is a secondary, so it is read-only. Writing to it
-directly is not how data gets in; it arrives from the primary.
+directly is not how data gets in; it arrives from the primary. That is
+enforced, not just advertised. Try it:
+
+```js
+// mongosh --port 27018
+db.getSiblingDB("shop").items.insertOne({ _id: 99, name: "nope" })
+// Expected:
+//   MongoServerError[NotWritablePrimary]: not primary
+db.getSiblingDB("shop").items.countDocuments({})
+// Expected: 3, unchanged
+```
+
+Key checks:
+- The error carries code `10107` and codeName `NotWritablePrimary`, matching
+  MongoDB exactly, because client retry logic keys off the code.
+- The message is `not primary`. MongoDB still sends the legacy `not master`
+  here; DumboDB deliberately does not. That deviation is recorded in the
+  replication design document.
+- The document count does not change. A refusal that still wrote would be
+  worse than no refusal at all.
 
 ## Scenario 2: Replicate into an empty DumboDB, then make changes
 
