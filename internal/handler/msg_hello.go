@@ -25,6 +25,7 @@ import (
 
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/replication/topology"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
@@ -39,13 +40,25 @@ func (h *Handler) MsgHello(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMs
 	if err != nil {
 		return nil, lazyerrors.Error(err)
 	}
+	if h.ReplSetName != "" {
+		if err := validateExhaustHello(msg, doc); err != nil {
+			return nil, err
+		}
+	}
 
 	resp, err := h.hello(connCtx, doc, h.TCPHost, h.ReplSetName)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
 	}
 
-	return documentOpMsg(resp)
+	message, err := documentOpMsg(resp)
+	if err != nil {
+		return nil, err
+	}
+	if h.ReplSetName != "" && msg.Flags.FlagSet(wire.OpMsgExhaustAllowed) {
+		message.Flags = wire.OpMsgFlags(wire.OpMsgMoreToCome)
+	}
+	return message, nil
 }
 
 // hello checks client metadata and returns hello's document fields.
@@ -54,18 +67,28 @@ func (h *Handler) hello(ctx context.Context, doc *types.Document, tcpHost, name 
 	if err := checkClientMetadata(ctx, doc); err != nil {
 		return nil, lazyerrors.Error(err)
 	}
+	if name != "" {
+		if err := h.awaitTopologyVersion(ctx, doc); err != nil {
+			return nil, err
+		}
+	}
 
 	res := must.NotFail(types.NewDocument())
+	isSecondary := name != ""
+	if h.ReplicationTopology != nil {
+		isSecondary = h.ReplicationTopology.Snapshot().State == topology.StateSecondary
+	}
+	isWritablePrimary := name == ""
 
 	switch doc.Command() {
 	case "hello":
-		res.Set("isWritablePrimary", true)
+		res.Set("isWritablePrimary", isWritablePrimary)
 	case "isMaster", "ismaster":
 		if helloOk, _ := doc.Get("helloOk"); helloOk != nil {
 			res.Set("helloOk", true)
 		}
 
-		res.Set("ismaster", true)
+		res.Set("ismaster", isWritablePrimary)
 	default:
 		panic(fmt.Sprintf("unexpected command: %q", doc.Command()))
 	}
@@ -99,7 +122,14 @@ func (h *Handler) hello(ctx context.Context, doc *types.Document, tcpHost, name 
 		}
 
 		res.Set("setName", name)
-		res.Set("hosts", must.NotFail(types.NewArray(tcpHost)))
+		res.Set("me", tcpHost)
+		res.Set("secondary", isSecondary)
+		if h.ReplicationTopology == nil {
+			res.Set("hosts", must.NotFail(types.NewArray(tcpHost)))
+		} else {
+			appendReplicaSetHello(res, h.ReplicationTopology.Snapshot())
+		}
+		res.Set("topologyVersion", h.topologyVersionDocument())
 	}
 
 	res.Set("maxBsonObjectSize", int32(h.MaxBsonObjectSizeBytes))
@@ -111,17 +141,6 @@ func (h *Handler) hello(ctx context.Context, doc *types.Document, tcpHost, name 
 	res.Set("minWireVersion", common.MinWireVersion)
 	res.Set("maxWireVersion", common.MaxWireVersion)
 	res.Set("readOnly", false)
-	// topologyVersion is deliberately omitted. Emitting it advertises
-	// awaitable ("streaming") hello monitoring (maxWireVersion >= 9):
-	// drivers then send an awaitable hello carrying maxAwaitTimeMS +
-	// exhaustAllowed and expect the server to hold the request open.
-	// This handler does not await, so a streaming monitor gets an
-	// instant non-exhaust reply, judges the connection broken, drops it
-	// every heartbeat, cycles the server to Unknown, and clears the
-	// client connection pool (observed with MongoDB Compass). Without
-	// topologyVersion, drivers fall back to polling monitoring, which
-	// this handler serves correctly.
-
 	if resSupportedMechs != nil && resSupportedMechs.Len() != 0 {
 		res.Set("saslSupportedMechs", resSupportedMechs)
 	}
@@ -147,6 +166,22 @@ func (h *Handler) hello(ctx context.Context, doc *types.Document, tcpHost, name 
 	res.Set("ok", float64(1))
 
 	return res, nil
+}
+
+func appendReplicaSetHello(response *types.Document, state topology.Snapshot) {
+	if state.Configuration != nil {
+		hosts := types.MakeArray(len(state.Configuration.Members))
+		for _, member := range state.Configuration.Members {
+			if !member.Hidden {
+				hosts.Append(member.Host)
+			}
+		}
+		response.Set("hosts", hosts)
+		response.Set("setVersion", state.Configuration.Version)
+	}
+	if state.PrimaryHost != "" {
+		response.Set("primary", state.PrimaryHost)
+	}
 }
 
 // getUserSupportedMechs returns supported mechanisms for the given user.

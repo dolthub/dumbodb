@@ -17,6 +17,7 @@ package backends
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 
@@ -48,6 +49,10 @@ type Backend interface {
 	DropDatabase(context.Context, *DropDatabaseParams) error
 
 	// There is no interface method to create a database; see package documentation.
+}
+
+type ReplicationControlBackend interface {
+	ReplicationControlCollection() (Collection, error)
 }
 
 // backendContract implements Backend interface.
@@ -120,6 +125,21 @@ func (bc *backendContract) AutoCommit(ctx context.Context, dbName, branch, messa
 		return ac.AutoCommit(ctx, dbName, branch, message, author)
 	}
 	return false, nil
+}
+
+func (bc *backendContract) ResetInitialSyncData(ctx context.Context) error {
+	if backend, ok := bc.b.(InitialSyncResetter); ok {
+		return backend.ResetInitialSyncData(ctx)
+	}
+	return errors.New("backend does not support initial sync reset")
+}
+
+func (bc *backendContract) ReplicationControlCollection() (Collection, error) {
+	backend, ok := bc.b.(ReplicationControlBackend)
+	if !ok {
+		return nil, errors.New("backend does not support replication control storage")
+	}
+	return backend.ReplicationControlCollection()
 }
 
 type StatusParams struct{}

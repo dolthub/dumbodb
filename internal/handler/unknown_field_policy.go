@@ -125,12 +125,16 @@ var unknownFieldPolicies = map[string]unknownFieldPolicy{
 	"debugError": legacyAccepts, "getFreeMonitoringStatus": legacyAccepts,
 	"setFreeMonitoring": legacyAccepts, "startSession": legacyAccepts,
 	"convertToCapped": legacyAccepts, "validate": legacyAccepts,
+	"_isSelf": legacyAccepts, "replSetGetConfig": legacyAccepts,
+	"replSetGetRBID": legacyAccepts, "replSetGetStatus": legacyAccepts,
+	"replSetHeartbeat": legacyAccepts,
 
 	// --- unsupported commands: DumboDB returns NotImplemented for the whole
 	// command, so top-level unknown-field rejection is moot. autoCompact has no
 	// background-compaction equivalent on Dolt-backed storage; search indexes are
 	// unimplemented. Kept strictPending deliberately.
-	"autoCompact":         strictPending,
-	"createSearchIndexes": strictPending, "listSearchIndexes": strictPending,
+	"autoCompact":           strictPending,
+	"replSetUpdatePosition": strictPending,
+	"createSearchIndexes":   strictPending, "listSearchIndexes": strictPending,
 	"dropSearchIndex": strictPending, "updateSearchIndex": strictPending,
 }

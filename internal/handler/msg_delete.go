@@ -183,11 +183,8 @@ func (h *Handler) execDelete(ctx context.Context, c backends.Collection, p *comm
 
 	d, err := c.DeleteAll(ctx, &backends.DeleteAllParams{IDs: ids, SkipDurableSync: skipDurableSync})
 	if err != nil {
-		if backends.ErrorCodeIs(err, backends.ErrorCodeReadOnlyDatabase) {
-			return 0, handlererrors.NewCommandErrorMsg(
-				handlererrors.ErrOperationFailed,
-				"cannot write to a read-only database snapshot",
-			)
+		if backends.ErrorCodeIs(err, backends.ErrorCodeReadOnlyDatabase, backends.ErrorCodeReadOnlyCollection) {
+			return 0, common.TranslateBackendWriteError(err)
 		}
 		if backends.ErrorCodeIs(err, backends.ErrorCodeWriteConflict) {
 			return 0, common.TranslateBackendWriteError(err)

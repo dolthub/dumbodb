@@ -139,6 +139,8 @@ const (
 	// ErrIndexesWrongType indicates that indexes parameter has wrong type.
 	ErrIndexesWrongType = ErrorCode(10065) // Location10065
 
+	ErrNotWritablePrimary = ErrorCode(10107) // NotWritablePrimary
+
 	// ErrDuplicateKeyInsert indicates duplicate key violation on inserting document.
 	ErrDuplicateKeyInsert = ErrorCode(11000) // DuplicateKey
 

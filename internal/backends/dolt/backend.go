@@ -242,8 +242,9 @@ type Backend struct {
 	autoCommit       bool // when true, each write auto-creates a Dolt commit
 	sessionIsolation bool // when true, writes auto-fork into per-conn overlay and doltCommit merges
 
-	mu  sync.RWMutex
-	dbs map[string]*dbState // dbName -> dbState
+	mu       sync.RWMutex
+	dbs      map[string]*dbState // dbName -> dbState
+	branchMu sync.Mutex
 
 	provider *dumbodbProvider
 
@@ -560,6 +561,14 @@ func (b *Backend) Close() {
 	}
 
 	b.dbs = make(map[string]*dbState)
+}
+
+func (b *Backend) ReplicationControlCollection() (backends.Collection, error) {
+	return backends.CollectionContract(&collection{
+		db:                    &database{backend: b, name: "admin", rootish: "main"},
+		name:                  backends.ReservedReplicationControlName,
+		allowReplicationWrite: true,
+	}), nil
 }
 
 func (b *Backend) Status(ctx context.Context, params *backends.StatusParams) (*backends.StatusResult, error) {
@@ -1433,13 +1442,16 @@ func (b *Backend) DumboDBBranch(ctx context.Context, params *backends.BranchPara
 		return nil, backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
 			fmt.Errorf("DumboDBBranch: database %q does not exist", params.DBName))
 	}
+	b.branchMu.Lock()
+	defer b.branchMu.Unlock()
+	if params.Action == "list" {
+		return dumboDBBranchList(ctx, db)
+	}
 
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
 	switch params.Action {
-	case "list":
-		return dumboDBBranchList(ctx, db)
 	case "update":
 		return dumboDBBranchConfigure(ctx, db, params)
 	case "remove":
@@ -1497,7 +1509,7 @@ func dumboDBBranchCreate(ctx context.Context, db *dbState, params *backends.Bran
 
 	res := &backends.BranchResult{Branch: params.Name}
 	if params.ConfigUpdate != nil {
-		cfg, cfgErr := db.backend.applyBranchConfig(ctx, db.name, params.Name, params.ConfigUpdate)
+		cfg, cfgErr := applyBranchConfigForLockedDatabase(ctx, db, params.Name, params.ConfigUpdate)
 		if cfgErr != nil {
 			_, _ = dumboDBBranchDelete(ctx, db, &backends.BranchParams{
 				DBName: params.DBName, From: params.From, Name: params.Name, Force: true,
@@ -1512,10 +1524,12 @@ func dumboDBBranchCreate(ctx context.Context, db *dbState, params *backends.Bran
 }
 
 // dumboDBBranchList returns every branch in the database with its HEAD commit,
-// sorted by name. Caller must hold db.mu.Lock().
+// sorted by name.
 func dumboDBBranchList(ctx context.Context, db *dbState) (*backends.BranchResult, error) {
+	db.mu.Lock()
 	dsMap, err := db.datasDB.Datasets(ctx)
 	if err != nil {
+		db.mu.Unlock()
 		return nil, fmt.Errorf("DumboDBBranch: listing datasets: %w", err)
 	}
 
@@ -1524,14 +1538,7 @@ func dumboDBBranchList(ctx context.Context, db *dbState) (*backends.BranchResult
 		switch {
 		case strings.HasPrefix(id, branchRefPrefix):
 			name := strings.TrimPrefix(id, branchRefPrefix)
-			info := backends.BranchInfo{Name: name, CommitID: headAddr.String()}
-			if cfg, ok, err := db.backend.readBranchConfig(ctx, db.name, name); err != nil {
-				return err
-			} else if ok {
-				info.Pull = pullInfo(cfg.pull)
-				info.Push = pushInfo(cfg.push)
-			}
-			branches = append(branches, info)
+			branches = append(branches, backends.BranchInfo{Name: name, CommitID: headAddr.String()})
 		case strings.HasPrefix(id, remoteRefPrefix):
 			rest := strings.TrimPrefix(id, remoteRefPrefix)
 			remote, ref, ok := strings.Cut(rest, "/")
@@ -1548,7 +1555,23 @@ func dumboDBBranchList(ctx context.Context, db *dbState) (*backends.BranchResult
 		}
 		return nil
 	}); iterErr != nil {
+		db.mu.Unlock()
 		return nil, fmt.Errorf("DumboDBBranch: iterating datasets: %w", iterErr)
+	}
+	db.mu.Unlock()
+
+	for index := range branches {
+		if branches[index].RemoteTracking {
+			continue
+		}
+		cfg, ok, err := db.backend.readBranchConfig(ctx, db.name, branches[index].Name)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			branches[index].Pull = pullInfo(cfg.pull)
+			branches[index].Push = pushInfo(cfg.push)
+		}
 	}
 
 	sort.Slice(branches, func(i, j int) bool { return branches[i].Name < branches[j].Name })
@@ -1568,7 +1591,7 @@ func dumboDBBranchConfigure(ctx context.Context, db *dbState, params *backends.B
 			fmt.Errorf("DumboDBBranch: branch %q does not exist", params.Name))
 	}
 
-	cfg, err := db.backend.applyBranchConfig(ctx, db.name, params.Name, params.ConfigUpdate)
+	cfg, err := applyBranchConfigForLockedDatabase(ctx, db, params.Name, params.ConfigUpdate)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBBranch: %w", err)
 	}
@@ -1690,11 +1713,31 @@ func dumboDBBranchDelete(ctx context.Context, db *dbState, params *backends.Bran
 
 	db.clearBranchWS(params.Name)
 
-	if err := db.backend.writeBranchConfig(ctx, db.name, params.Name, branchConfig{}); err != nil {
+	if err := clearBranchConfigForLockedDatabase(ctx, db, params.Name); err != nil {
 		return nil, fmt.Errorf("DumboDBBranch: clearing config for deleted branch %q: %w", params.Name, err)
 	}
 
 	return &backends.BranchResult{Branch: params.Name}, nil
+}
+
+func applyBranchConfigForLockedDatabase(ctx context.Context, db *dbState, branch string, update *backends.BranchConfigUpdate) (branchConfig, error) {
+	if db.name != "admin" {
+		return db.backend.applyBranchConfig(ctx, db.name, branch, update)
+	}
+	db.mu.Unlock()
+	config, err := db.backend.applyBranchConfig(ctx, db.name, branch, update)
+	db.mu.Lock()
+	return config, err
+}
+
+func clearBranchConfigForLockedDatabase(ctx context.Context, db *dbState, branch string) error {
+	if db.name != "admin" {
+		return db.backend.writeBranchConfig(ctx, db.name, branch, branchConfig{})
+	}
+	db.mu.Unlock()
+	err := db.backend.writeBranchConfig(ctx, db.name, branch, branchConfig{})
+	db.mu.Lock()
+	return err
 }
 
 // refLabel describes a refspec the way git describes merge sources in commit
@@ -2804,6 +2847,14 @@ func (b *Backend) DumboDBStatus(ctx context.Context, params *backends.Versioning
 // or a relative ancestor expression (e.g. "main~2"). HEAD/HEAD~N forms are rewritten by
 // the handler to "<branch>"/"<branch>~N" before they reach the backend.
 func (b *Backend) DumboDBReset(ctx context.Context, params *backends.ResetParams) (*backends.ResetResult, error) {
+	return b.dumboDBReset(ctx, params, nil)
+}
+
+func (b *Backend) dumboDBReset(
+	ctx context.Context,
+	params *backends.ResetParams,
+	preserveCollections []string,
+) (*backends.ResetResult, error) {
 	db, err := b.getOrOpenDB(ctx, params.DBName, false)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBReset: opening db %q: %w", params.DBName, err)
@@ -2844,6 +2895,37 @@ func (b *Backend) DumboDBReset(ctx context.Context, params *backends.ResetParams
 	targetAM, err := amFromCommitHash(ctx, db, commitID)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBReset: resolving target commit %q: %w", commitID, err)
+	}
+	if len(preserveCollections) > 0 {
+		currentAM, currentErr := db.getOrInitBranchAM(ctx, branch)
+		if currentErr != nil {
+			return nil, fmt.Errorf("DumboDBReset: reading collections to preserve: %w", currentErr)
+		}
+		editor := targetAM.Editor()
+		for _, name := range preserveCollections {
+			collectionHash, getErr := currentAM.Get(ctx, name)
+			if getErr != nil {
+				return nil, fmt.Errorf("DumboDBReset: reading preserved collection %q: %w", name, getErr)
+			}
+			if collectionHash.IsEmpty() {
+				continue
+			}
+			targetHash, targetErr := targetAM.Get(ctx, name)
+			if targetErr != nil {
+				return nil, fmt.Errorf("DumboDBReset: reading target collection %q: %w", name, targetErr)
+			}
+			if targetHash.IsEmpty() {
+				if addErr := editor.Add(ctx, name, collectionHash); addErr != nil {
+					return nil, fmt.Errorf("DumboDBReset: preserving collection %q: %w", name, addErr)
+				}
+			} else if updateErr := editor.Update(ctx, name, collectionHash); updateErr != nil {
+				return nil, fmt.Errorf("DumboDBReset: preserving collection %q: %w", name, updateErr)
+			}
+		}
+		targetAM, err = editor.Flush(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("DumboDBReset: flushing preserved collections: %w", err)
+		}
 	}
 
 	branchDS, dsErr := db.datasDB.GetDataset(ctx, branchDataset)

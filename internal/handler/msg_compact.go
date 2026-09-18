@@ -129,7 +129,7 @@ func (h *Handler) MsgCompact(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 		}
 	} else {
 		if _, err = c.Compact(connCtx, &backends.CompactParams{Full: force}); err != nil {
-			return nil, lazyerrors.Error(err)
+			return nil, common.TranslateBackendWriteError(err)
 		}
 
 		var statsAfter *backends.CollectionStatsResult

@@ -32,9 +32,14 @@ import (
 	doltevents "github.com/dolthub/dolt/go/libraries/events"
 	eventsapi "github.com/dolthub/eventsapi_schema/dolt/services/eventsapi/v1alpha1"
 
+	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/backends/dolt"
 	"github.com/dolthub/dumbodb/internal/clientconn"
 	"github.com/dolthub/dumbodb/internal/handler/registry"
 	"github.com/dolthub/dumbodb/internal/metrics"
+	"github.com/dolthub/dumbodb/internal/replication/control"
+	replicationruntime "github.com/dolthub/dumbodb/internal/replication/runtime"
+	"github.com/dolthub/dumbodb/internal/replication/topology"
 	"github.com/dolthub/dumbodb/internal/util/logging"
 	"github.com/dolthub/dumbodb/internal/util/state"
 	"github.com/dolthub/dumbodb/internal/version"
@@ -91,6 +96,7 @@ func run(logger *slog.Logger) error {
 	pprofAddr := fs.String("pprof-addr", "", "if non-empty, expose net/http/pprof on this address (e.g. 127.0.0.1:6060)")
 	noMetrics := fs.Bool("no-metrics", false, "disable anonymous daily usage metrics reported to DoltHub")
 	auth := fs.Bool("auth", false, "enable access control (forced login; an authenticated connection has full access)")
+	replSetName := fs.String("replSet", "", "replica set name for inbound MongoDB replication")
 	fs.Parse(os.Args[1:])
 
 	if *autoCommit && *sessionIsolation {
@@ -134,18 +140,41 @@ func run(logger *slog.Logger) error {
 		}
 	}
 
+	replicationConfiguration, replicationEnabled := replicationControlConfiguration(*replSetName, *addr)
+	var replicationTopology *topology.Manager
+	var replicationControlStore *control.Store
+	var handlerBackend backends.Backend
+	var err error
+	if replicationEnabled {
+		handlerBackend, err = dolt.NewBackend(*dataDir, logger, *autoCommit, *sessionIsolation, *sessionTimeout, *sessionSweepPeriod)
+		if err != nil {
+			return err
+		}
+		controlStore, err := control.Open(handlerBackend, replicationConfiguration)
+		if err != nil {
+			handlerBackend.Close()
+			return err
+		}
+		replicationControlStore = controlStore
+		defer replicationControlStore.Close()
+		replicationTopology = topology.New(controlStore)
+		logger.Info("replication control state opened", "replSet", *replSetName)
+	}
+
 	stateProvider := state.NewProvider()
 
 	h, closeBackend, err := registry.NewHandler("dolt", &registry.NewHandlerOpts{
-		Logger:             logger,
-		StateProvider:      stateProvider,
-		TCPHost:            *addr,
-		ReplSetName:        "",
-		DoltDataDir:        *dataDir,
-		AutoCommit:         *autoCommit,
-		SessionIsolation:   *sessionIsolation,
-		SessionTimeout:     *sessionTimeout,
-		SessionSweepPeriod: *sessionSweepPeriod,
+		Backend:             handlerBackend,
+		Logger:              logger,
+		StateProvider:       stateProvider,
+		TCPHost:             *addr,
+		ReplSetName:         *replSetName,
+		ReplicationTopology: replicationTopology,
+		DoltDataDir:         *dataDir,
+		AutoCommit:          *autoCommit,
+		SessionIsolation:    *sessionIsolation,
+		SessionTimeout:      *sessionTimeout,
+		SessionSweepPeriod:  *sessionSweepPeriod,
 		TestOpts: registry.TestOpts{
 			EnableNewAuth: *auth,
 		},
@@ -176,9 +205,27 @@ func run(logger *slog.Logger) error {
 		logger.Info("anonymous usage metrics disabled")
 	}
 	go metrics.RunReporter(ctx, logger, version.Get().Version, metricsEnabled)
+	if replicationTopology != nil {
+		go topology.NewHeartbeatMesh(replicationTopology, logger).Run(ctx)
+		runtime, err := replicationruntime.New(h.Backend, replicationControlStore, replicationTopology, logger, h.BumpAuthGeneration)
+		if err != nil {
+			return err
+		}
+		go runtime.Run(ctx)
+	}
 
 	listener.Run(ctx)
 	return nil
+}
+
+func replicationControlConfiguration(replSetName, memberHost string) (control.Configuration, bool) {
+	if replSetName == "" {
+		return control.Configuration{}, false
+	}
+	return control.Configuration{
+		SetName:    replSetName,
+		MemberHost: memberHost,
+	}, true
 }
 
 // envDisablesMetrics reports whether DUMBODB_NO_METRICS is set to a truthy value.

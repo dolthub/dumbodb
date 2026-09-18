@@ -31,6 +31,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/clientconn/cursor"
 	"github.com/dolthub/dumbodb/internal/handler/users"
+	"github.com/dolthub/dumbodb/internal/replication/topology"
 	"github.com/dolthub/dumbodb/internal/sqlctx"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/ctxutil"
@@ -62,11 +63,14 @@ type Handler struct {
 
 	b backends.Backend
 
-	cursors    *cursor.Registry
-	commands   map[string]*Command
-	paramStore *parameterStore
-	wg         sync.WaitGroup
-	processID  types.ObjectID
+	cursors         *cursor.Registry
+	commands        map[string]*Command
+	paramStore      *parameterStore
+	wg              sync.WaitGroup
+	processID       types.ObjectID
+	topologyMu      sync.Mutex
+	topologyCounter int64
+	topologyChanged chan struct{}
 
 	bootstrapLatch atomic.Bool
 
@@ -81,9 +85,10 @@ func (h *Handler) BumpAuthGeneration() { h.authGen.Add(1) }
 //
 //nolint:vet // for readability
 type NewOpts struct {
-	Backend     backends.Backend
-	TCPHost     string
-	ReplSetName string
+	Backend             backends.Backend
+	TCPHost             string
+	ReplSetName         string
+	ReplicationTopology *topology.Manager
 
 	SetupDatabase string
 	SetupUsername string
@@ -126,12 +131,16 @@ func New(opts *NewOpts) (*Handler, error) {
 	b := oplog.NewBackend(opts.Backend, logging.WithName(opts.L, "oplog"))
 
 	h := &Handler{
-		b:         b,
-		NewOpts:   opts,
-		cursors:   cursor.NewRegistry(logging.WithName(opts.L, "cursors")),
-		processID: types.NewObjectID(),
+		b:               b,
+		NewOpts:         opts,
+		cursors:         cursor.NewRegistry(logging.WithName(opts.L, "cursors")),
+		processID:       types.NewObjectID(),
+		topologyChanged: make(chan struct{}),
 
 		cappedCleanupStop: make(chan struct{}),
+	}
+	if h.ReplicationTopology != nil {
+		h.ReplicationTopology.SetChangeListener(h.BumpTopologyVersion)
 	}
 
 	if err := h.setup(); err != nil {

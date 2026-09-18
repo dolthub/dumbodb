@@ -33,13 +33,25 @@ func (h *Handler) MsgIsMaster(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 	if err != nil {
 		return nil, lazyerrors.Error(err)
 	}
+	if h.ReplSetName != "" {
+		if err := validateExhaustHello(msg, doc); err != nil {
+			return nil, err
+		}
+	}
 
 	res, err := h.hello(connCtx, doc, h.TCPHost, h.ReplSetName)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
 	}
 
-	return documentOpMsg(res)
+	message, err := documentOpMsg(res)
+	if err != nil {
+		return nil, err
+	}
+	if h.ReplSetName != "" && msg.Flags.FlagSet(wire.OpMsgExhaustAllowed) {
+		message.Flags = wire.OpMsgFlags(wire.OpMsgMoreToCome)
+	}
+	return message, nil
 }
 
 // checkClientMetadata checks if the message does not contain client metadata after it was received already.

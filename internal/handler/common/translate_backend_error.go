@@ -31,6 +31,12 @@ func TranslateBackendWriteError(err error) error {
 			"cannot write to a read-only database snapshot",
 		)
 	}
+	if backends.ErrorCodeIs(err, backends.ErrorCodeReadOnlyCollection) {
+		return handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrIllegalOperation,
+			"cannot modify a protected system collection",
+		)
+	}
 	if backends.ErrorCodeIs(err, backends.ErrorCodeWriteConflict) {
 		return handlererrors.NewCommandError(mongoWriteConflictCode, err)
 	}

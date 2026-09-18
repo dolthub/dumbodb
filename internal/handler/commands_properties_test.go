@@ -15,13 +15,19 @@
 package handler
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"testing"
 
+	"github.com/FerretDB/wire"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/dolthub/dumbodb/internal/backends/dolt"
+	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 func handlerForTest(t *testing.T) *Handler {
@@ -125,6 +131,110 @@ func TestCommands_NoCommandHasBothFlags(t *testing.T) {
 		assert.False(t, cmd.Durable && cmd.BlockedInTxn,
 			"command %q has both Durable and BlockedInTxn", name)
 	}
+}
+
+func TestCommands_NoCustomReplicationCommands(t *testing.T) {
+	h := handlerForTest(t)
+	for _, name := range []string{"dumboReplicationDetach", "dumboReplicationStatus"} {
+		if _, ok := h.Commands()[name]; ok {
+			t.Fatalf("custom replication command %q is registered", name)
+		}
+	}
+}
+
+func TestCommands_ReplicationRejectsMutations(t *testing.T) {
+	h := configuredReplicationHandler(t)
+	h.initCommands()
+	ctx := conninfo.Ctx(context.Background(), conninfo.New())
+	outStage := must.NotFail(types.NewDocument("$out", "copy"))
+	outPipeline := must.NotFail(types.NewArray(outStage))
+	tests := []struct {
+		name    string
+		message *wire.OpMsg
+	}{
+		{name: "insert", message: wire.MustOpMsg("insert", "items", "$db", "orders")},
+		{name: "update", message: wire.MustOpMsg("update", "items", "$db", "orders")},
+		{name: "delete", message: wire.MustOpMsg("delete", "items", "$db", "orders")},
+		{name: "findAndModify", message: wire.MustOpMsg("findAndModify", "items", "$db", "orders")},
+		{name: "bulkWrite", message: wire.MustOpMsg("bulkWrite", int32(1), "$db", "admin")},
+		{name: "create", message: wire.MustOpMsg("create", "items", "$db", "orders")},
+		{name: "aggregate", message: commandMessage("aggregate", "items", "pipeline", outPipeline, "$db", "orders")},
+		{name: "dumboBranch", message: wire.MustOpMsg("dumboBranch", int32(1), "action", "add", "branch", "other", "$db", "orders")},
+		{name: "dumboCommit", message: wire.MustOpMsg("dumboCommit", int32(1), "$db", "orders")},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := h.Commands()[test.name].Handler(ctx, test.message)
+			commandError, ok := err.(*handlererrors.CommandError)
+			if !ok {
+				t.Fatalf("error = %T %v, want command error", err, err)
+			}
+			if commandError.Code() != handlererrors.ErrNotWritablePrimary || commandError.Err().Error() != "not primary" {
+				t.Fatalf("error = %v, want NotWritablePrimary (10107): not primary", commandError)
+			}
+			if commandError.Code().String() != "NotWritablePrimary" {
+				t.Fatalf("codeName = %q, want NotWritablePrimary", commandError.Code())
+			}
+		})
+	}
+}
+
+func TestCommands_SecondaryMutationCommandsAreClassified(t *testing.T) {
+	h := handlerForTest(t)
+	mutatingCommands := []string{
+		"aggregate", "bulkWrite", "convertToCapped", "create", "delete", "dropIndexes", "insert", "update",
+		"findAndModify", "findandmodify", "drop", "dropDatabase", "createIndexes", "renameCollection", "collMod",
+		"createUser", "dropAllUsersFromDatabase", "dropUser", "updateUser", "grantRolesToUser", "revokeRolesFromUser",
+		"createRole", "updateRole", "dropRole", "dropAllRolesFromDatabase", "grantPrivilegesToRole", "revokePrivilegesFromRole",
+		"grantRolesToRole", "revokeRolesFromRole", "commitTransaction",
+		"doltBranch", "dumboBranch", "doltCherryPick", "dumboCherryPick", "doltMerge", "dumboMerge",
+		"doltRebase", "dumboRebase", "doltReset", "dumboReset", "doltRemote", "dumboRemote", "doltPush", "dumboPush",
+		"doltFetch", "dumboFetch", "doltPull", "dumboPull", "doltClone", "dumboClone",
+		"doltResolveConflict", "dumboResolveConflict", "doltRevert", "dumboRevert", "doltTag", "dumboTag",
+		"doltUndrop", "dumboUndrop", "doltCommit", "dumboCommit", "doltGC", "dumboGC",
+	}
+	for _, name := range mutatingCommands {
+		command, ok := h.Commands()[name]
+		if !ok || command.MutatesState == nil {
+			t.Errorf("command %q has no secondary mutation classification", name)
+		}
+	}
+}
+
+func TestCommands_SecondaryMutationClassification(t *testing.T) {
+	h := handlerForTest(t)
+	emptyPipeline := must.NotFail(types.NewArray())
+	outPipeline := must.NotFail(types.NewArray(must.NotFail(types.NewDocument("$out", "copy"))))
+	tests := []struct {
+		name    string
+		message *wire.OpMsg
+		want    bool
+	}{
+		{name: "aggregate read", message: commandMessage("aggregate", "items", "pipeline", emptyPipeline, "$db", "orders")},
+		{name: "aggregate out", message: commandMessage("aggregate", "items", "pipeline", outPipeline, "$db", "orders"), want: true},
+		{name: "branch list", message: wire.MustOpMsg("dumboBranch", int32(1), "action", "list", "$db", "orders")},
+		{name: "branch add", message: wire.MustOpMsg("dumboBranch", int32(1), "action", "add", "$db", "orders"), want: true},
+		{name: "remote list", message: wire.MustOpMsg("dumboRemote", int32(1), "action", "list", "$db", "orders")},
+		{name: "remote add", message: wire.MustOpMsg("dumboRemote", int32(1), "action", "add", "$db", "orders"), want: true},
+		{name: "tag list", message: wire.MustOpMsg("dumboTag", int32(1), "$db", "orders")},
+		{name: "tag add", message: wire.MustOpMsg("dumboTag", int32(1), "name", "v1", "$db", "orders"), want: true},
+		{name: "undrop list", message: wire.MustOpMsg("dumboUndrop", int32(1), "$db", "admin")},
+		{name: "undrop restore", message: wire.MustOpMsg("dumboUndrop", int32(1), "name", "orders", "$db", "admin"), want: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			keys := must.NotFail(opMsgDocument(test.message)).Keys()
+			command := h.Commands()[keys[0]]
+			got := command.MutatesState != nil && command.MutatesState(test.message)
+			if got != test.want {
+				t.Fatalf("MutatesState = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func commandMessage(pairs ...any) *wire.OpMsg {
+	return must.NotFail(documentOpMsg(must.NotFail(types.NewDocument(pairs...))))
 }
 
 func contains(haystack []string, needle string) bool {

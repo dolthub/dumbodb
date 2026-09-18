@@ -40,6 +40,8 @@ const ReservedMetadataIndexName = "__dumbo_metadata__"
 // version-control walks, and rejected as a user collection name.
 const ReservedCatalogName = "__dumbo_catalog__"
 
+const ReservedReplicationControlName = "system.dumbodb.replication"
+
 // Collection is a generic interface for all backends for accessing collection.
 //
 // Collection object should be stateless and temporary;
@@ -66,8 +68,25 @@ type Collection interface {
 	DropIndexes(context.Context, *DropIndexesParams) (*DropIndexesResult, error)
 }
 
+type InitialSyncCollection interface {
+	BulkLoadInitialSync(context.Context, []*types.Document) error
+}
+
 type collectionContract struct {
 	c Collection
+}
+
+func (cc *collectionContract) BulkLoadInitialSync(ctx context.Context, documents []*types.Document) error {
+	now := time.Now()
+	for _, document := range documents {
+		document.SetRecordID(types.NextTimestamp(now).Signed())
+		document.Freeze()
+	}
+	if loader, ok := cc.c.(InitialSyncCollection); ok {
+		return loader.BulkLoadInitialSync(ctx, documents)
+	}
+	_, err := cc.c.InsertAll(ctx, &InsertAllParams{Docs: documents})
+	return err
 }
 
 // CollectionContract wraps Collection and enforces its contract.

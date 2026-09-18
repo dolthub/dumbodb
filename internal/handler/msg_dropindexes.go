@@ -123,7 +123,7 @@ func (h *Handler) MsgDropIndexes(connCtx context.Context, msg *wire.OpMsg) (*wir
 
 	_, err = c.DropIndexes(connCtx, &backends.DropIndexesParams{Indexes: toDrop})
 	if err != nil {
-		return nil, lazyerrors.Error(err)
+		return nil, common.TranslateBackendWriteError(err)
 	}
 
 	replyDoc := must.NotFail(types.NewDocument(

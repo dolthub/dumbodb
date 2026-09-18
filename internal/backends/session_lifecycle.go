@@ -33,3 +33,7 @@ type SessionAwareBackend interface {
 type AutoCommitBackend interface {
 	AutoCommit(ctx context.Context, dbName, branch, message, author string) (bool, error)
 }
+
+type InitialSyncResetter interface {
+	ResetInitialSyncData(context.Context) error
+}

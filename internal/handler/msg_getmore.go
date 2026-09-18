@@ -201,6 +201,9 @@ func (h *Handler) MsgGetMore(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 			document.Command(),
 		)
 	}
+	if h.ReplicationTopology != nil && c.DB == "local" && c.Collection == "oplog.rs" {
+		return nil, downstreamReplicationUnsupportedError()
+	}
 
 	nextBatch, err := h.makeNextBatch(c, batchSize)
 	if err != nil {

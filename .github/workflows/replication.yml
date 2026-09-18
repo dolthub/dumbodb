@@ -1,0 +1,121 @@
+name: Replication Parity
+
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "internal/replication/**"
+      - "internal/handler/**"
+      - "internal/backends/**"
+      - "internal/bson/**"
+      - "internal/clientconn/**"
+      - "cmd/dumbodb/**"
+      - ".github/workflows/replication.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "internal/replication/**"
+      - "internal/handler/**"
+      - "internal/backends/**"
+      - "internal/bson/**"
+      - "internal/clientconn/**"
+      - "cmd/dumbodb/**"
+      - ".github/workflows/replication.yml"
+  workflow_dispatch:
+
+env:
+  DUMBODB_NO_METRICS: "1"
+
+jobs:
+  replication:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.7"
+          cache: true
+
+      - name: Install mongod binary
+        run: |
+          codename=$(. /etc/os-release && echo "$VERSION_CODENAME")
+          curl -fsSL https://www.mongodb.org/static/pgp/server-8.0.asc \
+            | sudo gpg --dearmor -o /usr/share/keyrings/mongodb-server-8.0.gpg
+          echo "deb [ signed-by=/usr/share/keyrings/mongodb-server-8.0.gpg ] https://repo.mongodb.org/apt/ubuntu ${codename}/mongodb-org/8.0 multiverse" \
+            | sudo tee /etc/apt/sources.list.d/mongodb-org-8.0.list
+          sudo apt-get update
+          sudo apt-get install -y mongodb-org-server=8.0.28
+          mongod --version
+
+      - name: Build DumboDB
+        run: |
+          make build
+          sudo cp .runtime/bin/dumbodb /usr/local/bin/dumbodb
+
+          reported=$(dumbodb --version | awk '{print $2}')
+          echo "dumbodb reports: ${reported}"
+          if [ -z "$reported" ] || [ "$reported" = "unknown" ]; then
+            echo "dumbodb has no version stamp; results would not be attributable" >&2
+            exit 1
+          fi
+          echo "### Subject: dumbodb \`${reported}\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Resolve parity-testing branch
+        id: parity_ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE: ${{ github.head_ref || github.ref_name }}
+        run: |
+          ref=main
+          if [ -n "$CANDIDATE" ] && [ "$CANDIDATE" != "main" ] && \
+             git ls-remote --exit-code --heads \
+               "https://x-access-token:${GH_TOKEN}@github.com/dolthub/dumbodb-parity-testing.git" \
+               "refs/heads/${CANDIDATE}" >/dev/null 2>&1; then
+            ref="$CANDIDATE"
+          fi
+          echo "ref=${ref}" >> "$GITHUB_OUTPUT"
+          echo "Using parity-testing ref: ${ref}"
+
+      - name: Check out parity tests
+        uses: actions/checkout@v6
+        with:
+          repository: dolthub/dumbodb-parity-testing
+          ref: ${{ steps.parity_ref.outputs.ref }}
+          path: parity-testing
+
+      - name: Run replication suite
+        working-directory: parity-testing
+        env:
+          MONGOD_BIN: /usr/bin/mongod
+          DUMBODB_BIN: /usr/local/bin/dumbodb
+        run: |
+          set -o pipefail
+          mkdir -p results
+          if [ ! -d tests/replication ]; then
+            echo "::error::tests/replication does not exist on parity-testing ref '${{ steps.parity_ref.outputs.ref }}'." >&2
+            echo "The replication cases moved into that package. Merge the parity-testing change first, or push a branch named the same as this one." >&2
+            exit 1
+          fi
+          go test -tags replication ./harness/ ./tests/replication/ \
+            -v -parallel 4 -timeout 40m -json | tee results/replication.json
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: replication-results
+          path: parity-testing/results/
+          if-no-files-found: ignore
+
+      - name: Dump member logs on failure
+        if: failure()
+        run: |
+          for f in /tmp/dumbodb-member-*.log; do
+            [ -f "$f" ] || continue
+            echo "=============== $f ==============="
+            tail -100 "$f"
+          done

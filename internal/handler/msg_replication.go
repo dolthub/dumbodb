@@ -1,0 +1,388 @@
+// Copyright 2026 Dolthub, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package handler
+
+import (
+	"context"
+	"encoding/hex"
+	"fmt"
+	"sort"
+	"time"
+
+	"github.com/FerretDB/wire"
+	"github.com/FerretDB/wire/wirebson"
+
+	"github.com/dolthub/dumbodb/internal/bson"
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/replication/control"
+	"github.com/dolthub/dumbodb/internal/replication/topology"
+	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
+	"github.com/dolthub/dumbodb/internal/util/must"
+)
+
+func (h *Handler) MsgIsSelf(_ context.Context, _ *wire.OpMsg) (*wire.OpMsg, error) {
+	return documentOpMsg(must.NotFail(types.NewDocument("id", h.processID, "ok", float64(1))))
+}
+
+func (h *Handler) MsgReplSetGetRBID(_ context.Context, _ *wire.OpMsg) (*wire.OpMsg, error) {
+	state, err := h.replicationState()
+	if err != nil {
+		return nil, err
+	}
+	return documentOpMsg(must.NotFail(types.NewDocument("rbid", state.RBID, "ok", float64(1))))
+}
+
+func (h *Handler) MsgReplSetGetConfig(_ context.Context, _ *wire.OpMsg) (*wire.OpMsg, error) {
+	state, err := h.replicationState()
+	if err != nil {
+		return nil, err
+	}
+	if state.Configuration == nil {
+		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrorCode(94), "no replica set config has been received")
+	}
+	return documentOpMsg(must.NotFail(types.NewDocument(
+		"config", replicaConfigurationDocument(*state.Configuration),
+		"ok", float64(1),
+	)))
+}
+
+func (h *Handler) MsgReplSetGetStatus(_ context.Context, _ *wire.OpMsg) (*wire.OpMsg, error) {
+	state, err := h.replicationState()
+	if err != nil {
+		return nil, err
+	}
+	persisted := h.ReplicationTopology.ControlSnapshot()
+	infoMessage := ""
+	if state.InitialSyncFailure != nil {
+		infoMessage = state.InitialSyncFailure.Message
+	} else if len(persisted.FailureHistory) != 0 {
+		infoMessage = persisted.FailureHistory[len(persisted.FailureHistory)-1].Message
+	}
+	members := types.MakeArray(len(state.Members) + 1)
+	members.Append(replicaStatusMember(state.MemberID, state.MemberHost, state.State, true, true, state.Checkpoint.Applied, time.Now(), infoMessage))
+	memberIDs := make([]int, 0, len(state.Members))
+	for memberID := range state.Members {
+		if memberID != state.MemberID {
+			memberIDs = append(memberIDs, memberID)
+		}
+	}
+	sort.Ints(memberIDs)
+	for _, memberID := range memberIDs {
+		member := state.Members[memberID]
+		members.Append(replicaStatusMember(member.MemberID, member.Host, member.State, false, member.Healthy, member.Applied, member.LastHeartbeat, ""))
+	}
+	response := must.NotFail(types.NewDocument(
+		"set", state.SetName,
+		"date", time.Now(),
+		"myState", int32(state.State),
+		"term", state.Term,
+		"syncSourceHost", state.SyncSource,
+		"syncSourceId", memberIDForHost(state, state.SyncSource),
+		"heartbeatIntervalMillis", int64(2000),
+		"optimes", replicaStatusOpTimes(state),
+		"members", members,
+		"ok", float64(1),
+	))
+	if persisted.InitialSyncPhase != control.InitialSyncComplete {
+		initialSync := must.NotFail(types.NewDocument(
+			"phase", string(persisted.InitialSyncPhase),
+			"failedInitialSyncAttempts", initialSyncFailureCount(persisted.FailureHistory),
+			"maxFailedInitialSyncAttempts", int32(1),
+		))
+		if state.InitialSyncFailure != nil {
+			initialSync.Set("initialSyncFailure", state.InitialSyncFailure.Message)
+			initialSync.Set("namespace", state.InitialSyncFailure.Namespace)
+			if state.InitialSyncFailure.BSONType != "" {
+				initialSync.Set("bsonType", state.InitialSyncFailure.BSONType)
+			}
+		}
+		if persisted.InitialSyncAttempt != nil {
+			initialSync.Set("beginFetchOpTime", opTimeDocument(persisted.InitialSyncAttempt.BeginFetch))
+			initialSync.Set("beginApplyOpTime", opTimeDocument(persisted.InitialSyncAttempt.BeginApply))
+			initialSync.Set("stopOpTime", opTimeDocument(persisted.InitialSyncAttempt.Stop))
+		}
+		initialSync.Set("collectionsTotal", int64(state.Runtime.InitialSyncCollectionsTotal))
+		initialSync.Set("collectionsCompleted", int64(state.Runtime.InitialSyncCollectionsCompleted))
+		initialSync.Set("documentsCopied", state.Runtime.InitialSyncDocuments)
+		if state.Runtime.InitialSyncCurrentNamespace != "" {
+			initialSync.Set("currentNamespace", state.Runtime.InitialSyncCurrentNamespace)
+		}
+		response.Set("initialSyncStatus", initialSync)
+	}
+	return documentOpMsg(response)
+}
+
+func initialSyncFailureCount(history []control.ReplicationFailure) int32 {
+	var count int32
+	for _, failure := range history {
+		if failure.Stage == "initial_sync" {
+			count++
+		}
+	}
+	return count
+}
+
+func replicaStatusOpTimes(state topology.Snapshot) *types.Document {
+	committed := durableCommittedOpTime(state)
+	return must.NotFail(types.NewDocument(
+		"lastCommittedOpTime", opTimeDocument(committed),
+		"lastCommittedWallTime", opTimeDate(committed),
+		"readConcernMajorityOpTime", opTimeDocument(committed),
+		"appliedOpTime", opTimeDocument(state.Checkpoint.Applied),
+		"durableOpTime", opTimeDocument(state.Checkpoint.Durable),
+		"writtenOpTime", opTimeDocument(state.Checkpoint.Written),
+		"lastAppliedWallTime", opTimeDate(state.Checkpoint.Applied),
+		"lastDurableWallTime", opTimeDate(state.Checkpoint.Durable),
+		"lastWrittenWallTime", opTimeDate(state.Checkpoint.Written),
+	))
+}
+
+func durableCommittedOpTime(state topology.Snapshot) control.OpTime {
+	if state.LastCommitted.Compare(state.Checkpoint.Durable) > 0 {
+		return state.Checkpoint.Durable
+	}
+	return state.LastCommitted
+}
+
+func (h *Handler) MsgReplSetHeartbeat(_ context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+	request, err := opMsgDocument(msg)
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+	state, err := h.replicationState()
+	if err != nil {
+		return nil, err
+	}
+	setValue, _ := request.Get("replSetHeartbeat")
+	setName, ok := setValue.(string)
+	if !ok || setName != state.SetName {
+		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrorCode(93), fmt.Sprintf("replSetHeartbeat set name %q does not match %q", setName, state.SetName))
+	}
+	from, _ := request.Get("from")
+	fromHost, ok := from.(string)
+	if !ok {
+		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrTypeMismatch, "replSetHeartbeat.from must be a string")
+	}
+	configVersion, err := requiredIntegerValue(request, "configVersion")
+	if err != nil {
+		return nil, err
+	}
+	term, err := requiredIntegerValue(request, "term")
+	if err != nil {
+		return nil, err
+	}
+	fromIDValue, err := optionalIntegerValue(request, "fromId", -1)
+	if err != nil {
+		return nil, err
+	}
+	primaryIDValue, err := optionalIntegerValue(request, "primaryId", -1)
+	if err != nil {
+		return nil, err
+	}
+	heartbeatVersion, err := optionalIntegerValue(request, "hbv", 1)
+	if err != nil {
+		return nil, err
+	}
+	if heartbeatVersion != 1 {
+		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrorCode(40666), fmt.Sprintf("Found invalid value for field hbv: %d", heartbeatVersion))
+	}
+	fromID := int(fromIDValue)
+	primaryID := int(primaryIDValue)
+	if fromID >= 0 && fromHost != "" {
+		if err := h.ReplicationTopology.ObserveMemberContact(fromHost, fromID, term, primaryID); err != nil {
+			return nil, err
+		}
+		state = h.ReplicationTopology.Snapshot()
+	}
+
+	response := must.NotFail(types.NewDocument(
+		"set", state.SetName,
+		"state", int32(state.State),
+		"term", state.Term,
+		"v", configurationVersion(state.Configuration),
+		"configTerm", configurationTerm(state.Configuration),
+		"primaryId", int32(state.PrimaryID),
+		"opTime", opTimeDocument(state.Checkpoint.Applied),
+		"wallTime", opTimeDate(state.Checkpoint.Applied),
+		"writtenOpTime", opTimeDocument(state.Checkpoint.Written),
+		"writtenWallTime", opTimeDate(state.Checkpoint.Written),
+		"durableOpTime", opTimeDocument(state.Checkpoint.Durable),
+		"durableWallTime", opTimeDate(state.Checkpoint.Durable),
+		"ok", float64(1),
+	))
+	if state.SyncSource != "" {
+		response.Set("syncingTo", state.SyncSource)
+	}
+	requesterHasStaleConfiguration, err := heartbeatRequesterHasStaleConfiguration(request, configVersion, state.Configuration)
+	if err != nil {
+		return nil, err
+	}
+	if requesterHasStaleConfiguration {
+		response.Set("config", replicaConfigurationDocument(*state.Configuration))
+	}
+	return documentOpMsg(response)
+}
+
+func heartbeatRequesterHasStaleConfiguration(request *types.Document, requestVersion int64, configuration *control.ReplicaConfiguration) (bool, error) {
+	if configuration == nil {
+		return false, nil
+	}
+	requestTermValue, _ := request.Get("configTerm")
+	if requestTermValue == nil {
+		return requestVersion < configuration.Version, nil
+	}
+	requestTerm, err := optionalIntegerValue(request, "configTerm", -1)
+	if err != nil {
+		return false, err
+	}
+	return requestTerm < configuration.Term || requestTerm == configuration.Term && requestVersion < configuration.Version, nil
+}
+
+func (h *Handler) MsgReplSetUpdatePositionUnsupported(_ context.Context, _ *wire.OpMsg) (*wire.OpMsg, error) {
+	return nil, downstreamReplicationUnsupportedError()
+}
+
+func downstreamReplicationUnsupportedError() error {
+	return handlererrors.NewCommandErrorMsg(handlererrors.ErrorCode(115), "DumboDB does not serve downstream oplog replication")
+}
+
+func (h *Handler) replicationState() (topology.Snapshot, error) {
+	if h.ReplicationTopology == nil {
+		return topology.Snapshot{}, handlererrors.NewCommandErrorMsg(handlererrors.ErrorCode(76), "not running with --replSet")
+	}
+	return h.ReplicationTopology.Snapshot(), nil
+}
+
+func replicaConfigurationDocument(configuration control.ReplicaConfiguration) *types.Document {
+	if len(configuration.RawBSON) != 0 {
+		return must.NotFail(bson.ToDocument(wirebson.RawDocument(configuration.RawBSON)))
+	}
+	members := types.MakeArray(len(configuration.Members))
+	for _, member := range configuration.Members {
+		memberDocument := must.NotFail(types.NewDocument(
+			"_id", int32(member.MemberID),
+			"host", member.Host,
+			"priority", member.Priority,
+			"votes", int32(member.Votes),
+		))
+		if member.Hidden {
+			memberDocument.Set("hidden", true)
+		}
+		members.Append(memberDocument)
+	}
+	replicaSetID := any(configuration.ReplicaSetID)
+	if decoded, err := hex.DecodeString(configuration.ReplicaSetID); err == nil && len(decoded) == types.ObjectIDLen {
+		var objectID types.ObjectID
+		copy(objectID[:], decoded)
+		replicaSetID = objectID
+	}
+	settings := must.NotFail(types.NewDocument("replicaSetId", replicaSetID))
+	return must.NotFail(types.NewDocument(
+		"_id", configuration.SetName,
+		"version", configuration.Version,
+		"term", configuration.Term,
+		"protocolVersion", configuration.ProtocolVersion,
+		"members", members,
+		"settings", settings,
+	))
+}
+
+func replicaStatusMember(memberID int, host string, state topology.MemberState, self, healthy bool, applied control.OpTime, heartbeat time.Time, infoMessage string) *types.Document {
+	document := must.NotFail(types.NewDocument(
+		"_id", int32(memberID),
+		"name", host,
+		"health", boolFloat(healthy),
+		"state", int32(state),
+		"stateStr", state.String(),
+		"uptime", int64(0),
+		"optime", opTimeDocument(applied),
+		"optimeDate", opTimeDate(applied),
+	))
+	if self {
+		document.Set("self", true)
+	} else if !heartbeat.IsZero() {
+		document.Set("lastHeartbeat", heartbeat)
+	}
+	if infoMessage != "" {
+		document.Set("infoMessage", infoMessage)
+	}
+	return document
+}
+
+func opTimeDocument(opTime control.OpTime) *types.Document {
+	timestamp := types.Timestamp(uint64(opTime.Seconds)<<32 | uint64(opTime.Increment))
+	return must.NotFail(types.NewDocument("ts", timestamp, "t", opTime.Term))
+}
+
+func opTimeDate(opTime control.OpTime) time.Time {
+	return time.Unix(int64(opTime.Seconds), 0).UTC()
+}
+
+func memberIDForHost(state topology.Snapshot, host string) int32 {
+	if host == state.MemberHost {
+		return int32(state.MemberID)
+	}
+	for id, member := range state.Members {
+		if member.Host == host {
+			return int32(id)
+		}
+	}
+	return -1
+}
+
+func optionalIntegerValue(document *types.Document, field string, defaultValue int64) (int64, error) {
+	value, _ := document.Get(field)
+	if value == nil {
+		return defaultValue, nil
+	}
+	switch value := value.(type) {
+	case int32:
+		return int64(value), nil
+	case int64:
+		return value, nil
+	default:
+		return 0, handlererrors.NewCommandErrorMsg(handlererrors.ErrTypeMismatch, fmt.Sprintf("%s must be an integer", field))
+	}
+}
+
+func requiredIntegerValue(document *types.Document, field string) (int64, error) {
+	value, _ := document.Get(field)
+	if value == nil {
+		return 0, handlererrors.NewCommandErrorMsg(handlererrors.ErrBadValue, fmt.Sprintf("missing required field %s", field))
+	}
+	return optionalIntegerValue(document, field, 0)
+}
+
+func configurationVersion(configuration *control.ReplicaConfiguration) int64 {
+	if configuration == nil {
+		return -2
+	}
+	return configuration.Version
+}
+
+func configurationTerm(configuration *control.ReplicaConfiguration) int64 {
+	if configuration == nil {
+		return -1
+	}
+	return configuration.Term
+}
+
+func boolFloat(value bool) float64 {
+	if value {
+		return 1
+	}
+	return 0
+}

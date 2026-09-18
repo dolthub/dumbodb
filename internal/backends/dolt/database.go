@@ -35,6 +35,17 @@ type database struct {
 	rootish string // rootish from encoded name (branch, commit hash, tag, or ancestor expression)
 }
 
+func (db *database) isReplicationControlCollection(name string) bool {
+	return db.name == "admin" && name == backends.ReservedReplicationControlName
+}
+
+func replicationControlReadOnlyError() error {
+	return backends.NewError(
+		backends.ErrorCodeReadOnlyCollection,
+		fmt.Errorf("collection admin.%s is read-only", backends.ReservedReplicationControlName),
+	)
+}
+
 // isReadOnly reports whether the database's rootish resolves to a read-only
 // snapshot (commit hash, ancestor expression, caret, or tag).
 func (db *database) isReadOnly(ctx context.Context, state *dbState) bool {
@@ -178,6 +189,7 @@ func (db *database) ListCollections(ctx context.Context, params *backends.ListCo
 		ci := backends.CollectionInfo{Name: name}
 		if m := catalog[name]; m != nil {
 			ci.UUID = m.UUID
+			ci.SourceUUID = m.SourceUUID
 			ci.Validator = m.Validator
 			ci.Collation = m.Collation
 			// listCollections must mirror MongoDB, which does NOT materialize the
@@ -203,6 +215,9 @@ func (db *database) ListCollections(ctx context.Context, params *backends.ListCo
 }
 
 func (db *database) CreateCollection(ctx context.Context, params *backends.CreateCollectionParams) error {
+	if db.isReplicationControlCollection(params.Name) {
+		return replicationControlReadOnlyError()
+	}
 	state, err := db.backend.getOrOpenDB(ctx, db.name, true)
 	if err != nil {
 		return err
@@ -223,6 +238,18 @@ func (db *database) CreateCollection(ctx context.Context, params *backends.Creat
 	if exists {
 		return backends.NewError(backends.ErrorCodeCollectionAlreadyExists,
 			fmt.Errorf("collection %q already exists in %q", params.Name, db.name))
+	}
+	if params.SourceUUID != "" {
+		catalog, err := listCatalog(ctx, state, branchAM)
+		if err != nil {
+			return err
+		}
+		for name, metadata := range catalog {
+			if metadata.SourceUUID == params.SourceUUID {
+				return backends.NewError(backends.ErrorCodeCollectionAlreadyExists,
+					fmt.Errorf("source collection UUID %q is already assigned to %q.%q", params.SourceUUID, db.name, name))
+			}
+		}
 	}
 
 	if params.ViewOn != "" {
@@ -254,6 +281,7 @@ func (db *database) CreateCollection(ctx context.Context, params *backends.Creat
 	}
 	meta := &collMeta{
 		UUID:             collectionUUID(db.name, params.Name),
+		SourceUUID:       params.SourceUUID,
 		Validator:        params.Validator,
 		Collation:        params.Collation,
 		ValidationLevel:  params.ValidationLevel,
@@ -280,6 +308,9 @@ func (db *database) CreateCollection(ctx context.Context, params *backends.Creat
 }
 
 func (db *database) DropCollection(ctx context.Context, params *backends.DropCollectionParams) error {
+	if db.isReplicationControlCollection(params.Name) {
+		return replicationControlReadOnlyError()
+	}
 	state, err := db.backend.getOrOpenDB(ctx, db.name, false)
 	if err != nil {
 		return err
@@ -320,6 +351,9 @@ func (db *database) DropCollection(ctx context.Context, params *backends.DropCol
 }
 
 func (db *database) RenameCollection(ctx context.Context, params *backends.RenameCollectionParams) error {
+	if db.isReplicationControlCollection(params.OldName) || db.isReplicationControlCollection(params.NewName) {
+		return replicationControlReadOnlyError()
+	}
 	state, err := db.backend.getOrOpenDB(ctx, db.name, false)
 	if err != nil {
 		return err
@@ -353,7 +387,7 @@ func (db *database) RenameCollection(ctx context.Context, params *backends.Renam
 		return err
 	}
 
-	if newExists {
+	if newExists && !params.DropTarget {
 		return backends.NewError(backends.ErrorCodeCollectionAlreadyExists,
 			fmt.Errorf("collection %q already exists in %q", params.NewName, db.name))
 	}
@@ -366,13 +400,16 @@ func (db *database) RenameCollection(ctx context.Context, params *backends.Renam
 		if err := ed.Delete(ctx, params.OldName); err != nil {
 			return err
 		}
-		if err := ed.Add(ctx, params.NewName, oldAddr); err != nil {
-			return err
+		if newExists {
+			if err := ed.Update(ctx, params.NewName, oldAddr); err != nil {
+				return err
+			}
+		} else {
+			if err := ed.Add(ctx, params.NewName, oldAddr); err != nil {
+				return err
+			}
 		}
-		if meta != nil {
-			return state.applyCatalogRename(ctx, renameBranchAM, ed, params.OldName, params.NewName, meta)
-		}
-		return nil
+		return state.applyCatalogRename(ctx, renameBranchAM, ed, params.OldName, params.NewName, meta)
 	}); err != nil {
 		return err
 	}
@@ -381,6 +418,9 @@ func (db *database) RenameCollection(ctx context.Context, params *backends.Renam
 }
 
 func (db *database) CollMod(ctx context.Context, params *backends.CollModParams) error {
+	if db.isReplicationControlCollection(params.Name) {
+		return replicationControlReadOnlyError()
+	}
 	state, err := db.backend.getOrOpenDB(ctx, db.name, false)
 	if err != nil {
 		return err

@@ -374,12 +374,29 @@ func (c *conn) run(ctx context.Context) (err error) {
 				panic("no response to send to client")
 			}
 
-			if err = wire.WriteMessage(bufw, resHeader, resBody); err != nil {
-				return
-			}
-
-			if err = bufw.Flush(); err != nil {
-				return
+			responseTo := reqHeader.RequestID
+			for {
+				resHeader.ResponseTo = responseTo
+				if err = wire.WriteMessage(bufw, resHeader, resBody); err != nil {
+					return
+				}
+				if err = bufw.Flush(); err != nil {
+					return
+				}
+				responseMsg, ok := resBody.(*wire.OpMsg)
+				if c.mode != NormalMode || !ok || !responseMsg.Flags.FlagSet(wire.OpMsgMoreToCome) {
+					break
+				}
+				responseTo = resHeader.RequestID
+				if reqBody, err = nextExhaustRequest(reqBody, responseMsg); err != nil {
+					return
+				}
+				var closeAfterResponse bool
+				resHeader, resBody, closeAfterResponse = c.route(ctx, reqHeader, reqBody)
+				resCloseConn = resCloseConn || closeAfterResponse
+				if resHeader == nil || resBody == nil {
+					panic("no exhaust response to send to client")
+				}
 			}
 		}
 
@@ -388,6 +405,44 @@ func (c *conn) run(ctx context.Context) (err error) {
 			return
 		}
 	}
+}
+
+func nextExhaustRequest(request wire.MsgBody, response *wire.OpMsg) (wire.MsgBody, error) {
+	requestMsg, ok := request.(*wire.OpMsg)
+	if !ok {
+		return request, nil
+	}
+	requestRaw, err := requestMsg.RawDocument()
+	if err != nil {
+		return nil, err
+	}
+	requestDocument, err := bson.ToDocument(requestRaw)
+	if err != nil {
+		return nil, err
+	}
+	responseRaw, err := response.RawDocument()
+	if err != nil {
+		return nil, err
+	}
+	responseDocument, err := bson.ToDocument(responseRaw)
+	if err != nil {
+		return nil, err
+	}
+	topologyVersion, _ := responseDocument.Get("topologyVersion")
+	if topologyVersion == nil {
+		return request, nil
+	}
+	requestDocument.Set("topologyVersion", topologyVersion)
+	wireDocument, err := bson.FromDocument(requestDocument)
+	if err != nil {
+		return nil, err
+	}
+	next, err := wire.NewOpMsg(wireDocument)
+	if err != nil {
+		return nil, err
+	}
+	next.Flags = requestMsg.Flags
+	return next, nil
 }
 
 // route sends request to a handler's command based on the op code provided in the request header.

@@ -179,7 +179,7 @@ func (h *Handler) MsgCollMod(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 			msg := fmt.Sprintf("Invalid collection name: %s", collectionName)
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace, msg, "collMod")
 		default:
-			return nil, lazyerrors.Error(err)
+			return nil, common.TranslateBackendWriteError(err)
 		}
 	}
 
