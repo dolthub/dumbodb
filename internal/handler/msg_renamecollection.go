@@ -142,20 +142,10 @@ func (h *Handler) MsgRenameCollection(connCtx context.Context, msg *wire.OpMsg) 
 		)
 	}
 
-	// When dropTarget is true and the target already exists, drop it first.
-	if dropTarget {
-		if err = db.DropCollection(connCtx, &backends.DropCollectionParams{Name: newCName}); err != nil {
-			if !backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist) &&
-				!backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseDoesNotExist) {
-				return nil, lazyerrors.Error(err)
-			}
-			// Target doesn't exist  -- that's fine, proceed with rename.
-		}
-	}
-
 	err = db.RenameCollection(connCtx, &backends.RenameCollectionParams{
-		OldName: oldCName,
-		NewName: newCName,
+		OldName:    oldCName,
+		NewName:    newCName,
+		DropTarget: dropTarget,
 	})
 
 	switch {

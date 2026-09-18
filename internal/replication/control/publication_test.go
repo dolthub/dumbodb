@@ -232,7 +232,7 @@ func TestAbortingPublicationRestoresPreApplyControlStateAfterRestart(t *testing.
 	if err := store.BeginPublication(pending); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.RenameCollectionMapping(mapping.SourceUUID, "orders", "items", "orders", "renamed", position); err != nil {
+	if err := store.RenameCollectionMapping(mapping.SourceUUID, "orders", "items", "orders", "renamed", "", position); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.PutCollectionMapping(CollectionMapping{

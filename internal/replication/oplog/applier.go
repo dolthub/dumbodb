@@ -196,17 +196,21 @@ func parseOperation(document *types.Document) (operation, error) {
 }
 
 func parseSourceUUID(document *types.Document) (string, error) {
-	value, getErr := document.Get("ui")
+	return parseOptionalUUIDField(document, "ui")
+}
+
+func parseOptionalUUIDField(document *types.Document, field string) (string, error) {
+	value, getErr := document.Get(field)
 	if getErr != nil {
 		return "", nil
 	}
 	binary, ok := value.(types.Binary)
 	if !ok || binary.Subtype != types.BinaryUUID || len(binary.B) != 16 {
-		return "", fmt.Errorf("ui has type %T, want UUID binary", value)
+		return "", fmt.Errorf("%s has type %T, want UUID binary", field, value)
 	}
 	parsed, err := uuid.FromBytes(binary.B)
 	if err != nil {
-		return "", fmt.Errorf("parsing ui: %w", err)
+		return "", fmt.Errorf("parsing %s: %w", field, err)
 	}
 	return parsed.String(), nil
 }
@@ -358,7 +362,11 @@ func (a *Applier) applyCommand(ctx context.Context, operation operation, opTime 
 		if err != nil {
 			return err
 		}
-		return a.catalog.Rename(ctx, operation.SourceUUID, targetDatabase, targetCollection, opTime)
+		dropTargetUUID, err := parseOptionalUUIDField(operation.Object, "dropTarget")
+		if err != nil {
+			return err
+		}
+		return a.catalog.Rename(ctx, operation.SourceUUID, targetDatabase, targetCollection, dropTargetUUID, opTime)
 	case "createIndexes":
 		if operation.SourceUUID == "" {
 			return errors.New("createIndexes has no collection UUID")

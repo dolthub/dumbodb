@@ -226,11 +226,16 @@ func (state *dbState) applyCatalogDelete(ctx context.Context, am prolly.AddressM
 }
 
 // applyCatalogRename moves oldName's metadata document to newName in a single
-// catalog rebuild staged into ed. A single setCatalogEntry is required because
-// two independent applyCatalog* calls would each rebuild the whole catalog DTBL
-// from am and the second would clobber the first. Folds into the caller's
-// transaction; performs no commit.
+// catalog rebuild staged into ed. When the source has no metadata, any replaced
+// target metadata is removed. Folds into the caller's transaction; performs no
+// commit.
 func (state *dbState) applyCatalogRename(ctx context.Context, am prolly.AddressMap, ed prolly.AddressMapEditor, oldName, newName string, meta *collMeta) error {
+	if meta == nil {
+		h, err := am.Get(ctx, reservedCatalogName)
+		if err != nil || h.IsEmpty() {
+			return err
+		}
+	}
 	catMap, err := catalogMapFromAM(ctx, state, am)
 	if err != nil {
 		return err
@@ -243,17 +248,23 @@ func (state *dbState) applyCatalogRename(ctx context.Context, am prolly.AddressM
 	if err != nil {
 		return err
 	}
-	doc, err := collMetaToDoc(newName, meta)
-	if err != nil {
-		return err
-	}
-	value, err := writeBSONDocToValue(ctx, state.ns, doc)
-	if err != nil {
-		return err
-	}
 	mut := catMap.Mutate()
-	if err := mut.Put(ctx, newKey, value); err != nil {
-		return err
+	if meta == nil {
+		if err := mut.Delete(ctx, newKey); err != nil {
+			return err
+		}
+	} else {
+		doc, err := collMetaToDoc(newName, meta)
+		if err != nil {
+			return err
+		}
+		value, err := writeBSONDocToValue(ctx, state.ns, doc)
+		if err != nil {
+			return err
+		}
+		if err := mut.Put(ctx, newKey, value); err != nil {
+			return err
+		}
 	}
 	if err := mut.Delete(ctx, oldKey); err != nil {
 		return err

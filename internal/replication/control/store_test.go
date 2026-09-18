@@ -345,7 +345,7 @@ func TestCollectionMappingRenameDropAndNameReuse(t *testing.T) {
 	}); err == nil {
 		t.Fatal("PutCollectionMapping accepted an active namespace collision")
 	}
-	if err := store.RenameCollectionMapping("source-one", "orders", "items", "orders", "renamed", opTime(3)); err != nil {
+	if err := store.RenameCollectionMapping("source-one", "orders", "items", "orders", "renamed", "", opTime(3)); err != nil {
 		t.Fatal(err)
 	}
 	if mapping, ok := store.ActiveCollectionMapping("source-one"); !ok || mapping.Collection != "renamed" || mapping.LocalUUID != "local-one" {
@@ -363,8 +363,46 @@ func TestCollectionMappingRenameDropAndNameReuse(t *testing.T) {
 	if err := store.PutCollectionMapping(second); err != nil {
 		t.Fatalf("name reuse after drop: %v", err)
 	}
-	if err := store.RenameCollectionMapping("source-one", "orders", "renamed", "orders", "wrong", opTime(6)); err == nil {
+	if err := store.RenameCollectionMapping("source-one", "orders", "renamed", "orders", "wrong", "", opTime(6)); err == nil {
 		t.Fatal("RenameCollectionMapping revived a dropped UUID")
+	}
+}
+
+func TestRenameCollectionMappingDropsTarget(t *testing.T) {
+	store, err := openTestStore(t, t.TempDir(), testConfiguration())
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := CollectionMapping{
+		SourceUUID: "source", Database: "orders", Collection: "incoming", LocalUUID: "local-source", CreateOpTime: opTime(1),
+	}
+	target := CollectionMapping{
+		SourceUUID: "target", Database: "orders", Collection: "current", LocalUUID: "local-target", CreateOpTime: opTime(1),
+	}
+	if err := store.PutCollectionMapping(source); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutCollectionMapping(target); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RenameCollectionMapping("source", "orders", "incoming", "orders", "current", "wrong", opTime(2)); err == nil {
+		t.Fatal("RenameCollectionMapping accepted a mismatched dropTarget UUID")
+	}
+	if mapping, ok := store.ActiveCollectionMapping("target"); !ok || mapping.Collection != "current" {
+		t.Fatalf("target mapping changed after rejected rename: %+v, %v", mapping, ok)
+	}
+	if err := store.RenameCollectionMapping("source", "orders", "incoming", "orders", "current", "target", opTime(2)); err != nil {
+		t.Fatal(err)
+	}
+	if mapping, ok := store.ActiveCollectionMapping("source"); !ok || mapping.Collection != "current" {
+		t.Fatalf("source mapping after replacement = %+v, %v", mapping, ok)
+	}
+	if _, ok := store.ActiveCollectionMapping("target"); ok {
+		t.Fatal("replaced target mapping remained active")
+	}
+	dropped := store.Snapshot().CollectionMappings["target"]
+	if !dropped.Dropped || dropped.DropOpTime != opTime(2) || dropped.LastUpdateOpTime != opTime(2) {
+		t.Fatalf("dropped target mapping = %+v", dropped)
 	}
 }
 

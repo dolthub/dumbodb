@@ -136,6 +136,42 @@ func TestSourceUUIDSurvivesRenameAndPreventsAlias(t *testing.T) {
 	}
 }
 
+func TestRenameCollectionDropTargetReplacesCatalogIdentity(t *testing.T) {
+	ctx := context.Background()
+	backend, err := NewBackend(t.TempDir(), slog.Default(), false, false, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backend.Close()
+	database, err := backend.Database("replicated")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.CreateCollection(ctx, &backends.CreateCollectionParams{Name: "source", SourceUUID: "source-uuid"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.CreateCollection(ctx, &backends.CreateCollectionParams{Name: "target", SourceUUID: "target-uuid"}); err != nil {
+		t.Fatal(err)
+	}
+	source := collInfo(t, database, "source")
+	if err := database.RenameCollection(ctx, &backends.RenameCollectionParams{
+		OldName: "source", NewName: "target", DropTarget: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	replaced := collInfo(t, database, "target")
+	if replaced.UUID != source.UUID || replaced.SourceUUID != source.SourceUUID {
+		t.Fatalf("replacement identity = %+v, want source identity %+v", replaced, source)
+	}
+	remaining, err := database.ListCollections(ctx, &backends.ListCollectionsParams{Name: "source"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(remaining.Collections) != 0 {
+		t.Fatalf("source collection remained after replacement: %+v", remaining.Collections)
+	}
+}
+
 func TestCatalogHiddenFromListCollections(t *testing.T) {
 	dir, err := os.MkdirTemp("", "dolt-catalog-hidden-*")
 	if err != nil {

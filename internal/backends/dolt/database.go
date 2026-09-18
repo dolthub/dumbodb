@@ -387,7 +387,7 @@ func (db *database) RenameCollection(ctx context.Context, params *backends.Renam
 		return err
 	}
 
-	if newExists {
+	if newExists && !params.DropTarget {
 		return backends.NewError(backends.ErrorCodeCollectionAlreadyExists,
 			fmt.Errorf("collection %q already exists in %q", params.NewName, db.name))
 	}
@@ -400,13 +400,16 @@ func (db *database) RenameCollection(ctx context.Context, params *backends.Renam
 		if err := ed.Delete(ctx, params.OldName); err != nil {
 			return err
 		}
-		if err := ed.Add(ctx, params.NewName, oldAddr); err != nil {
-			return err
+		if newExists {
+			if err := ed.Update(ctx, params.NewName, oldAddr); err != nil {
+				return err
+			}
+		} else {
+			if err := ed.Add(ctx, params.NewName, oldAddr); err != nil {
+				return err
+			}
 		}
-		if meta != nil {
-			return state.applyCatalogRename(ctx, renameBranchAM, ed, params.OldName, params.NewName, meta)
-		}
-		return nil
+		return state.applyCatalogRename(ctx, renameBranchAM, ed, params.OldName, params.NewName, meta)
 	}); err != nil {
 		return err
 	}

@@ -308,6 +308,59 @@ func TestApplierCatalogCommands(t *testing.T) {
 	}
 }
 
+func TestApplierRenameCollectionDropsExistingTarget(t *testing.T) {
+	ctx := context.Background()
+	backend, applier, sourceUUID := newTestApplier(t)
+	targetUUID := "87654321-4321-4321-8321-cba987654321"
+	createTestCollection(t, ctx, backend, applier, sourceUUID, "orders", "incoming")
+	createTestCollection(t, ctx, backend, applier, targetUUID, "orders", "current")
+	sourceDocument := must.NotFail(types.NewDocument("_id", "source", "value", "replacement"))
+	targetDocument := must.NotFail(types.NewDocument("_id", "target", "value", "discarded"))
+	insertTestDocuments(t, ctx, backend, "orders", "incoming", sourceDocument)
+	insertTestDocuments(t, ctx, backend, "orders", "current", targetDocument)
+
+	rename := must.NotFail(types.NewDocument(
+		"renameCollection", "orders.incoming",
+		"to", "orders.current",
+		"stayTemp", false,
+		"dropTarget", uuidBinary(uuid.MustParse(targetUUID)),
+	))
+	entry := makeOplogEntry(t, 2, "c", "orders.$cmd", sourceUUID, rename, nil)
+	if err := applier.Apply(ctx, entry); err != nil {
+		t.Fatal(err)
+	}
+	if err := applier.Apply(ctx, entry); err != nil {
+		t.Fatalf("idempotent replacement rename: %v", err)
+	}
+
+	location, err := applier.catalog.Resolve(ctx, sourceUUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if location.Database != "orders" || location.Collection != "current" {
+		t.Fatalf("renamed source location = %+v", location)
+	}
+	if _, err := applier.catalog.Resolve(ctx, targetUUID); !errors.Is(err, catalog.ErrSourceUUIDNotFound) {
+		t.Fatalf("resolved replaced target UUID: %v", err)
+	}
+	if _, ok := applier.store.ActiveCollectionMapping(targetUUID); ok {
+		t.Fatal("replaced target mapping remained active")
+	}
+	assertCollectionCount(t, ctx, backend, "orders", "current", 1)
+	assertStoredDocument(t, ctx, backend, "orders", "current", sourceDocument)
+	database, err := backend.Database("orders")
+	if err != nil {
+		t.Fatal(err)
+	}
+	remaining, err := database.ListCollections(ctx, &backends.ListCollectionsParams{Name: "incoming"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(remaining.Collections) != 0 {
+		t.Fatalf("source collection remained after replacement: %+v", remaining.Collections)
+	}
+}
+
 func TestApplierAssemblesTransactionsWithAtomicVisibility(t *testing.T) {
 	ctx := context.Background()
 	backend, applier, sourceUUID := newTestApplier(t)

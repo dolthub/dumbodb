@@ -204,7 +204,11 @@ func (a *Applier) DropDatabase(ctx context.Context, databaseName string, opTime 
 	return nil
 }
 
-func (a *Applier) Rename(ctx context.Context, sourceUUID, newDatabase, newCollection string, opTime control.OpTime) error {
+func (a *Applier) Rename(
+	ctx context.Context,
+	sourceUUID, newDatabase, newCollection, dropTargetUUID string,
+	opTime control.OpTime,
+) error {
 	location, err := a.Resolve(ctx, sourceUUID)
 	if err != nil {
 		return err
@@ -214,7 +218,7 @@ func (a *Applier) Rename(ctx context.Context, sourceUUID, newDatabase, newCollec
 		return fmt.Errorf("source UUID %q has no active control mapping", sourceUUID)
 	}
 	if location.Database == newDatabase && location.Collection == newCollection {
-		return a.store.RenameCollectionMapping(sourceUUID, mapping.Database, mapping.Collection, newDatabase, newCollection, opTime)
+		return a.store.RenameCollectionMapping(sourceUUID, mapping.Database, mapping.Collection, newDatabase, newCollection, dropTargetUUID, opTime)
 	}
 	if location.Database != mapping.Database || location.Collection != mapping.Collection {
 		return fmt.Errorf("catalog location %q.%q disagrees with control mapping %q.%q", location.Database, location.Collection, mapping.Database, mapping.Collection)
@@ -222,14 +226,32 @@ func (a *Applier) Rename(ctx context.Context, sourceUUID, newDatabase, newCollec
 	if location.Database != newDatabase {
 		return errors.New("cross-database replicated rename is not supported")
 	}
+	if dropTargetUUID == sourceUUID {
+		return errors.New("renameCollection dropTarget UUID matches the source UUID")
+	}
+	if dropTargetUUID != "" {
+		target, err := a.Resolve(ctx, dropTargetUUID)
+		if err != nil {
+			return fmt.Errorf("resolving renameCollection dropTarget UUID %q: %w", dropTargetUUID, err)
+		}
+		if target.Database != newDatabase || target.Collection != newCollection {
+			return fmt.Errorf("renameCollection dropTarget UUID %q identifies %q.%q, not %q.%q", dropTargetUUID, target.Database, target.Collection, newDatabase, newCollection)
+		}
+		targetMapping, ok := a.store.ActiveCollectionMapping(dropTargetUUID)
+		if !ok || targetMapping.Database != newDatabase || targetMapping.Collection != newCollection {
+			return fmt.Errorf("renameCollection dropTarget UUID %q has no active mapping at %q.%q", dropTargetUUID, newDatabase, newCollection)
+		}
+	}
 	database, err := a.backend.Database(location.Database)
 	if err != nil {
 		return err
 	}
-	if err := database.RenameCollection(ctx, &backends.RenameCollectionParams{OldName: location.Collection, NewName: newCollection}); err != nil {
+	if err := database.RenameCollection(ctx, &backends.RenameCollectionParams{
+		OldName: location.Collection, NewName: newCollection, DropTarget: dropTargetUUID != "",
+	}); err != nil {
 		return err
 	}
-	return a.store.RenameCollectionMapping(sourceUUID, location.Database, location.Collection, newDatabase, newCollection, opTime)
+	return a.store.RenameCollectionMapping(sourceUUID, location.Database, location.Collection, newDatabase, newCollection, dropTargetUUID, opTime)
 }
 
 func (a *Applier) Drop(ctx context.Context, sourceUUID string, opTime control.OpTime) error {

@@ -59,7 +59,7 @@ func TestCatalogApplierPreservesIdentityAcrossLifecycle(t *testing.T) {
 	if err := applier.CreateIndexes(ctx, "source-one", indexes); err != nil {
 		t.Fatal(err)
 	}
-	if err := applier.Rename(ctx, "source-one", "orders", "renamed", catalogOpTime(2)); err != nil {
+	if err := applier.Rename(ctx, "source-one", "orders", "renamed", "", catalogOpTime(2)); err != nil {
 		t.Fatal(err)
 	}
 	renamed, err := applier.Resolve(ctx, "source-one")
@@ -239,7 +239,7 @@ func TestCatalogApplierRepairsCompletedRootMutation(t *testing.T) {
 	if err := database.RenameCollection(ctx, &backends.RenameCollectionParams{OldName: "items", NewName: "renamed"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := applier.Rename(ctx, "source-one", "orders", "renamed", catalogOpTime(2)); err != nil {
+	if err := applier.Rename(ctx, "source-one", "orders", "renamed", "", catalogOpTime(2)); err != nil {
 		t.Fatalf("repair rename mapping: %v", err)
 	}
 	if err := database.DropCollection(ctx, &backends.DropCollectionParams{Name: "renamed"}); err != nil {

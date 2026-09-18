@@ -927,7 +927,10 @@ func (s *Store) PutCollectionMapping(mapping CollectionMapping) error {
 	return s.persistLocked()
 }
 
-func (s *Store) RenameCollectionMapping(sourceUUID, oldDatabase, oldCollection, newDatabase, newCollection string, opTime OpTime) error {
+func (s *Store) RenameCollectionMapping(
+	sourceUUID, oldDatabase, oldCollection, newDatabase, newCollection, dropTargetUUID string,
+	opTime OpTime,
+) error {
 	if sourceUUID == "" || oldDatabase == "" || oldCollection == "" || newDatabase == "" || newCollection == "" {
 		return errors.New("source UUID and old/new namespaces are required")
 	}
@@ -949,10 +952,31 @@ func (s *Store) RenameCollectionMapping(sourceUUID, oldDatabase, oldCollection, 
 	if opTime.Compare(mapping.LastUpdateOpTime) <= 0 {
 		return fmt.Errorf("rename optime %v is not after mapping optime %v", opTime, mapping.LastUpdateOpTime)
 	}
+	var droppedTarget CollectionMapping
+	var droppedTargetUUID string
 	for otherUUID, existing := range s.state.CollectionMappings {
 		if otherUUID != sourceUUID && !existing.Dropped && existing.Database == newDatabase && existing.Collection == newCollection {
-			return fmt.Errorf("rename target %q.%q is mapped to source UUID %q", newDatabase, newCollection, otherUUID)
+			if dropTargetUUID == "" {
+				return fmt.Errorf("rename target %q.%q is mapped to source UUID %q", newDatabase, newCollection, otherUUID)
+			}
+			if otherUUID != dropTargetUUID {
+				return fmt.Errorf("rename target %q.%q maps to source UUID %q, not dropTarget UUID %q", newDatabase, newCollection, otherUUID, dropTargetUUID)
+			}
+			if opTime.Compare(existing.LastUpdateOpTime) <= 0 {
+				return fmt.Errorf("rename optime %v is not after dropTarget mapping optime %v", opTime, existing.LastUpdateOpTime)
+			}
+			droppedTarget = existing
+			droppedTargetUUID = otherUUID
 		}
+	}
+	if dropTargetUUID != "" && droppedTargetUUID == "" {
+		return fmt.Errorf("dropTarget source UUID %q is not actively mapped to %q.%q", dropTargetUUID, newDatabase, newCollection)
+	}
+	if droppedTargetUUID != "" {
+		droppedTarget.Dropped = true
+		droppedTarget.DropOpTime = opTime
+		droppedTarget.LastUpdateOpTime = opTime
+		s.state.CollectionMappings[droppedTargetUUID] = droppedTarget
 	}
 	mapping.Database = newDatabase
 	mapping.Collection = newCollection

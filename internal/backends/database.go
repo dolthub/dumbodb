@@ -262,8 +262,9 @@ func (dbc *databaseContract) DropCollection(ctx context.Context, params *DropCol
 }
 
 type RenameCollectionParams struct {
-	OldName string
-	NewName string
+	OldName    string
+	NewName    string
+	DropTarget bool
 }
 
 // RenameCollection renames existing collection in the database.
