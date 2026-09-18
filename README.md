@@ -60,7 +60,7 @@ Parity is verified against a specific MongoDB release: **MongoDB 8.0.28**. This 
 - Authentication & Access Control: SCRAM authentication with role-based access control (RBAC), including built-in and custom roles, privilege grant/revoke, and role inheritance. As in MongoDB, access control is enabled with `--auth`; the first user is bootstrapped via the localhost exception (create a user with the `root` role from a local connection), after which all connections must authenticate.
 
 ### Limitations & Scope
-- Single Node: Replication (Replica Sets) and Sharding are out of scope. Support not planned.
+- Replica Sets: DumboDB can join a MongoDB replica set as a non-voting peer. General replica-set functionality and sharding remain out of scope.
 - Ecosystem Features: Proprietary features specific to [MongoDB Atlas](https://www.mongodb.com/lp/cloud/atlas/try3) (e.g., Search Indexes, Serverless Triggers) are not supported. Support not planned.
 - Capped Collections: Fixed-size collections (`capped: true`) and their oldest-first eviction are not supported; creating one is rejected with an error. Not clear if there is any place for this feature in a version-controlled database. Support not planned.
 - Expiration (TTL): `expireAfterSeconds` is not supported; specifying it on a collection or index is rejected with an error rather than silently accepted. Support not planned.
@@ -281,8 +281,7 @@ DumboDB is built on two open-source projects:
 
 ## Roadmap
 
-- **v0.7**: Add Clone, Push, and Pull support. This will allow you to sync your DumboDB repositories with remote servers, and collaborate with others.
-- **v0.8**: Add support for Replication (as a secondary backup to your existing MongoDB instance).
+- **v0.7**: Branch Level Permissions
+- **v0.8**: Server support for Clone/Push/Pull
 - **v0.9**: Visualization and operations via a custom Workbench UI.
 - **v1.0**: General availability release, with a focus on stability, performance, and usability improvements.
-
