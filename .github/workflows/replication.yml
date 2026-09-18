@@ -13,14 +13,18 @@ on:
     branches: [main]
     paths:
       - "internal/replication/**"
-      - "internal/handler/msg_replication*.go"
-      - "internal/handler/msg_hello.go"
-      - "internal/handler/msg_serverstatus.go"
-      # Replication is built on these, so a regression in any of them reaches
-      # it without touching internal/replication at all: the storage the
-      # applier writes through, the BSON conversion every oplog entry passes
-      # through, the connection layer inbound member commands arrive on, and
-      # the wiring that turns on --replSet.
+      # internal/handler is the command dispatch layer, roughly a file per
+      # MongoDB command, so this triggers on nearly every change to server
+      # behavior rather than on replication changes alone. That is deliberate,
+      # by owner direction: the suite runs in under six minutes, and a
+      # replication regression reaching main unnoticed costs more than the
+      # runs this adds. Two of the four defects found in review this week
+      # lived outside internal/replication.
+      - "internal/handler/**"
+      # Replication is built on these too: the storage the applier writes
+      # through, the BSON conversion every oplog entry passes through, the
+      # connection layer inbound member commands arrive on, and the wiring
+      # that turns on --replSet.
       - "internal/backends/**"
       - "internal/bson/**"
       - "internal/clientconn/**"
@@ -30,14 +34,18 @@ on:
     branches: [main]
     paths:
       - "internal/replication/**"
-      - "internal/handler/msg_replication*.go"
-      - "internal/handler/msg_hello.go"
-      - "internal/handler/msg_serverstatus.go"
-      # Replication is built on these, so a regression in any of them reaches
-      # it without touching internal/replication at all: the storage the
-      # applier writes through, the BSON conversion every oplog entry passes
-      # through, the connection layer inbound member commands arrive on, and
-      # the wiring that turns on --replSet.
+      # internal/handler is the command dispatch layer, roughly a file per
+      # MongoDB command, so this triggers on nearly every change to server
+      # behavior rather than on replication changes alone. That is deliberate,
+      # by owner direction: the suite runs in under six minutes, and a
+      # replication regression reaching main unnoticed costs more than the
+      # runs this adds. Two of the four defects found in review this week
+      # lived outside internal/replication.
+      - "internal/handler/**"
+      # Replication is built on these too: the storage the applier writes
+      # through, the BSON conversion every oplog entry passes through, the
+      # connection layer inbound member commands arrive on, and the wiring
+      # that turns on --replSet.
       - "internal/backends/**"
       - "internal/bson/**"
       - "internal/clientconn/**"
