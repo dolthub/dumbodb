@@ -199,7 +199,7 @@ func (h *Handler) initCommands() {
 			unguarded := inner
 			inner = func(ctx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 				if h.ReplicationTopology != nil && mutatesState(msg) {
-					return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrNotWritablePrimary, "not master")
+					return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrNotWritablePrimary, "not primary")
 				}
 				return unguarded(ctx, msg)
 			}

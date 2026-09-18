@@ -484,6 +484,14 @@ optime. A transaction must become visible atomically in DumboDB even when its so
 representation spans multiple entries. Wall time is metadata only and must never
 drive ordering or deduplication.
 
+### Secondary write-refusal wording deviation
+
+MongoDB 8.0.28 refuses a direct write to a secondary with code `10107`,
+codeName `NotWritablePrimary`, and the legacy message `not master`. DumboDB
+deliberately returns the same code and codeName with the message `not primary`.
+Drivers must use the stable error code rather than the human-facing message.
+**WIRE/DESIGN**
+
 ### Document field-order deviation
 
 MongoDB preserves BSON document field order. DumboDB deliberately canonicalizes

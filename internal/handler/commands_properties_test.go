@@ -169,8 +169,8 @@ func TestCommands_ReplicationRejectsMutations(t *testing.T) {
 			if !ok {
 				t.Fatalf("error = %T %v, want command error", err, err)
 			}
-			if commandError.Code() != handlererrors.ErrNotWritablePrimary || commandError.Err().Error() != "not master" {
-				t.Fatalf("error = %v, want NotWritablePrimary (10107): not master", commandError)
+			if commandError.Code() != handlererrors.ErrNotWritablePrimary || commandError.Err().Error() != "not primary" {
+				t.Fatalf("error = %v, want NotWritablePrimary (10107): not primary", commandError)
 			}
 			if commandError.Code().String() != "NotWritablePrimary" {
 				t.Fatalf("codeName = %q, want NotWritablePrimary", commandError.Code())
