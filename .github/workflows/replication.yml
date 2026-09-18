@@ -16,6 +16,15 @@ on:
       - "internal/handler/msg_replication*.go"
       - "internal/handler/msg_hello.go"
       - "internal/handler/msg_serverstatus.go"
+      # Replication is built on these, so a regression in any of them reaches
+      # it without touching internal/replication at all: the storage the
+      # applier writes through, the BSON conversion every oplog entry passes
+      # through, the connection layer inbound member commands arrive on, and
+      # the wiring that turns on --replSet.
+      - "internal/backends/**"
+      - "internal/bson/**"
+      - "internal/clientconn/**"
+      - "cmd/dumbodb/**"
       - ".github/workflows/replication.yml"
   pull_request:
     branches: [main]
@@ -24,6 +33,15 @@ on:
       - "internal/handler/msg_replication*.go"
       - "internal/handler/msg_hello.go"
       - "internal/handler/msg_serverstatus.go"
+      # Replication is built on these, so a regression in any of them reaches
+      # it without touching internal/replication at all: the storage the
+      # applier writes through, the BSON conversion every oplog entry passes
+      # through, the connection layer inbound member commands arrive on, and
+      # the wiring that turns on --replSet.
+      - "internal/backends/**"
+      - "internal/bson/**"
+      - "internal/clientconn/**"
+      - "cmd/dumbodb/**"
       - ".github/workflows/replication.yml"
   workflow_dispatch:
 

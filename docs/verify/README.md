@@ -42,7 +42,7 @@ needs a real MongoDB replica set to replicate from:
 
 | Document | Automated analog |
 |----------|------------------|
-| replication.md | `go test -tags replication ./harness/ ./tests/` in dumbodb-parity-testing |
+| replication.md | `go test -tags replication ./harness/ ./tests/replication/` in dumbodb-parity-testing |
 
 Run all verify tests:
 
