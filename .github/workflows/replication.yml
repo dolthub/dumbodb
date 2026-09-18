@@ -33,7 +33,7 @@ env:
 jobs:
   replication:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v6
@@ -108,11 +108,18 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p results
-          # -tags replication selects the cases that spawn real replica sets.
-          # Without the tag they are excluded from the build entirely, which is
-          # how parity.yml in both repositories stays fast.
-          go test -tags replication ./harness/ ./tests/ \
-            -v -timeout 80m -json | tee results/replication.json
+          # ./tests/replication/ is the whole point: the replication cases live
+          # in their own package so this gate runs them and nothing else. The
+          # build tag controls COMPILATION of those files, not selection, so
+          # naming ./tests/ here would drag in the two thousand general parity
+          # cases that already run in parity.yml. That mistake cost about seven
+          # minutes a run and was invisible, because the suite passed either way.
+          #
+          # -parallel 4: each case owns an isolated replica set on random ports
+          # under its own temp directory, so they cannot collide. Serial, the
+          # suite took fifty three minutes.
+          go test -tags replication ./harness/ ./tests/replication/ \
+            -v -parallel 4 -timeout 40m -json | tee results/replication.json
 
       - name: Upload results
         if: always()
