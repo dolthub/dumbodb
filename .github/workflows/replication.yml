@@ -108,6 +108,16 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p results
+          # The replication cases live in the parity repository, and this
+          # workflow checks out a same-named branch there or falls back to its
+          # main. If that ref predates the move into tests/replication, go test
+          # reports "directory not found" and the reason is not obvious from
+          # the log. Say it plainly instead.
+          if [ ! -d tests/replication ]; then
+            echo "::error::tests/replication does not exist on parity-testing ref '${{ steps.parity_ref.outputs.ref }}'." >&2
+            echo "The replication cases moved into that package. Merge the parity-testing change first, or push a branch named the same as this one." >&2
+            exit 1
+          fi
           # ./tests/replication/ is the whole point: the replication cases live
           # in their own package so this gate runs them and nothing else. The
           # build tag controls COMPILATION of those files, not selection, so
