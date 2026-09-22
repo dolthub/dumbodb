@@ -95,7 +95,7 @@ func (state *dbState) reconcileWorkingSets(ctx context.Context, branch string, b
 	if len(conflicts) > 0 || len(viewConflicts) > 0 || len(metaConflicts) > 0 {
 		unresolved := &mergeInProgress{
 			intoBranch:    branch,
-			fromBranch:    branch,
+			fromLabel:     refLabel(ctx, state, branch),
 			premergeAM:    oursAM,
 			intoHash:      theirsHash,
 			fromHash:      theirsHash,

@@ -1339,7 +1339,7 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 			return nil, fmt.Errorf("dumboCommit: publishing the resolved merge for %q: %w", branch, err)
 		}
 		db.mergeState = nil
-		_ = clearMergeState(db)
+		_ = clearMergeState(ctx, db, branch)
 		if sess := sessionFromContext(ctx); sess != nil {
 			if err := releaseSessionOverlay(sqlctx.Wrap(ctx, sess), sess, db.name, branch); err != nil {
 				return nil, fmt.Errorf("dumboCommit: %w", err)
