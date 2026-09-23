@@ -23,37 +23,32 @@ import (
 func TestValidateTLSFlags(t *testing.T) {
 	tests := []struct {
 		name                                string
-		addr                                string
+		mode                                string
 		certificateKeyFile                  string
 		caFile                              string
 		allowConnectionsWithoutCertificates bool
 		wantError                           string
 	}{
-		{name: "disabled"},
-		{name: "certificate without address", certificateKeyFile: "server.pem", wantError: "--tls-addr is required"},
-		{name: "CA without address", caFile: "ca.pem", wantError: "--tls-addr is required"},
-		{name: "address without certificate", addr: "127.0.0.1:27018", wantError: "--tlsCertificateKeyFile is required"},
-		{name: "server TLS", addr: "127.0.0.1:27018", certificateKeyFile: "server.pem"},
-		{name: "mutual TLS", addr: "127.0.0.1:27018", certificateKeyFile: "server.pem", caFile: "ca.pem"},
+		{name: "disabled", mode: "disabled"},
+		{name: "certificate while disabled", mode: "disabled", certificateKeyFile: "server.pem", wantError: "need to enable TLS"},
+		{name: "invalid mode", mode: "sometimesTLS", wantError: "invalid --tlsMode"},
+		{name: "allow TLS unsupported", mode: "allowTLS", wantError: "is not supported"},
+		{name: "prefer TLS unsupported", mode: "preferTLS", wantError: "is not supported"},
+		{name: "certificate required", mode: "requireTLS", wantError: "--tlsCertificateKeyFile is required"},
+		{name: "CA required", mode: "requireTLS", certificateKeyFile: "server.pem", wantError: "--tlsCAFile is required"},
+		{name: "mutual TLS", mode: "requireTLS", certificateKeyFile: "server.pem", caFile: "ca.pem"},
 		{
 			name:                                "optional client certificate",
-			addr:                                "127.0.0.1:27018",
+			mode:                                "requireTLS",
 			certificateKeyFile:                  "server.pem",
 			caFile:                              "ca.pem",
 			allowConnectionsWithoutCertificates: true,
-		},
-		{
-			name:                                "optional client certificate without CA",
-			addr:                                "127.0.0.1:27018",
-			certificateKeyFile:                  "server.pem",
-			allowConnectionsWithoutCertificates: true,
-			wantError:                           "--tlsCAFile is required",
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			err := validateTLSFlags(test.addr, test.certificateKeyFile, test.caFile, test.allowConnectionsWithoutCertificates)
+			err := validateTLSFlags(test.mode, test.certificateKeyFile, test.caFile, test.allowConnectionsWithoutCertificates)
 			if test.wantError == "" {
 				assert.NoError(t, err)
 				return

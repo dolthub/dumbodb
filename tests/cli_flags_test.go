@@ -191,6 +191,15 @@ func TestTLSFlags(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	require.NoError(t, client.Ping(ctx, nil))
+
+	plaintextClient, err := mongo.Connect(options.Client().
+		ApplyURI("mongodb://" + serverTLSAddr + "/?directConnection=true").
+		SetServerSelectionTimeout(time.Second))
+	require.NoError(t, err)
+	t.Cleanup(func() { plaintextClient.Disconnect(context.Background()) })
+	plaintextCtx, plaintextCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer plaintextCancel()
+	assert.Error(t, plaintextClient.Ping(plaintextCtx, nil))
 }
 
 func startTLSServer(t *testing.T, binary, certificateKeyFile, caFile string, allowConnectionsWithoutCertificates bool) string {
@@ -201,9 +210,9 @@ func startTLSServer(t *testing.T, binary, certificateKeyFile, caFile string, all
 	require.NoError(t, listener.Close())
 
 	args := []string{
-		"--addr", "",
+		"--addr", addr,
 		"--data-dir", t.TempDir(),
-		"--tls-addr", addr,
+		"--tlsMode", "requireTLS",
 		"--tlsCertificateKeyFile", certificateKeyFile,
 		"--tlsCAFile", caFile,
 		"--no-metrics",

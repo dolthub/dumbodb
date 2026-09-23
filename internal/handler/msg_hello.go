@@ -112,6 +112,9 @@ func (h *Handler) hello(ctx context.Context, doc *types.Document, tcpHost, name 
 		if resSupportedMechs, err = h.getUserSupportedMechs(ctx, db, username); err != nil {
 			return nil, lazyerrors.Error(err)
 		}
+		if resSupportedMechs == nil {
+			resSupportedMechs = types.MakeArray(0)
+		}
 	}
 
 	if name != "" {
@@ -141,7 +144,7 @@ func (h *Handler) hello(ctx context.Context, doc *types.Document, tcpHost, name 
 	res.Set("minWireVersion", common.MinWireVersion)
 	res.Set("maxWireVersion", common.MaxWireVersion)
 	res.Set("readOnly", false)
-	if resSupportedMechs != nil && resSupportedMechs.Len() != 0 {
+	if resSupportedMechs != nil {
 		res.Set("saslSupportedMechs", resSupportedMechs)
 	}
 

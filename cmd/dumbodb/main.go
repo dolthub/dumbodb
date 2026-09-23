@@ -88,7 +88,7 @@ func run(logger *slog.Logger) error {
 	dataDir := fs.String("data-dir", "data", "directory for storing Dolt data")
 	addr := fs.String("addr", "127.0.0.1:27017", "listen address")
 	port := fs.Int("port", 0, "listen port (overrides port in --addr if set)")
-	tlsAddr := fs.String("tls-addr", "", "TLS listen address")
+	tlsMode := fs.String("tlsMode", "disabled", "TLS mode (disabled or requireTLS)")
 	tlsCertificateKeyFile := fs.String("tlsCertificateKeyFile", "", "certificate and private key PEM file for TLS")
 	tlsCAFile := fs.String("tlsCAFile", "", "certificate authority PEM file for client certificate verification")
 	tlsAllowConnectionsWithoutCertificates := fs.Bool("tlsAllowConnectionsWithoutCertificates", false, "allow TLS clients without certificates")
@@ -106,7 +106,7 @@ func run(logger *slog.Logger) error {
 	if *autoCommit && *sessionIsolation {
 		return fmt.Errorf("--auto-commit and --session-isolation are mutually exclusive: auto-commit commits every write at the command boundary, while session-isolation defers commits to an explicit doltCommit merge")
 	}
-	if err := validateTLSFlags(*tlsAddr, *tlsCertificateKeyFile, *tlsCAFile, *tlsAllowConnectionsWithoutCertificates); err != nil {
+	if err := validateTLSFlags(*tlsMode, *tlsCertificateKeyFile, *tlsCAFile, *tlsAllowConnectionsWithoutCertificates); err != nil {
 		return err
 	}
 
@@ -193,7 +193,7 @@ func run(logger *slog.Logger) error {
 
 	listener, err := clientconn.Listen(&clientconn.NewListenerOpts{
 		TCP:                                    *addr,
-		TLS:                                    *tlsAddr,
+		TLS:                                    *tlsMode == "requireTLS",
 		TLSCertFile:                            *tlsCertificateKeyFile,
 		TLSKeyFile:                             *tlsCertificateKeyFile,
 		TLSCAFile:                              *tlsCAFile,
@@ -206,7 +206,7 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
-	logger.Info("DumboDB server started", "addr", *addr, "tls-addr", *tlsAddr, "data-dir", *dataDir)
+	logger.Info("DumboDB server started", "addr", *addr, "tlsMode", *tlsMode, "data-dir", *dataDir)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -230,20 +230,26 @@ func run(logger *slog.Logger) error {
 	return nil
 }
 
-func validateTLSFlags(tlsAddr, certificateKeyFile, caFile string, allowConnectionsWithoutCertificates bool) error {
-	if tlsAddr == "" {
+func validateTLSFlags(tlsMode, certificateKeyFile, caFile string, allowConnectionsWithoutCertificates bool) error {
+	switch tlsMode {
+	case "disabled":
 		if certificateKeyFile != "" || caFile != "" || allowConnectionsWithoutCertificates {
-			return fmt.Errorf("--tls-addr is required when TLS options are set")
+			return fmt.Errorf("need to enable TLS via --tlsMode when using TLS configuration options")
 		}
 		return nil
+	case "requireTLS":
+		if certificateKeyFile == "" {
+			return fmt.Errorf("--tlsCertificateKeyFile is required when --tlsMode is requireTLS")
+		}
+		if caFile == "" {
+			return fmt.Errorf("--tlsCAFile is required when --tlsMode is requireTLS")
+		}
+		return nil
+	case "allowTLS", "preferTLS":
+		return fmt.Errorf("--tlsMode %s is not supported; supported modes are disabled and requireTLS", tlsMode)
+	default:
+		return fmt.Errorf("invalid --tlsMode %q; supported modes are disabled and requireTLS", tlsMode)
 	}
-	if certificateKeyFile == "" {
-		return fmt.Errorf("--tlsCertificateKeyFile is required when --tls-addr is set")
-	}
-	if allowConnectionsWithoutCertificates && caFile == "" {
-		return fmt.Errorf("--tlsCAFile is required with --tlsAllowConnectionsWithoutCertificates")
-	}
-	return nil
 }
 
 func replicationControlConfiguration(replSetName, memberHost string) (control.Configuration, bool) {
