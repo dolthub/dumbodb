@@ -22,45 +22,62 @@ import (
 	"os"
 )
 
-// Config provides TLS configuration for the given certificate and key files.
-// If CA file is provided, full authentication is enabled.
-func Config(certFile, keyFile, caFile string) (*tls.Config, error) {
+func ServerConfig(certFile, keyFile, caFile string, allowConnectionsWithoutCertificates bool) (*tls.Config, error) {
+	config, ca, err := config(certFile, keyFile, caFile)
+	if err != nil {
+		return nil, err
+	}
+	if ca != nil {
+		config.ClientAuth = tls.RequireAndVerifyClientCert
+		if allowConnectionsWithoutCertificates {
+			config.ClientAuth = tls.VerifyClientCertIfGiven
+		}
+		config.ClientCAs = ca
+	}
+	return config, nil
+}
+
+func ClientConfig(certFile, keyFile, caFile string) (*tls.Config, error) {
+	config, ca, err := config(certFile, keyFile, caFile)
+	if err != nil {
+		return nil, err
+	}
+	config.RootCAs = ca
+	return config, nil
+}
+
+func config(certFile, keyFile, caFile string) (*tls.Config, *x509.CertPool, error) {
 	if _, err := os.Stat(certFile); err != nil {
-		return nil, fmt.Errorf("TLS certificate file: %w", err)
+		return nil, nil, fmt.Errorf("TLS certificate file: %w", err)
 	}
 
 	if _, err := os.Stat(keyFile); err != nil {
-		return nil, fmt.Errorf("TLS key file: %w", err)
+		return nil, nil, fmt.Errorf("TLS key file: %w", err)
 	}
 
 	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {
-		return nil, fmt.Errorf("TLS file pair: %w", err)
+		return nil, nil, fmt.Errorf("TLS file pair: %w", err)
 	}
 
 	config := &tls.Config{
 		Certificates: []tls.Certificate{cert},
 	}
 
-	if caFile != "" {
-		if _, err := os.Stat(caFile); err != nil {
-			return nil, fmt.Errorf("TLS CA file: %w", err)
-		}
-
-		b, err := os.ReadFile(caFile)
-		if err != nil {
-			return nil, err
-		}
-
-		ca := x509.NewCertPool()
-		if ok := ca.AppendCertsFromPEM(b); !ok {
-			return nil, fmt.Errorf("TLS CA file: failed to parse")
-		}
-
-		config.ClientAuth = tls.RequireAndVerifyClientCert
-		config.ClientCAs = ca
-		config.RootCAs = ca
+	if caFile == "" {
+		return config, nil, nil
 	}
 
-	return config, nil
+	if _, err := os.Stat(caFile); err != nil {
+		return nil, nil, fmt.Errorf("TLS CA file: %w", err)
+	}
+	b, err := os.ReadFile(caFile)
+	if err != nil {
+		return nil, nil, err
+	}
+	ca := x509.NewCertPool()
+	if ok := ca.AppendCertsFromPEM(b); !ok {
+		return nil, nil, fmt.Errorf("TLS CA file: failed to parse")
+	}
+	return config, ca, nil
 }

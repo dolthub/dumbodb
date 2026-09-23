@@ -16,8 +16,17 @@ package tests
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"fmt"
+	"math/big"
 	"net"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
@@ -28,6 +37,8 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
+
+	"github.com/dolthub/dumbodb/internal/util/tlsutil"
 )
 
 // TestPortFlag verifies that --port overrides the port in --addr.
@@ -153,4 +164,126 @@ func TestAutoCommitSessionIsolationMutuallyExclusive(t *testing.T) {
 	require.Error(t, err, "server must exit non-zero when both flags are set")
 	assert.Contains(t, string(out), "mutually exclusive",
 		"error must explain the flags are mutually exclusive; got: %s", out)
+}
+
+func TestTLSFlags(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "dumbodb")
+	build := exec.Command("go", "build", "-o", binary, "./cmd/dumbodb/")
+	build.Dir = repoRoot()
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("building binary: %v\n%s", err, out)
+	}
+
+	certificateKeyFile, caFile, roots := writeTLSCertificates(t)
+	serverTLSConfig, err := tlsutil.ServerConfig(certificateKeyFile, certificateKeyFile, "", false)
+	require.NoError(t, err)
+	assert.Equal(t, tls.NoClientCert, serverTLSConfig.ClientAuth)
+	mutualTLSConfig, err := tlsutil.ServerConfig(certificateKeyFile, certificateKeyFile, caFile, false)
+	require.NoError(t, err)
+	assert.Equal(t, tls.RequireAndVerifyClientCert, mutualTLSConfig.ClientAuth)
+	optionalClientCertificateConfig, err := tlsutil.ServerConfig(certificateKeyFile, certificateKeyFile, caFile, true)
+	require.NoError(t, err)
+	assert.Equal(t, tls.VerifyClientCertIfGiven, optionalClientCertificateConfig.ClientAuth)
+
+	serverTLSAddr := startTLSServer(t, binary, certificateKeyFile, caFile, true)
+	client := newTLSClient(t, serverTLSAddr, roots)
+	t.Cleanup(func() { client.Disconnect(context.Background()) })
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	require.NoError(t, client.Ping(ctx, nil))
+}
+
+func startTLSServer(t *testing.T, binary, certificateKeyFile, caFile string, allowConnectionsWithoutCertificates bool) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := listener.Addr().String()
+	require.NoError(t, listener.Close())
+
+	args := []string{
+		"--addr", "",
+		"--data-dir", t.TempDir(),
+		"--tls-addr", addr,
+		"--tlsCertificateKeyFile", certificateKeyFile,
+		"--tlsCAFile", caFile,
+		"--no-metrics",
+	}
+	if allowConnectionsWithoutCertificates {
+		args = append(args, "--tlsAllowConnectionsWithoutCertificates")
+	}
+	cmd := exec.Command(binary, args...)
+	require.NoError(t, cmd.Start())
+	t.Cleanup(func() {
+		cmd.Process.Kill()
+		cmd.Wait()
+	})
+
+	require.Eventually(t, func() bool {
+		conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
+		if err != nil {
+			return false
+		}
+		conn.Close()
+		return true
+	}, 15*time.Second, 100*time.Millisecond)
+	return addr
+}
+
+func newTLSClient(t *testing.T, addr string, roots *x509.CertPool) *mongo.Client {
+	t.Helper()
+	client, err := mongo.Connect(options.Client().
+		ApplyURI("mongodb://" + addr + "/?directConnection=true").
+		SetTLSConfig(&tls.Config{RootCAs: roots}).
+		SetBSONOptions(&options.BSONOptions{DefaultDocumentM: true}))
+	require.NoError(t, err)
+	return client
+}
+
+func writeTLSCertificates(t *testing.T) (string, string, *x509.CertPool) {
+	t.Helper()
+	now := time.Now()
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	caTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "DumboDB test CA"},
+		NotBefore:             now.Add(-time.Hour),
+		NotAfter:              now.Add(time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	require.NoError(t, err)
+
+	serverKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	serverTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: "localhost"},
+		NotBefore:    now.Add(-time.Hour),
+		NotAfter:     now.Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:     []string{"localhost"},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+	}
+	serverDER, err := x509.CreateCertificate(rand.Reader, serverTemplate, caTemplate, &serverKey.PublicKey, caKey)
+	require.NoError(t, err)
+	serverKeyDER, err := x509.MarshalPKCS8PrivateKey(serverKey)
+	require.NoError(t, err)
+
+	certificateKeyFile := filepath.Join(t.TempDir(), "server.pem")
+	certificateKeyPEM := append(
+		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: serverDER}),
+		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: serverKeyDER})...,
+	)
+	require.NoError(t, os.WriteFile(certificateKeyFile, certificateKeyPEM, 0o600))
+
+	caFile := filepath.Join(t.TempDir(), "ca.pem")
+	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})
+	require.NoError(t, os.WriteFile(caFile, caPEM, 0o600))
+	roots := x509.NewCertPool()
+	require.True(t, roots.AppendCertsFromPEM(caPEM))
+	return certificateKeyFile, caFile, roots
 }

@@ -56,10 +56,11 @@ type NewListenerOpts struct {
 	TCP  string
 	Unix string
 
-	TLS         string
-	TLSCertFile string
-	TLSKeyFile  string
-	TLSCAFile   string
+	TLS                                    string
+	TLSCertFile                            string
+	TLSKeyFile                             string
+	TLSCAFile                              string
+	TLSAllowConnectionsWithoutCertificates bool
 
 	ProxyAddr        string
 	ProxyTLSCertFile string
@@ -115,7 +116,12 @@ func Listen(opts *NewListenerOpts) (*Listener, error) {
 	if l.TLS != "" {
 		var config *tls.Config
 
-		if config, err = tlsutil.Config(l.TLSCertFile, l.TLSKeyFile, l.TLSCAFile); err != nil {
+		if config, err = tlsutil.ServerConfig(
+			l.TLSCertFile,
+			l.TLSKeyFile,
+			l.TLSCAFile,
+			l.TLSAllowConnectionsWithoutCertificates,
+		); err != nil {
 			// this error is user visible, do not use lazyerror as it makes less readable
 			return nil, err
 		}
@@ -296,4 +302,3 @@ func (l *Listener) TLSAddr() net.Addr {
 	must.NotBeZero(l.tlsListener)
 	return l.tlsListener.Addr()
 }
-

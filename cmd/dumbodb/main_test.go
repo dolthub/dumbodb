@@ -14,7 +14,54 @@
 
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
+
+func TestValidateTLSFlags(t *testing.T) {
+	tests := []struct {
+		name                                string
+		addr                                string
+		certificateKeyFile                  string
+		caFile                              string
+		allowConnectionsWithoutCertificates bool
+		wantError                           string
+	}{
+		{name: "disabled"},
+		{name: "certificate without address", certificateKeyFile: "server.pem", wantError: "--tls-addr is required"},
+		{name: "CA without address", caFile: "ca.pem", wantError: "--tls-addr is required"},
+		{name: "address without certificate", addr: "127.0.0.1:27018", wantError: "--tlsCertificateKeyFile is required"},
+		{name: "server TLS", addr: "127.0.0.1:27018", certificateKeyFile: "server.pem"},
+		{name: "mutual TLS", addr: "127.0.0.1:27018", certificateKeyFile: "server.pem", caFile: "ca.pem"},
+		{
+			name:                                "optional client certificate",
+			addr:                                "127.0.0.1:27018",
+			certificateKeyFile:                  "server.pem",
+			caFile:                              "ca.pem",
+			allowConnectionsWithoutCertificates: true,
+		},
+		{
+			name:                                "optional client certificate without CA",
+			addr:                                "127.0.0.1:27018",
+			certificateKeyFile:                  "server.pem",
+			allowConnectionsWithoutCertificates: true,
+			wantError:                           "--tlsCAFile is required",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateTLSFlags(test.addr, test.certificateKeyFile, test.caFile, test.allowConnectionsWithoutCertificates)
+			if test.wantError == "" {
+				assert.NoError(t, err)
+				return
+			}
+			assert.ErrorContains(t, err, test.wantError)
+		})
+	}
+}
 
 func TestReplicationControlConfiguration(t *testing.T) {
 	tests := []struct {

@@ -88,6 +88,10 @@ func run(logger *slog.Logger) error {
 	dataDir := fs.String("data-dir", "data", "directory for storing Dolt data")
 	addr := fs.String("addr", "127.0.0.1:27017", "listen address")
 	port := fs.Int("port", 0, "listen port (overrides port in --addr if set)")
+	tlsAddr := fs.String("tls-addr", "", "TLS listen address")
+	tlsCertificateKeyFile := fs.String("tlsCertificateKeyFile", "", "certificate and private key PEM file for TLS")
+	tlsCAFile := fs.String("tlsCAFile", "", "certificate authority PEM file for client certificate verification")
+	tlsAllowConnectionsWithoutCertificates := fs.Bool("tlsAllowConnectionsWithoutCertificates", false, "allow TLS clients without certificates")
 	logLevel := fs.String("log-level", "info", "log level (debug, info, warn, error)")
 	autoCommit := fs.Bool("auto-commit", false, "automatically commit each write (insert/update/delete) to Dolt history")
 	sessionIsolation := fs.Bool("session-isolation", false, "run in version-control-native isolation mode: per-connection working-set overlay, doltCommit merges, startTransaction rejected")
@@ -101,6 +105,9 @@ func run(logger *slog.Logger) error {
 
 	if *autoCommit && *sessionIsolation {
 		return fmt.Errorf("--auto-commit and --session-isolation are mutually exclusive: auto-commit commits every write at the command boundary, while session-isolation defers commits to an explicit doltCommit merge")
+	}
+	if err := validateTLSFlags(*tlsAddr, *tlsCertificateKeyFile, *tlsCAFile, *tlsAllowConnectionsWithoutCertificates); err != nil {
+		return err
 	}
 
 	metricsEnabled := !*noMetrics && !envDisablesMetrics()
@@ -185,16 +192,21 @@ func run(logger *slog.Logger) error {
 	defer closeBackend()
 
 	listener, err := clientconn.Listen(&clientconn.NewListenerOpts{
-		TCP:     *addr,
-		Mode:    clientconn.NormalMode,
-		Handler: h,
-		Logger:  logger,
+		TCP:                                    *addr,
+		TLS:                                    *tlsAddr,
+		TLSCertFile:                            *tlsCertificateKeyFile,
+		TLSKeyFile:                             *tlsCertificateKeyFile,
+		TLSCAFile:                              *tlsCAFile,
+		TLSAllowConnectionsWithoutCertificates: *tlsAllowConnectionsWithoutCertificates,
+		Mode:                                   clientconn.NormalMode,
+		Handler:                                h,
+		Logger:                                 logger,
 	})
 	if err != nil {
 		return err
 	}
 
-	logger.Info("DumboDB server started", "addr", *addr, "data-dir", *dataDir)
+	logger.Info("DumboDB server started", "addr", *addr, "tls-addr", *tlsAddr, "data-dir", *dataDir)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -215,6 +227,22 @@ func run(logger *slog.Logger) error {
 	}
 
 	listener.Run(ctx)
+	return nil
+}
+
+func validateTLSFlags(tlsAddr, certificateKeyFile, caFile string, allowConnectionsWithoutCertificates bool) error {
+	if tlsAddr == "" {
+		if certificateKeyFile != "" || caFile != "" || allowConnectionsWithoutCertificates {
+			return fmt.Errorf("--tls-addr is required when TLS options are set")
+		}
+		return nil
+	}
+	if certificateKeyFile == "" {
+		return fmt.Errorf("--tlsCertificateKeyFile is required when --tls-addr is set")
+	}
+	if allowConnectionsWithoutCertificates && caFile == "" {
+		return fmt.Errorf("--tlsCAFile is required with --tlsAllowConnectionsWithoutCertificates")
+	}
 	return nil
 }
 
