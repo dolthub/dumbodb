@@ -64,7 +64,11 @@ func config(certFile, keyFile, caFile string) (*tls.Config, *x509.CertPool, erro
 	if err != nil {
 		return nil, nil, fmt.Errorf("TLS certificate file %q: %w", certFile, err)
 	}
-	if now := time.Now(); now.After(leaf.NotAfter) {
+	now := time.Now()
+	if now.Before(leaf.NotBefore) {
+		return nil, nil, fmt.Errorf("TLS certificate file %q: certificate is not valid before %s", certFile, leaf.NotBefore.Format(time.RFC3339))
+	}
+	if now.After(leaf.NotAfter) {
 		return nil, nil, fmt.Errorf("TLS certificate file %q: certificate expired at %s", certFile, leaf.NotAfter.Format(time.RFC3339))
 	}
 

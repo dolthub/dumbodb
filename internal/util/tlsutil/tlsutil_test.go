@@ -36,6 +36,12 @@ func TestServerConfigRejectsExpiredCertificate(t *testing.T) {
 	require.ErrorContains(t, err, "certificate expired")
 }
 
+func TestServerConfigRejectsCertificateBeforeValidityWindow(t *testing.T) {
+	certificateKeyFile := writeCertificateKeyFile(t, time.Now().Add(time.Hour), time.Now().Add(2*time.Hour))
+	_, err := ServerConfig(certificateKeyFile, certificateKeyFile, "", false)
+	require.ErrorContains(t, err, "certificate is not valid before")
+}
+
 func writeCertificateKeyFile(t *testing.T, notBefore, notAfter time.Time) string {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
