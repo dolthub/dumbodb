@@ -124,7 +124,11 @@ jobs:
           # The suite used to run a second time for human-readable output, which
           # doubled load on the runner and the extra mongod instances the harness
           # spawns, causing flaky connection timeouts to the reference mongo.
-          go test ./tests/ -v -timeout 15m -json | tee results/parity.json
+          #
+          # tests/tls needs no job of its own: it spawns its own mongod and
+          # dumbodb per case from the two binaries already resolved above, and
+          # ignores the service container and the long-running server entirely.
+          go test ./tests/ ./tests/tls/ -v -timeout 20m -json | tee results/parity.json
 
       - name: Report parity failures
         if: failure()
