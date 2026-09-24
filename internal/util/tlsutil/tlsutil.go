@@ -20,6 +20,7 @@ import (
 	"crypto/x509"
 	"fmt"
 	"os"
+	"time"
 )
 
 func ServerConfig(certFile, keyFile, caFile string, allowConnectionsWithoutCertificates bool) (*tls.Config, error) {
@@ -58,6 +59,13 @@ func config(certFile, keyFile, caFile string) (*tls.Config, *x509.CertPool, erro
 	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {
 		return nil, nil, fmt.Errorf("TLS file pair: %w", err)
+	}
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		return nil, nil, fmt.Errorf("TLS certificate file %q: %w", certFile, err)
+	}
+	if now := time.Now(); now.After(leaf.NotAfter) {
+		return nil, nil, fmt.Errorf("TLS certificate file %q: certificate expired at %s", certFile, leaf.NotAfter.Format(time.RFC3339))
 	}
 
 	config := &tls.Config{
