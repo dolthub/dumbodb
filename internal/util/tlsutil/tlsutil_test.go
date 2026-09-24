@@ -126,6 +126,15 @@ func TestServerConfigRejectsRevokedClientCertificate(t *testing.T) {
 func TestServerConfigSelectsEnabledProtocol(t *testing.T) {
 	now := time.Now()
 	serverFile := writeCertificateKeyFile(t, now.Add(-time.Hour), now.Add(time.Hour))
+	defaultConfig, err := ServerConfig(ServerConfigOptions{
+		CertificateFile: serverFile,
+		KeyFile:         serverFile,
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint16(tls.VersionTLS12), defaultConfig.MinVersion)
+	require.Equal(t, uint16(tls.VersionTLS13), defaultConfig.MaxVersion)
+	require.Nil(t, defaultConfig.GetConfigForClient)
+
 	tests := []struct {
 		name      string
 		disabled  []uint16
@@ -133,14 +142,13 @@ func TestServerConfigSelectsEnabledProtocol(t *testing.T) {
 		want      uint16
 		wantError string
 	}{
-		{name: "highest enabled", disabled: []uint16{tls.VersionTLS13}, supported: []uint16{tls.VersionTLS13, tls.VersionTLS12}, want: tls.VersionTLS12},
-		{name: "non-contiguous", disabled: []uint16{tls.VersionTLS12}, supported: []uint16{tls.VersionTLS12, tls.VersionTLS11}, want: tls.VersionTLS11},
-		{name: "legacy enabled", supported: []uint16{tls.VersionTLS11}, want: tls.VersionTLS11},
+		{name: "TLS 1.3 disabled", disabled: []uint16{tls.VersionTLS13}, supported: []uint16{tls.VersionTLS13, tls.VersionTLS12}, want: tls.VersionTLS12},
+		{name: "TLS 1.2 disabled", disabled: []uint16{tls.VersionTLS12}, supported: []uint16{tls.VersionTLS12, tls.VersionTLS11, tls.VersionTLS13}, want: tls.VersionTLS13},
+		{name: "unordered client versions", disabled: []uint16{tls.VersionTLS11}, supported: []uint16{tls.VersionTLS12, tls.VersionTLS11, tls.VersionTLS13}, want: tls.VersionTLS13},
+		{name: "legacy remains disabled", disabled: []uint16{tls.VersionTLS10}, supported: []uint16{tls.VersionTLS11, tls.VersionTLS10}, wantError: "does not support an enabled TLS protocol version"},
 		{
-			name: "all disabled",
-			disabled: []uint16{
-				tls.VersionTLS10, tls.VersionTLS11, tls.VersionTLS12, tls.VersionTLS13,
-			},
+			name:      "all enabled protocols disabled",
+			disabled:  []uint16{tls.VersionTLS12, tls.VersionTLS13},
 			supported: []uint16{tls.VersionTLS13, tls.VersionTLS12},
 			wantError: "does not support an enabled TLS protocol version",
 		},
@@ -149,10 +157,9 @@ func TestServerConfigSelectsEnabledProtocol(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			config, err := ServerConfig(ServerConfigOptions{
-				CertificateFile:       serverFile,
-				KeyFile:               serverFile,
-				DisabledProtocols:     test.disabled,
-				EnableLegacyProtocols: true,
+				CertificateFile:   serverFile,
+				KeyFile:           serverFile,
+				DisabledProtocols: test.disabled,
 			})
 			require.NoError(t, err)
 			selected, err := config.GetConfigForClient(&tls.ClientHelloInfo{SupportedVersions: test.supported})

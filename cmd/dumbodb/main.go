@@ -213,7 +213,6 @@ func run(logger *slog.Logger) error {
 		TLSCRLFile:                             *tlsCRLFile,
 		TLSAllowConnectionsWithoutCertificates: *tlsAllowConnectionsWithoutCertificates,
 		TLSDisabledProtocols:                   disabledProtocols,
-		TLSEnableLegacyProtocols:               tlsDisabledProtocolsSet,
 		Mode:                                   clientconn.NormalMode,
 		Handler:                                h,
 		Logger:                                 logger,

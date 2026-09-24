@@ -32,7 +32,6 @@ type ServerConfigOptions struct {
 	CRLFile                             string
 	AllowConnectionsWithoutCertificates bool
 	DisabledProtocols                   []uint16
-	EnableLegacyProtocols               bool
 }
 
 func ServerConfig(opts ServerConfigOptions) (*tls.Config, error) {
@@ -59,26 +58,29 @@ func ServerConfig(opts ServerConfigOptions) (*tls.Config, error) {
 			return verifyRevocation(state.VerifiedChains, revocationLists, time.Now())
 		}
 	}
-	if opts.EnableLegacyProtocols {
-		config.MinVersion = tls.VersionTLS10
-		config.MaxVersion = tls.VersionTLS13
+	config.MinVersion = tls.VersionTLS12
+	config.MaxVersion = tls.VersionTLS13
+	if len(opts.DisabledProtocols) > 0 {
 		disabled := make(map[uint16]struct{}, len(opts.DisabledProtocols))
 		for _, version := range opts.DisabledProtocols {
 			disabled[version] = struct{}{}
 		}
 		config.GetConfigForClient = func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
+			var highestEnabled uint16
 			for _, version := range hello.SupportedVersions {
 				if _, found := disabled[version]; found {
 					continue
 				}
-				switch version {
-				case tls.VersionTLS10, tls.VersionTLS11, tls.VersionTLS12, tls.VersionTLS13:
-					selected := config.Clone()
-					selected.GetConfigForClient = nil
-					selected.MinVersion = version
-					selected.MaxVersion = version
-					return selected, nil
+				if version >= config.MinVersion && version <= config.MaxVersion && version > highestEnabled {
+					highestEnabled = version
 				}
+			}
+			if highestEnabled != 0 {
+				selected := config.Clone()
+				selected.GetConfigForClient = nil
+				selected.MinVersion = highestEnabled
+				selected.MaxVersion = highestEnabled
+				return selected, nil
 			}
 			return nil, fmt.Errorf("client does not support an enabled TLS protocol version")
 		}
