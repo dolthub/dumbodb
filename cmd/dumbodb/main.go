@@ -92,6 +92,7 @@ func run(logger *slog.Logger) error {
 	tlsCertificateKeyFile := fs.String("tlsCertificateKeyFile", "", "certificate and private key PEM file for TLS")
 	tlsCAFile := fs.String("tlsCAFile", "", "certificate authority PEM file for client certificate verification")
 	tlsAllowConnectionsWithoutCertificates := fs.Bool("tlsAllowConnectionsWithoutCertificates", false, "allow TLS clients without certificates")
+	registerUnsupportedTLSFlags(fs)
 	logLevel := fs.String("log-level", "info", "log level (debug, info, warn, error)")
 	autoCommit := fs.Bool("auto-commit", false, "automatically commit each write (insert/update/delete) to Dolt history")
 	sessionIsolation := fs.Bool("session-isolation", false, "run in version-control-native isolation mode: per-connection working-set overlay, doltCommit merges, startTransaction rejected")
@@ -103,6 +104,9 @@ func run(logger *slog.Logger) error {
 	replSetName := fs.String("replSet", "", "replica set name for inbound MongoDB replication")
 	fs.Parse(os.Args[1:])
 
+	if err := rejectUnsupportedTLSFlags(fs); err != nil {
+		return err
+	}
 	if *autoCommit && *sessionIsolation {
 		return fmt.Errorf("--auto-commit and --session-isolation are mutually exclusive: auto-commit commits every write at the command boundary, while session-isolation defers commits to an explicit doltCommit merge")
 	}
@@ -228,6 +232,46 @@ func run(logger *slog.Logger) error {
 
 	listener.Run(ctx)
 	return nil
+}
+
+func registerUnsupportedTLSFlags(fs *flag.FlagSet) {
+	fs.String("tlsCertificateKeyFilePassword", "", "unsupported MongoDB TLS option")
+	fs.String("tlsCRLFile", "", "unsupported MongoDB TLS option")
+	fs.String("tlsDisabledProtocols", "", "unsupported MongoDB TLS option")
+	fs.Bool("tlsAllowInvalidCertificates", false, "unsupported MongoDB TLS option")
+	fs.Bool("tlsAllowInvalidHostnames", false, "unsupported MongoDB TLS option")
+	fs.String("tlsLogVersions", "", "unsupported MongoDB TLS option")
+	fs.Bool("tlsOnNormalPorts", false, "unsupported MongoDB TLS option")
+	fs.String("tlsClusterFile", "", "unsupported MongoDB replica-set TLS option")
+	fs.String("tlsClusterPassword", "", "unsupported MongoDB replica-set TLS option")
+	fs.String("tlsClusterCAFile", "", "unsupported MongoDB replica-set TLS option")
+	fs.String("tlsClusterAuthX509ExtensionValue", "", "unsupported MongoDB replica-set TLS option")
+	fs.String("tlsClusterAuthX509Attributes", "", "unsupported MongoDB replica-set TLS option")
+}
+
+func rejectUnsupportedTLSFlags(fs *flag.FlagSet) error {
+	var unsupported *flag.Flag
+	fs.Visit(func(f *flag.Flag) {
+		if unsupported == nil {
+			switch f.Name {
+			case "tlsCertificateKeyFilePassword", "tlsCRLFile", "tlsDisabledProtocols",
+				"tlsAllowInvalidCertificates", "tlsAllowInvalidHostnames", "tlsLogVersions",
+				"tlsOnNormalPorts", "tlsClusterFile", "tlsClusterPassword", "tlsClusterCAFile",
+				"tlsClusterAuthX509ExtensionValue", "tlsClusterAuthX509Attributes":
+				unsupported = f
+			}
+		}
+	})
+	if unsupported == nil {
+		return nil
+	}
+	switch unsupported.Name {
+	case "tlsClusterFile", "tlsClusterPassword", "tlsClusterCAFile",
+		"tlsClusterAuthX509ExtensionValue", "tlsClusterAuthX509Attributes":
+		return fmt.Errorf("--%s is a MongoDB replica-set TLS option that DumboDB does not support", unsupported.Name)
+	default:
+		return fmt.Errorf("--%s is a MongoDB TLS option that DumboDB does not support", unsupported.Name)
+	}
 }
 
 func validateTLSFlags(tlsMode, certificateKeyFile, caFile string, allowConnectionsWithoutCertificates bool) error {

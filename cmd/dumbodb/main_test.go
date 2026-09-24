@@ -15,10 +15,49 @@
 package main
 
 import (
+	"flag"
+	"io"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
+
+func TestRejectUnsupportedTLSFlags(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		message string
+	}{
+		{name: "none"},
+		{name: "certificate password", args: []string{"--tlsCertificateKeyFilePassword", "secret"}, message: "--tlsCertificateKeyFilePassword is a MongoDB TLS option"},
+		{name: "CRL", args: []string{"--tlsCRLFile", "revocations.pem"}, message: "--tlsCRLFile is a MongoDB TLS option"},
+		{name: "disabled protocols", args: []string{"--tlsDisabledProtocols", "TLS1_0"}, message: "--tlsDisabledProtocols is a MongoDB TLS option"},
+		{name: "invalid certificates", args: []string{"--tlsAllowInvalidCertificates"}, message: "--tlsAllowInvalidCertificates is a MongoDB TLS option"},
+		{name: "invalid hostnames", args: []string{"--tlsAllowInvalidHostnames"}, message: "--tlsAllowInvalidHostnames is a MongoDB TLS option"},
+		{name: "log versions", args: []string{"--tlsLogVersions", "TLS1_2"}, message: "--tlsLogVersions is a MongoDB TLS option"},
+		{name: "normal ports", args: []string{"--tlsOnNormalPorts"}, message: "--tlsOnNormalPorts is a MongoDB TLS option"},
+		{name: "cluster file", args: []string{"--tlsClusterFile", "cluster.pem"}, message: "--tlsClusterFile is a MongoDB replica-set TLS option"},
+		{name: "cluster password", args: []string{"--tlsClusterPassword", "secret"}, message: "--tlsClusterPassword is a MongoDB replica-set TLS option"},
+		{name: "cluster CA", args: []string{"--tlsClusterCAFile", "ca.pem"}, message: "--tlsClusterCAFile is a MongoDB replica-set TLS option"},
+		{name: "cluster extension", args: []string{"--tlsClusterAuthX509ExtensionValue", "value"}, message: "--tlsClusterAuthX509ExtensionValue is a MongoDB replica-set TLS option"},
+		{name: "cluster attributes", args: []string{"--tlsClusterAuthX509Attributes", "O=example"}, message: "--tlsClusterAuthX509Attributes is a MongoDB replica-set TLS option"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fs := flag.NewFlagSet("test", flag.ContinueOnError)
+			fs.SetOutput(io.Discard)
+			registerUnsupportedTLSFlags(fs)
+			assert.NoError(t, fs.Parse(test.args))
+			err := rejectUnsupportedTLSFlags(fs)
+			if test.message == "" {
+				assert.NoError(t, err)
+				return
+			}
+			assert.ErrorContains(t, err, test.message)
+		})
+	}
+}
 
 func TestValidateTLSFlags(t *testing.T) {
 	tests := []struct {
