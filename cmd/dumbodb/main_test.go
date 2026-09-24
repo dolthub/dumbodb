@@ -15,6 +15,7 @@
 package main
 
 import (
+	"crypto/tls"
 	"flag"
 	"io"
 	"testing"
@@ -30,7 +31,6 @@ func TestRejectUnsupportedTLSFlags(t *testing.T) {
 	}{
 		{name: "none"},
 		{name: "certificate password", args: []string{"--tlsCertificateKeyFilePassword", "secret"}, message: "--tlsCertificateKeyFilePassword is a MongoDB TLS option"},
-		{name: "disabled protocols", args: []string{"--tlsDisabledProtocols", "TLS1_0"}, message: "--tlsDisabledProtocols is a MongoDB TLS option"},
 		{name: "invalid certificates", args: []string{"--tlsAllowInvalidCertificates"}, message: "--tlsAllowInvalidCertificates is a MongoDB TLS option"},
 		{name: "invalid hostnames", args: []string{"--tlsAllowInvalidHostnames"}, message: "--tlsAllowInvalidHostnames is a MongoDB TLS option"},
 		{name: "log versions", args: []string{"--tlsLogVersions", "TLS1_2"}, message: "--tlsLogVersions is a MongoDB TLS option"},
@@ -65,12 +65,14 @@ func TestValidateTLSFlags(t *testing.T) {
 		certificateKeyFile                  string
 		caFile                              string
 		crlFile                             string
+		disabledProtocolsSet                bool
 		allowConnectionsWithoutCertificates bool
 		wantError                           string
 	}{
 		{name: "disabled", mode: "disabled"},
 		{name: "certificate while disabled", mode: "disabled", certificateKeyFile: "server.pem", wantError: "need to enable TLS"},
 		{name: "CRL while disabled", mode: "disabled", crlFile: "revocations.pem", wantError: "need to enable TLS"},
+		{name: "disabled protocols while TLS disabled", mode: "disabled", disabledProtocolsSet: true, wantError: "need to enable TLS"},
 		{name: "invalid mode", mode: "sometimesTLS", wantError: "invalid --tlsMode"},
 		{name: "allow TLS unsupported", mode: "allowTLS", wantError: "is not supported"},
 		{name: "prefer TLS unsupported", mode: "preferTLS", wantError: "is not supported"},
@@ -88,12 +90,42 @@ func TestValidateTLSFlags(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			err := validateTLSFlags(test.mode, test.certificateKeyFile, test.caFile, test.crlFile, test.allowConnectionsWithoutCertificates)
+			err := validateTLSFlags(test.mode, test.certificateKeyFile, test.caFile, test.crlFile, test.disabledProtocolsSet, test.allowConnectionsWithoutCertificates)
 			if test.wantError == "" {
 				assert.NoError(t, err)
 				return
 			}
 			assert.ErrorContains(t, err, test.wantError)
+		})
+	}
+}
+
+func TestParseTLSDisabledProtocols(t *testing.T) {
+	tests := []struct {
+		name      string
+		value     string
+		enabled   bool
+		want      []uint16
+		wantError string
+	}{
+		{name: "not set"},
+		{name: "none", value: "none", enabled: true},
+		{name: "single", value: "TLS1_2", enabled: true, want: []uint16{tls.VersionTLS12}},
+		{name: "non-contiguous", value: "TLS1_1,TLS1_3", enabled: true, want: []uint16{tls.VersionTLS11, tls.VersionTLS13}},
+		{name: "legacy names", value: "noTLS1_0,noTLS1_2", enabled: true, want: []uint16{tls.VersionTLS10, tls.VersionTLS12}},
+		{name: "empty", enabled: true, wantError: "unrecognized"},
+		{name: "unknown", value: "TLS2_0", enabled: true, wantError: "unrecognized"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := parseTLSDisabledProtocols(test.value, test.enabled)
+			if test.wantError != "" {
+				assert.ErrorContains(t, err, test.wantError)
+				return
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, test.want, got)
 		})
 	}
 }

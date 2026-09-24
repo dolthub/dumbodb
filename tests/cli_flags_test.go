@@ -197,7 +197,7 @@ func TestTLSFlags(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, tls.VerifyClientCertIfGiven, optionalClientCertificateConfig.ClientAuth)
 
-	serverTLSAddr := startTLSServer(t, binary, certificateKeyFile, caFile, true)
+	serverTLSAddr := startTLSServer(t, binary, certificateKeyFile, caFile, true, "TLS1_2")
 	client := newTLSClient(t, serverTLSAddr, roots)
 	t.Cleanup(func() { client.Disconnect(context.Background()) })
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -212,9 +212,28 @@ func TestTLSFlags(t *testing.T) {
 	plaintextCtx, plaintextCancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer plaintextCancel()
 	assert.Error(t, plaintextClient.Ping(plaintextCtx, nil))
+
+	tls12Client, err := mongo.Connect(options.Client().
+		ApplyURI("mongodb://" + serverTLSAddr + "/?directConnection=true").
+		SetTLSConfig(&tls.Config{
+			RootCAs: roots, MinVersion: tls.VersionTLS12, MaxVersion: tls.VersionTLS12,
+		}).
+		SetServerSelectionTimeout(time.Second))
+	require.NoError(t, err)
+	t.Cleanup(func() { tls12Client.Disconnect(context.Background()) })
+	tls12Ctx, tls12Cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer tls12Cancel()
+	assert.Error(t, tls12Client.Ping(tls12Ctx, nil))
 }
 
-func startTLSServer(t *testing.T, binary, certificateKeyFile, caFile string, allowConnectionsWithoutCertificates bool) string {
+func startTLSServer(
+	t *testing.T,
+	binary string,
+	certificateKeyFile string,
+	caFile string,
+	allowConnectionsWithoutCertificates bool,
+	disabledProtocols string,
+) string {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -231,6 +250,9 @@ func startTLSServer(t *testing.T, binary, certificateKeyFile, caFile string, all
 	}
 	if allowConnectionsWithoutCertificates {
 		args = append(args, "--tlsAllowConnectionsWithoutCertificates")
+	}
+	if disabledProtocols != "" {
+		args = append(args, "--tlsDisabledProtocols", disabledProtocols)
 	}
 	cmd := exec.Command(binary, args...)
 	require.NoError(t, cmd.Start())

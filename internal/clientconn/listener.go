@@ -60,6 +60,8 @@ type NewListenerOpts struct {
 	TLSCAFile                              string
 	TLSCRLFile                             string
 	TLSAllowConnectionsWithoutCertificates bool
+	TLSDisabledProtocols                   []uint16
+	TLSEnableLegacyProtocols               bool
 
 	ProxyAddr        string
 	ProxyTLSCertFile string
@@ -103,6 +105,8 @@ func Listen(opts *NewListenerOpts) (*Listener, error) {
 				CAFile:                              l.TLSCAFile,
 				CRLFile:                             l.TLSCRLFile,
 				AllowConnectionsWithoutCertificates: l.TLSAllowConnectionsWithoutCertificates,
+				DisabledProtocols:                   l.TLSDisabledProtocols,
+				EnableLegacyProtocols:               l.TLSEnableLegacyProtocols,
 			}); err != nil {
 				return nil, err
 			}

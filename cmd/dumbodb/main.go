@@ -17,6 +17,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"log"
@@ -27,6 +28,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 
 	doltevents "github.com/dolthub/dolt/go/libraries/events"
@@ -92,6 +94,7 @@ func run(logger *slog.Logger) error {
 	tlsCertificateKeyFile := fs.String("tlsCertificateKeyFile", "", "certificate and private key PEM file for TLS")
 	tlsCAFile := fs.String("tlsCAFile", "", "certificate authority PEM file for client certificate verification")
 	tlsCRLFile := fs.String("tlsCRLFile", "", "certificate revocation list for client certificate verification")
+	tlsDisabledProtocols := fs.String("tlsDisabledProtocols", "", "comma-separated TLS protocol versions to disable")
 	tlsAllowConnectionsWithoutCertificates := fs.Bool("tlsAllowConnectionsWithoutCertificates", false, "allow TLS clients without certificates")
 	registerUnsupportedTLSFlags(fs)
 	logLevel := fs.String("log-level", "info", "log level (debug, info, warn, error)")
@@ -108,10 +111,15 @@ func run(logger *slog.Logger) error {
 	if err := rejectUnsupportedTLSFlags(fs); err != nil {
 		return err
 	}
+	tlsDisabledProtocolsSet := flagWasSet(fs, "tlsDisabledProtocols")
+	disabledProtocols, parseErr := parseTLSDisabledProtocols(*tlsDisabledProtocols, tlsDisabledProtocolsSet)
+	if parseErr != nil {
+		return parseErr
+	}
 	if *autoCommit && *sessionIsolation {
 		return fmt.Errorf("--auto-commit and --session-isolation are mutually exclusive: auto-commit commits every write at the command boundary, while session-isolation defers commits to an explicit doltCommit merge")
 	}
-	if err := validateTLSFlags(*tlsMode, *tlsCertificateKeyFile, *tlsCAFile, *tlsCRLFile, *tlsAllowConnectionsWithoutCertificates); err != nil {
+	if err := validateTLSFlags(*tlsMode, *tlsCertificateKeyFile, *tlsCAFile, *tlsCRLFile, tlsDisabledProtocolsSet, *tlsAllowConnectionsWithoutCertificates); err != nil {
 		return err
 	}
 
@@ -204,6 +212,8 @@ func run(logger *slog.Logger) error {
 		TLSCAFile:                              *tlsCAFile,
 		TLSCRLFile:                             *tlsCRLFile,
 		TLSAllowConnectionsWithoutCertificates: *tlsAllowConnectionsWithoutCertificates,
+		TLSDisabledProtocols:                   disabledProtocols,
+		TLSEnableLegacyProtocols:               tlsDisabledProtocolsSet,
 		Mode:                                   clientconn.NormalMode,
 		Handler:                                h,
 		Logger:                                 logger,
@@ -238,7 +248,6 @@ func run(logger *slog.Logger) error {
 
 func registerUnsupportedTLSFlags(fs *flag.FlagSet) {
 	fs.String("tlsCertificateKeyFilePassword", "", "unsupported MongoDB TLS option")
-	fs.String("tlsDisabledProtocols", "", "unsupported MongoDB TLS option")
 	fs.Bool("tlsAllowInvalidCertificates", false, "unsupported MongoDB TLS option")
 	fs.Bool("tlsAllowInvalidHostnames", false, "unsupported MongoDB TLS option")
 	fs.String("tlsLogVersions", "", "unsupported MongoDB TLS option")
@@ -255,7 +264,7 @@ func rejectUnsupportedTLSFlags(fs *flag.FlagSet) error {
 	fs.Visit(func(f *flag.Flag) {
 		if unsupported == nil {
 			switch f.Name {
-			case "tlsCertificateKeyFilePassword", "tlsDisabledProtocols",
+			case "tlsCertificateKeyFilePassword",
 				"tlsAllowInvalidCertificates", "tlsAllowInvalidHostnames", "tlsLogVersions",
 				"tlsOnNormalPorts", "tlsClusterFile", "tlsClusterPassword", "tlsClusterCAFile",
 				"tlsClusterAuthX509ExtensionValue", "tlsClusterAuthX509Attributes":
@@ -275,10 +284,45 @@ func rejectUnsupportedTLSFlags(fs *flag.FlagSet) error {
 	}
 }
 
-func validateTLSFlags(tlsMode, certificateKeyFile, caFile, crlFile string, allowConnectionsWithoutCertificates bool) error {
+func flagWasSet(fs *flag.FlagSet, name string) bool {
+	found := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			found = true
+		}
+	})
+	return found
+}
+
+func parseTLSDisabledProtocols(value string, enabled bool) ([]uint16, error) {
+	if !enabled || value == "none" {
+		return nil, nil
+	}
+	versions := map[string]uint16{
+		"TLS1_0":   tls.VersionTLS10,
+		"TLS1_1":   tls.VersionTLS11,
+		"TLS1_2":   tls.VersionTLS12,
+		"TLS1_3":   tls.VersionTLS13,
+		"noTLS1_0": tls.VersionTLS10,
+		"noTLS1_1": tls.VersionTLS11,
+		"noTLS1_2": tls.VersionTLS12,
+		"noTLS1_3": tls.VersionTLS13,
+	}
+	var disabled []uint16
+	for _, token := range strings.Split(value, ",") {
+		version, ok := versions[token]
+		if !ok {
+			return nil, fmt.Errorf("unrecognized --tlsDisabledProtocols value %q", token)
+		}
+		disabled = append(disabled, version)
+	}
+	return disabled, nil
+}
+
+func validateTLSFlags(tlsMode, certificateKeyFile, caFile, crlFile string, disabledProtocolsSet, allowConnectionsWithoutCertificates bool) error {
 	switch tlsMode {
 	case "disabled":
-		if certificateKeyFile != "" || caFile != "" || crlFile != "" || allowConnectionsWithoutCertificates {
+		if certificateKeyFile != "" || caFile != "" || crlFile != "" || disabledProtocolsSet || allowConnectionsWithoutCertificates {
 			return fmt.Errorf("need to enable TLS via --tlsMode when using TLS configuration options")
 		}
 		return nil
