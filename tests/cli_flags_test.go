@@ -175,13 +175,25 @@ func TestTLSFlags(t *testing.T) {
 	}
 
 	certificateKeyFile, caFile, roots := writeTLSCertificates(t)
-	serverTLSConfig, err := tlsutil.ServerConfig(certificateKeyFile, certificateKeyFile, "", false)
+	serverTLSConfig, err := tlsutil.ServerConfig(tlsutil.ServerConfigOptions{
+		CertificateFile: certificateKeyFile,
+		KeyFile:         certificateKeyFile,
+	})
 	require.NoError(t, err)
 	assert.Equal(t, tls.NoClientCert, serverTLSConfig.ClientAuth)
-	mutualTLSConfig, err := tlsutil.ServerConfig(certificateKeyFile, certificateKeyFile, caFile, false)
+	mutualTLSConfig, err := tlsutil.ServerConfig(tlsutil.ServerConfigOptions{
+		CertificateFile: certificateKeyFile,
+		KeyFile:         certificateKeyFile,
+		CAFile:          caFile,
+	})
 	require.NoError(t, err)
 	assert.Equal(t, tls.RequireAndVerifyClientCert, mutualTLSConfig.ClientAuth)
-	optionalClientCertificateConfig, err := tlsutil.ServerConfig(certificateKeyFile, certificateKeyFile, caFile, true)
+	optionalClientCertificateConfig, err := tlsutil.ServerConfig(tlsutil.ServerConfigOptions{
+		CertificateFile:                     certificateKeyFile,
+		KeyFile:                             certificateKeyFile,
+		CAFile:                              caFile,
+		AllowConnectionsWithoutCertificates: true,
+	})
 	require.NoError(t, err)
 	assert.Equal(t, tls.VerifyClientCertIfGiven, optionalClientCertificateConfig.ClientAuth)
 

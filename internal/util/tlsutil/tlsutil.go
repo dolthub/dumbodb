@@ -16,24 +16,46 @@
 package tlsutil
 
 import (
+	"bytes"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"os"
 	"time"
 )
 
-func ServerConfig(certFile, keyFile, caFile string, allowConnectionsWithoutCertificates bool) (*tls.Config, error) {
-	config, ca, err := config(certFile, keyFile, caFile)
+type ServerConfigOptions struct {
+	CertificateFile                     string
+	KeyFile                             string
+	CAFile                              string
+	CRLFile                             string
+	AllowConnectionsWithoutCertificates bool
+}
+
+func ServerConfig(opts ServerConfigOptions) (*tls.Config, error) {
+	config, ca, err := config(opts.CertificateFile, opts.KeyFile, opts.CAFile)
 	if err != nil {
 		return nil, err
 	}
 	if ca != nil {
 		config.ClientAuth = tls.RequireAndVerifyClientCert
-		if allowConnectionsWithoutCertificates {
+		if opts.AllowConnectionsWithoutCertificates {
 			config.ClientAuth = tls.VerifyClientCertIfGiven
 		}
 		config.ClientCAs = ca
+	}
+	if opts.CRLFile != "" {
+		if ca == nil {
+			return nil, fmt.Errorf("TLS CRL file requires a CA file")
+		}
+		revocationLists, err := loadRevocationLists(opts.CRLFile)
+		if err != nil {
+			return nil, err
+		}
+		config.VerifyConnection = func(state tls.ConnectionState) error {
+			return verifyRevocation(state.VerifiedChains, revocationLists, time.Now())
+		}
 	}
 	return config, nil
 }
@@ -92,4 +114,94 @@ func config(certFile, keyFile, caFile string) (*tls.Config, *x509.CertPool, erro
 		return nil, nil, fmt.Errorf("TLS CA file: failed to parse")
 	}
 	return config, ca, nil
+}
+
+func loadRevocationLists(path string) ([]*x509.RevocationList, error) {
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("TLS CRL file: %w", err)
+	}
+	var lists []*x509.RevocationList
+	rest := contents
+	for {
+		block, remaining := pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		rest = remaining
+		if block.Type != "X509 CRL" {
+			continue
+		}
+		list, err := x509.ParseRevocationList(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("TLS CRL file %q: %w", path, err)
+		}
+		lists = append(lists, list)
+	}
+	if len(lists) == 0 {
+		list, err := x509.ParseRevocationList(contents)
+		if err != nil {
+			return nil, fmt.Errorf("TLS CRL file %q: %w", path, err)
+		}
+		lists = append(lists, list)
+	}
+	return lists, nil
+}
+
+func verifyRevocation(chains [][]*x509.Certificate, lists []*x509.RevocationList, now time.Time) error {
+	if len(chains) == 0 {
+		return nil
+	}
+	var firstError error
+	for _, chain := range chains {
+		err := verifyChainRevocation(chain, lists, now)
+		if err == nil {
+			return nil
+		}
+		if firstError == nil {
+			firstError = err
+		}
+	}
+	return firstError
+}
+
+func verifyChainRevocation(chain []*x509.Certificate, lists []*x509.RevocationList, now time.Time) error {
+	for i := 0; i+1 < len(chain); i++ {
+		certificate := chain[i]
+		issuer := chain[i+1]
+		var validLists []*x509.RevocationList
+		var listError error
+		for _, list := range lists {
+			if !bytes.Equal(list.RawIssuer, certificate.RawIssuer) {
+				continue
+			}
+			if err := list.CheckSignatureFrom(issuer); err != nil {
+				listError = fmt.Errorf("CRL signature validation failed: %w", err)
+				continue
+			}
+			if now.Before(list.ThisUpdate) {
+				listError = fmt.Errorf("CRL is not valid before %s", list.ThisUpdate.Format(time.RFC3339))
+				continue
+			}
+			if list.NextUpdate.IsZero() || now.After(list.NextUpdate) {
+				listError = fmt.Errorf("CRL expired at %s", list.NextUpdate.Format(time.RFC3339))
+				continue
+			}
+			validLists = append(validLists, list)
+		}
+		if len(validLists) == 0 {
+			if listError != nil {
+				return listError
+			}
+			return fmt.Errorf("no CRL found for certificate issuer %q", certificate.Issuer.String())
+		}
+		for _, list := range validLists {
+			for _, entry := range list.RevokedCertificateEntries {
+				if certificate.SerialNumber.Cmp(entry.SerialNumber) == 0 {
+					return fmt.Errorf("certificate with serial number %s is revoked", certificate.SerialNumber)
+				}
+			}
+		}
+	}
+	return nil
 }

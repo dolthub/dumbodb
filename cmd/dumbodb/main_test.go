@@ -30,7 +30,6 @@ func TestRejectUnsupportedTLSFlags(t *testing.T) {
 	}{
 		{name: "none"},
 		{name: "certificate password", args: []string{"--tlsCertificateKeyFilePassword", "secret"}, message: "--tlsCertificateKeyFilePassword is a MongoDB TLS option"},
-		{name: "CRL", args: []string{"--tlsCRLFile", "revocations.pem"}, message: "--tlsCRLFile is a MongoDB TLS option"},
 		{name: "disabled protocols", args: []string{"--tlsDisabledProtocols", "TLS1_0"}, message: "--tlsDisabledProtocols is a MongoDB TLS option"},
 		{name: "invalid certificates", args: []string{"--tlsAllowInvalidCertificates"}, message: "--tlsAllowInvalidCertificates is a MongoDB TLS option"},
 		{name: "invalid hostnames", args: []string{"--tlsAllowInvalidHostnames"}, message: "--tlsAllowInvalidHostnames is a MongoDB TLS option"},
@@ -65,11 +64,13 @@ func TestValidateTLSFlags(t *testing.T) {
 		mode                                string
 		certificateKeyFile                  string
 		caFile                              string
+		crlFile                             string
 		allowConnectionsWithoutCertificates bool
 		wantError                           string
 	}{
 		{name: "disabled", mode: "disabled"},
 		{name: "certificate while disabled", mode: "disabled", certificateKeyFile: "server.pem", wantError: "need to enable TLS"},
+		{name: "CRL while disabled", mode: "disabled", crlFile: "revocations.pem", wantError: "need to enable TLS"},
 		{name: "invalid mode", mode: "sometimesTLS", wantError: "invalid --tlsMode"},
 		{name: "allow TLS unsupported", mode: "allowTLS", wantError: "is not supported"},
 		{name: "prefer TLS unsupported", mode: "preferTLS", wantError: "is not supported"},
@@ -87,7 +88,7 @@ func TestValidateTLSFlags(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			err := validateTLSFlags(test.mode, test.certificateKeyFile, test.caFile, test.allowConnectionsWithoutCertificates)
+			err := validateTLSFlags(test.mode, test.certificateKeyFile, test.caFile, test.crlFile, test.allowConnectionsWithoutCertificates)
 			if test.wantError == "" {
 				assert.NoError(t, err)
 				return

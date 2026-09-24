@@ -18,6 +18,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -32,14 +33,151 @@ import (
 
 func TestServerConfigRejectsExpiredCertificate(t *testing.T) {
 	certificateKeyFile := writeCertificateKeyFile(t, time.Now().Add(-2*time.Hour), time.Now().Add(-time.Hour))
-	_, err := ServerConfig(certificateKeyFile, certificateKeyFile, "", false)
+	_, err := ServerConfig(ServerConfigOptions{CertificateFile: certificateKeyFile, KeyFile: certificateKeyFile})
 	require.ErrorContains(t, err, "certificate expired")
 }
 
 func TestServerConfigRejectsCertificateBeforeValidityWindow(t *testing.T) {
 	certificateKeyFile := writeCertificateKeyFile(t, time.Now().Add(time.Hour), time.Now().Add(2*time.Hour))
-	_, err := ServerConfig(certificateKeyFile, certificateKeyFile, "", false)
+	_, err := ServerConfig(ServerConfigOptions{CertificateFile: certificateKeyFile, KeyFile: certificateKeyFile})
 	require.ErrorContains(t, err, "certificate is not valid before")
+}
+
+func TestVerifyChainRevocation(t *testing.T) {
+	issuer, issuerKey, certificate := certificateChain(t)
+	now := time.Now()
+	tests := []struct {
+		name      string
+		lists     []*x509.RevocationList
+		wantError string
+	}{
+		{
+			name:  "not revoked",
+			lists: []*x509.RevocationList{revocationList(t, issuer, issuerKey, nil, now.Add(-time.Hour), now.Add(time.Hour))},
+		},
+		{
+			name: "revoked",
+			lists: []*x509.RevocationList{revocationList(t, issuer, issuerKey, []x509.RevocationListEntry{
+				{SerialNumber: certificate.SerialNumber, RevocationTime: now.Add(-time.Minute)},
+			}, now.Add(-time.Hour), now.Add(time.Hour))},
+			wantError: "is revoked",
+		},
+		{
+			name:      "expired",
+			lists:     []*x509.RevocationList{revocationList(t, issuer, issuerKey, nil, now.Add(-2*time.Hour), now.Add(-time.Hour))},
+			wantError: "CRL expired",
+		},
+		{
+			name:      "not yet valid",
+			lists:     []*x509.RevocationList{revocationList(t, issuer, issuerKey, nil, now.Add(time.Hour), now.Add(2*time.Hour))},
+			wantError: "CRL is not valid before",
+		},
+		{
+			name: "valid list supersedes expired list",
+			lists: []*x509.RevocationList{
+				revocationList(t, issuer, issuerKey, nil, now.Add(-2*time.Hour), now.Add(-time.Hour)),
+				revocationList(t, issuer, issuerKey, nil, now.Add(-time.Hour), now.Add(time.Hour)),
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := verifyChainRevocation([]*x509.Certificate{certificate, issuer}, test.lists, now)
+			if test.wantError == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, test.wantError)
+		})
+	}
+}
+
+func TestServerConfigRejectsRevokedClientCertificate(t *testing.T) {
+	now := time.Now()
+	issuer, issuerKey, clientCertificate := certificateChain(t)
+	serverFile := writeCertificateKeyFile(t, now.Add(-time.Hour), now.Add(time.Hour))
+	caFile := filepath.Join(t.TempDir(), "ca.pem")
+	require.NoError(t, os.WriteFile(caFile, pem.EncodeToMemory(&pem.Block{
+		Type: "CERTIFICATE", Bytes: issuer.Raw,
+	}), 0o600))
+	list := revocationList(t, issuer, issuerKey, []x509.RevocationListEntry{
+		{SerialNumber: clientCertificate.SerialNumber, RevocationTime: now.Add(-time.Minute)},
+	}, now.Add(-time.Hour), now.Add(time.Hour))
+	crlFile := filepath.Join(t.TempDir(), "revocations.pem")
+	require.NoError(t, os.WriteFile(crlFile, pem.EncodeToMemory(&pem.Block{
+		Type: "X509 CRL", Bytes: list.Raw,
+	}), 0o600))
+
+	config, err := ServerConfig(ServerConfigOptions{
+		CertificateFile: serverFile,
+		KeyFile:         serverFile,
+		CAFile:          caFile,
+		CRLFile:         crlFile,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, config.VerifyConnection)
+	err = config.VerifyConnection(tls.ConnectionState{
+		VerifiedChains: [][]*x509.Certificate{{clientCertificate, issuer}},
+	})
+	require.ErrorContains(t, err, "is revoked")
+}
+
+func certificateChain(t *testing.T) (*x509.Certificate, *ecdsa.PrivateKey, *x509.Certificate) {
+	t.Helper()
+	now := time.Now()
+	issuerKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	issuerTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "test CA"},
+		NotBefore:             now.Add(-time.Hour),
+		NotAfter:              now.Add(time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	issuerDER, err := x509.CreateCertificate(rand.Reader, issuerTemplate, issuerTemplate, &issuerKey.PublicKey, issuerKey)
+	require.NoError(t, err)
+	issuer, err := x509.ParseCertificate(issuerDER)
+	require.NoError(t, err)
+
+	certificateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	certificateTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: "client"},
+		NotBefore:    now.Add(-time.Hour),
+		NotAfter:     now.Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+	certificateDER, err := x509.CreateCertificate(rand.Reader, certificateTemplate, issuer, &certificateKey.PublicKey, issuerKey)
+	require.NoError(t, err)
+	certificate, err := x509.ParseCertificate(certificateDER)
+	require.NoError(t, err)
+	return issuer, issuerKey, certificate
+}
+
+func revocationList(
+	t *testing.T,
+	issuer *x509.Certificate,
+	issuerKey *ecdsa.PrivateKey,
+	entries []x509.RevocationListEntry,
+	thisUpdate time.Time,
+	nextUpdate time.Time,
+) *x509.RevocationList {
+	t.Helper()
+	contents, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
+		Number:                    big.NewInt(1),
+		ThisUpdate:                thisUpdate,
+		NextUpdate:                nextUpdate,
+		RevokedCertificateEntries: entries,
+	}, issuer, issuerKey)
+	require.NoError(t, err)
+	list, err := x509.ParseRevocationList(contents)
+	require.NoError(t, err)
+	return list
 }
 
 func writeCertificateKeyFile(t *testing.T, notBefore, notAfter time.Time) string {

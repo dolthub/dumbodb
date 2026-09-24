@@ -58,6 +58,7 @@ type NewListenerOpts struct {
 	TLSCertFile                            string
 	TLSKeyFile                             string
 	TLSCAFile                              string
+	TLSCRLFile                             string
 	TLSAllowConnectionsWithoutCertificates bool
 
 	ProxyAddr        string
@@ -96,12 +97,13 @@ func Listen(opts *NewListenerOpts) (*Listener, error) {
 		protocol := "TCP"
 		if l.TLS {
 			var config *tls.Config
-			if config, err = tlsutil.ServerConfig(
-				l.TLSCertFile,
-				l.TLSKeyFile,
-				l.TLSCAFile,
-				l.TLSAllowConnectionsWithoutCertificates,
-			); err != nil {
+			if config, err = tlsutil.ServerConfig(tlsutil.ServerConfigOptions{
+				CertificateFile:                     l.TLSCertFile,
+				KeyFile:                             l.TLSKeyFile,
+				CAFile:                              l.TLSCAFile,
+				CRLFile:                             l.TLSCRLFile,
+				AllowConnectionsWithoutCertificates: l.TLSAllowConnectionsWithoutCertificates,
+			}); err != nil {
 				return nil, err
 			}
 			l.tcpListener, err = tls.Listen("tcp", l.TCP, config)
