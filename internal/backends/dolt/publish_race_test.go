@@ -16,12 +16,14 @@ package dolt
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"testing"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	doltref "github.com/dolthub/dolt/go/libraries/doltcore/ref"
+	"github.com/dolthub/dolt/go/store/datas"
 	"github.com/stretchr/testify/require"
 
 	"github.com/dolthub/dumbodb/internal/backends"
@@ -96,4 +98,22 @@ func TestPublishWorkingSet_ForkPointIsAvailableAtTheRead(t *testing.T) {
 		"a working set resolved from disk can be hashed, so the reconcile can hand its hash to the publish")
 
 	var _ *doltdb.WorkingSet = cur
+}
+
+// autoCommitRaceLost must classify BOTH lost-race errors, not just the
+// optimistic-lock one. A soak surfaced ErrMergeNeeded ("dataset head is not
+// ancestor of commit") reaching the client as an InternalError after the write
+// was already durable: when the working set is clean, a winning concurrent
+// auto-commit advances HEAD without changing the working-set ref, so Dolt
+// returns ErrMergeNeeded rather than ErrOptimisticLockFailed. Both mean the
+// same thing here -- someone else committed this write.
+func TestAutoCommitRaceLost_ClassifiesBothLostRaces(t *testing.T) {
+	require.True(t, autoCommitRaceLost(datas.ErrOptimisticLockFailed),
+		"the working-set ref moving is a lost race")
+	require.True(t, autoCommitRaceLost(datas.ErrMergeNeeded),
+		"HEAD moving under a clean working set is a lost race")
+	require.True(t, autoCommitRaceLost(fmt.Errorf("commitBranchWS: committing %q: %w", "main", datas.ErrMergeNeeded)),
+		"a wrapped ErrMergeNeeded is still a lost race")
+	require.False(t, autoCommitRaceLost(io.EOF), "an unrelated error is not a race")
+	require.False(t, autoCommitRaceLost(nil), "no error is not a race")
 }

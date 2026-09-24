@@ -336,6 +336,17 @@ func (s *dbState) commitBranchRootLocked(
 	return commitHash, persisted, nil
 }
 
+// autoCommitRaceLost reports whether err is another writer winning the
+// auto-commit race. Both cases mean the winner committed the shared working
+// set, which already holds this write, so the caller retries rather than
+// reporting: the re-read then finds nothing left to commit. The write must
+// never reach the client as a failure. ErrOptimisticLockFailed is the
+// working-set ref moving; ErrMergeNeeded is HEAD moving while the ref stayed
+// put, which happens when the working set was already clean.
+func autoCommitRaceLost(err error) bool {
+	return errors.Is(err, datas.ErrOptimisticLockFailed) || errors.Is(err, datas.ErrMergeNeeded)
+}
+
 // commitBranchWS commits branch's working root as one Dolt commit, or returns
 // false without committing when the root already matches HEAD. Caller must hold
 // state.mu.
@@ -420,7 +431,7 @@ func (s *dbState) tryCommitBranchWS(ctx context.Context, branch, message, author
 	cleanWS := current.WithStagedRoot(workingRoot).ClearMerge()
 	var rsc doltdb.ReplicationStatusController
 	if _, err := s.doltDB.CommitWithWorkingSet(ctx, headRef, wsRef, pending, cleanWS, forkPoint, doltdb.TodoWorkingSetMeta(), &rsc); err != nil {
-		if errors.Is(err, datas.ErrOptimisticLockFailed) {
+		if autoCommitRaceLost(err) {
 			return false, fmt.Errorf("%w: %q moved while auto-committing it", backends.ErrWriteRaced, branch)
 		}
 		return false, fmt.Errorf("commitBranchWS: committing %q: %w", branch, err)
