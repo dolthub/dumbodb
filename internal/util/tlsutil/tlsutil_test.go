@@ -43,6 +43,37 @@ func TestServerConfigRejectsCertificateBeforeValidityWindow(t *testing.T) {
 	require.ErrorContains(t, err, "certificate is not valid before")
 }
 
+func TestServerConfigIdentifiesEncryptedPrivateKey(t *testing.T) {
+	tests := []struct {
+		name  string
+		block *pem.Block
+	}{
+		{
+			name:  "PKCS8",
+			block: &pem.Block{Type: "ENCRYPTED PRIVATE KEY", Bytes: []byte("encrypted")},
+		},
+		{
+			name: "legacy",
+			block: &pem.Block{
+				Type:    "RSA PRIVATE KEY",
+				Headers: map[string]string{"DEK-Info": "AES-256-CBC,0123456789ABCDEF"},
+				Bytes:   []byte("encrypted"),
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "server.pem")
+			require.NoError(t, os.WriteFile(path, pem.EncodeToMemory(test.block), 0o600))
+
+			_, err := ServerConfig(ServerConfigOptions{CertificateFile: path, KeyFile: path})
+			require.ErrorContains(t, err, "is encrypted")
+			require.ErrorContains(t, err, "does not support encrypted private key files")
+			require.ErrorContains(t, err, "openssl pkey")
+		})
+	}
+}
+
 func TestVerifyChainRevocation(t *testing.T) {
 	issuer, issuerKey, certificate := certificateChain(t)
 	now := time.Now()

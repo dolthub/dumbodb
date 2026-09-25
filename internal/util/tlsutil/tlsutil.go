@@ -22,6 +22,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -105,6 +106,13 @@ func config(certFile, keyFile, caFile string) (*tls.Config, *x509.CertPool, erro
 	if _, err := os.Stat(keyFile); err != nil {
 		return nil, nil, fmt.Errorf("TLS key file: %w", err)
 	}
+	keyContents, err := os.ReadFile(keyFile)
+	if err != nil {
+		return nil, nil, fmt.Errorf("TLS key file: %w", err)
+	}
+	if containsEncryptedPrivateKey(keyContents) {
+		return nil, nil, fmt.Errorf("TLS key file %q is encrypted; DumboDB does not support encrypted private key files; provide an unencrypted certificate-key PEM file (decrypt the key with 'openssl pkey -in encrypted-key.pem -out key.pem')", keyFile)
+	}
 
 	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {
@@ -142,6 +150,20 @@ func config(certFile, keyFile, caFile string) (*tls.Config, *x509.CertPool, erro
 		return nil, nil, fmt.Errorf("TLS CA file: failed to parse")
 	}
 	return config, ca, nil
+}
+
+func containsEncryptedPrivateKey(contents []byte) bool {
+	for {
+		block, rest := pem.Decode(contents)
+		if block == nil {
+			return false
+		}
+		if block.Type == "ENCRYPTED PRIVATE KEY" ||
+			(strings.HasSuffix(block.Type, "PRIVATE KEY") && block.Headers["DEK-Info"] != "") {
+			return true
+		}
+		contents = rest
+	}
 }
 
 func loadRevocationLists(path string) ([]*x509.RevocationList, error) {
