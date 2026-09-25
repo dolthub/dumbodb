@@ -190,19 +190,46 @@ func TestOrdinaryWritesDoNotLockEachOtherOut(t *testing.T) {
 // A client transaction's lock is contention behaviour for transactions only.
 // An ordinary write neither waits for it nor fails on it; the two reconcile
 // through the merge at whichever boundary comes second.
-func TestOrdinaryWriteIgnoresAClientTransactionsLock(t *testing.T) {
+// An ordinary (non-transactional) write must not run over a document a client
+// transaction holds: it blocks until that transaction resolves, then proceeds --
+// matching MongoDB, which blocks a plain write on a document an open transaction
+// locks. The wait is bounded by the command's maxTimeMS via ctx. See workspace-s1s.
+func TestOrdinaryWriteBlocksOnAClientTransactionsLock(t *testing.T) {
 	be := docLockBackend(t, false)
-	txnCtx, _ := clientTxnCtx()
+	txnCtx, txnOwner := clientTxnCtx()
 	ids := []hash.Hash{idH(1)}
 	require.NoError(t, be.acquireTxnLocks(txnCtx, "mydb", "main", "col", ids))
 
-	// A deadline turns a wait into a visible failure rather than a hang.
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
 	ordinary := conninfo.New()
 	ordinary.SetForked(true)
 
-	require.NoError(t, be.acquireTxnLocks(conninfo.Ctx(ctx, ordinary), "mydb", "main", "col", ids))
+	// While the transaction holds the lock, an ordinary write waits; with a
+	// deadline it fails (mapped to maxTimeMS upstream) rather than proceeding.
+	deadlineCtx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	err := be.acquireTxnLocks(conninfo.Ctx(deadlineCtx, ordinary), "mydb", "main", "col", ids)
+	require.Error(t, err, "an ordinary write must block on a locked document")
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+
+	// Once the transaction releases, the ordinary write proceeds.
+	done := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		done <- be.acquireTxnLocks(conninfo.Ctx(ctx, ordinary), "mydb", "main", "col", ids)
+	}()
+	select {
+	case <-done:
+		t.Fatal("ordinary write returned before the transaction released")
+	case <-time.After(150 * time.Millisecond):
+	}
+	be.releaseLocksForOwner(txnOwner)
+	select {
+	case err := <-done:
+		require.NoError(t, err, "ordinary write should proceed once the lock is released")
+	case <-time.After(2 * time.Second):
+		t.Fatal("ordinary write did not proceed after release")
+	}
 }
 
 // Client transactions keep fail-fast locking, and keep it in every mode: it is

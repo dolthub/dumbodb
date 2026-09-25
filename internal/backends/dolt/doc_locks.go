@@ -34,10 +34,13 @@ var ErrWriteConflict = errors.New("write conflict: document locked by another tr
 type DocLockManager struct {
 	mu    sync.Mutex
 	locks map[string]map[hash.Hash]string
+	// notify is closed and replaced on every Release, waking any ordinary write
+	// parked in WaitUntilFree so it can re-check whether its document is free.
+	notify chan struct{}
 }
 
 func NewDocLockManager() *DocLockManager {
-	return &DocLockManager{locks: map[string]map[hash.Hash]string{}}
+	return &DocLockManager{locks: map[string]map[hash.Hash]string{}, notify: make(chan struct{})}
 }
 
 func (m *DocLockManager) Acquire(owner string, collection string, ids []hash.Hash) error {
@@ -83,6 +86,57 @@ func (m *DocLockManager) Release(owner string) {
 			delete(m.locks, coll)
 		}
 	}
+
+	// Wake anyone waiting for a document to free up. A fresh channel starts the
+	// next wait generation.
+	close(m.notify)
+	m.notify = make(chan struct{})
+}
+
+// WaitUntilFree blocks until none of ids in collection are held by any
+// transaction, or ctx is done. An ordinary (non-transactional) write calls this
+// so it waits out an in-progress transaction holding the document -- matching
+// MongoDB, which blocks a plain write until the transaction commits or aborts --
+// instead of proceeding immediately. Ordinary writes take no lock themselves;
+// they only wait, so this never deadlocks (only transactions hold locks, and a
+// transaction that meets a held document fails fast rather than waiting). ctx
+// carries the command's maxTimeMS deadline, so a write that waits too long
+// returns ctx.Err(), which the handler maps to MaxTimeMSExpired.
+func (m *DocLockManager) WaitUntilFree(ctx context.Context, collection string, ids []hash.Hash) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	for {
+		m.mu.Lock()
+		if !m.anyHeld(collection, ids) {
+			m.mu.Unlock()
+			return nil
+		}
+		wait := m.notify
+		m.mu.Unlock()
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-wait:
+			// A Release happened; loop and re-check.
+		}
+	}
+}
+
+// anyHeld reports whether any id in collection is currently locked. The caller
+// must hold m.mu.
+func (m *DocLockManager) anyHeld(collection string, ids []hash.Hash) bool {
+	collLocks, ok := m.locks[collection]
+	if !ok {
+		return false
+	}
+	for _, id := range ids {
+		if _, held := collLocks[id]; held {
+			return true
+		}
+	}
+	return false
 }
 
 // ownerForDocLocks reports the lock owner for a write inside a transaction the
@@ -116,7 +170,11 @@ func (b *Backend) acquireTxnLocks(ctx context.Context, db, branch, collection st
 	}
 	owner, inClientTxn := ownerForDocLocks(ctx)
 	if !inClientTxn {
-		return nil
+		// Ordinary writes take no lock, but must not run over a document a
+		// transaction currently holds: wait for that transaction to resolve,
+		// bounded by the command's maxTimeMS via ctx. Matches MongoDB, which
+		// blocks a plain write on a document locked by an open transaction.
+		return b.docLockManager(db, branch).WaitUntilFree(ctx, collection, ids)
 	}
 	if err := b.docLockManager(db, branch).Acquire(owner, collection, ids); err != nil {
 		if errors.Is(err, ErrWriteConflict) {
