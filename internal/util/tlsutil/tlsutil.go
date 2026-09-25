@@ -16,13 +16,16 @@
 package tlsutil
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"net"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -33,6 +36,23 @@ type ServerConfigOptions struct {
 	CRLFile                             string
 	AllowConnectionsWithoutCertificates bool
 	DisabledProtocols                   []uint16
+}
+
+type optionalTLSListener struct {
+	net.Listener
+	config *tls.Config
+}
+
+type optionalTLSConn struct {
+	net.Conn
+	config   *tls.Config
+	once     sync.Once
+	selected net.Conn
+}
+
+type bufferedConn struct {
+	net.Conn
+	reader *bufio.Reader
 }
 
 func ServerConfig(opts ServerConfigOptions) (*tls.Config, error) {
@@ -87,6 +107,45 @@ func ServerConfig(opts ServerConfigOptions) (*tls.Config, error) {
 		}
 	}
 	return config, nil
+}
+
+// OptionalListener accepts both TLS and plaintext connections.
+func OptionalListener(listener net.Listener, config *tls.Config) net.Listener {
+	return &optionalTLSListener{Listener: listener, config: config}
+}
+
+func (l *optionalTLSListener) Accept() (net.Conn, error) {
+	conn, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	return &optionalTLSConn{Conn: conn, config: l.config}, nil
+}
+
+func (c *optionalTLSConn) Read(p []byte) (int, error) {
+	c.selectProtocol()
+	return c.selected.Read(p)
+}
+
+func (c *optionalTLSConn) Write(p []byte) (int, error) {
+	c.selectProtocol()
+	return c.selected.Write(p)
+}
+
+func (c *optionalTLSConn) selectProtocol() {
+	c.once.Do(func() {
+		reader := bufio.NewReader(c.Conn)
+		prefix, _ := reader.Peek(3)
+		var selected net.Conn = &bufferedConn{Conn: c.Conn, reader: reader}
+		if len(prefix) == 3 && prefix[0] == 0x16 && prefix[1] == 0x03 && prefix[2] >= 0x01 && prefix[2] <= 0x04 {
+			selected = tls.Server(selected, c.config)
+		}
+		c.selected = selected
+	})
+}
+
+func (c *bufferedConn) Read(p []byte) (int, error) {
+	return c.reader.Read(p)
 }
 
 func ClientConfig(certFile, keyFile, caFile string) (*tls.Config, error) {

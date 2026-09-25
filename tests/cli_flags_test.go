@@ -197,7 +197,7 @@ func TestTLSFlags(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, tls.VerifyClientCertIfGiven, optionalClientCertificateConfig.ClientAuth)
 
-	serverTLSAddr := startTLSServer(t, binary, certificateKeyFile, caFile, true, "TLS1_2")
+	serverTLSAddr := startTLSServer(t, binary, certificateKeyFile, caFile, "requireTLS", true, "TLS1_2")
 	client := newTLSClient(t, serverTLSAddr, roots)
 	t.Cleanup(func() { client.Disconnect(context.Background()) })
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -224,6 +224,26 @@ func TestTLSFlags(t *testing.T) {
 	tls12Ctx, tls12Cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer tls12Cancel()
 	assert.Error(t, tls12Client.Ping(tls12Ctx, nil))
+
+	for _, mode := range []string{"allowTLS", "preferTLS"} {
+		t.Run(mode, func(t *testing.T) {
+			addr := startTLSServer(t, binary, certificateKeyFile, caFile, mode, true, "")
+			plaintextClient, err := mongo.Connect(options.Client().
+				ApplyURI("mongodb://" + addr + "/?directConnection=true").
+				SetServerSelectionTimeout(time.Second))
+			require.NoError(t, err)
+			t.Cleanup(func() { plaintextClient.Disconnect(context.Background()) })
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			require.NoError(t, plaintextClient.Ping(ctx, nil))
+
+			tlsClient := newTLSClient(t, addr, roots)
+			t.Cleanup(func() { tlsClient.Disconnect(context.Background()) })
+			tlsCtx, tlsCancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer tlsCancel()
+			require.NoError(t, tlsClient.Ping(tlsCtx, nil))
+		})
+	}
 }
 
 func startTLSServer(
@@ -231,6 +251,7 @@ func startTLSServer(
 	binary string,
 	certificateKeyFile string,
 	caFile string,
+	tlsMode string,
 	allowConnectionsWithoutCertificates bool,
 	disabledProtocols string,
 ) string {
@@ -243,7 +264,7 @@ func startTLSServer(
 	args := []string{
 		"--addr", addr,
 		"--data-dir", t.TempDir(),
-		"--tlsMode", "requireTLS",
+		"--tlsMode", tlsMode,
 		"--tlsCertificateKeyFile", certificateKeyFile,
 		"--tlsCAFile", caFile,
 		"--no-metrics",

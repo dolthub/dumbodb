@@ -22,7 +22,9 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"io"
 	"math/big"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -205,6 +207,60 @@ func TestServerConfigSelectsEnabledProtocol(t *testing.T) {
 	}
 }
 
+func TestOptionalTLSConn(t *testing.T) {
+	now := time.Now()
+	serverFile := writeCertificateKeyFile(t, now.Add(-time.Hour), now.Add(time.Hour))
+	config, err := ServerConfig(ServerConfigOptions{
+		CertificateFile: serverFile,
+		KeyFile:         serverFile,
+	})
+	require.NoError(t, err)
+	certificate, err := x509.ParseCertificate(config.Certificates[0].Certificate[0])
+	require.NoError(t, err)
+	roots := x509.NewCertPool()
+	roots.AddCert(certificate)
+
+	tests := []struct {
+		name    string
+		useTLS  bool
+		payload []byte
+	}{
+		{name: "plaintext", payload: []byte("plaintext")},
+		{name: "plaintext starts with TLS content type", payload: []byte{0x16, 0x00, 0x00, 0x00, 'x'}},
+		{name: "TLS", useTLS: true, payload: []byte("encrypted")},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			serverConn, clientConn := net.Pipe()
+			defer serverConn.Close()
+			defer clientConn.Close()
+			require.NoError(t, serverConn.SetDeadline(time.Now().Add(5*time.Second)))
+			require.NoError(t, clientConn.SetDeadline(time.Now().Add(5*time.Second)))
+
+			var client net.Conn = clientConn
+			if test.useTLS {
+				client = tls.Client(clientConn, &tls.Config{
+					MinVersion: tls.VersionTLS12,
+					RootCAs:    roots,
+					ServerName: "localhost",
+				})
+			}
+			writeResult := make(chan error, 1)
+			go func() {
+				_, err := client.Write(test.payload)
+				writeResult <- err
+			}()
+
+			optional := &optionalTLSConn{Conn: serverConn, config: config}
+			received := make([]byte, len(test.payload))
+			_, err = io.ReadFull(optional, received)
+			require.NoError(t, err)
+			require.Equal(t, test.payload, received)
+			require.NoError(t, <-writeResult)
+		})
+	}
+}
+
 func certificateChain(t *testing.T) (*x509.Certificate, *ecdsa.PrivateKey, *x509.Certificate) {
 	t.Helper()
 	now := time.Now()
@@ -269,6 +325,7 @@ func writeCertificateKeyFile(t *testing.T, notBefore, notAfter time.Time) string
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
 		Subject:      pkix.Name{CommonName: "localhost"},
+		DNSNames:     []string{"localhost"},
 		NotBefore:    notBefore,
 		NotAfter:     notAfter,
 		KeyUsage:     x509.KeyUsageDigitalSignature,

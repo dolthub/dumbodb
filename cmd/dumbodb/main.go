@@ -90,7 +90,7 @@ func run(logger *slog.Logger) error {
 	dataDir := fs.String("data-dir", "data", "directory for storing Dolt data")
 	addr := fs.String("addr", "127.0.0.1:27017", "listen address")
 	port := fs.Int("port", 0, "listen port (overrides port in --addr if set)")
-	tlsMode := fs.String("tlsMode", "disabled", "TLS mode (disabled or requireTLS)")
+	tlsMode := fs.String("tlsMode", "disabled", "TLS mode (disabled, allowTLS, preferTLS, or requireTLS)")
 	tlsCertificateKeyFile := fs.String("tlsCertificateKeyFile", "", "certificate and private key PEM file for TLS")
 	tlsCAFile := fs.String("tlsCAFile", "", "certificate authority PEM file for client certificate verification")
 	tlsCRLFile := fs.String("tlsCRLFile", "", "certificate revocation list for client certificate verification")
@@ -206,13 +206,14 @@ func run(logger *slog.Logger) error {
 
 	listener, err := clientconn.Listen(&clientconn.NewListenerOpts{
 		TCP:                                    *addr,
-		TLS:                                    *tlsMode == "requireTLS",
+		TLS:                                    *tlsMode != "disabled",
 		TLSCertFile:                            *tlsCertificateKeyFile,
 		TLSKeyFile:                             *tlsCertificateKeyFile,
 		TLSCAFile:                              *tlsCAFile,
 		TLSCRLFile:                             *tlsCRLFile,
 		TLSAllowConnectionsWithoutCertificates: *tlsAllowConnectionsWithoutCertificates,
 		TLSDisabledProtocols:                   disabledProtocols,
+		TLSAcceptPlaintext:                     *tlsMode == "allowTLS" || *tlsMode == "preferTLS",
 		Mode:                                   clientconn.NormalMode,
 		Handler:                                h,
 		Logger:                                 logger,
@@ -326,18 +327,16 @@ func validateTLSFlags(tlsMode, certificateKeyFile, caFile, crlFile string, disab
 			return fmt.Errorf("need to enable TLS via --tlsMode when using TLS configuration options")
 		}
 		return nil
-	case "requireTLS":
+	case "allowTLS", "preferTLS", "requireTLS":
 		if certificateKeyFile == "" {
-			return fmt.Errorf("--tlsCertificateKeyFile is required when --tlsMode is requireTLS")
+			return fmt.Errorf("--tlsCertificateKeyFile is required when --tlsMode is %s", tlsMode)
 		}
 		if caFile == "" {
-			return fmt.Errorf("--tlsCAFile is required when --tlsMode is requireTLS")
+			return fmt.Errorf("--tlsCAFile is required when --tlsMode is %s", tlsMode)
 		}
 		return nil
-	case "allowTLS", "preferTLS":
-		return fmt.Errorf("--tlsMode %s is not supported; supported modes are disabled and requireTLS", tlsMode)
 	default:
-		return fmt.Errorf("invalid --tlsMode %q; supported modes are disabled and requireTLS", tlsMode)
+		return fmt.Errorf("invalid --tlsMode %q; supported modes are disabled, allowTLS, preferTLS, and requireTLS", tlsMode)
 	}
 }
 
