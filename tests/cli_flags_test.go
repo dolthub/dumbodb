@@ -34,6 +34,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/youmark/pkcs8"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
@@ -197,7 +198,7 @@ func TestTLSFlags(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, tls.VerifyClientCertIfGiven, optionalClientCertificateConfig.ClientAuth)
 
-	serverTLSAddr := startTLSServer(t, binary, certificateKeyFile, caFile, "requireTLS", true, "TLS1_2")
+	serverTLSAddr := startTLSServer(t, binary, certificateKeyFile, caFile, "requireTLS", "", true, "TLS1_2")
 	client := newTLSClient(t, serverTLSAddr, roots)
 	t.Cleanup(func() { client.Disconnect(context.Background()) })
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -227,7 +228,7 @@ func TestTLSFlags(t *testing.T) {
 
 	for _, mode := range []string{"allowTLS", "preferTLS"} {
 		t.Run(mode, func(t *testing.T) {
-			addr := startTLSServer(t, binary, certificateKeyFile, caFile, mode, true, "")
+			addr := startTLSServer(t, binary, certificateKeyFile, caFile, mode, "", true, "")
 			plaintextClient, err := mongo.Connect(options.Client().
 				ApplyURI("mongodb://" + addr + "/?directConnection=true").
 				SetServerSelectionTimeout(time.Second))
@@ -244,6 +245,14 @@ func TestTLSFlags(t *testing.T) {
 			require.NoError(t, tlsClient.Ping(tlsCtx, nil))
 		})
 	}
+
+	encryptedKeyFile := encryptTLSPrivateKey(t, certificateKeyFile, "key-password")
+	encryptedAddr := startTLSServer(t, binary, encryptedKeyFile, caFile, "requireTLS", "key-password", true, "")
+	encryptedClient := newTLSClient(t, encryptedAddr, roots)
+	t.Cleanup(func() { encryptedClient.Disconnect(context.Background()) })
+	encryptedCtx, encryptedCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer encryptedCancel()
+	require.NoError(t, encryptedClient.Ping(encryptedCtx, nil))
 }
 
 func startTLSServer(
@@ -252,6 +261,7 @@ func startTLSServer(
 	certificateKeyFile string,
 	caFile string,
 	tlsMode string,
+	keyPassword string,
 	allowConnectionsWithoutCertificates bool,
 	disabledProtocols string,
 ) string {
@@ -271,6 +281,9 @@ func startTLSServer(
 	}
 	if allowConnectionsWithoutCertificates {
 		args = append(args, "--tlsAllowConnectionsWithoutCertificates")
+	}
+	if keyPassword != "" {
+		args = append(args, "--tlsCertificateKeyFilePassword", keyPassword)
 	}
 	if disabledProtocols != "" {
 		args = append(args, "--tlsDisabledProtocols", disabledProtocols)
@@ -350,4 +363,25 @@ func writeTLSCertificates(t *testing.T) (string, string, *x509.CertPool) {
 	roots := x509.NewCertPool()
 	require.True(t, roots.AppendCertsFromPEM(caPEM))
 	return certificateKeyFile, caFile, roots
+}
+
+func encryptTLSPrivateKey(t *testing.T, certificateKeyFile, password string) string {
+	t.Helper()
+	contents, err := os.ReadFile(certificateKeyFile)
+	require.NoError(t, err)
+	certificateBlock, rest := pem.Decode(contents)
+	require.NotNil(t, certificateBlock)
+	keyBlock, _ := pem.Decode(rest)
+	require.NotNil(t, keyBlock)
+	privateKey, err := x509.ParsePKCS8PrivateKey(keyBlock.Bytes)
+	require.NoError(t, err)
+	encryptedDER, err := pkcs8.MarshalPrivateKey(privateKey, []byte(password), nil)
+	require.NoError(t, err)
+	encryptedContents := append(
+		pem.EncodeToMemory(certificateBlock),
+		pem.EncodeToMemory(&pem.Block{Type: "ENCRYPTED PRIVATE KEY", Bytes: encryptedDER})...,
+	)
+	path := filepath.Join(t.TempDir(), "server-encrypted.pem")
+	require.NoError(t, os.WriteFile(path, encryptedContents, 0o600))
+	return path
 }

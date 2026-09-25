@@ -30,7 +30,6 @@ func TestRejectUnsupportedTLSFlags(t *testing.T) {
 		message string
 	}{
 		{name: "none"},
-		{name: "certificate password", args: []string{"--tlsCertificateKeyFilePassword", "secret"}, message: "--tlsCertificateKeyFilePassword is a MongoDB TLS option"},
 		{name: "invalid certificates", args: []string{"--tlsAllowInvalidCertificates"}, message: "--tlsAllowInvalidCertificates is a MongoDB replica-set TLS option"},
 		{name: "invalid hostnames", args: []string{"--tlsAllowInvalidHostnames"}, message: "--tlsAllowInvalidHostnames is a MongoDB replica-set TLS option"},
 		{name: "log versions", args: []string{"--tlsLogVersions", "TLS1_2"}, message: "--tlsLogVersions is a MongoDB TLS option"},
@@ -63,6 +62,7 @@ func TestValidateTLSFlags(t *testing.T) {
 		name                                string
 		mode                                string
 		certificateKeyFile                  string
+		certificateKeyFilePassword          string
 		caFile                              string
 		crlFile                             string
 		disabledProtocolsSet                bool
@@ -71,6 +71,7 @@ func TestValidateTLSFlags(t *testing.T) {
 	}{
 		{name: "disabled", mode: "disabled"},
 		{name: "certificate while disabled", mode: "disabled", certificateKeyFile: "server.pem", wantError: "need to enable TLS"},
+		{name: "certificate password while disabled", mode: "disabled", certificateKeyFilePassword: "secret", wantError: "need to enable TLS"},
 		{name: "CRL while disabled", mode: "disabled", crlFile: "revocations.pem", wantError: "need to enable TLS"},
 		{name: "disabled protocols while TLS disabled", mode: "disabled", disabledProtocolsSet: true, wantError: "need to enable TLS"},
 		{name: "invalid mode", mode: "sometimesTLS", wantError: "invalid --tlsMode"},
@@ -92,7 +93,7 @@ func TestValidateTLSFlags(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			err := validateTLSFlags(test.mode, test.certificateKeyFile, test.caFile, test.crlFile, test.disabledProtocolsSet, test.allowConnectionsWithoutCertificates)
+			err := validateTLSFlags(test.mode, test.certificateKeyFile, test.certificateKeyFilePassword, test.caFile, test.crlFile, test.disabledProtocolsSet, test.allowConnectionsWithoutCertificates)
 			if test.wantError == "" {
 				assert.NoError(t, err)
 				return

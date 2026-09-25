@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/youmark/pkcs8"
 )
 
 func TestServerConfigRejectsExpiredCertificate(t *testing.T) {
@@ -45,35 +46,43 @@ func TestServerConfigRejectsCertificateBeforeValidityWindow(t *testing.T) {
 	require.ErrorContains(t, err, "certificate is not valid before")
 }
 
-func TestServerConfigIdentifiesEncryptedPrivateKey(t *testing.T) {
-	tests := []struct {
-		name  string
-		block *pem.Block
-	}{
-		{
-			name:  "PKCS8",
-			block: &pem.Block{Type: "ENCRYPTED PRIVATE KEY", Bytes: []byte("encrypted")},
-		},
-		{
-			name: "legacy",
-			block: &pem.Block{
-				Type:    "RSA PRIVATE KEY",
-				Headers: map[string]string{"DEK-Info": "AES-256-CBC,0123456789ABCDEF"},
-				Bytes:   []byte("encrypted"),
-			},
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "server.pem")
-			require.NoError(t, os.WriteFile(path, pem.EncodeToMemory(test.block), 0o600))
+func TestServerConfigDecryptsPKCS8PrivateKey(t *testing.T) {
+	path := writeEncryptedCertificateKeyFile(t, "correct-password")
+	_, err := ServerConfig(ServerConfigOptions{
+		CertificateFile: path,
+		KeyFile:         path,
+		KeyPassword:     "correct-password",
+	})
+	require.NoError(t, err)
 
-			_, err := ServerConfig(ServerConfigOptions{CertificateFile: path, KeyFile: path})
-			require.ErrorContains(t, err, "is encrypted")
-			require.ErrorContains(t, err, "does not support encrypted private key files")
-			require.ErrorContains(t, err, "openssl pkey")
-		})
+	_, err = ServerConfig(ServerConfigOptions{CertificateFile: path, KeyFile: path})
+	require.ErrorContains(t, err, "is encrypted")
+	require.ErrorContains(t, err, "--tlsCertificateKeyFilePassword")
+
+	_, err = ServerConfig(ServerConfigOptions{
+		CertificateFile: path,
+		KeyFile:         path,
+		KeyPassword:     "wrong-password",
+	})
+	require.ErrorContains(t, err, "incorrect password")
+}
+
+func TestServerConfigRejectsLegacyEncryptedPrivateKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "server.pem")
+	block := &pem.Block{
+		Type:    "RSA PRIVATE KEY",
+		Headers: map[string]string{"DEK-Info": "AES-256-CBC,0123456789ABCDEF"},
+		Bytes:   []byte("encrypted"),
 	}
+	require.NoError(t, os.WriteFile(path, pem.EncodeToMemory(block), 0o600))
+
+	_, err := ServerConfig(ServerConfigOptions{
+		CertificateFile: path,
+		KeyFile:         path,
+		KeyPassword:     "password",
+	})
+	require.ErrorContains(t, err, "legacy PEM encryption")
+	require.ErrorContains(t, err, "encrypted PKCS#8")
 }
 
 func TestVerifyChainRevocation(t *testing.T) {
@@ -341,5 +350,26 @@ func writeCertificateKeyFile(t *testing.T, notBefore, notAfter time.Time) string
 	)
 	path := filepath.Join(t.TempDir(), "server.pem")
 	require.NoError(t, os.WriteFile(path, contents, 0o600))
+	return path
+}
+
+func writeEncryptedCertificateKeyFile(t *testing.T, password string) string {
+	t.Helper()
+	path := writeCertificateKeyFile(t, time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+	contents, err := os.ReadFile(path)
+	require.NoError(t, err)
+	certificateBlock, rest := pem.Decode(contents)
+	require.NotNil(t, certificateBlock)
+	keyBlock, _ := pem.Decode(rest)
+	require.NotNil(t, keyBlock)
+	privateKey, err := x509.ParsePKCS8PrivateKey(keyBlock.Bytes)
+	require.NoError(t, err)
+	encryptedDER, err := pkcs8.MarshalPrivateKey(privateKey, []byte(password), nil)
+	require.NoError(t, err)
+	encryptedContents := append(
+		pem.EncodeToMemory(certificateBlock),
+		pem.EncodeToMemory(&pem.Block{Type: "ENCRYPTED PRIVATE KEY", Bytes: encryptedDER})...,
+	)
+	require.NoError(t, os.WriteFile(path, encryptedContents, 0o600))
 	return path
 }

@@ -27,11 +27,14 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/youmark/pkcs8"
 )
 
 type ServerConfigOptions struct {
 	CertificateFile                     string
 	KeyFile                             string
+	KeyPassword                         string
 	CAFile                              string
 	CRLFile                             string
 	AllowConnectionsWithoutCertificates bool
@@ -56,7 +59,7 @@ type bufferedConn struct {
 }
 
 func ServerConfig(opts ServerConfigOptions) (*tls.Config, error) {
-	config, ca, err := config(opts.CertificateFile, opts.KeyFile, opts.CAFile)
+	config, ca, err := config(opts.CertificateFile, opts.KeyFile, opts.KeyPassword, opts.CAFile)
 	if err != nil {
 		return nil, err
 	}
@@ -149,7 +152,7 @@ func (c *bufferedConn) Read(p []byte) (int, error) {
 }
 
 func ClientConfig(certFile, keyFile, caFile string) (*tls.Config, error) {
-	config, ca, err := config(certFile, keyFile, caFile)
+	config, ca, err := config(certFile, keyFile, "", caFile)
 	if err != nil {
 		return nil, err
 	}
@@ -157,8 +160,12 @@ func ClientConfig(certFile, keyFile, caFile string) (*tls.Config, error) {
 	return config, nil
 }
 
-func config(certFile, keyFile, caFile string) (*tls.Config, *x509.CertPool, error) {
+func config(certFile, keyFile, keyPassword, caFile string) (*tls.Config, *x509.CertPool, error) {
 	if _, err := os.Stat(certFile); err != nil {
+		return nil, nil, fmt.Errorf("TLS certificate file: %w", err)
+	}
+	certificateContents, err := os.ReadFile(certFile)
+	if err != nil {
 		return nil, nil, fmt.Errorf("TLS certificate file: %w", err)
 	}
 
@@ -169,11 +176,12 @@ func config(certFile, keyFile, caFile string) (*tls.Config, *x509.CertPool, erro
 	if err != nil {
 		return nil, nil, fmt.Errorf("TLS key file: %w", err)
 	}
-	if containsEncryptedPrivateKey(keyContents) {
-		return nil, nil, fmt.Errorf("TLS key file %q is encrypted; DumboDB does not support encrypted private key files; provide an unencrypted certificate-key PEM file (decrypt the key with 'openssl pkey -in encrypted-key.pem -out key.pem')", keyFile)
+	keyContents, err = decryptPrivateKeys(keyFile, keyContents, keyPassword)
+	if err != nil {
+		return nil, nil, err
 	}
 
-	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	cert, err := tls.X509KeyPair(certificateContents, keyContents)
 	if err != nil {
 		return nil, nil, fmt.Errorf("TLS file pair: %w", err)
 	}
@@ -211,18 +219,44 @@ func config(certFile, keyFile, caFile string) (*tls.Config, *x509.CertPool, erro
 	return config, ca, nil
 }
 
-func containsEncryptedPrivateKey(contents []byte) bool {
+func decryptPrivateKeys(path string, contents []byte, password string) ([]byte, error) {
+	original := contents
+	var blocks []*pem.Block
+	var decrypted bool
 	for {
 		block, rest := pem.Decode(contents)
 		if block == nil {
-			return false
+			break
 		}
-		if block.Type == "ENCRYPTED PRIVATE KEY" ||
-			(strings.HasSuffix(block.Type, "PRIVATE KEY") && block.Headers["DEK-Info"] != "") {
-			return true
+		if strings.HasSuffix(block.Type, "PRIVATE KEY") && block.Headers["DEK-Info"] != "" {
+			return nil, fmt.Errorf("TLS key file %q uses legacy PEM encryption, which DumboDB does not support; convert it to encrypted PKCS#8 with 'openssl pkcs8 -topk8 -in legacy-key.pem -out key.pem'", path)
 		}
+		if block.Type == "ENCRYPTED PRIVATE KEY" {
+			if password == "" {
+				return nil, fmt.Errorf("TLS key file %q is encrypted; provide its password with --tlsCertificateKeyFilePassword", path)
+			}
+			privateKey, err := pkcs8.ParsePKCS8PrivateKey(block.Bytes, []byte(password))
+			if err != nil {
+				return nil, fmt.Errorf("TLS key file %q: decrypting encrypted PKCS#8 private key: %w", path, err)
+			}
+			der, err := x509.MarshalPKCS8PrivateKey(privateKey)
+			if err != nil {
+				return nil, fmt.Errorf("TLS key file %q: encoding decrypted PKCS#8 private key: %w", path, err)
+			}
+			block = &pem.Block{Type: "PRIVATE KEY", Bytes: der}
+			decrypted = true
+		}
+		blocks = append(blocks, block)
 		contents = rest
 	}
+	if !decrypted {
+		return original, nil
+	}
+	var result []byte
+	for _, block := range blocks {
+		result = append(result, pem.EncodeToMemory(block)...)
+	}
+	return result, nil
 }
 
 func loadRevocationLists(path string) ([]*x509.RevocationList, error) {

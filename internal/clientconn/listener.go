@@ -57,6 +57,7 @@ type NewListenerOpts struct {
 	TLS                                    bool
 	TLSCertFile                            string
 	TLSKeyFile                             string
+	TLSKeyPassword                         string
 	TLSCAFile                              string
 	TLSCRLFile                             string
 	TLSAllowConnectionsWithoutCertificates bool
@@ -102,6 +103,7 @@ func Listen(opts *NewListenerOpts) (*Listener, error) {
 			if config, err = tlsutil.ServerConfig(tlsutil.ServerConfigOptions{
 				CertificateFile:                     l.TLSCertFile,
 				KeyFile:                             l.TLSKeyFile,
+				KeyPassword:                         l.TLSKeyPassword,
 				CAFile:                              l.TLSCAFile,
 				CRLFile:                             l.TLSCRLFile,
 				AllowConnectionsWithoutCertificates: l.TLSAllowConnectionsWithoutCertificates,
