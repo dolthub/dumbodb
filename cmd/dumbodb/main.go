@@ -247,10 +247,10 @@ func run(logger *slog.Logger) error {
 
 func registerUnsupportedTLSFlags(fs *flag.FlagSet) {
 	fs.String("tlsCertificateKeyFilePassword", "", "unsupported MongoDB TLS option")
-	fs.Bool("tlsAllowInvalidCertificates", false, "unsupported MongoDB TLS option")
-	fs.Bool("tlsAllowInvalidHostnames", false, "unsupported MongoDB TLS option")
 	fs.String("tlsLogVersions", "", "unsupported MongoDB TLS option")
 	fs.Bool("tlsOnNormalPorts", false, "unsupported MongoDB TLS option")
+	fs.Bool("tlsAllowInvalidCertificates", false, "unsupported MongoDB replica-set TLS option")
+	fs.Bool("tlsAllowInvalidHostnames", false, "unsupported MongoDB replica-set TLS option")
 	fs.String("tlsClusterFile", "", "unsupported MongoDB replica-set TLS option")
 	fs.String("tlsClusterPassword", "", "unsupported MongoDB replica-set TLS option")
 	fs.String("tlsClusterCAFile", "", "unsupported MongoDB replica-set TLS option")
@@ -275,7 +275,8 @@ func rejectUnsupportedTLSFlags(fs *flag.FlagSet) error {
 		return nil
 	}
 	switch unsupported.Name {
-	case "tlsClusterFile", "tlsClusterPassword", "tlsClusterCAFile",
+	case "tlsAllowInvalidCertificates", "tlsAllowInvalidHostnames",
+		"tlsClusterFile", "tlsClusterPassword", "tlsClusterCAFile",
 		"tlsClusterAuthX509ExtensionValue", "tlsClusterAuthX509Attributes":
 		return fmt.Errorf("--%s is a MongoDB replica-set TLS option that DumboDB does not support", unsupported.Name)
 	default:

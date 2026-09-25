@@ -31,8 +31,8 @@ func TestRejectUnsupportedTLSFlags(t *testing.T) {
 	}{
 		{name: "none"},
 		{name: "certificate password", args: []string{"--tlsCertificateKeyFilePassword", "secret"}, message: "--tlsCertificateKeyFilePassword is a MongoDB TLS option"},
-		{name: "invalid certificates", args: []string{"--tlsAllowInvalidCertificates"}, message: "--tlsAllowInvalidCertificates is a MongoDB TLS option"},
-		{name: "invalid hostnames", args: []string{"--tlsAllowInvalidHostnames"}, message: "--tlsAllowInvalidHostnames is a MongoDB TLS option"},
+		{name: "invalid certificates", args: []string{"--tlsAllowInvalidCertificates"}, message: "--tlsAllowInvalidCertificates is a MongoDB replica-set TLS option"},
+		{name: "invalid hostnames", args: []string{"--tlsAllowInvalidHostnames"}, message: "--tlsAllowInvalidHostnames is a MongoDB replica-set TLS option"},
 		{name: "log versions", args: []string{"--tlsLogVersions", "TLS1_2"}, message: "--tlsLogVersions is a MongoDB TLS option"},
 		{name: "normal ports", args: []string{"--tlsOnNormalPorts"}, message: "--tlsOnNormalPorts is a MongoDB TLS option"},
 		{name: "cluster file", args: []string{"--tlsClusterFile", "cluster.pem"}, message: "--tlsClusterFile is a MongoDB replica-set TLS option"},
