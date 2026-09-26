@@ -77,9 +77,13 @@ var fieldMergeMatrix = []struct {
 		wantStatus: "review",
 	},
 	{
+		// Convergent: both sides add the same field with the same value. The
+		// default mergeMode is fieldTouched, which conflicts on a field both
+		// sides wrote even when they agree, because agreement is not
+		// permission -- two compare-and-swap updates converge by design.
 		name: "both insert same value",
 		ours: fieldEdit{set: "review"}, theirs: fieldEdit{set: "review"},
-		wantStatus: "review",
+		wantConflict: true,
 	},
 	{
 		name: "both insert different values",
@@ -104,10 +108,11 @@ var fieldMergeMatrix = []struct {
 		wantStatus: "review",
 	},
 	{
+		// Convergent modify: the compare-and-swap race. fieldTouched refuses it.
 		name:       "both modify same value",
 		baseStatus: "draft",
 		ours:       fieldEdit{set: "review"}, theirs: fieldEdit{set: "review"},
-		wantStatus: "review",
+		wantConflict: true,
 	},
 	{
 		name:       "both modify different values",
@@ -126,9 +131,13 @@ var fieldMergeMatrix = []struct {
 		theirs:     fieldEdit{unset: true},
 	},
 	{
+		// Both sides unset the same field. They agree on the result, and
+		// fieldTouched still conflicts: a Touched mode asks who wrote the
+		// field, not what they wrote.
 		name:       "both delete",
 		baseStatus: "draft",
 		ours:       fieldEdit{unset: true}, theirs: fieldEdit{unset: true},
+		wantConflict: true,
 	},
 	{
 		name:       "ours modifies, theirs deletes",

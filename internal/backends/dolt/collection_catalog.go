@@ -49,6 +49,10 @@ type collMeta struct {
 	TimeField        string
 	MetaField        string
 	Granularity      string
+	// MergeMode is the collection's declared merge mode. An empty value
+	// resolves to DefaultMergeMode, which keeps catalogs written before the
+	// field existed readable.
+	MergeMode string
 }
 
 func collMetaToDoc(collName string, m *collMeta) (*types.Document, error) {
@@ -72,6 +76,7 @@ func collMetaToDoc(collName string, m *collMeta) (*types.Document, error) {
 		"timeField", m.TimeField,
 		"metaField", m.MetaField,
 		"granularity", m.Granularity,
+		"mergeMode", m.MergeMode,
 	)
 }
 
@@ -105,6 +110,7 @@ func docToCollMeta(doc *types.Document) *collMeta {
 	m.TimeField = getStr("timeField")
 	m.MetaField = getStr("metaField")
 	m.Granularity = getStr("granularity")
+	m.MergeMode = getStr("mergeMode")
 	return m
 }
 

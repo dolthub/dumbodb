@@ -182,7 +182,12 @@ func (b *Backend) DumboDBPush(ctx context.Context, params *backends.PushParams) 
 	}
 
 	// statsCh may be nil; the puller guards against a nil channel.
-	err = actions.Push(ctx, tempDir, mode, destBranchRef, remoteRef, state.doltDB, remoteDB, commit, nil)
+	//
+	// The PushRefResult is not used. Its OldHash duplicates commitBefore,
+	// computed above, and that computation is needed regardless: the result is
+	// nil on the up-to-date path handled below, so it cannot be the only
+	// source of the before-and-after report.
+	_, err = actions.Push(ctx, tempDir, mode, destBranchRef, remoteRef, state.doltDB, remoteDB, commit, nil)
 	upToDate := errors.Is(err, pull.ErrDBUpToDate) || errors.Is(err, doltdb.ErrUpToDate)
 	if err != nil && !upToDate {
 		return nil, fmt.Errorf("dumboPush: %w", err)

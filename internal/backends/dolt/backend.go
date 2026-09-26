@@ -303,7 +303,18 @@ func (b *Backend) OnSessionEnd(owner string) {
 }
 
 func (b *Backend) OnTransactionCommit(ctx context.Context, owner string) error {
-	sess := b.sessionForOwner(owner)
+	// Reconcile the session the write actually ran on -- the one the
+	// connection holds via its cached shadow -- not a fresh registry lookup.
+	// Under a shared lsid (pooled driver sessions), another connection can
+	// clear this owner's registry entry between the write and its boundary;
+	// sessionForOwner would then return nil, the boundary would publish
+	// nothing, and the write's already-acknowledged n:1 would stand with no
+	// durable increment behind it. The cached shadow still points at the
+	// session that carries the overlay, so it is the authority here.
+	sess := sessionFromContext(ctx)
+	if sess == nil {
+		sess = b.sessionForOwner(owner)
+	}
 	if sess == nil {
 		b.releaseLocksForOwner(owner)
 		return nil
@@ -322,11 +333,15 @@ func (b *Backend) OnTransactionCommit(ctx context.Context, owner string) error {
 	}
 	b.mu.RUnlock()
 
+	// No database-wide lock here. Every storage update this reaches carries
+	// the fork point it was derived from, so two writers publishing at once is
+	// settled by the compare-and-swap on the working set ref: the loser is told
+	// its branch moved and replays against the new tip. Serializing the whole
+	// reconcile behind a mutex would only hide that mechanism -- and hide
+	// whether it works -- while capping writes at one per database.
 	var firstErr error
 	for _, db := range dbs {
-		db.mu.Lock()
 		_, err := db.commitDirtyBranchesForSession(sqlCtx, sess, tx)
-		db.mu.Unlock()
 		if err != nil && firstErr == nil {
 			firstErr = err
 		}
@@ -719,6 +734,7 @@ func (b *Backend) DropDatabase(ctx context.Context, params *backends.DropDatabas
 		db.mu.Unlock()
 		delete(b.dbs, params.Name)
 	}
+	b.provider.forgetDatabase(params.Name)
 
 	// Soft delete: move (not remove) into the preserved-drops store so UndropDatabase can restore it.
 	dest, err := b.preservedDest(params.Name)
@@ -1032,7 +1048,7 @@ func (b *Backend) getOrOpenDBLocked(ctx context.Context, dbName string, create b
 	// If the working set was not on disk (new database or first open after migration),
 	// persist it now so that dolt CLI tools can read it.
 	if wsErr != nil {
-		if persistErr := updateWorkingSet(ctx, doltDB, mainWS, defaultBranch); persistErr != nil {
+		if persistErr := initializeWorkingSet(ctx, doltDB, mainWS, defaultBranch); persistErr != nil {
 			b.l.Warn("could not persist initial working set", "db", dbName, "err", persistErr)
 		}
 	}
@@ -1235,11 +1251,36 @@ func workingSetForBranch(branch string) string {
 // The RTVL chunk for workingAM must already be in the value store (written by the
 // caller via vs.WriteValue). The staged RTVL is recomputed from stagedAM and its
 // chunk must also be present in the store (e.g. written by a prior commit).
-func updateWorkingSet(ctx context.Context, ddb *doltdb.DoltDB, ws *doltdb.WorkingSet, branch string) error {
+// publishWorkingSet writes ws to branch, but only if the branch still holds
+// forkPoint -- the working set whose contents ws was derived from.
+//
+// That precondition is the whole of the optimistic lock, and it has to be
+// supplied by the caller. A working set built in memory with WithWorkingRoot
+// cannot hash itself, so the fork point must be captured when the branch is
+// READ and carried here; resolving a hash at publish time asserts only that
+// the branch is whatever it is at this instant, which is always true and lets
+// a writer that reconciled against a stale branch overwrite whoever published
+// in between. Both writers have been told their write succeeded by then.
+//
+// A racing publish comes back wrapping backends.ErrWriteRaced, so the caller
+// can reconcile against the new tip and try again instead of reporting.
+func publishWorkingSet(ctx context.Context, ddb *doltdb.DoltDB, ws *doltdb.WorkingSet, branch string, forkPoint hash.Hash) error {
 	wsRef := doltref.NewWorkingSetRef("heads/" + branch)
-	// Use the current on-disk working set hash as the optimistic-lock prevHash.
-	// ws.HashOf() returns an error for in-memory WS created via WithWorkingRoot,
-	// so we resolve from disk instead.
+	meta := doltdb.TodoWorkingSetMeta()
+	var rsc doltdb.ReplicationStatusController
+	err := ddb.UpdateWorkingSet(ctx, wsRef, ws, forkPoint, meta, &rsc)
+	if errors.Is(err, datas.ErrOptimisticLockFailed) {
+		return fmt.Errorf("%w: %q moved since this write read it", backends.ErrWriteRaced, branch)
+	}
+	return err
+}
+
+// initializeWorkingSet creates a branch's working set ref unconditionally. Its
+// callers are establishing a ref that should not exist yet -- a new database, a
+// new branch, a clone -- so there is no fork point to hold them to. Anything
+// that reconciles against existing contents must use publishWorkingSet.
+func initializeWorkingSet(ctx context.Context, ddb *doltdb.DoltDB, ws *doltdb.WorkingSet, branch string) error {
+	wsRef := doltref.NewWorkingSetRef("heads/" + branch)
 	var prevHash hash.Hash
 	if cur, resolveErr := ddb.ResolveWorkingSet(ctx, wsRef); resolveErr == nil {
 		prevHash, _ = cur.HashOf()
@@ -1280,12 +1321,33 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 		branch = defaultBranch
 	}
 
-	if b.sessionIsolation {
-		return b.doltCommitSessionIsolation(ctx, params, db, branch, message, ts)
-	}
-
 	db.mu.Lock()
 	defer db.mu.Unlock()
+
+	// A conflict paused an earlier dumboCommit on this branch. If the client
+	// has resolved it, publish the resolution so the commit below takes it;
+	// the resolution lives in ms.resolvedAM until then (applyResolvedAM is a
+	// no-op for a session commit). This runs before the merge guard below,
+	// which would otherwise report a merge in progress and leave the client
+	// with no way to finish.
+	if ms := db.mergeState; ms != nil && ms.isSessionCommit && ms.intoBranch == branch {
+		if ms.hasUnresolvedConflicts() {
+			return nil, &backends.MergeConflictError{Conflicts: ms.summaries()}
+		}
+		_ = clearConflictArtifacts(ctx, db, ms)
+		if err := db.persistAM(ctx, branch, ms.resolvedAM); err != nil {
+			return nil, fmt.Errorf("dumboCommit: publishing the resolved merge for %q: %w", branch, err)
+		}
+		db.mergeState = nil
+		_ = clearMergeState(ctx, db, branch)
+		if sess := sessionFromContext(ctx); sess != nil {
+			if err := releaseSessionOverlay(sqlctx.Wrap(ctx, sess), sess, db.name, branch); err != nil {
+				return nil, fmt.Errorf("dumboCommit: %w", err)
+			}
+		}
+	} else if err := db.publishSessionOverlay(ctx, branch); err != nil {
+		return nil, err
+	}
 
 	// Guard: reject dumboDBCommit during any in-progress merge, cherry-pick, or rebase.
 	if db.mergeState != nil && db.mergeState.intoBranch == branch {
@@ -1492,7 +1554,7 @@ func dumboDBBranchCreate(ctx context.Context, db *dbState, params *backends.Bran
 		if rv, rvErr := headCommit.GetRootValue(ctx); rvErr == nil {
 			wsRef := doltref.NewWorkingSetRef("heads/" + params.Name)
 			emptyWS := doltdb.EmptyWorkingSet(wsRef).WithWorkingRoot(rv).WithStagedRoot(rv)
-			_ = updateWorkingSet(ctx, db.doltDB, emptyWS, params.Name)
+			_ = initializeWorkingSet(ctx, db.doltDB, emptyWS, params.Name)
 		}
 	}
 

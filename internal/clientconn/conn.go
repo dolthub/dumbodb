@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand/v2"
 	"net"
 	"net/netip"
 	"os"
@@ -494,6 +495,17 @@ func (c *conn) route(connCtx context.Context, reqHeader *wire.MsgHeader, reqBody
 		command = doc.Command()
 		cmd := c.h.Commands()[command]
 
+		// A command may not repeat a field, at any depth. See
+		// findDuplicateField for why reading one is unsafe.
+		if err == nil {
+			if dup, dupOK := commandDuplicateField(typedDoc); dupOK {
+				err = handlererrors.NewCommandErrorMsg(
+					handlererrors.ErrFailedToParse,
+					fmt.Sprintf("BSON field '%s' is a duplicate field", dup),
+				)
+			}
+		}
+
 		var startedTxn bool
 		if err == nil {
 			extractAndSetLSID(connCtx, typedDoc)
@@ -657,19 +669,53 @@ func (c *conn) route(connCtx context.Context, reqHeader *wire.MsgHeader, reqBody
 	return
 }
 
+// maxWriteReplays breaks a livelock; it is not a concurrency policy. MongoDB
+// waits for a contended document rather than giving up on it after a fixed
+// number of tries, so the real bound on a replay is the operation's own
+// lifetime, which the context carries. Each round settles at least one writer,
+// so N writers on one document need at most N rounds, and this is set well
+// clear of any contention a single document can sustain.
+const maxWriteReplays = 256
+
+// replayBackoffStep is the unit of the randomized wait between replays. The
+// window grows with the attempt and is capped, so the first retry is nearly
+// immediate and a heavily contended document spreads its writers out instead
+// of resynchronizing them.
+const (
+	replayBackoffStep = 250 * time.Microsecond
+	replayBackoffCap  = 8 * time.Millisecond
+)
+
+func sleepBeforeReplay(attempt int) {
+	window := replayBackoffStep << min(attempt, 5)
+	if window > replayBackoffCap {
+		window = replayBackoffCap
+	}
+	time.Sleep(time.Duration(rand.Int64N(int64(window) + 1)))
+}
+
 func (c *conn) dispatchThroughSession(connCtx context.Context, msg *wire.OpMsg, name string, cmd *handler.Command) (*wire.OpMsg, error) {
 	reg := c.h.SessionRegistry()
 	if reg == nil {
-		return c.invokeHandler(connCtx, msg, name, cmd)
+		resMsg, err := c.invokeHandler(connCtx, msg, name, cmd)
+		return resMsg, c.autoCommitAfter(connCtx, err)
 	}
 
 	ci := conninfo.Get(connCtx)
 	ci.EnsureLSID()
 	sessKey := ci.Owner()
 
+	// An inactive shadow now means one thing only: the session was torn down
+	// by Sweep or End. Another connection arriving on this lsid no longer
+	// evicts this one, so there is no supersede to distinguish.
 	shadow, cachedKey := ci.CachedShadow()
+	// A non-transactional command may reconnect if its session was reaped: it
+	// carries no cross-command state, so a fresh session is equivalent. A
+	// command inside a client transaction or under --session-isolation cannot,
+	// because the reaped session held its uncommitted work.
+	mayReconnect := !c.h.SessionIsolation() && !ci.InTransaction()
 	staleReap := shadow != nil && cachedKey == sessKey && !shadow.Active() &&
-		shadow.Purged() && !c.h.SessionIsolation() && !ci.InTransaction()
+		shadow.Purged() && mayReconnect
 	if shadow == nil || cachedKey != sessKey || staleReap {
 		if cachedKey != "" && cachedKey != sessKey {
 			reg.End(cachedKey)
@@ -685,23 +731,135 @@ func (c *conn) dispatchThroughSession(connCtx context.Context, msg *wire.OpMsg, 
 		return nil, shadowGoneError(shadow)
 	}
 
+	// One fork mechanism, one reconciliation. A write pins a BASE and
+	// accumulates in the session overlay; the mode chooses only the boundary at
+	// which that overlay reconciles against the tip and publishes:
+	//
+	//	explicit transaction  -> commitTransaction
+	//	--session-isolation   -> dumboCommit
+	//	otherwise             -> the end of this command
+	//
+	// Nothing else about a write depends on the mode.
+	writes := cmd != nil && cmd.WritesData
+	inClientTxn := ci.InTransaction()
+	forked := writes || inClientTxn || c.h.SessionIsolation()
+	reconcileAtCommandEnd := writes && !inClientTxn && !c.h.SessionIsolation()
+
 	runFn := shadow.Use
-	if cmd != nil && cmd.Durable {
+	if reconcileAtCommandEnd || cmd != nil && cmd.Durable {
 		runFn = shadow.Commit
 	}
 
+	if writes {
+		ci.SetWriting(true)
+		defer ci.SetWriting(false)
+	}
+
 	var resMsg *wire.OpMsg
-	runErr := runFn(time.Now(), func(sess *dsess.DoltSession) error {
-		if c.h.SessionIsolation() || conninfo.Get(connCtx).InTransaction() {
+	replaying := false
+	attemptWrite := func(sess *dsess.DoltSession) error {
+		if forked {
 			sqlCtx := sqlctx.Wrap(connCtx, sess)
+			// A replay must pin a new BASE, so drop the transaction the
+			// refused attempt left behind before starting one.
+			if replaying {
+				sqlCtx.SetTransaction(nil)
+			}
 			if _, txErr := sqlctx.EnsureTxn(sqlCtx, sess); txErr != nil {
 				return fmt.Errorf("dispatchThroughSession: %w", txErr)
+			}
+			// Forked covers the writes that have no client transaction to
+			// speak for them. Inside one, InTransaction already reports the
+			// fork, and it is cleared when the transaction ends -- whereas a
+			// Forked set here would outlive the transaction, because only the
+			// command-end boundary clears it, and every later read on the
+			// connection would stay pinned to a finished transaction's root.
+			if !inClientTxn {
+				ci.SetForked(true)
+				if reconcileAtCommandEnd {
+					defer ci.SetForked(false)
+				}
 			}
 		}
 		var handlerErr error
 		resMsg, handlerErr = c.invokeHandler(connCtx, msg, name, cmd)
-		return handlerErr
-	})
+		if !reconcileAtCommandEnd {
+			if handlerErr != nil {
+				return handlerErr
+			}
+			// A write whose boundary comes later -- a client transaction, or
+			// --session-isolation -- leaves the branches it recorded pending.
+			// The command that publishes them is the one that commits them.
+			if writes {
+				return nil
+			}
+			return c.h.AutoCommitBoundary(connCtx)
+		}
+		if handlerErr != nil {
+			c.h.AbandonWriteBoundary(connCtx)
+			return handlerErr
+		}
+
+		// The boundary is still inside this command, and the command is still
+		// here, so a refusal does not have to be reported -- it can be
+		// answered. The caller discards the overlay, waits, and runs this
+		// closure again against the tip that refused it.
+		//
+		// Running the operation is what a merge of end states cannot do. Two
+		// blind $inc:1 both produce v=n+1 and are indistinguishable at merge
+		// time from two compare-and-swap increments, so the merge can only
+		// ever refuse the second one; re-applying it against the new tip
+		// gives v=n+2, which is MongoDB's answer. And the same replay gives a
+		// compare-and-swap the other MongoDB answer for free: its filter is
+		// re-evaluated against the tip, genuinely matches nothing, and n:0
+		// comes back as a fact rather than something the server invented.
+		if err := c.h.ReconcileWriteBoundary(connCtx); err != nil {
+			c.h.AbandonWriteBoundary(connCtx)
+			return err
+		}
+		return c.h.AutoCommitBoundary(connCtx)
+	}
+
+	// One attempt per pass through the fence. The wait between attempts is
+	// deliberately outside runFn, which holds the session's write fence: a
+	// contended document is retried, not slept on while holding a lock.
+	var runErr error
+	for attempt := 0; ; attempt++ {
+		runErr = runFn(time.Now(), attemptWrite)
+		replayable := errors.Is(runErr, handler.ErrWriteRefused) || errors.Is(runErr, handler.ErrWriteRaced)
+		if !replayable || attempt >= maxWriteReplays {
+			break
+		}
+		replaying = true
+		// The client is no longer waiting for this, so stop working on it.
+		if connCtx.Err() != nil {
+			break
+		}
+		// Decorrelate the retry. Every writer contending for a document is
+		// refused at the same instant and would otherwise re-apply at the
+		// same instant, so the tip keeps moving under all of them and an
+		// unlucky writer can starve. Waiting a random slice of a growing
+		// window lets them land one at a time.
+		sleepBeforeReplay(attempt)
+	}
+	// The idle sweep can reap a pooled session in the window between the active
+	// check above and run() taking the command latch. run() rechecks under the
+	// latch and returns ErrShadowInvalidated before the command begins, so
+	// nothing ran. For a reconnectable command that is not a lost transaction,
+	// it is a reaped-then-reused session: reconnect and run once more against a
+	// fresh session rather than aborting an active client with code 251.
+	if errors.Is(runErr, sqlctx.ErrShadowInvalidated) && mayReconnect {
+		s, err := reg.Connect(sessKey)
+		if err != nil {
+			return nil, fmt.Errorf("session registry: reconnect for %q: %w", sessKey, err)
+		}
+		ci.SetCachedShadow(sessKey, s)
+		reRun := s.Use
+		if reconcileAtCommandEnd || cmd != nil && cmd.Durable {
+			reRun = s.Commit
+		}
+		runErr = reRun(time.Now(), attemptWrite)
+	}
 	if errors.Is(runErr, sqlctx.ErrShadowInvalidated) {
 		return nil, shadowGoneError(shadow)
 	}
@@ -731,12 +889,21 @@ func (c *conn) invokeHandler(connCtx context.Context, msg *wire.OpMsg, name stri
 			fmt.Sprintf("no such command: '%s'", name),
 		)
 	}
-	resMsg, err := cmd.Handler(connCtx, msg)
+	return cmd.Handler(connCtx, msg)
+}
 
-	if acErr := c.h.AutoCommitBoundary(connCtx); acErr != nil && err == nil {
-		err = acErr
+// autoCommitAfter runs the --auto-commit boundary once the command's writes
+// have reached the branch. A handler error wins over an auto-commit error.
+//
+// Ordering is load-bearing: a write accumulates in the session overlay, so
+// draining the recorded branches before the overlay publishes commits a branch
+// that has not received the write. The record is consumed either way, so the
+// commit is not merely late, it never happens.
+func (c *conn) autoCommitAfter(connCtx context.Context, handlerErr error) error {
+	if handlerErr != nil {
+		return handlerErr
 	}
-	return resMsg, err
+	return c.h.AutoCommitBoundary(connCtx)
 }
 
 // logResponse dumps the header+body at DEBUG (ERROR on closeConn) and

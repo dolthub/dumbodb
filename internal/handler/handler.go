@@ -27,9 +27,9 @@ import (
 	"go.opentelemetry.io/otel"
 
 	"github.com/dolthub/dumbodb/internal/backends"
-	"github.com/dolthub/dumbodb/internal/backends/decorators/oplog"
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/clientconn/cursor"
+	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/users"
 	"github.com/dolthub/dumbodb/internal/replication/topology"
 	"github.com/dolthub/dumbodb/internal/sqlctx"
@@ -128,10 +128,8 @@ func New(opts *NewOpts) (*Handler, error) {
 		opts.BatchSize = int(maxWriteBatchSize)
 	}
 
-	b := oplog.NewBackend(opts.Backend, logging.WithName(opts.L, "oplog"))
-
 	h := &Handler{
-		b:               b,
+		b:               opts.Backend,
 		NewOpts:         opts,
 		cursors:         cursor.NewRegistry(logging.WithName(opts.L, "cursors")),
 		processID:       types.NewObjectID(),
@@ -297,6 +295,51 @@ func (h *Handler) SessionRegistry() *sqlctx.SessionRegistry {
 		return sab.SessionRegistry()
 	}
 	return nil
+}
+
+// ErrWriteRefused reports that a write reached its boundary and the
+// collection's merge mode refused it. It is not a failure: the write simply
+// did not apply, and where the boundary is still inside the command the reply
+// can say so the way MongoDB does. Callers match it with errors.Is.
+var ErrWriteRefused = errors.New("write refused at its reconciliation boundary")
+
+// ErrWriteRaced reports that a write could not be published because the branch
+// moved after the write read it. Like a refusal it is answered by running the
+// operation again against the new tip, but the two are kept apart because a
+// refusal is a decision the merge mode made and a race is only bad luck.
+var ErrWriteRaced = errors.New("write raced another publish on its branch")
+
+// ReconcileWriteBoundary reconciles the connection's pending writes against
+// the current tip and publishes them. This is the same reconciliation an
+// explicit commitTransaction performs; the only thing that varies by mode is
+// when it is reached.
+//
+// A merge-mode refusal comes back wrapping ErrWriteRefused, so the caller can
+// tell "this write did not apply" from "this write broke".
+func (h *Handler) ReconcileWriteBoundary(ctx context.Context) error {
+	if sab, ok := h.b.(backends.SessionAwareBackend); ok {
+		if err := sab.OnTransactionCommit(ctx, conninfo.Get(ctx).Owner()); err != nil {
+			var refusal *backends.MergeConflictError
+			if errors.As(err, &refusal) {
+				return fmt.Errorf("%w: %w", ErrWriteRefused, err)
+			}
+			if errors.Is(err, backends.ErrWriteRaced) {
+				return fmt.Errorf("%w: %w", ErrWriteRaced, err)
+			}
+			if backends.ErrorCodeIs(err, backends.ErrorCodeWriteConflict) {
+				return common.TranslateBackendWriteError(err)
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+// AbandonWriteBoundary discards the connection's pending writes.
+func (h *Handler) AbandonWriteBoundary(ctx context.Context) {
+	if sab, ok := h.b.(backends.SessionAwareBackend); ok {
+		sab.OnTransactionAbort(conninfo.Get(ctx).Owner())
+	}
 }
 
 // AutoCommitBoundary commits each branch a write recorded on the connection

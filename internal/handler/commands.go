@@ -52,6 +52,14 @@ type Command struct {
 	BlockedInTxn bool
 
 	MutatesState func(*wire.OpMsg) bool
+
+	// WritesData marks a command that modifies documents. Such a command
+	// always runs inside a transaction, so its reads and writes see one
+	// pinned BASE. Only the boundary at which that transaction reconciles
+	// differs by mode; see conn.dispatchThroughSession. It is narrower than
+	// MutatesState: DDL mutates state but does not take the fork-reconcile
+	// document-write path.
+	WritesData bool
 }
 
 // register adds c to the command map under every supplied name. A single
@@ -74,7 +82,7 @@ func (h *Handler) initCommands() {
 		"_isSelf":                  {Handler: h.MsgIsSelf, anonymous: true},
 		"aggregate":                {Handler: h.MsgAggregate, MutatesState: aggregateMutatesState, Help: "Returns aggregated data."},
 		"autoCompact":              {Handler: h.MsgAutoCompact, Help: "Enables or disables background compaction (MongoDB 8.0+)."},
-		"bulkWrite":                {Handler: h.MsgBulkWrite, MutatesState: alwaysMutatesState, Help: "Performs multiple write operations across collections in a single command."},
+		"bulkWrite":                {Handler: h.MsgBulkWrite, MutatesState: alwaysMutatesState, WritesData: true, Help: "Performs multiple write operations across collections in a single command."},
 		"convertToCapped":          {Handler: h.MsgConvertToCapped, MutatesState: alwaysMutatesState, Help: "Converts an existing collection to a capped collection."},
 		"collStats":                {Handler: h.MsgCollStats, Help: "Returns storage data for a collection."},
 		"compact":                  {Handler: h.MsgCompact, Help: "Reduces the disk space collection takes and refreshes its statistics."},
@@ -84,7 +92,7 @@ func (h *Handler) initCommands() {
 		"currentOp":                {Handler: h.MsgCurrentOp, Help: "Returns information about operations currently in progress."},
 		"dataSize":                 {Handler: h.MsgDataSize, Help: "Returns the size of the collection in bytes."},
 		"debugError":               {Handler: h.MsgDebugError, Help: "Returns error for debugging."},
-		"delete":                   {Handler: h.MsgDelete, MutatesState: alwaysMutatesState, Help: "Deletes documents matched by the query."},
+		"delete":                   {Handler: h.MsgDelete, MutatesState: alwaysMutatesState, WritesData: true, Help: "Deletes documents matched by the query."},
 		"distinct":                 {Handler: h.MsgDistinct, Help: "Returns an array of distinct values for the given field."},
 		"dropIndexes":              {Handler: h.MsgDropIndexes, MutatesState: alwaysMutatesState, Help: "Drops indexes on a collection."},
 		"explain":                  {Handler: h.MsgExplain, Help: "Returns the execution plan."},
@@ -96,7 +104,7 @@ func (h *Handler) initCommands() {
 		"getParameter":             {Handler: h.MsgGetParameter, Help: "Returns the value of the parameter."},
 		"hello":                    {Handler: h.MsgHello, anonymous: true, Help: "Returns the role of the DumboDB instance."},
 		"hostInfo":                 {Handler: h.MsgHostInfo, Help: "Returns a summary of the system information."},
-		"insert":                   {Handler: h.MsgInsert, MutatesState: alwaysMutatesState, Help: "Inserts documents into the database."},
+		"insert":                   {Handler: h.MsgInsert, MutatesState: alwaysMutatesState, WritesData: true, Help: "Inserts documents into the database."},
 		"killCursors":              {Handler: h.MsgKillCursors, Help: "Closes server cursors."},
 		"listCollections":          {Handler: h.MsgListCollections, Help: "Returns the information of the collections and views in the database."},
 		"listCommands":             {Handler: h.MsgListCommands, Help: "Returns a list of currently supported commands."},
@@ -122,7 +130,7 @@ func (h *Handler) initCommands() {
 		"serverStatus":             {Handler: h.MsgServerStatus, Help: "Returns an overview of the databases state."},
 		"setFreeMonitoring":        {Handler: h.msgFreeMonitoringNotSupported, Help: "Toggles free monitoring."},
 		"setParameter":             {Handler: h.MsgSetParameter, Help: "Sets the value of a runtime-settable server parameter."},
-		"update":                   {Handler: h.MsgUpdate, MutatesState: alwaysMutatesState, Help: "Updates documents that are matched by the query."},
+		"update":                   {Handler: h.MsgUpdate, MutatesState: alwaysMutatesState, WritesData: true, Help: "Updates documents that are matched by the query."},
 		"validate":                 {Handler: h.MsgValidate, Help: "Validates collection."},
 		"whatsmyuri":               {Handler: h.MsgWhatsMyURI, anonymous: true, Help: "Returns peer information."},
 		"createUser":               {Handler: h.MsgCreateUser, MutatesState: alwaysMutatesState, Help: "Creates a new user."},
@@ -146,7 +154,7 @@ func (h *Handler) initCommands() {
 	// Lowercase-variant handshake / introspection aliases.
 	h.register(&Command{Handler: h.MsgBuildInfo, anonymous: true, Help: "Returns a summary of the build information."}, "buildInfo", "buildinfo")
 	h.register(&Command{Handler: h.MsgDBStats, Help: "Returns the statistics of the database."}, "dbStats", "dbstats")
-	h.register(&Command{Handler: h.MsgFindAndModify, MutatesState: alwaysMutatesState, Help: "Updates or deletes, and returns a document matched by the query."}, "findAndModify", "findandmodify")
+	h.register(&Command{Handler: h.MsgFindAndModify, MutatesState: alwaysMutatesState, WritesData: true, Help: "Updates or deletes, and returns a document matched by the query."}, "findAndModify", "findandmodify")
 	h.register(&Command{Handler: h.MsgIsMaster, anonymous: true, Help: "Returns the role of the DumboDB instance."}, "isMaster", "ismaster")
 
 	// DumboDB version-control commands accept both dolt* and dumbo* prefixes.

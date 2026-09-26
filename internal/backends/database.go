@@ -103,6 +103,9 @@ type CollectionInfo struct {
 	ValidationLevel string
 	// ValidationAction is "error" or "warn" (empty defaults to "error").
 	ValidationAction string
+	// MergeMode is the collection's declared merge mode (empty when unset,
+	// which resolves to the default).
+	MergeMode string
 	// IsView is true if this entry represents a view.
 	IsView bool
 	// ViewOn is the source collection name for a view.
@@ -168,6 +171,9 @@ type CreateCollectionParams struct {
 	ValidationLevel string
 	// ValidationAction is "error" or "warn" (empty defaults to "error").
 	ValidationAction string
+	// MergeMode names what makes two branches' changes to one of this
+	// collection's documents a conflict. Empty resolves to the default.
+	MergeMode string
 	// ViewOn is the source collection for a view (empty for regular collections).
 	ViewOn string
 	// ViewPipeline is the aggregation pipeline for a view.
@@ -197,6 +203,8 @@ type CollModParams struct {
 	ValidationLevel string
 	// ValidationAction replaces the existing action when non-empty.
 	ValidationAction string
+	// MergeMode replaces the collection's merge mode when non-empty.
+	MergeMode string
 	// CappedSize, when > 0, converts the collection to a capped collection with this size in bytes.
 	CappedSize int64
 	// SetView is true when the caller redefines a view (collMod on a view).

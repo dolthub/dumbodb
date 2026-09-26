@@ -39,12 +39,16 @@ jobs:
           # Command reference
           cp docs/COMMANDS.md wiki/Commands.md
 
+          # Merge modes
+          cp docs/MERGE-MODES.md wiki/Merge-Modes.md
+
           # Sidebar: navigation generated from the dumbo* command sections in
           # COMMANDS.md so it never drifts from the actual command set.
           {
             echo "### Navigation"
             echo "- [[Home]]"
             echo "- [[Commands]]"
+            echo "- [[Merge Modes|Merge-Modes]]"
             echo ""
             echo "### Commands"
             grep '^## dumbo' docs/COMMANDS.md | sed -E 's/^## (dumbo[A-Za-z]+).*/\1/' | while read -r cmd; do

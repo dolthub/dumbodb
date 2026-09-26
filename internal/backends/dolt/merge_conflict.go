@@ -1093,6 +1093,7 @@ func captureConflictsForCollection(
 	theirHash hash.Hash,
 	applier *indexMergeApplier,
 	oursDesc, theirsDesc string,
+	mode MergeMode,
 ) (mergedMap prolly.Map, entries []*conflictEntry, err error) {
 	ns := baseMap.NodeStore()
 
@@ -1129,10 +1130,32 @@ func captureConflictsForCollection(
 		return mergedVal, true, nil
 	}
 
+	// The merge mode decides what counts as a conflict for a user collection's
+	// documents. It is consulted for every three-way row decision, including
+	// the convergent ones the differ would otherwise resolve without asking,
+	// so tryMergeJSON now only runs where the mode defers.
+	//
+	// The catalog keeps the differ's existing field-divergent behaviour rather
+	// than taking a collection's mode. Its rows are derived from DDL, not
+	// written by users, and two sides that implicitly create the same
+	// collection produce an identical catalog document -- the uuid is derived
+	// from the database and collection names (catalogUUID), precisely so that
+	// case merges. A Touched mode conflicts on an identical add, which would
+	// make two clients writing to a not-yet-created collection collide over
+	// metadata neither of them chose.
+	//
+	// Genuine metadata divergence is still caught: two sides setting different
+	// validators conflict here and surface as a typed metadata conflict, which
+	// TestResolveConflict_MetadataByIDAlone covers.
+	var policy tree.RowMergePolicy
+	if collection != reservedCatalogName {
+		policy = rowMergePolicy(ns, mode)
+	}
 	differ, err := tree.NewThreeWayDiffer[val.Tuple, val.Tuple, *val.TupleDesc](
 		ctx, ns,
 		intoMap.Tuples(), fromMap.Tuples(), baseMap.Tuples(),
 		tryMergeJSON,
+		policy,
 		false, // not keyless
 		tree.ThreeWayDiffInfo{},
 		intoMap.KeyDesc(),
@@ -1638,7 +1661,16 @@ func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, 
 		}
 		applier := &indexMergeApplier{state: state, survivors: survivors}
 
-		mergedMap, collConflicts, err := captureConflictsForCollection(ctx, name, intoMap, fromMap, baseMap, theirHash, applier, oursDesc, theirsDesc)
+		// The destination branch's declared mode governs the merge. Which
+		// side's mode should win when the two branches disagree about it is
+		// still open (see docs/design/merge-strictness.md); taking ours keeps
+		// the choice with the branch being merged into.
+		mode := DefaultMergeMode
+		if meta, metaErr := readCatalogDoc(ctx, state, intoAM, name); metaErr == nil && meta != nil {
+			mode = mergeModeOrDefault(meta.MergeMode)
+		}
+
+		mergedMap, collConflicts, err := captureConflictsForCollection(ctx, name, intoMap, fromMap, baseMap, theirHash, applier, oursDesc, theirsDesc, mode)
 		if err != nil {
 			return prolly.AddressMap{}, nil, nil, nil, fmt.Errorf("merging collection %q: %w", name, err)
 		}

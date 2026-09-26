@@ -15,67 +15,101 @@
 package dolt
 
 import (
+	"context"
 	"fmt"
 
-	"github.com/dolthub/go-mysql-server/sql"
-
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
-	"github.com/dolthub/dolt/go/libraries/doltcore/merge"
-	"github.com/dolthub/dolt/go/libraries/doltcore/table/editor"
+	"github.com/dolthub/dolt/go/store/prolly"
+
+	dolttypes "github.com/dolthub/dolt/go/store/types"
+	"github.com/dolthub/dumbodb/internal/backends"
 )
 
-// mergePendingIntoCommitted produces the post-commit working set for a
-// transaction by three-way merging the txn's pending changes (ours) against
-// the latest committed state (theirs), using the txn's start-of-life snapshot
-// (base) as the common ancestor. Fast paths short-circuit when one side made
-// no changes; otherwise dolt's merge.MergeRoots performs a row-level merge.
-func mergePendingIntoCommitted(
-	sqlCtx *sql.Context,
-	resolver doltdb.TableResolver,
-	base, ours, theirs *doltdb.WorkingSet,
-) (*doltdb.WorkingSet, error) {
+// rootValueFromAM wraps a collections AddressMap in the RTVL chunk dolt
+// expects wherever a root value is stored.
+func rootValueFromAM(ctx context.Context, state *dbState, am prolly.AddressMap) (doltdb.RootValue, error) {
+	msg := dolttypes.SerialMessage(buildRootValueFlatbuffer(am))
+	return doltdb.NewRootValue(ctx, state.doltDB.ValueReadWriter(), state.doltDB.NodeStore(), msg)
+}
+
+// reconcileWorkingSets produces the post-boundary working set for a write by
+// three-way merging the writer's pending changes (ours) against the branch's
+// current state (theirs), with the working set the write started from as the
+// base.
+//
+// This runs dumbodb's own address-map merge -- the same merge a branch merge,
+// cherry-pick, revert or rebase runs -- so every collection's merge mode
+// decides what counts as a conflict. There is one merge in the product and one
+// policy, and a write reaches it whatever boundary it reconciles at.
+//
+// A refusal comes back as a typed MergeConflictError together with the
+// unresolved conflicts, so a boundary that can offer resolution -- dumboCommit
+// -- is able to install them, and one that cannot just reports the error.
+func (state *dbState) reconcileWorkingSets(ctx context.Context, branch string, base, ours, theirs *doltdb.WorkingSet) (*doltdb.WorkingSet, *mergeInProgress, error) {
 	baseHash, err := base.WorkingRoot().HashOf()
 	if err != nil {
-		return nil, fmt.Errorf("merge: hashing base root: %w", err)
+		return nil, nil, fmt.Errorf("hashing base root: %w", err)
 	}
 	oursHash, err := ours.WorkingRoot().HashOf()
 	if err != nil {
-		return nil, fmt.Errorf("merge: hashing ours root: %w", err)
+		return nil, nil, fmt.Errorf("hashing ours root: %w", err)
 	}
 	theirsHash, err := theirs.WorkingRoot().HashOf()
 	if err != nil {
-		return nil, fmt.Errorf("merge: hashing theirs root: %w", err)
+		return nil, nil, fmt.Errorf("hashing theirs root: %w", err)
 	}
 
+	// One side changed nothing, so there is nothing to reconcile.
 	if baseHash == oursHash {
-		return theirs, nil
+		return theirs, nil, nil
 	}
 	if baseHash == theirsHash {
-		return ours, nil
+		return ours, nil, nil
 	}
-	if oursHash == theirsHash {
-		return ours, nil
-	}
+	// Deliberately no fast path for ours == theirs. Two sides reaching the
+	// identical result is the convergent edit, which is the case the Touched
+	// modes exist to refuse: two compare-and-swap increments from the same
+	// base both produce v=n+1, and short-circuiting on the equal hash would
+	// accept both and lose one. Only the merge mode may decide it.
 
-	result, err := merge.MergeRoots(
-		sqlCtx,
-		resolver,
-		ours.WorkingRoot(), theirs.WorkingRoot(), base.WorkingRoot(),
-		theirs, base,
-		editor.Options{},
-		merge.MergeOpts{},
-	)
+	oursAM, err := amFromWorkingRoot(ctx, ours.WorkingRoot(), state.ns)
 	if err != nil {
-		return nil, fmt.Errorf("merge: %w", err)
+		return nil, nil, fmt.Errorf("deriving ours AM: %w", err)
 	}
-	if result.HasSchemaConflicts() {
-		return nil, fmt.Errorf("merge: schema conflict on transaction commit")
+	theirsAM, err := amFromWorkingRoot(ctx, theirs.WorkingRoot(), state.ns)
+	if err != nil {
+		return nil, nil, fmt.Errorf("deriving theirs AM: %w", err)
 	}
-	for tbl, stats := range result.Stats {
-		if stats.DataConflicts > 0 {
-			return nil, fmt.Errorf("merge: data conflict on %q (%d row(s)); commit rejected", tbl.Name, stats.DataConflicts)
-		}
+	baseAM, err := amFromWorkingRoot(ctx, base.WorkingRoot(), state.ns)
+	if err != nil {
+		return nil, nil, fmt.Errorf("deriving base AM: %w", err)
 	}
 
-	return ours.WithWorkingRoot(result.Root).WithStagedRoot(result.Root), nil
+	mergedAM, conflicts, viewConflicts, metaConflicts, err := mergeAddressMapsWithConflicts(
+		ctx, state, oursAM, theirsAM, baseAM, theirsHash, baseHash,
+		"your write (ours)", "the branch (theirs)")
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if len(conflicts) > 0 || len(viewConflicts) > 0 || len(metaConflicts) > 0 {
+		unresolved := &mergeInProgress{
+			intoBranch:    branch,
+			fromLabel:     refLabel(ctx, state, branch),
+			premergeAM:    oursAM,
+			intoHash:      theirsHash,
+			fromHash:      theirsHash,
+			conflicts:     conflicts,
+			viewConflicts: viewConflicts,
+			metaConflicts: metaConflicts,
+			resolvedAM:    mergedAM,
+		}
+		return nil, unresolved, &backends.MergeConflictError{Conflicts: unresolved.summaries()}
+	}
+
+	mergedRV, err := rootValueFromAM(ctx, state, mergedAM)
+	if err != nil {
+		return nil, nil, fmt.Errorf("building merged root: %w", err)
+	}
+	return ours.WithWorkingRoot(mergedRV).WithStagedRoot(mergedRV), nil, nil
 }

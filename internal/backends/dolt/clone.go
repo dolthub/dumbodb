@@ -129,7 +129,7 @@ func (b *Backend) DumboDBClone(ctx context.Context, params *backends.CloneParams
 		}
 		wsRef := ref.NewWorkingSetRef("heads/" + local)
 		ws := doltdb.EmptyWorkingSet(wsRef).WithWorkingRoot(rv).WithStagedRoot(rv)
-		if err := updateWorkingSet(ctx, state.doltDB, ws, local); err != nil {
+		if err := initializeWorkingSet(ctx, state.doltDB, ws, local); err != nil {
 			return fmt.Errorf("dumboClone: initializing working set for %q: %w", local, err)
 		}
 		return nil
