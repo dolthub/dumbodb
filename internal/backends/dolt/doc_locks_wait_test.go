@@ -35,7 +35,7 @@ func TestWaitUntilFree_ImmediateWhenUnlocked(t *testing.T) {
 func TestWaitUntilFree_BlocksThenReturnsAfterRelease(t *testing.T) {
 	m := NewDocLockManager()
 	id := hash.Hash{1}
-	if err := m.Acquire("txn", "c", []hash.Hash{id}); err != nil {
+	if err := m.Acquire("txn", "c", []hash.Hash{id}, true); err != nil {
 		t.Fatalf("acquire: %v", err)
 	}
 
@@ -67,7 +67,7 @@ func TestWaitUntilFree_BlocksThenReturnsAfterRelease(t *testing.T) {
 func TestWaitUntilFree_HonorsContextDeadline(t *testing.T) {
 	m := NewDocLockManager()
 	id := hash.Hash{2}
-	if err := m.Acquire("txn", "c", []hash.Hash{id}); err != nil {
+	if err := m.Acquire("txn", "c", []hash.Hash{id}, true); err != nil {
 		t.Fatalf("acquire: %v", err)
 	}
 
@@ -85,12 +85,33 @@ func TestWaitUntilFree_HonorsContextDeadline(t *testing.T) {
 
 func TestWaitUntilFree_UnaffectedByOtherDocument(t *testing.T) {
 	m := NewDocLockManager()
-	if err := m.Acquire("txn", "c", []hash.Hash{{9}}); err != nil {
+	if err := m.Acquire("txn", "c", []hash.Hash{{9}}, true); err != nil {
 		t.Fatalf("acquire: %v", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	if err := m.WaitUntilFree(ctx, "c", []hash.Hash{{1}}); err != nil {
 		t.Fatalf("a lock on a different document must not block: %v", err)
+	}
+}
+
+// An insert lock covers a not-yet-committed new _id, invisible to other
+// connections, so an ordinary write must not wait on it -- matching MongoDB,
+// where an upsert racing a transaction's insert does not block (workspace-s1s).
+func TestWaitUntilFree_IgnoresNonWaitableInsertLock(t *testing.T) {
+	m := NewDocLockManager()
+	id := hash.Hash{3}
+	// waitable=false models a transaction's insert of a new document.
+	if err := m.Acquire("txn", "c", []hash.Hash{id}, false); err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if err := m.WaitUntilFree(ctx, "c", []hash.Hash{id}); err != nil {
+		t.Fatalf("an insert lock must not block an ordinary write, got %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
+		t.Fatalf("returned after %s; an insert lock should not cause any wait", elapsed)
 	}
 }

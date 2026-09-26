@@ -29,21 +29,33 @@ import (
 
 var ErrWriteConflict = errors.New("write conflict: document locked by another transaction")
 
+// lockEntry is one held document lock.
+type lockEntry struct {
+	owner string
+	// waitable is true for a lock on a document that already exists -- a
+	// transaction update or delete -- so an ordinary write to it must wait. It is
+	// false for a lock on a not-yet-committed insert of a new _id: that document
+	// is invisible to other connections, so an ordinary write must not wait on it
+	// (MongoDB does not; the insert race resolves on the unique key instead). A
+	// transaction still fails fast against either kind.
+	waitable bool
+}
+
 // DocLockManager holds one owner per locked document, keyed by collection.
 // Only a client transaction takes a lock; see acquireTxnLocks.
 type DocLockManager struct {
 	mu    sync.Mutex
-	locks map[string]map[hash.Hash]string
+	locks map[string]map[hash.Hash]lockEntry
 	// notify is closed and replaced on every Release, waking any ordinary write
 	// parked in WaitUntilFree so it can re-check whether its document is free.
 	notify chan struct{}
 }
 
 func NewDocLockManager() *DocLockManager {
-	return &DocLockManager{locks: map[string]map[hash.Hash]string{}, notify: make(chan struct{})}
+	return &DocLockManager{locks: map[string]map[hash.Hash]lockEntry{}, notify: make(chan struct{})}
 }
 
-func (m *DocLockManager) Acquire(owner string, collection string, ids []hash.Hash) error {
+func (m *DocLockManager) Acquire(owner string, collection string, ids []hash.Hash, waitable bool) error {
 	if owner == "" {
 		// Empty owner means upstream lost the lsid/conn-id; reject so the bug
 		// surfaces rather than locking under a sentinel value.
@@ -56,18 +68,18 @@ func (m *DocLockManager) Acquire(owner string, collection string, ids []hash.Has
 	collLocks, ok := m.locks[collection]
 	if ok {
 		for _, id := range ids {
-			if holder, held := collLocks[id]; held && holder != owner {
+			if e, held := collLocks[id]; held && e.owner != owner {
 				return ErrWriteConflict
 			}
 		}
 	}
 
 	if collLocks == nil {
-		collLocks = map[hash.Hash]string{}
+		collLocks = map[hash.Hash]lockEntry{}
 		m.locks[collection] = collLocks
 	}
 	for _, id := range ids {
-		collLocks[id] = owner
+		collLocks[id] = lockEntry{owner: owner, waitable: waitable}
 	}
 	return nil
 }
@@ -77,8 +89,8 @@ func (m *DocLockManager) Release(owner string) {
 	defer m.mu.Unlock()
 
 	for coll, collLocks := range m.locks {
-		for id, holder := range collLocks {
-			if holder == owner {
+		for id, e := range collLocks {
+			if e.owner == owner {
 				delete(collLocks, id)
 			}
 		}
@@ -124,15 +136,17 @@ func (m *DocLockManager) WaitUntilFree(ctx context.Context, collection string, i
 	}
 }
 
-// anyHeld reports whether any id in collection is currently locked. The caller
-// must hold m.mu.
+// anyHeld reports whether any id in collection is held by a waitable lock -- one
+// on an existing document that an ordinary write must wait for. Locks for
+// not-yet-committed inserts are ignored, since the document they cover is not
+// visible to the waiter. The caller must hold m.mu.
 func (m *DocLockManager) anyHeld(collection string, ids []hash.Hash) bool {
 	collLocks, ok := m.locks[collection]
 	if !ok {
 		return false
 	}
 	for _, id := range ids {
-		if _, held := collLocks[id]; held {
+		if e, held := collLocks[id]; held && e.waitable {
 			return true
 		}
 	}
@@ -164,7 +178,7 @@ func ownerForDocLocks(ctx context.Context) (string, bool) {
 // merge mode decides whether two writes to one document agree. A lock would
 // decide that first, at write time, and the mode would never run.
 // --session-isolation changes when the boundary falls, not what happens at it.
-func (b *Backend) acquireTxnLocks(ctx context.Context, db, branch, collection string, ids []hash.Hash) error {
+func (b *Backend) acquireTxnLocks(ctx context.Context, db, branch, collection string, ids []hash.Hash, waitable bool) error {
 	if len(ids) == 0 {
 		return nil
 	}
@@ -173,10 +187,11 @@ func (b *Backend) acquireTxnLocks(ctx context.Context, db, branch, collection st
 		// Ordinary writes take no lock, but must not run over a document a
 		// transaction currently holds: wait for that transaction to resolve,
 		// bounded by the command's maxTimeMS via ctx. Matches MongoDB, which
-		// blocks a plain write on a document locked by an open transaction.
+		// blocks a plain write on a document locked by an open transaction. Only
+		// waitable (existing-document) locks are waited on; see WaitUntilFree.
 		return b.docLockManager(db, branch).WaitUntilFree(ctx, collection, ids)
 	}
-	if err := b.docLockManager(db, branch).Acquire(owner, collection, ids); err != nil {
+	if err := b.docLockManager(db, branch).Acquire(owner, collection, ids, waitable); err != nil {
 		if errors.Is(err, ErrWriteConflict) {
 			return backends.NewError(backends.ErrorCodeWriteConflict, err)
 		}
@@ -218,7 +233,9 @@ func (c *collection) acquireInsertLocks(ctx context.Context, docs []*types.Docum
 	if err != nil {
 		return err
 	}
-	return c.db.backend.acquireTxnLocks(ctx, c.db.name, c.db.rootish, c.name, ids)
+	// An insert creates a new _id: its lock does not make ordinary writes wait,
+	// because the not-yet-committed document is invisible to them.
+	return c.db.backend.acquireTxnLocks(ctx, c.db.name, c.db.rootish, c.name, ids, false)
 }
 
 func (c *collection) acquireUpdateLocks(ctx context.Context, docs []*types.Document) error {
@@ -226,7 +243,8 @@ func (c *collection) acquireUpdateLocks(ctx context.Context, docs []*types.Docum
 	if err != nil {
 		return err
 	}
-	return c.db.backend.acquireTxnLocks(ctx, c.db.name, c.db.rootish, c.name, ids)
+	// An update targets an existing document: ordinary writes to it must wait.
+	return c.db.backend.acquireTxnLocks(ctx, c.db.name, c.db.rootish, c.name, ids, true)
 }
 
 func (c *collection) acquireDeleteLocks(ctx context.Context, idVals []any) error {
@@ -234,7 +252,8 @@ func (c *collection) acquireDeleteLocks(ctx context.Context, idVals []any) error
 	if err != nil {
 		return err
 	}
-	return c.db.backend.acquireTxnLocks(ctx, c.db.name, c.db.rootish, c.name, ids)
+	// A delete targets an existing document: ordinary writes to it must wait.
+	return c.db.backend.acquireTxnLocks(ctx, c.db.name, c.db.rootish, c.name, ids, true)
 }
 
 func (m *DocLockManager) Holds(owner string, collection string, id hash.Hash) bool {
@@ -245,6 +264,6 @@ func (m *DocLockManager) Holds(owner string, collection string, id hash.Hash) bo
 	if !ok {
 		return false
 	}
-	holder, has := collLocks[id]
-	return has && holder == owner
+	e, has := collLocks[id]
+	return has && e.owner == owner
 }

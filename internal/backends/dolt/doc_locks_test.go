@@ -41,7 +41,7 @@ func TestAcquireSucceedsForNewIds(t *testing.T) {
 	m := NewDocLockManager()
 	ids := []hash.Hash{idH(1), idH(2), idH(3)}
 
-	require.NoError(t, m.Acquire("ownerA", "col", ids))
+	require.NoError(t, m.Acquire("ownerA", "col", ids, true))
 	for _, id := range ids {
 		assert.True(t, m.Holds("ownerA", "col", id), "ownerA should hold lock on id %v", id)
 	}
@@ -50,9 +50,9 @@ func TestAcquireSucceedsForNewIds(t *testing.T) {
 func TestAcquireBlocksConflictingOwner(t *testing.T) {
 	m := NewDocLockManager()
 
-	require.NoError(t, m.Acquire("ownerA", "col", []hash.Hash{idH(1)}))
+	require.NoError(t, m.Acquire("ownerA", "col", []hash.Hash{idH(1)}, true))
 
-	err := m.Acquire("ownerB", "col", []hash.Hash{idH(1), idH(2)})
+	err := m.Acquire("ownerB", "col", []hash.Hash{idH(1), idH(2)}, true)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrWriteConflict))
 
@@ -63,8 +63,8 @@ func TestAcquireBlocksConflictingOwner(t *testing.T) {
 func TestAcquireNonConflictingIsAllowed(t *testing.T) {
 	m := NewDocLockManager()
 
-	require.NoError(t, m.Acquire("ownerA", "col", []hash.Hash{idH(1)}))
-	require.NoError(t, m.Acquire("ownerB", "col", []hash.Hash{idH(2)}))
+	require.NoError(t, m.Acquire("ownerA", "col", []hash.Hash{idH(1)}, true))
+	require.NoError(t, m.Acquire("ownerB", "col", []hash.Hash{idH(2)}, true))
 	assert.True(t, m.Holds("ownerA", "col", idH(1)))
 	assert.True(t, m.Holds("ownerB", "col", idH(2)))
 }
@@ -72,8 +72,8 @@ func TestAcquireNonConflictingIsAllowed(t *testing.T) {
 func TestAcquireIsIdempotentForSameOwner(t *testing.T) {
 	m := NewDocLockManager()
 
-	require.NoError(t, m.Acquire("ownerA", "col", []hash.Hash{idH(1), idH(2)}))
-	require.NoError(t, m.Acquire("ownerA", "col", []hash.Hash{idH(1), idH(2), idH(3)}))
+	require.NoError(t, m.Acquire("ownerA", "col", []hash.Hash{idH(1), idH(2)}, true))
+	require.NoError(t, m.Acquire("ownerA", "col", []hash.Hash{idH(1), idH(2), idH(3)}, true))
 	assert.True(t, m.Holds("ownerA", "col", idH(1)))
 	assert.True(t, m.Holds("ownerA", "col", idH(2)))
 	assert.True(t, m.Holds("ownerA", "col", idH(3)))
@@ -82,22 +82,22 @@ func TestAcquireIsIdempotentForSameOwner(t *testing.T) {
 func TestReleaseDropsAllOwnedLocks(t *testing.T) {
 	m := NewDocLockManager()
 
-	require.NoError(t, m.Acquire("ownerA", "colX", []hash.Hash{idH(1)}))
-	require.NoError(t, m.Acquire("ownerA", "colY", []hash.Hash{idH(2)}))
-	require.NoError(t, m.Acquire("ownerB", "colX", []hash.Hash{idH(3)}))
+	require.NoError(t, m.Acquire("ownerA", "colX", []hash.Hash{idH(1)}, true))
+	require.NoError(t, m.Acquire("ownerA", "colY", []hash.Hash{idH(2)}, true))
+	require.NoError(t, m.Acquire("ownerB", "colX", []hash.Hash{idH(3)}, true))
 
 	m.Release("ownerA")
 	assert.False(t, m.Holds("ownerA", "colX", idH(1)))
 	assert.False(t, m.Holds("ownerA", "colY", idH(2)))
 	assert.True(t, m.Holds("ownerB", "colX", idH(3)))
 
-	require.NoError(t, m.Acquire("ownerB", "colX", []hash.Hash{idH(1)}))
+	require.NoError(t, m.Acquire("ownerB", "colX", []hash.Hash{idH(1)}, true))
 	assert.True(t, m.Holds("ownerB", "colX", idH(1)))
 }
 
 func TestReleaseNoopForUnknownOwner(t *testing.T) {
 	m := NewDocLockManager()
-	require.NoError(t, m.Acquire("ownerA", "col", []hash.Hash{idH(1)}))
+	require.NoError(t, m.Acquire("ownerA", "col", []hash.Hash{idH(1)}, true))
 
 	m.Release("ownerZ")
 	assert.True(t, m.Holds("ownerA", "col", idH(1)))
@@ -105,15 +105,15 @@ func TestReleaseNoopForUnknownOwner(t *testing.T) {
 
 func TestEmptyOwnerRejected(t *testing.T) {
 	m := NewDocLockManager()
-	err := m.Acquire("", "col", []hash.Hash{idH(1)})
+	err := m.Acquire("", "col", []hash.Hash{idH(1)}, true)
 	require.Error(t, err)
 	assert.NotErrorIs(t, err, ErrWriteConflict, "empty owner is a programmer error, not a runtime conflict")
 }
 
 func TestAcquireEmptyIdsIsNoop(t *testing.T) {
 	m := NewDocLockManager()
-	require.NoError(t, m.Acquire("ownerA", "col", nil))
-	require.NoError(t, m.Acquire("ownerA", "col", []hash.Hash{}))
+	require.NoError(t, m.Acquire("ownerA", "col", nil, true))
+	require.NoError(t, m.Acquire("ownerA", "col", []hash.Hash{}, true))
 }
 
 func TestAcquireTxnVsTxnInsertConflicts(t *testing.T) {
@@ -121,8 +121,8 @@ func TestAcquireTxnVsTxnInsertConflicts(t *testing.T) {
 	// lock manager, matching MongoDB's WriteConflict / TransientTransactionError
 	// for txn-vs-txn duplicate-key races.
 	m := NewDocLockManager()
-	require.NoError(t, m.Acquire("ownerA", "col", []hash.Hash{idH(1)}))
-	err := m.Acquire("ownerB", "col", []hash.Hash{idH(1)})
+	require.NoError(t, m.Acquire("ownerA", "col", []hash.Hash{idH(1)}, true))
+	err := m.Acquire("ownerB", "col", []hash.Hash{idH(1)}, true)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrWriteConflict))
 }
@@ -162,7 +162,7 @@ func TestOrdinaryWriteTakesNoDocumentLock(t *testing.T) {
 			be := docLockBackend(t, sessionIsolation)
 			ctx, owner := ordinaryWriteCtx()
 
-			require.NoError(t, be.acquireTxnLocks(ctx, "mydb", "main", "col", []hash.Hash{idH(1)}))
+			require.NoError(t, be.acquireTxnLocks(ctx, "mydb", "main", "col", []hash.Hash{idH(1)}, true))
 
 			assert.False(t, be.docLockManager("mydb", "main").Holds(owner, "col", idH(1)),
 				"an ordinary write must hold no document lock")
@@ -180,16 +180,13 @@ func TestOrdinaryWritesDoNotLockEachOtherOut(t *testing.T) {
 			ctxB, _ := ordinaryWriteCtx()
 			ids := []hash.Hash{idH(1)}
 
-			require.NoError(t, be.acquireTxnLocks(ctxA, "mydb", "main", "col", ids))
-			require.NoError(t, be.acquireTxnLocks(ctxB, "mydb", "main", "col", ids),
+			require.NoError(t, be.acquireTxnLocks(ctxA, "mydb", "main", "col", ids, true))
+			require.NoError(t, be.acquireTxnLocks(ctxB, "mydb", "main", "col", ids, true),
 				"a second ordinary writer must not be rejected or made to wait")
 		})
 	}
 }
 
-// A client transaction's lock is contention behaviour for transactions only.
-// An ordinary write neither waits for it nor fails on it; the two reconcile
-// through the merge at whichever boundary comes second.
 // An ordinary (non-transactional) write must not run over a document a client
 // transaction holds: it blocks until that transaction resolves, then proceeds --
 // matching MongoDB, which blocks a plain write on a document an open transaction
@@ -198,7 +195,7 @@ func TestOrdinaryWriteBlocksOnAClientTransactionsLock(t *testing.T) {
 	be := docLockBackend(t, false)
 	txnCtx, txnOwner := clientTxnCtx()
 	ids := []hash.Hash{idH(1)}
-	require.NoError(t, be.acquireTxnLocks(txnCtx, "mydb", "main", "col", ids))
+	require.NoError(t, be.acquireTxnLocks(txnCtx, "mydb", "main", "col", ids, true))
 
 	ordinary := conninfo.New()
 	ordinary.SetForked(true)
@@ -207,7 +204,7 @@ func TestOrdinaryWriteBlocksOnAClientTransactionsLock(t *testing.T) {
 	// deadline it fails (mapped to maxTimeMS upstream) rather than proceeding.
 	deadlineCtx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
-	err := be.acquireTxnLocks(conninfo.Ctx(deadlineCtx, ordinary), "mydb", "main", "col", ids)
+	err := be.acquireTxnLocks(conninfo.Ctx(deadlineCtx, ordinary), "mydb", "main", "col", ids, true)
 	require.Error(t, err, "an ordinary write must block on a locked document")
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 
@@ -216,7 +213,7 @@ func TestOrdinaryWriteBlocksOnAClientTransactionsLock(t *testing.T) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		done <- be.acquireTxnLocks(conninfo.Ctx(ctx, ordinary), "mydb", "main", "col", ids)
+		done <- be.acquireTxnLocks(conninfo.Ctx(ctx, ordinary), "mydb", "main", "col", ids, true)
 	}()
 	select {
 	case <-done:
@@ -242,8 +239,8 @@ func TestClientTransactionFailsFastOnDocumentContention(t *testing.T) {
 			ctxB, _ := clientTxnCtx()
 			ids := []hash.Hash{idH(1)}
 
-			require.NoError(t, be.acquireTxnLocks(ctxA, "mydb", "main", "col", ids))
-			err := be.acquireTxnLocks(ctxB, "mydb", "main", "col", ids)
+			require.NoError(t, be.acquireTxnLocks(ctxA, "mydb", "main", "col", ids, true))
+			err := be.acquireTxnLocks(ctxB, "mydb", "main", "col", ids, true)
 
 			require.Error(t, err)
 			assert.True(t, backends.ErrorCodeIs(err, backends.ErrorCodeWriteConflict),
