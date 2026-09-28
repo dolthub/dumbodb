@@ -153,6 +153,15 @@ func (h *Handler) MsgListCollections(connCtx context.Context, msg *wire.OpMsg) (
 			if collection.ValidationAction != "" {
 				options.Set("validationAction", collection.ValidationAction)
 			}
+
+			// mergeMode is a dumbodb option with no MongoDB counterpart. It is
+			// reported here with the rest of a collection's configuration
+			// rather than hidden, so a client can read back what it set.
+			// Reported only when declared, matching how the validation
+			// defaults are left unmaterialized.
+			if collection.MergeMode != "" {
+				options.Set("mergeMode", collection.MergeMode)
+			}
 		}
 
 		if collection.UUID != "" {

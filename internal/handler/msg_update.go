@@ -41,6 +41,10 @@ func (h *Handler) MsgUpdate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		return nil, lazyerrors.Error(err)
 	}
 
+	if err := rejectRetryableWriteOnStandalone(document, h.ReplSetName); err != nil {
+		return nil, err
+	}
+
 	params, err := common.GetUpdateParams(document, h.L)
 	if err != nil {
 		return nil, lazyerrors.Error(err)

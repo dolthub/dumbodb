@@ -52,6 +52,10 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		return nil, lazyerrors.Error(err)
 	}
 
+	if err := rejectRetryableWriteOnStandalone(document, h.ReplSetName); err != nil {
+		return nil, err
+	}
+
 	params, err := common.GetInsertParams(document, h.L)
 	if err != nil {
 		return nil, lazyerrors.Error(err)

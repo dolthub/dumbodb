@@ -524,7 +524,13 @@ func TestSessionIsolation_NonConflictingMergesCleanly_OnFeatureBranch(t *testing
 	assert.ElementsMatch(t, []string{"seed", "from-A", "from-B"}, ids)
 }
 
-func TestSessionIsolation_LsidSupersedeSurfacedAsCode225(t *testing.T) {
+// Two connections may hold one lsid. Drivers pool logical sessions
+// independently of connections, so this is ordinary traffic, and neither
+// connection may lose its session to the other. This replaced an earlier
+// contract where the second connection evicted the first and the first's next
+// command was answered with code 225; see workspace-5xe, where that cost a
+// 30-minute soak 1,550 indeterminate outcomes.
+func TestSession_LsidSharedByTwoConnections(t *testing.T) {
 	env := startDumboDB(t)
 
 	a := dialWire(t, env)
@@ -551,6 +557,8 @@ func TestSessionIsolation_LsidSupersedeSurfacedAsCode225(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1.0, resB["ok"])
 
+	// A keeps its session and sees both writes: one lsid is one session,
+	// however many connections are holding it.
 	resA2, err := a.run(bson.D{
 		{Key: "find", Value: "c"},
 		{Key: "filter", Value: bson.D{}},
@@ -558,20 +566,11 @@ func TestSessionIsolation_LsidSupersedeSurfacedAsCode225(t *testing.T) {
 		{Key: "$db", Value: dbName},
 	})
 	require.NoError(t, err)
-	assert.Equal(t, 0.0, resA2["ok"])
-	if code, ok := resA2["code"].(int32); ok {
-		assert.Equal(t, int32(225), code)
-	} else if code, ok := resA2["code"].(int64); ok {
-		assert.Equal(t, int64(225), code)
-	} else {
-		t.Fatalf("expected numeric code in response: %#v", resA2)
-	}
-	if msg, ok := resA2["errmsg"].(string); ok {
-		assert.Contains(t, msg, "taken over")
-	}
+	require.Equal(t, 1.0, resA2["ok"], "a second connection on this lsid must not cost A its session")
+	assert.Len(t, firstBatchFromFindResponse(t, resA2), 2)
 }
 
-func TestSessionIsolation_DoltCommitDurabilityUnderConcurrentSupersede(t *testing.T) {
+func TestSession_DoltCommitDurabilityWithAnotherConnectionOnTheLsid(t *testing.T) {
 	env := startDumboDB(t)
 	dbName := fmt.Sprintf("commitfence_%d", env.Port)
 	lsid := freshLsid()
@@ -619,6 +618,8 @@ func TestSessionIsolation_DoltCommitDurabilityUnderConcurrentSupersede(t *testin
 	require.True(t, ok)
 	assert.Equal(t, "from-A", bsonDLookup(doc, "_id"))
 
+	// The durable commit is the point of this test. A also keeps working:
+	// B arriving on the same lsid is not a takeover.
 	resA2, err := a.run(bson.D{
 		{Key: "find", Value: "c"},
 		{Key: "filter", Value: bson.D{}},
@@ -626,12 +627,7 @@ func TestSessionIsolation_DoltCommitDurabilityUnderConcurrentSupersede(t *testin
 		{Key: "$db", Value: dbName},
 	})
 	require.NoError(t, err)
-	assert.Equal(t, 0.0, resA2["ok"])
-	if code, ok := resA2["code"].(int32); ok {
-		assert.Equal(t, int32(225), code)
-	} else if code, ok := resA2["code"].(int64); ok {
-		assert.Equal(t, int64(225), code)
-	}
+	assert.Equal(t, 1.0, resA2["ok"])
 }
 
 // Default-mode reconnect: a multi-document transaction started by

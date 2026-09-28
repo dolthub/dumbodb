@@ -22,6 +22,7 @@ import (
 	"github.com/dolthub/go-mysql-server/sql"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
+	doltref "github.com/dolthub/dolt/go/libraries/doltcore/ref"
 	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/dsess"
 
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
@@ -58,6 +59,35 @@ func ensureDsessTxn(sqlCtx *sql.Context, sess *dsess.DoltSession) (sql.Transacti
 
 func clearDsessTxn(sqlCtx *sql.Context) {
 	sqlCtx.SetTransaction(nil)
+}
+
+// txnBaseWS resolves the working set at the root the live transaction pinned
+// when it started, or reports false when no transaction is live.
+//
+// Every read a write command makes, and the seed of that command's overlay,
+// must come from this one root. A dumbodb write replaces the whole document,
+// so a write derived from a read of some LATER root carries fields the writer
+// never touched. The three-way merge then sees those fields as changes on our
+// side and attributes another connection's field write to this one -- turning
+// a disjoint-field workload into a same-field conflict.
+//
+// Resolving at a root touches no dbState, so this is safe to call under
+// state.mu held for reading.
+func (state *dbState) txnBaseWS(ctx context.Context, sess *dsess.DoltSession, branch string) (*doltdb.WorkingSet, bool, error) {
+	dtx, ok := sess.GetTransaction().(*dsess.DoltTransaction)
+	if !ok {
+		return nil, false, nil
+	}
+	startRoot, ok := dtx.GetInitialRoot(state.name)
+	if !ok {
+		return nil, false, nil
+	}
+	ws, err := state.doltDB.ResolveWorkingSetAtRoot(
+		sqlctx.Wrap(ctx, sess), doltref.NewWorkingSetRef("heads/"+branch), startRoot)
+	if err != nil {
+		return nil, false, fmt.Errorf("txnBaseWS: resolving %q at the transaction's root: %w", branch, err)
+	}
+	return ws, true, nil
 }
 
 // workingSetViaSession returns the session's branchState only when

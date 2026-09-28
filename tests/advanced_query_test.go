@@ -139,8 +139,17 @@ func TestAdvancedQuery_JsonSchema_DuplicateRequired(t *testing.T) {
 	)
 
 	ctx := context.Background()
-	// bson.D allows duplicate keys, but MongoDB rejects $jsonSchema with duplicate
-	// keyword names with FailedToParse: "Duplicate $jsonSchema keyword: required".
+	// bson.D allows duplicate keys; MongoDB rejects the command with
+	// FailedToParse either way.
+	//
+	// The message is now the generic duplicate-field one rather than
+	// $jsonSchema's own "Duplicate $jsonSchema keyword: required". A
+	// duplicated field is rejected at the wire boundary before any handler
+	// reads the command, because reading one panics -- see
+	// clientconn.commandDuplicateField. $jsonSchema's check does produce the
+	// better message, but only for the keywords it walks: a duplicated
+	// property NAME under "properties" slipped past it and killed the
+	// connection, so the boundary check cannot defer to it.
 	_, err := coll.Find(ctx,
 		bson.D{{Key: "$jsonSchema", Value: bson.D{
 			{Key: "required", Value: bson.A{"x"}},
@@ -151,7 +160,8 @@ func TestAdvancedQuery_JsonSchema_DuplicateRequired(t *testing.T) {
 	cmdErr, ok := err.(mongo.CommandError)
 	require.True(t, ok, "expected mongo.CommandError, got %T: %v", err, err)
 	assert.EqualValues(t, 9, cmdErr.Code, "expected FailedToParse (9), got code %d: %s", cmdErr.Code, cmdErr.Message)
-	assert.Contains(t, cmdErr.Message, "Duplicate $jsonSchema keyword: required")
+	assert.Contains(t, cmdErr.Message, "is a duplicate field")
+	assert.Contains(t, cmdErr.Message, "required", "the error should name the offending field")
 }
 
 // TestAdvancedQuery_JsonSchema_OneOf verifies $jsonSchema oneOf constraint. (DumboDBFull)

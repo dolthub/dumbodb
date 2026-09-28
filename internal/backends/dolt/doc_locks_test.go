@@ -17,12 +17,18 @@ package dolt
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
+	"log/slog"
 	"testing"
 	"time"
 
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 )
 
 func idH(b byte) hash.Hash {
@@ -35,7 +41,7 @@ func TestAcquireSucceedsForNewIds(t *testing.T) {
 	m := NewDocLockManager()
 	ids := []hash.Hash{idH(1), idH(2), idH(3)}
 
-	require.NoError(t, m.Acquire("ownerA", "col", ids, LockKindUpdate))
+	require.NoError(t, m.Acquire("ownerA", "col", ids, true))
 	for _, id := range ids {
 		assert.True(t, m.Holds("ownerA", "col", id), "ownerA should hold lock on id %v", id)
 	}
@@ -44,9 +50,9 @@ func TestAcquireSucceedsForNewIds(t *testing.T) {
 func TestAcquireBlocksConflictingOwner(t *testing.T) {
 	m := NewDocLockManager()
 
-	require.NoError(t, m.Acquire("ownerA", "col", []hash.Hash{idH(1)}, LockKindUpdate))
+	require.NoError(t, m.Acquire("ownerA", "col", []hash.Hash{idH(1)}, true))
 
-	err := m.Acquire("ownerB", "col", []hash.Hash{idH(1), idH(2)}, LockKindUpdate)
+	err := m.Acquire("ownerB", "col", []hash.Hash{idH(1), idH(2)}, true)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrWriteConflict))
 
@@ -57,8 +63,8 @@ func TestAcquireBlocksConflictingOwner(t *testing.T) {
 func TestAcquireNonConflictingIsAllowed(t *testing.T) {
 	m := NewDocLockManager()
 
-	require.NoError(t, m.Acquire("ownerA", "col", []hash.Hash{idH(1)}, LockKindUpdate))
-	require.NoError(t, m.Acquire("ownerB", "col", []hash.Hash{idH(2)}, LockKindUpdate))
+	require.NoError(t, m.Acquire("ownerA", "col", []hash.Hash{idH(1)}, true))
+	require.NoError(t, m.Acquire("ownerB", "col", []hash.Hash{idH(2)}, true))
 	assert.True(t, m.Holds("ownerA", "col", idH(1)))
 	assert.True(t, m.Holds("ownerB", "col", idH(2)))
 }
@@ -66,8 +72,8 @@ func TestAcquireNonConflictingIsAllowed(t *testing.T) {
 func TestAcquireIsIdempotentForSameOwner(t *testing.T) {
 	m := NewDocLockManager()
 
-	require.NoError(t, m.Acquire("ownerA", "col", []hash.Hash{idH(1), idH(2)}, LockKindUpdate))
-	require.NoError(t, m.Acquire("ownerA", "col", []hash.Hash{idH(1), idH(2), idH(3)}, LockKindUpdate))
+	require.NoError(t, m.Acquire("ownerA", "col", []hash.Hash{idH(1), idH(2)}, true))
+	require.NoError(t, m.Acquire("ownerA", "col", []hash.Hash{idH(1), idH(2), idH(3)}, true))
 	assert.True(t, m.Holds("ownerA", "col", idH(1)))
 	assert.True(t, m.Holds("ownerA", "col", idH(2)))
 	assert.True(t, m.Holds("ownerA", "col", idH(3)))
@@ -76,22 +82,22 @@ func TestAcquireIsIdempotentForSameOwner(t *testing.T) {
 func TestReleaseDropsAllOwnedLocks(t *testing.T) {
 	m := NewDocLockManager()
 
-	require.NoError(t, m.Acquire("ownerA", "colX", []hash.Hash{idH(1)}, LockKindUpdate))
-	require.NoError(t, m.Acquire("ownerA", "colY", []hash.Hash{idH(2)}, LockKindUpdate))
-	require.NoError(t, m.Acquire("ownerB", "colX", []hash.Hash{idH(3)}, LockKindUpdate))
+	require.NoError(t, m.Acquire("ownerA", "colX", []hash.Hash{idH(1)}, true))
+	require.NoError(t, m.Acquire("ownerA", "colY", []hash.Hash{idH(2)}, true))
+	require.NoError(t, m.Acquire("ownerB", "colX", []hash.Hash{idH(3)}, true))
 
 	m.Release("ownerA")
 	assert.False(t, m.Holds("ownerA", "colX", idH(1)))
 	assert.False(t, m.Holds("ownerA", "colY", idH(2)))
 	assert.True(t, m.Holds("ownerB", "colX", idH(3)))
 
-	require.NoError(t, m.Acquire("ownerB", "colX", []hash.Hash{idH(1)}, LockKindUpdate))
+	require.NoError(t, m.Acquire("ownerB", "colX", []hash.Hash{idH(1)}, true))
 	assert.True(t, m.Holds("ownerB", "colX", idH(1)))
 }
 
 func TestReleaseNoopForUnknownOwner(t *testing.T) {
 	m := NewDocLockManager()
-	require.NoError(t, m.Acquire("ownerA", "col", []hash.Hash{idH(1)}, LockKindUpdate))
+	require.NoError(t, m.Acquire("ownerA", "col", []hash.Hash{idH(1)}, true))
 
 	m.Release("ownerZ")
 	assert.True(t, m.Holds("ownerA", "col", idH(1)))
@@ -99,90 +105,148 @@ func TestReleaseNoopForUnknownOwner(t *testing.T) {
 
 func TestEmptyOwnerRejected(t *testing.T) {
 	m := NewDocLockManager()
-	err := m.Acquire("", "col", []hash.Hash{idH(1)}, LockKindUpdate)
+	err := m.Acquire("", "col", []hash.Hash{idH(1)}, true)
 	require.Error(t, err)
 	assert.NotErrorIs(t, err, ErrWriteConflict, "empty owner is a programmer error, not a runtime conflict")
 }
 
 func TestAcquireEmptyIdsIsNoop(t *testing.T) {
 	m := NewDocLockManager()
-	require.NoError(t, m.Acquire("ownerA", "col", nil, LockKindUpdate))
-	require.NoError(t, m.Acquire("ownerA", "col", []hash.Hash{}, LockKindUpdate))
+	require.NoError(t, m.Acquire("ownerA", "col", nil, true))
+	require.NoError(t, m.Acquire("ownerA", "col", []hash.Hash{}, true))
 }
 
-func TestAcquireInsertVsTxnInsertConflicts(t *testing.T) {
+func TestAcquireTxnVsTxnInsertConflicts(t *testing.T) {
 	// Two concurrent transactions inserting the same _id must conflict at the
-	// lock manager (matches MongoDB's WriteConflict / TransientTransactionError
-	// for txn-vs-txn duplicate-key races), even though insert-kind locks are
-	// invisible to non-txn waiters.
+	// lock manager, matching MongoDB's WriteConflict / TransientTransactionError
+	// for txn-vs-txn duplicate-key races.
 	m := NewDocLockManager()
-	require.NoError(t, m.Acquire("ownerA", "col", []hash.Hash{idH(1)}, LockKindInsert))
-	err := m.Acquire("ownerB", "col", []hash.Hash{idH(1)}, LockKindInsert)
+	require.NoError(t, m.Acquire("ownerA", "col", []hash.Hash{idH(1)}, true))
+	err := m.Acquire("ownerB", "col", []hash.Hash{idH(1)}, true)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrWriteConflict))
 }
 
-func TestWaitForReleaseReturnsImmediatelyWhenUnheld(t *testing.T) {
-	m := NewDocLockManager()
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-	defer cancel()
-	start := time.Now()
-	require.NoError(t, m.WaitForRelease(ctx, "col", []hash.Hash{idH(1)}))
-	assert.Less(t, time.Since(start), 50*time.Millisecond)
+func docLockBackend(t *testing.T, sessionIsolation bool) *Backend {
+	t.Helper()
+	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, sessionIsolation, 0, 0)
+	require.NoError(t, err)
+	t.Cleanup(be.Close)
+	return be
 }
 
-func TestWaitForReleaseBlocksUntilReleased(t *testing.T) {
-	m := NewDocLockManager()
-	require.NoError(t, m.Acquire("ownerA", "col", []hash.Hash{idH(1)}, LockKindUpdate))
+// ordinaryWriteCtx describes a write with no client transaction: a session
+// transaction is live, so the write accumulates in the overlay and reconciles
+// at its boundary. Every write looks like this in every mode.
+func ordinaryWriteCtx() (context.Context, string) {
+	ci := conninfo.New()
+	ci.SetForked(true)
+	return conninfo.Ctx(context.Background(), ci), ci.Owner()
+}
 
+// clientTxnCtx describes a write inside a transaction the client opened with
+// startTransaction.
+func clientTxnCtx() (context.Context, string) {
+	ci := conninfo.New()
+	ci.SetForked(true)
+	ci.SetInTransaction(true)
+	return conninfo.Ctx(context.Background(), ci), ci.Owner()
+}
+
+// An ordinary write reconciles optimistically at its boundary, so it must not
+// take a document lock. A lock here would decide contention before the merge
+// mode ever ran.
+func TestOrdinaryWriteTakesNoDocumentLock(t *testing.T) {
+	for _, sessionIsolation := range []bool{false, true} {
+		t.Run(fmt.Sprintf("sessionIsolation=%v", sessionIsolation), func(t *testing.T) {
+			be := docLockBackend(t, sessionIsolation)
+			ctx, owner := ordinaryWriteCtx()
+
+			require.NoError(t, be.acquireTxnLocks(ctx, "mydb", "main", "col", []hash.Hash{idH(1)}, true))
+
+			assert.False(t, be.docLockManager("mydb", "main").Holds(owner, "col", idH(1)),
+				"an ordinary write must hold no document lock")
+		})
+	}
+}
+
+// Two clients writing the same document is the case the merge mode exists to
+// decide. Neither may be rejected at write time.
+func TestOrdinaryWritesDoNotLockEachOtherOut(t *testing.T) {
+	for _, sessionIsolation := range []bool{false, true} {
+		t.Run(fmt.Sprintf("sessionIsolation=%v", sessionIsolation), func(t *testing.T) {
+			be := docLockBackend(t, sessionIsolation)
+			ctxA, _ := ordinaryWriteCtx()
+			ctxB, _ := ordinaryWriteCtx()
+			ids := []hash.Hash{idH(1)}
+
+			require.NoError(t, be.acquireTxnLocks(ctxA, "mydb", "main", "col", ids, true))
+			require.NoError(t, be.acquireTxnLocks(ctxB, "mydb", "main", "col", ids, true),
+				"a second ordinary writer must not be rejected or made to wait")
+		})
+	}
+}
+
+// An ordinary (non-transactional) write must not run over a document a client
+// transaction holds: it blocks until that transaction resolves, then proceeds --
+// matching MongoDB, which blocks a plain write on a document an open transaction
+// locks. The wait is bounded by the command's maxTimeMS via ctx. See workspace-s1s.
+func TestOrdinaryWriteBlocksOnAClientTransactionsLock(t *testing.T) {
+	be := docLockBackend(t, false)
+	txnCtx, txnOwner := clientTxnCtx()
+	ids := []hash.Hash{idH(1)}
+	require.NoError(t, be.acquireTxnLocks(txnCtx, "mydb", "main", "col", ids, true))
+
+	ordinary := conninfo.New()
+	ordinary.SetForked(true)
+
+	// While the transaction holds the lock, an ordinary write waits; with a
+	// deadline it fails (mapped to maxTimeMS upstream) rather than proceeding.
+	deadlineCtx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	err := be.acquireTxnLocks(conninfo.Ctx(deadlineCtx, ordinary), "mydb", "main", "col", ids, true)
+	require.Error(t, err, "an ordinary write must block on a locked document")
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+
+	// Once the transaction releases, the ordinary write proceeds.
+	done := make(chan error, 1)
 	go func() {
-		time.Sleep(100 * time.Millisecond)
-		m.Release("ownerA")
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		done <- be.acquireTxnLocks(conninfo.Ctx(ctx, ordinary), "mydb", "main", "col", ids, true)
 	}()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	start := time.Now()
-	require.NoError(t, m.WaitForRelease(ctx, "col", []hash.Hash{idH(1)}))
-	elapsed := time.Since(start)
-	assert.GreaterOrEqual(t, elapsed, 80*time.Millisecond, "should have waited for the release")
-	assert.Less(t, elapsed, 500*time.Millisecond, "should have unblocked promptly after release")
+	select {
+	case <-done:
+		t.Fatal("ordinary write returned before the transaction released")
+	case <-time.After(150 * time.Millisecond):
+	}
+	be.releaseLocksForOwner(txnOwner)
+	select {
+	case err := <-done:
+		require.NoError(t, err, "ordinary write should proceed once the lock is released")
+	case <-time.After(2 * time.Second):
+		t.Fatal("ordinary write did not proceed after release")
+	}
 }
 
-func TestWaitForReleaseRespectsContextCancellation(t *testing.T) {
-	m := NewDocLockManager()
-	require.NoError(t, m.Acquire("ownerA", "col", []hash.Hash{idH(1)}, LockKindUpdate))
+// Client transactions keep fail-fast locking, and keep it in every mode: it is
+// transaction-contention behaviour, not a server-wide concurrency mechanism.
+func TestClientTransactionFailsFastOnDocumentContention(t *testing.T) {
+	for _, sessionIsolation := range []bool{false, true} {
+		t.Run(fmt.Sprintf("sessionIsolation=%v", sessionIsolation), func(t *testing.T) {
+			be := docLockBackend(t, sessionIsolation)
+			ctxA, ownerA := clientTxnCtx()
+			ctxB, _ := clientTxnCtx()
+			ids := []hash.Hash{idH(1)}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-	start := time.Now()
-	err := m.WaitForRelease(ctx, "col", []hash.Hash{idH(1)})
-	elapsed := time.Since(start)
-	require.Error(t, err)
-	assert.ErrorIs(t, err, context.DeadlineExceeded)
-	assert.GreaterOrEqual(t, elapsed, 80*time.Millisecond)
-	assert.Less(t, elapsed, 500*time.Millisecond)
-}
+			require.NoError(t, be.acquireTxnLocks(ctxA, "mydb", "main", "col", ids, true))
+			err := be.acquireTxnLocks(ctxB, "mydb", "main", "col", ids, true)
 
-func TestWaitForReleaseEmptyIdsIsNoop(t *testing.T) {
-	m := NewDocLockManager()
-	require.NoError(t, m.Acquire("ownerA", "col", []hash.Hash{idH(1)}, LockKindUpdate))
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-	defer cancel()
-	require.NoError(t, m.WaitForRelease(ctx, "col", nil))
-	require.NoError(t, m.WaitForRelease(ctx, "col", []hash.Hash{}))
-}
-
-func TestWaitForReleaseSkipsInsertKindLocks(t *testing.T) {
-	// Insert-kind locks model in-flight uncommitted inserts. Outside readers
-	// in MongoDB do not see uncommitted inserts under default read concern,
-	// so a non-txn waiter races past the insert rather than blocking on it.
-	m := NewDocLockManager()
-	require.NoError(t, m.Acquire("ownerA", "col", []hash.Hash{idH(1)}, LockKindInsert))
-
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-	defer cancel()
-	start := time.Now()
-	require.NoError(t, m.WaitForRelease(ctx, "col", []hash.Hash{idH(1)}))
-	assert.Less(t, time.Since(start), 50*time.Millisecond, "should not have waited on an insert-kind lock")
+			require.Error(t, err)
+			assert.True(t, backends.ErrorCodeIs(err, backends.ErrorCodeWriteConflict),
+				"expected a write conflict, got %v", err)
+			assert.True(t, be.docLockManager("mydb", "main").Holds(ownerA, "col", idH(1)),
+				"the holder keeps its lock")
+		})
+	}
 }

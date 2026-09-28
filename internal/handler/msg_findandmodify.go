@@ -49,6 +49,10 @@ func (h *Handler) MsgFindAndModify(connCtx context.Context, msg *wire.OpMsg) (*w
 		return nil, lazyerrors.Error(err)
 	}
 
+	if err := rejectRetryableWriteOnStandalone(document, h.ReplSetName); err != nil {
+		return nil, err
+	}
+
 	params, err := common.GetFindAndModifyParams(document, h.L)
 	if err != nil {
 		return nil, err
