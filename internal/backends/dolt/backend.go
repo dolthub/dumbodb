@@ -1870,13 +1870,20 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 		}
 		ms := db.mergeState
 
-		if newConflicts, reErr := b.recheckCrossValidation(ctx, db, ms); reErr != nil {
-			return nil, fmt.Errorf("DumboDBMerge: continue: %w", reErr)
-		} else if newConflicts {
+		hadDeferredCollections := len(ms.deferredCollections) > 0
+		newConflicts := false
+		if hadDeferredCollections {
+			if newConflicts, err = mergeDeferredCollections(ctx, db, ms); err != nil {
+				return nil, fmt.Errorf("DumboDBMerge: continue: %w", err)
+			}
 			db.setAM(ctx, ms.intoBranch, ms.resolvedAM)
 			if wsErr := persistConflictState(ctx, db, ms); wsErr != nil {
-				return nil, fmt.Errorf("DumboDBMerge: continue: persisting new validation conflicts: %w", wsErr)
+				return nil, fmt.Errorf("DumboDBMerge: continue: persisting deferred collection merge: %w", wsErr)
 			}
+		} else if newConflicts, err = b.recheckCrossValidation(ctx, db, ms); err != nil {
+			return nil, fmt.Errorf("DumboDBMerge: continue: %w", err)
+		}
+		if newConflicts {
 			return nil, &backends.MergeConflictError{Conflicts: ms.summaries()}
 		}
 

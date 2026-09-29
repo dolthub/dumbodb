@@ -116,10 +116,9 @@ func mergeDeferredCollections(ctx context.Context, state *dbState, ms *mergeInPr
 		return false, fmt.Errorf("flushing deferred collections: %w", err)
 	}
 	ms.resolvedAM = mergedAM
-	before := unresolvedConflictCount(ms.conflicts)
 	if err := crossValidateMergedDocuments(ctx, state, mergedAM, baseAM, ms.conflicts,
 		map[string]*metaConflictEntry{}, ms.theirHash(), theirsDesc, false); err != nil {
 		return false, fmt.Errorf("validating deferred collections: %w", err)
 	}
-	return unresolvedConflictCount(ms.conflicts) > before || before > 0, nil
+	return ms.hasUnresolvedConflicts(), nil
 }

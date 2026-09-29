@@ -82,6 +82,7 @@ func ageOf(t *testing.T, coll *mongo.Collection, id int) (int32, bool) {
 }
 
 func TestValidatorMergeCrossValidation(t *testing.T) {
+	suiteT := t
 	env := startDumboDB(t)
 	ctx := context.Background()
 	suffix := rand.Int64N(1_000_000)
@@ -468,8 +469,12 @@ func TestValidatorMergeCrossValidation(t *testing.T) {
 		assert.ErrorIs(t, err, mongo.ErrNoDocuments,
 			"feature-only insert must not be visible before validator resolution")
 
+		env.Restart(suiteT)
+		mainDB = env.Client.Database(dbName + "@main")
 		mc := conflictsByType(t, mainDB, "metadata")[0]
 		require.NoError(t, resolveConflict(t, mainDB, "items", mc["conflictId"].(string), "theirs", nil))
+		env.Restart(suiteT)
+		mainDB = env.Client.Database(dbName + "@main")
 		continueMerge(t, mainDB)
 
 		require.NoError(t, mainDB.Collection("items").FindOne(ctx, bson.D{{Key: "_id", Value: 1}}).Decode(&doc1))
@@ -524,7 +529,7 @@ func TestValidatorMergeCrossValidation(t *testing.T) {
 		require.EqualValues(t, 0, cont["ok"], "deferred document merge must re-pause: %v", cont)
 		docs := conflictsByType(t, mainDB, "document")
 		require.Len(t, docs, 1)
-		assert.EqualValues(t, 1, docs[0]["documentId"])
+		assert.EqualValues(t, 1, docs[0]["ours"].(bson.M)["_id"])
 	})
 
 	_ = options.CreateCollection
