@@ -2156,6 +2156,19 @@ func (b *Backend) DumboDBCherryPick(ctx context.Context, params *backends.Cherry
 			return nil, fmt.Errorf("DumboDBCherryPick: unresolved cherry-pick conflicts remain")
 		}
 		ms := db.mergeState
+		if len(ms.deferredCollections) > 0 {
+			newConflicts, mergeErr := mergeDeferredCollections(ctx, db, ms)
+			if mergeErr != nil {
+				return nil, fmt.Errorf("DumboDBCherryPick: continue: %w", mergeErr)
+			}
+			db.setAM(ctx, ms.intoBranch, ms.resolvedAM)
+			if wsErr := persistConflictState(ctx, db, ms); wsErr != nil {
+				return nil, fmt.Errorf("DumboDBCherryPick: continue: persisting deferred collection merge: %w", wsErr)
+			}
+			if newConflicts {
+				return nil, &backends.DumboDBCherryPickConflictError{Conflicts: ms.summaries()}
+			}
+		}
 
 		contAM, contAMErr := b.currentWorkingAM(ctx, db, ms.intoBranch)
 		if contAMErr != nil {
