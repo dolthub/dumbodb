@@ -112,6 +112,39 @@ func TestMergeMode_ChangedByCollMod(t *testing.T) {
 		"after collMod to fieldTouched, a convergent edit must conflict")
 }
 
+func TestMergeMode_OneSidedChangeGovernsSameMerge(t *testing.T) {
+	env := startDumboDB(t)
+	ctx := context.Background()
+	dbName := fmt.Sprintf("mmo_%d", rand.Int64N(1_000_000))
+	mainDB := env.Client.Database(dbName + "@main")
+
+	require.NoError(t, mainDB.RunCommand(ctx, bson.D{{Key: "create", Value: "docs"}}).Err())
+	_, err := mainDB.Collection("docs").InsertOne(ctx,
+		bson.D{{Key: "_id", Value: int32(1)}, {Key: "v", Value: int32(1)}})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, dbName+"@main", "base")
+	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
+		{Key: "doltBranch", Value: 1}, {Key: "action", Value: "add"}, {Key: "branch", Value: "feature"},
+	}).Err())
+
+	featureDB := env.Client.Database(dbName + "@feature")
+	require.NoError(t, featureDB.RunCommand(ctx, bson.D{
+		{Key: "collMod", Value: "docs"}, {Key: "mergeMode", Value: "fieldDivergent"},
+	}).Err())
+	_, err = featureDB.Collection("docs").UpdateOne(ctx, bson.D{{Key: "_id", Value: int32(1)}},
+		bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(2)}}}})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, dbName+"@feature", "feature changes mode and value")
+
+	_, err = mainDB.Collection("docs").UpdateOne(ctx, bson.D{{Key: "_id", Value: int32(1)}},
+		bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(2)}}}})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, dbName+"@main", "main changes value")
+
+	raw := runCommandRaw(t, mainDB, bson.D{{Key: "doltMerge", Value: 1}, {Key: "mergeIn", Value: "feature"}})
+	require.EqualValues(t, 1, raw["ok"], "the incoming fieldDivergent mode must govern its own one-sided change: %v", raw)
+}
+
 // A collection that declares nothing gets the default, which is the mode the
 // compare-and-swap pattern needs.
 func TestMergeMode_DefaultsToFieldTouched(t *testing.T) {

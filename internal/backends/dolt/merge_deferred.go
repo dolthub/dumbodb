@@ -24,6 +24,39 @@ import (
 	"github.com/dolthub/dolt/go/store/prolly"
 )
 
+func effectiveMetadataMergeMode(meta *collMeta) MergeMode {
+	if meta == nil {
+		return DefaultMergeMode
+	}
+	return mergeModeOrDefault(meta.MergeMode)
+}
+
+func mergedCollectionMode(ctx context.Context, state *dbState, intoAM, fromAM, baseAM prolly.AddressMap, name string) (MergeMode, error) {
+	ours, err := readCatalogDoc(ctx, state, intoAM, name)
+	if err != nil {
+		return "", fmt.Errorf("reading ours metadata for %q: %w", name, err)
+	}
+	theirs, err := readCatalogDoc(ctx, state, fromAM, name)
+	if err != nil {
+		return "", fmt.Errorf("reading theirs metadata for %q: %w", name, err)
+	}
+	base, err := readCatalogDoc(ctx, state, baseAM, name)
+	if err != nil {
+		return "", fmt.Errorf("reading base metadata for %q: %w", name, err)
+	}
+	oursMode := effectiveMetadataMergeMode(ours)
+	theirsMode := effectiveMetadataMergeMode(theirs)
+	baseMode := effectiveMetadataMergeMode(base)
+	switch {
+	case oursMode == baseMode:
+		return theirsMode, nil
+	case theirsMode == baseMode || oursMode == theirsMode:
+		return oursMode, nil
+	default:
+		return "", fmt.Errorf("merge mode for %q is unresolved", name)
+	}
+}
+
 func setDeferredCollectionPlaceholders(ctx context.Context, mergedAM, placeholderAM prolly.AddressMap, deferred map[string]struct{}) (prolly.AddressMap, error) {
 	editor := mergedAM.Editor()
 	for name := range deferred {

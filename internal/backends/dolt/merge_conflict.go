@@ -1627,10 +1627,9 @@ func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, 
 			return prolly.AddressMap{}, nil, nil, nil, nil, fmt.Errorf("conflict in %q: deleted on one branch and modified on the other", name)
 		}
 
-		// The destination branch's declared mode governs ordinary merges.
-		mode := DefaultMergeMode
-		if meta, metaErr := readCatalogDoc(ctx, state, intoAM, name); metaErr == nil && meta != nil {
-			mode = mergeModeOrDefault(meta.MergeMode)
+		mode, modeErr := mergedCollectionMode(ctx, state, intoAM, fromAM, baseAM, name)
+		if modeErr != nil {
+			return prolly.AddressMap{}, nil, nil, nil, nil, modeErr
 		}
 		mergedH, collConflicts, err := mergeCollectionDTBL(ctx, state, name, intoH, fromH, baseH,
 			theirHash, baseHash, oursDesc, theirsDesc, mode)

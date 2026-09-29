@@ -80,6 +80,31 @@ func TestGoverningMetadataConflict(t *testing.T) {
 			theirs:       &collMeta{Validator: validator0, ValidationLevel: "strict", ValidationAction: "error"},
 			wantDeferred: false,
 		},
+		{
+			name: "merge mode diverged",
+			base: &collMeta{}, ours: &collMeta{MergeMode: string(MergeModeDocumentTouched)},
+			theirs: &collMeta{MergeMode: string(MergeModeFieldDivergent)}, wantDeferred: true,
+		},
+		{
+			name: "other merge mode pair diverged",
+			base: &collMeta{}, ours: &collMeta{MergeMode: string(MergeModeDocumentDivergent)},
+			theirs: &collMeta{MergeMode: string(MergeModeFieldDivergent)}, wantDeferred: true,
+		},
+		{
+			name: "one sided merge mode change",
+			base: &collMeta{}, ours: &collMeta{},
+			theirs: &collMeta{MergeMode: string(MergeModeDocumentTouched)}, wantDeferred: false,
+		},
+		{
+			name: "explicit default agrees with unset",
+			base: &collMeta{}, ours: &collMeta{},
+			theirs: &collMeta{MergeMode: string(MergeModeFieldTouched)}, wantDeferred: false,
+		},
+		{
+			name: "agreed document divergent",
+			base: &collMeta{}, ours: &collMeta{MergeMode: string(MergeModeDocumentDivergent)},
+			theirs: &collMeta{MergeMode: string(MergeModeDocumentDivergent)}, wantDeferred: false,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

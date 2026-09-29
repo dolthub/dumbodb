@@ -58,7 +58,8 @@ func validationSettingsEqual(left, right *collMeta) bool {
 	leftLevel, leftAction := left.effectiveValidation()
 	rightLevel, rightAction := right.effectiveValidation()
 	return documentsEqual(left.Validator, right.Validator) &&
-		leftLevel == rightLevel && leftAction == rightAction
+		leftLevel == rightLevel && leftAction == rightAction &&
+		mergeModeOrDefault(left.MergeMode) == mergeModeOrDefault(right.MergeMode)
 }
 
 func metaReasonCode(base *collMeta, ourDiff, theirDiff string) string {
