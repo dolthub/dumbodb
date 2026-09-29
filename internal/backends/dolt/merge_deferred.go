@@ -21,7 +21,37 @@ import (
 
 	"github.com/dolthub/dolt/go/store/datas"
 	"github.com/dolthub/dolt/go/store/hash"
+	"github.com/dolthub/dolt/go/store/prolly"
 )
+
+func setDeferredCollectionPlaceholders(ctx context.Context, mergedAM, placeholderAM prolly.AddressMap, deferred map[string]struct{}) (prolly.AddressMap, error) {
+	editor := mergedAM.Editor()
+	for name := range deferred {
+		h, err := placeholderAM.Get(ctx, name)
+		if err != nil {
+			return prolly.AddressMap{}, err
+		}
+		has, err := mergedAM.Has(ctx, name)
+		if err != nil {
+			return prolly.AddressMap{}, err
+		}
+		switch {
+		case h.IsEmpty() && has:
+			if err := editor.Delete(ctx, name); err != nil {
+				return prolly.AddressMap{}, err
+			}
+		case !h.IsEmpty() && has:
+			if err := editor.Update(ctx, name, h); err != nil {
+				return prolly.AddressMap{}, err
+			}
+		case !h.IsEmpty():
+			if err := editor.Add(ctx, name, h); err != nil {
+				return prolly.AddressMap{}, err
+			}
+		}
+	}
+	return editor.Flush(ctx)
+}
 
 func operationBaseHash(ctx context.Context, state *dbState, ms *mergeInProgress) (hash.Hash, error) {
 	switch {

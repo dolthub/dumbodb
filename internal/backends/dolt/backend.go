@@ -3284,6 +3284,21 @@ func (b *Backend) DumboDBRebase(ctx context.Context, params *backends.RebasePara
 			return nil, fmt.Errorf("DumboDBRebase: unresolved rebase conflicts remain")
 		}
 		ms := db.mergeState
+		if len(ms.deferredCollections) > 0 {
+			newConflicts, mergeErr := mergeDeferredCollections(ctx, db, ms)
+			if mergeErr != nil {
+				return nil, fmt.Errorf("DumboDBRebase: continue: %w", mergeErr)
+			}
+			db.setAM(ctx, ms.intoBranch, ms.resolvedAM)
+			if wsErr := persistConflictState(ctx, db, ms); wsErr != nil {
+				return nil, fmt.Errorf("DumboDBRebase: continue: persisting deferred collection merge: %w", wsErr)
+			}
+			if newConflicts {
+				return nil, &backends.DumboDBRebaseConflictError{
+					Conflicts: ms.summaries(), ConflictCommit: ms.rebaseCurrentPick.String(),
+				}
+			}
+		}
 
 		// Clear artifact maps for the paused conflict before committing, taking
 		// the branch's current root so writes made during the conflict window
@@ -3499,6 +3514,12 @@ func (b *Backend) replayRemainingCommits(ctx context.Context, db *dbState, ms *m
 			fmt.Sprintf("commit '%s' (ours)", pickHash.String()), fmt.Sprintf("branch '%s' (theirs)", ms.ontoBranch))
 		if err != nil {
 			return nil, fmt.Errorf("replayRemainingCommits: merging commit %q: %w", pickHash, err)
+		}
+		if len(deferredCollections) > 0 {
+			mergedAM, err = setDeferredCollectionPlaceholders(ctx, mergedAM, intoAM, deferredCollections)
+			if err != nil {
+				return nil, fmt.Errorf("replayRemainingCommits: preserving destination collections: %w", err)
+			}
 		}
 
 		if len(conflicts) > 0 || len(viewConflicts) > 0 || len(metaConflicts) > 0 {
