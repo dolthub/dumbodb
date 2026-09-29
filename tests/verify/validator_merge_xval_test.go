@@ -418,5 +418,114 @@ func TestValidatorMergeCrossValidation(t *testing.T) {
 		assert.EqualValues(t, 5, age1, "grandfathered unchanged doc survives")
 	})
 
+	t.Run("ValidatorConflictDefersCleanDocumentMerge", func(t *testing.T) {
+		dbName, db := newDB("metadeferclean")
+		require.NoError(t, db.CreateCollection(ctx, "items",
+			options.CreateCollection().SetValidator(valNonNegAge)))
+		_, err := db.Collection("items").InsertOne(ctx, bson.D{
+			{Key: "_id", Value: 1},
+			{Key: "age", Value: int32(25)},
+			{Key: "a", Value: "base"},
+			{Key: "b", Value: "base"},
+		})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, dbName, "create validated items + doc", "alice <alice@acme.com>")
+
+		vmBranch(t, env, dbName, "feature")
+		featureDB := env.Client.Database(dbName + "@feature")
+		require.NoError(t, featureDB.RunCommand(ctx, bson.D{
+			{Key: "collMod", Value: "items"}, {Key: "validator", Value: ageGte(10)},
+		}).Err())
+		_, err = featureDB.Collection("items").UpdateOne(ctx, bson.D{{Key: "_id", Value: 1}},
+			bson.D{{Key: "$set", Value: bson.D{{Key: "a", Value: "feature"}}}})
+		require.NoError(t, err)
+		_, err = featureDB.Collection("items").InsertOne(ctx,
+			bson.D{{Key: "_id", Value: 2}, {Key: "age", Value: int32(12)}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, dbName+"@feature", "feature: validator + documents", "bob <bob@widgets.io>")
+
+		require.NoError(t, db.RunCommand(ctx, bson.D{
+			{Key: "collMod", Value: "items"}, {Key: "validator", Value: ageGte(3)},
+		}).Err())
+		_, err = db.Collection("items").UpdateOne(ctx, bson.D{{Key: "_id", Value: 1}},
+			bson.D{{Key: "$set", Value: bson.D{{Key: "b", Value: "main"}}}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, dbName, "main: validator + document", "alice <alice@acme.com>")
+
+		mainDB := env.Client.Database(dbName + "@main")
+		raw := vmMerge(t, env, dbName, "feature")
+		require.EqualValues(t, 0, raw["ok"], "divergent validator must conflict: %v", raw)
+		require.Len(t, conflictsByType(t, mainDB, "metadata"), 1)
+		require.Empty(t, conflictsByType(t, mainDB, "document"),
+			"document merge must wait for validator resolution")
+		require.Empty(t, conflictsByType(t, mainDB, "validation"))
+
+		var doc1 bson.M
+		require.NoError(t, mainDB.Collection("items").FindOne(ctx, bson.D{{Key: "_id", Value: 1}}).Decode(&doc1))
+		assert.Equal(t, "base", doc1["a"], "feature edit must not be visible before validator resolution")
+		assert.Equal(t, "main", doc1["b"])
+		err = mainDB.Collection("items").FindOne(ctx, bson.D{{Key: "_id", Value: 2}}).Err()
+		assert.ErrorIs(t, err, mongo.ErrNoDocuments,
+			"feature-only insert must not be visible before validator resolution")
+
+		mc := conflictsByType(t, mainDB, "metadata")[0]
+		require.NoError(t, resolveConflict(t, mainDB, "items", mc["conflictId"].(string), "theirs", nil))
+		continueMerge(t, mainDB)
+
+		require.NoError(t, mainDB.Collection("items").FindOne(ctx, bson.D{{Key: "_id", Value: 1}}).Decode(&doc1))
+		assert.Equal(t, "feature", doc1["a"])
+		assert.Equal(t, "main", doc1["b"])
+		var doc2 bson.M
+		require.NoError(t, mainDB.Collection("items").FindOne(ctx, bson.D{{Key: "_id", Value: 2}}).Decode(&doc2))
+		assert.EqualValues(t, 12, doc2["age"])
+	})
+
+	t.Run("ValidatorConflictDefersDocumentConflict", func(t *testing.T) {
+		dbName, db := newDB("metadeferconflict")
+		require.NoError(t, db.CreateCollection(ctx, "items",
+			options.CreateCollection().SetValidator(valNonNegAge)))
+		_, err := db.Collection("items").InsertOne(ctx,
+			bson.D{{Key: "_id", Value: 1}, {Key: "age", Value: int32(25)}, {Key: "tag", Value: "base"}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, dbName, "create validated items + doc", "alice <alice@acme.com>")
+
+		vmBranch(t, env, dbName, "feature")
+		featureDB := env.Client.Database(dbName + "@feature")
+		require.NoError(t, featureDB.RunCommand(ctx, bson.D{
+			{Key: "collMod", Value: "items"}, {Key: "validator", Value: ageGte(10)},
+		}).Err())
+		_, err = featureDB.Collection("items").UpdateOne(ctx, bson.D{{Key: "_id", Value: 1}},
+			bson.D{{Key: "$set", Value: bson.D{{Key: "tag", Value: "feature"}}}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, dbName+"@feature", "feature: validator + document", "bob <bob@widgets.io>")
+
+		require.NoError(t, db.RunCommand(ctx, bson.D{
+			{Key: "collMod", Value: "items"}, {Key: "validator", Value: ageGte(3)},
+		}).Err())
+		_, err = db.Collection("items").UpdateOne(ctx, bson.D{{Key: "_id", Value: 1}},
+			bson.D{{Key: "$set", Value: bson.D{{Key: "tag", Value: "main"}}}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, dbName, "main: validator + document", "alice <alice@acme.com>")
+
+		mainDB := env.Client.Database(dbName + "@main")
+		raw := vmMerge(t, env, dbName, "feature")
+		require.EqualValues(t, 0, raw["ok"], "divergent validator must conflict: %v", raw)
+		require.Len(t, conflictsByType(t, mainDB, "metadata"), 1)
+		require.Empty(t, conflictsByType(t, mainDB, "document"),
+			"document conflict detection must wait for validator resolution")
+
+		var before bson.M
+		require.NoError(t, mainDB.Collection("items").FindOne(ctx, bson.D{{Key: "_id", Value: 1}}).Decode(&before))
+		assert.Equal(t, "main", before["tag"], "ours must remain visible while configuration is unresolved")
+
+		mc := conflictsByType(t, mainDB, "metadata")[0]
+		require.NoError(t, resolveConflict(t, mainDB, "items", mc["conflictId"].(string), "theirs", nil))
+		cont := runCommandRaw(t, mainDB, bson.D{{Key: "doltMerge", Value: 1}, {Key: "continue", Value: 1}})
+		require.EqualValues(t, 0, cont["ok"], "deferred document merge must re-pause: %v", cont)
+		docs := conflictsByType(t, mainDB, "document")
+		require.Len(t, docs, 1)
+		assert.EqualValues(t, 1, docs[0]["documentId"])
+	})
+
 	_ = options.CreateCollection
 }
