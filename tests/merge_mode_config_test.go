@@ -145,6 +145,84 @@ func TestMergeMode_OneSidedChangeGovernsSameMerge(t *testing.T) {
 	require.EqualValues(t, 1, raw["ok"], "the incoming fieldDivergent mode must govern its own one-sided change: %v", raw)
 }
 
+func TestMergeMode_DivergenceUsesResolvedMode(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		resolution       string
+		wantDataConflict bool
+	}{
+		{name: "fieldDivergent", resolution: "theirs"},
+		{name: "documentDivergent", resolution: "ours", wantDataConflict: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := startDumboDB(t)
+			ctx := context.Background()
+			dbName := fmt.Sprintf("mmtwo_%d", rand.Int64N(1_000_000))
+			mainDB := env.Client.Database(dbName + "@main")
+			require.NoError(t, mainDB.RunCommand(ctx, bson.D{{Key: "create", Value: "docs"}}).Err())
+			_, err := mainDB.Collection("docs").InsertOne(ctx, bson.D{
+				{Key: "_id", Value: 1}, {Key: "a", Value: "base"}, {Key: "b", Value: "base"},
+			})
+			require.NoError(t, err)
+			dumboDBCommit(t, env, dbName+"@main", "base")
+			require.NoError(t, mainDB.RunCommand(ctx, bson.D{
+				{Key: "doltBranch", Value: 1}, {Key: "action", Value: "add"}, {Key: "branch", Value: "feature"},
+			}).Err())
+
+			featureDB := env.Client.Database(dbName + "@feature")
+			require.NoError(t, featureDB.RunCommand(ctx, bson.D{
+				{Key: "collMod", Value: "docs"}, {Key: "mergeMode", Value: "fieldDivergent"},
+			}).Err())
+			_, err = featureDB.Collection("docs").UpdateOne(ctx, bson.D{{Key: "_id", Value: 1}},
+				bson.D{{Key: "$set", Value: bson.D{{Key: "a", Value: "feature"}}}})
+			require.NoError(t, err)
+			dumboDBCommit(t, env, dbName+"@feature", "feature mode and edit")
+
+			require.NoError(t, mainDB.RunCommand(ctx, bson.D{
+				{Key: "collMod", Value: "docs"}, {Key: "mergeMode", Value: "documentDivergent"},
+			}).Err())
+			_, err = mainDB.Collection("docs").UpdateOne(ctx, bson.D{{Key: "_id", Value: 1}},
+				bson.D{{Key: "$set", Value: bson.D{{Key: "b", Value: "main"}}}})
+			require.NoError(t, err)
+			dumboDBCommit(t, env, dbName+"@main", "main mode and edit")
+
+			raw := runCommandRaw(t, mainDB, bson.D{{Key: "doltMerge", Value: 1}, {Key: "mergeIn", Value: "feature"}})
+			require.EqualValues(t, 0, raw["ok"])
+			var conflictResult bson.M
+			require.NoError(t, mainDB.RunCommand(ctx, bson.D{{Key: "doltConflicts", Value: 1}}).Decode(&conflictResult))
+			conflicts := conflictResult["conflicts"].(bson.A)
+			require.Len(t, conflicts, 1, "phase one must expose metadata only")
+			metadata := conflicts[0].(bson.M)
+			require.Equal(t, "metadata", metadata["type"])
+			assert.Equal(t, "documentDivergent", metadata["ours"].(bson.M)["mergeMode"])
+			assert.Equal(t, "fieldDivergent", metadata["theirs"].(bson.M)["mergeMode"])
+			var before bson.M
+			require.NoError(t, mainDB.Collection("docs").FindOne(ctx, bson.D{{Key: "_id", Value: 1}}).Decode(&before))
+			assert.Equal(t, "base", before["a"])
+			assert.Equal(t, "main", before["b"])
+
+			require.NoError(t, mainDB.RunCommand(ctx, bson.D{
+				{Key: "doltResolveConflict", Value: 1}, {Key: "collection", Value: "docs"},
+				{Key: "conflictId", Value: metadata["conflictId"]}, {Key: "resolution", Value: tc.resolution},
+			}).Err())
+			continued := runCommandRaw(t, mainDB, bson.D{{Key: "doltMerge", Value: 1}, {Key: "continue", Value: 1}})
+			if tc.wantDataConflict {
+				require.EqualValues(t, 0, continued["ok"], "documentDivergent must re-pause: %v", continued)
+				require.NoError(t, mainDB.RunCommand(ctx, bson.D{{Key: "doltConflicts", Value: 1}}).Decode(&conflictResult))
+				conflicts = conflictResult["conflicts"].(bson.A)
+				require.Len(t, conflicts, 1)
+				assert.Equal(t, "document", conflicts[0].(bson.M)["type"])
+				return
+			}
+			require.EqualValues(t, 1, continued["ok"], "%v", continued)
+			var merged bson.M
+			require.NoError(t, mainDB.Collection("docs").FindOne(ctx, bson.D{{Key: "_id", Value: 1}}).Decode(&merged))
+			assert.Equal(t, "feature", merged["a"])
+			assert.Equal(t, "main", merged["b"])
+		})
+	}
+}
+
 // A collection that declares nothing gets the default, which is the mode the
 // compare-and-swap pattern needs.
 func TestMergeMode_DefaultsToFieldTouched(t *testing.T) {
