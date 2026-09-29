@@ -430,6 +430,8 @@ func TestValidatorMergeCrossValidation(t *testing.T) {
 			{Key: "b", Value: "base"},
 		})
 		require.NoError(t, err)
+		_, err = db.Collection("unaffected").InsertOne(ctx, bson.D{{Key: "_id", Value: 0}})
+		require.NoError(t, err)
 		dumboDBCommit(t, env, dbName, "create validated items + doc", "alice <alice@acme.com>")
 
 		vmBranch(t, env, dbName, "feature")
@@ -443,6 +445,8 @@ func TestValidatorMergeCrossValidation(t *testing.T) {
 		_, err = featureDB.Collection("items").InsertOne(ctx,
 			bson.D{{Key: "_id", Value: 2}, {Key: "age", Value: int32(12)}})
 		require.NoError(t, err)
+		_, err = featureDB.Collection("unaffected").InsertOne(ctx, bson.D{{Key: "_id", Value: 2}})
+		require.NoError(t, err)
 		dumboDBCommit(t, env, dbName+"@feature", "feature: validator + documents", "bob <bob@widgets.io>")
 
 		require.NoError(t, db.RunCommand(ctx, bson.D{
@@ -450,6 +454,8 @@ func TestValidatorMergeCrossValidation(t *testing.T) {
 		}).Err())
 		_, err = db.Collection("items").UpdateOne(ctx, bson.D{{Key: "_id", Value: 1}},
 			bson.D{{Key: "$set", Value: bson.D{{Key: "b", Value: "main"}}}})
+		require.NoError(t, err)
+		_, err = db.Collection("unaffected").InsertOne(ctx, bson.D{{Key: "_id", Value: 1}})
 		require.NoError(t, err)
 		dumboDBCommit(t, env, dbName, "main: validator + document", "alice <alice@acme.com>")
 
@@ -468,6 +474,9 @@ func TestValidatorMergeCrossValidation(t *testing.T) {
 		err = mainDB.Collection("items").FindOne(ctx, bson.D{{Key: "_id", Value: 2}}).Err()
 		assert.ErrorIs(t, err, mongo.ErrNoDocuments,
 			"feature-only insert must not be visible before validator resolution")
+		require.NoError(t, mainDB.Collection("unaffected").FindOne(ctx, bson.D{{Key: "_id", Value: 1}}).Err())
+		require.NoError(t, mainDB.Collection("unaffected").FindOne(ctx, bson.D{{Key: "_id", Value: 2}}).Err(),
+			"collections without governing metadata conflicts still merge during phase one")
 
 		env.Restart(suiteT)
 		mainDB = env.Client.Database(dbName + "@main")
@@ -530,6 +539,65 @@ func TestValidatorMergeCrossValidation(t *testing.T) {
 		docs := conflictsByType(t, mainDB, "document")
 		require.Len(t, docs, 1)
 		assert.EqualValues(t, 1, docs[0]["ours"].(bson.M)["_id"])
+	})
+
+	t.Run("ValidatorConflictDefersUniqueIndexConflict", func(t *testing.T) {
+		dbName, db := newDB("metadeferunique")
+		require.NoError(t, db.CreateCollection(ctx, "items",
+			options.CreateCollection().SetValidator(valNonNegAge)))
+		_, err := db.Collection("items").Indexes().CreateOne(ctx, mongo.IndexModel{
+			Keys:    bson.D{{Key: "sku", Value: int32(1)}},
+			Options: options.Index().SetName("by_sku").SetUnique(true),
+		})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, dbName, "create validated items and index", "alice <alice@acme.com>")
+
+		vmBranch(t, env, dbName, "feature")
+		featureDB := env.Client.Database(dbName + "@feature")
+		require.NoError(t, featureDB.RunCommand(ctx, bson.D{
+			{Key: "collMod", Value: "items"}, {Key: "validator", Value: ageGte(10)},
+		}).Err())
+		_, err = featureDB.Collection("items").InsertOne(ctx,
+			bson.D{{Key: "_id", Value: 2}, {Key: "age", Value: int32(12)}, {Key: "sku", Value: "S-1"}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, dbName+"@feature", "feature validator and indexed document", "bob <bob@widgets.io>")
+
+		require.NoError(t, db.RunCommand(ctx, bson.D{
+			{Key: "collMod", Value: "items"}, {Key: "validator", Value: ageGte(3)},
+		}).Err())
+		_, err = db.Collection("items").InsertOne(ctx,
+			bson.D{{Key: "_id", Value: 1}, {Key: "age", Value: int32(5)}, {Key: "sku", Value: "S-1"}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, dbName, "main validator and indexed document", "alice <alice@acme.com>")
+
+		mainDB := env.Client.Database(dbName + "@main")
+		raw := vmMerge(t, env, dbName, "feature")
+		require.EqualValues(t, 0, raw["ok"])
+		require.Len(t, conflictsByType(t, mainDB, "metadata"), 1)
+		require.Empty(t, conflictsByType(t, mainDB, "document"),
+			"unique-index reconciliation must wait for validator resolution")
+		require.NoError(t, mainDB.Collection("items").FindOne(ctx, bson.D{{Key: "_id", Value: 1}}).Err())
+		assert.ErrorIs(t, mainDB.Collection("items").FindOne(ctx, bson.D{{Key: "_id", Value: 2}}).Err(), mongo.ErrNoDocuments)
+
+		mc := conflictsByType(t, mainDB, "metadata")[0]
+		require.NoError(t, resolveConflict(t, mainDB, "items", mc["conflictId"].(string), "theirs", nil))
+		cont := runCommandRaw(t, mainDB, bson.D{{Key: "doltMerge", Value: 1}, {Key: "continue", Value: 1}})
+		require.EqualValues(t, 0, cont["ok"], "deferred unique collision must re-pause: %v", cont)
+		docs := conflictsByType(t, mainDB, "document")
+		require.Len(t, docs, 1)
+		reason := docs[0]["reason"].(bson.M)
+		assert.Equal(t, "uniqueKeyCollision", reason["code"])
+		assert.Equal(t, "by_sku", reason["index"])
+
+		require.NoError(t, resolveConflict(t, mainDB, "items", docs[0]["conflictId"].(string), "theirs", nil))
+		require.Empty(t, conflictsByType(t, mainDB, "document"))
+		vals := conflictsByType(t, mainDB, "validation")
+		require.Len(t, vals, 1)
+		assert.EqualValues(t, 1, vals[0]["documentId"])
+		require.NoError(t, resolveConflict(t, mainDB, "items", vals[0]["conflictId"].(string), "drop", nil))
+		continueMerge(t, mainDB)
+		assert.ErrorIs(t, mainDB.Collection("items").FindOne(ctx, bson.D{{Key: "_id", Value: 1}}).Err(), mongo.ErrNoDocuments)
+		require.NoError(t, mainDB.Collection("items").FindOne(ctx, bson.D{{Key: "_id", Value: 2}}).Err())
 	})
 
 	_ = options.CreateCollection
