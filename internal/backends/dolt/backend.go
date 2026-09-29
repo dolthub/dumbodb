@@ -3708,6 +3708,19 @@ func (b *Backend) DumboDBRevert(ctx context.Context, params *backends.RevertPara
 			return nil, fmt.Errorf("DumboDBRevert: unresolved revert conflicts remain")
 		}
 		ms := db.mergeState
+		if len(ms.deferredCollections) > 0 {
+			newConflicts, mergeErr := mergeDeferredCollections(ctx, db, ms)
+			if mergeErr != nil {
+				return nil, fmt.Errorf("DumboDBRevert: continue: %w", mergeErr)
+			}
+			db.setAM(ctx, ms.intoBranch, ms.resolvedAM)
+			if wsErr := persistConflictState(ctx, db, ms); wsErr != nil {
+				return nil, fmt.Errorf("DumboDBRevert: continue: persisting deferred collection merge: %w", wsErr)
+			}
+			if newConflicts {
+				return nil, &backends.DumboDBRevertConflictError{Conflicts: ms.summaries()}
+			}
+		}
 
 		contAM, contAMErr := b.currentWorkingAM(ctx, db, ms.intoBranch)
 		if contAMErr != nil {
