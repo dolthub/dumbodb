@@ -27,6 +27,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
 // cherryPickVerifySetup returns hashC1 (main HEAD, initial commit) and hashC2
@@ -65,6 +67,66 @@ func cherryPickVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (ha
 	require.NotEmpty(t, hashC2, "feature commit hash must not be empty")
 
 	return hashC1, hashC2
+}
+
+func TestCherryPickValidatorConflictDefersDocuments(t *testing.T) {
+	env := startDumboDB(t)
+	ctx := context.Background()
+	dbName := fmt.Sprintf("pickval%d", rand.Int64N(1_000_000))
+	db := env.Client.Database(dbName)
+	require.NoError(t, db.CreateCollection(ctx, "items",
+		options.CreateCollection().SetValidator(valNonNegAge)))
+	_, err := db.Collection("items").InsertOne(ctx, bson.D{
+		{Key: "_id", Value: 1}, {Key: "age", Value: int32(25)},
+		{Key: "a", Value: "base"}, {Key: "b", Value: "base"},
+	})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, dbName, "base", "alice <alice@acme.com>")
+	vmBranch(t, env, dbName, "feature")
+
+	featureDB := env.Client.Database(dbName + "@feature")
+	require.NoError(t, featureDB.RunCommand(ctx, bson.D{
+		{Key: "collMod", Value: "items"}, {Key: "validator", Value: ageGte(10)},
+	}).Err())
+	_, err = featureDB.Collection("items").UpdateOne(ctx, bson.D{{Key: "_id", Value: 1}},
+		bson.D{{Key: "$set", Value: bson.D{{Key: "a", Value: "feature"}}}})
+	require.NoError(t, err)
+	_, err = featureDB.Collection("items").InsertOne(ctx,
+		bson.D{{Key: "_id", Value: 2}, {Key: "age", Value: int32(12)}})
+	require.NoError(t, err)
+	pickHash := dumboDBCommit(t, env, dbName+"@feature", "feature validator and data", "bob <bob@widgets.io>")
+
+	require.NoError(t, db.RunCommand(ctx, bson.D{
+		{Key: "collMod", Value: "items"}, {Key: "validator", Value: ageGte(3)},
+	}).Err())
+	_, err = db.Collection("items").UpdateOne(ctx, bson.D{{Key: "_id", Value: 1}},
+		bson.D{{Key: "$set", Value: bson.D{{Key: "b", Value: "main"}}}})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, dbName, "main validator and data", "alice <alice@acme.com>")
+
+	mainDB := env.Client.Database(dbName + "@main")
+	raw := runCommandRaw(t, mainDB, bson.D{{Key: "dumboCherryPick", Value: 1}, {Key: "commit", Value: pickHash}})
+	require.EqualValues(t, 0, raw["ok"])
+	require.Len(t, conflictsByType(t, mainDB, "metadata"), 1)
+	require.Empty(t, conflictsByType(t, mainDB, "document"))
+
+	var doc1 bson.M
+	require.NoError(t, mainDB.Collection("items").FindOne(ctx, bson.D{{Key: "_id", Value: 1}}).Decode(&doc1))
+	assert.Equal(t, "base", doc1["a"])
+	assert.Equal(t, "main", doc1["b"])
+	err = mainDB.Collection("items").FindOne(ctx, bson.D{{Key: "_id", Value: 2}}).Err()
+	assert.ErrorIs(t, err, mongo.ErrNoDocuments)
+
+	mc := conflictsByType(t, mainDB, "metadata")[0]
+	require.NoError(t, resolveConflict(t, mainDB, "items", mc["conflictId"].(string), "theirs", nil))
+	raw = runCommandRaw(t, mainDB, bson.D{{Key: "dumboCherryPick", Value: 1}, {Key: "continue", Value: 1}})
+	require.EqualValues(t, 1, raw["ok"], "%v", raw)
+	require.NoError(t, mainDB.Collection("items").FindOne(ctx, bson.D{{Key: "_id", Value: 1}}).Decode(&doc1))
+	assert.Equal(t, "feature", doc1["a"])
+	assert.Equal(t, "main", doc1["b"])
+	var doc2 bson.M
+	require.NoError(t, mainDB.Collection("items").FindOne(ctx, bson.D{{Key: "_id", Value: 2}}).Decode(&doc2))
+	assert.EqualValues(t, 12, doc2["age"])
 }
 
 func TestCherryPickVerify(t *testing.T) {

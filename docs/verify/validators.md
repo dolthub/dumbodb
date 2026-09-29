@@ -3,8 +3,9 @@
 Manual verification guide for the **version-control** behavior of collection
 document validators (`validator`, `validationLevel`, `validationAction`):
 durability across restart, carry across `doltBranch`, and behavior across
-`doltMerge`. These have no MongoDB analogue, so they cannot be checked against
-the oracle and are the scenarios worth verifying by hand.
+history operations and session-isolated commits. These have no MongoDB
+analogue, so they cannot be checked against the oracle and are the scenarios
+worth verifying by hand.
 
 **Enforcement is not covered here.** A validator's rejection of an invalid
 insert / update / findAndModify / bulkWrite, `validationAction: "warn"`,
@@ -19,11 +20,10 @@ by `doltBranch`, and participates in `doltMerge`. That internal collection is
 never shown to users -- validators appear only as a collection's `options` in
 `listCollections`.
 
-> **Automated equivalent:** `tests/verify/validator_test.go`
-> (`TestValidatorVerify`) covers Scenarios 1-4 and 8; the merge cross-validation
-> cases (Scenarios 5-7: the data-violation case, the 6a-6i matrix, and the
-> two-phase case) are covered by `tests/verify/validator_merge_xval_test.go`
-> (`TestValidatorMergeCrossValidation`). Run them with:
+> **Automated equivalent:** `tests/verify/validator_test.go` contains the full
+> validator verification suite. `TestValidatorVerify` covers lifecycle and
+> metadata behavior; `TestValidatorMergeCrossValidation` covers merge-time
+> validation and configuration-first ordering. Run them with:
 > ```
 > go test ./tests/verify/ -run 'TestValidatorVerify|TestValidatorMergeCrossValidation' -v
 > ```
@@ -591,11 +591,13 @@ db.items.findOne({ _id: 1 })                                                    
 ## Scenario 7: The validator definition and the data both conflict (two-phase)
 
 When the same merge has BOTH a validator-definition conflict (Scenario 4) and a
-document that violates the resulting validator, the merge resolves in two phases.
-The document check is **deferred** until the validator is pinned -- until then the
-resulting validator is unknown, so only the metadata conflict is shown. After you
-resolve the metadata conflict and `continue`, cross-validation runs against the
-now-pinned validator and **re-pauses** if a merged document violates it.
+document changes, the merge resolves in two phases. The entire collection data
+and index merge is **deferred** until the validator is pinned. Until then, reads
+show the destination collection unchanged and only metadata conflicts are
+reported. After you resolve the metadata conflict and `continue`, DumboDB merges
+the original immutable base, destination, and source collection states exactly
+once, validates the result against the resolved metadata, and **re-pauses** for
+document, unique-index, or validation conflicts.
 
 ```js
 var db = db.getSiblingDB("valtwophase")
@@ -622,7 +624,7 @@ db.runCommand({ doltCommit: 1, message: "main: age >= 3 + doc age 5", author: "a
 db.runCommand({ doltMerge: 1, merge_in: "feature" })
 // { conflicts: [ { collection: "items", count: 1 } ], ok: 0 }
 
-// Phase 1 -- only the metadata conflict is visible (the document check is deferred):
+// Phase 1 -- only the metadata conflict is visible (all document work is deferred):
 db.runCommand({ doltConflicts: 1 }).conflicts   // one type: "metadata" entry on items
 var mid = db.runCommand({ doltConflicts: 1 }).conflicts[0].conflictId
 db.runCommand({ doltResolveConflict: 1, collection: "items", conflictId: mid, resolution: "theirs" })  // pin age >= 10
@@ -642,10 +644,25 @@ db.items.find().sort({ _id: 1 })
 ```
 
 Key checks:
-- Before the metadata conflict is resolved, `doltConflicts` shows no
-  `type: "validation"` entry -- the document check waits for the pinned validator.
+- Before the metadata conflict is resolved, the affected collection remains at
+  its destination state and `doltConflicts` has no document or validation entry.
 - `continue` after resolving the metadata conflict returns `ok: 0` with the
   deferred validation conflict, which then resolves by replace-to-conform / drop.
+- Collections without a governing metadata conflict still merge during phase 1.
+
+The same configuration-first lifecycle applies to `dumboCherryPick`,
+`dumboRebase`, and `dumboRevert`: their operation-specific `continue` command
+runs phase 2 before it creates or advances any replay commit. Abort restores the
+pre-operation state, and persisted history operations survive restart at either
+pause. Under `--session-isolation`, the losing `doltCommit` keeps its deferred
+roots in that session; other clients continue to see only the committed branch.
+Resolving the metadata conflict and committing again runs phase 2. Session
+conflicts are in-memory and therefore do not survive a server restart.
+
+Focused command tests in `cherry_pick_test.go`, `rebase_test.go`,
+`revert_test.go`, and `session_isolation_test.go` exercise the corresponding
+continuation and visibility paths. This guide's full automated counterpart
+remains the single `validator_test.go` suite named above.
 
 ---
 

@@ -42,6 +42,26 @@ type metaConflictEntry struct {
 	resolved      bool
 }
 
+func governingMetadataConflict(mce *metaConflictEntry) bool {
+	if mce == nil {
+		return false
+	}
+	return !validationSettingsEqual(mce.ours, mce.theirs) &&
+		!validationSettingsEqual(mce.ours, mce.base) &&
+		!validationSettingsEqual(mce.theirs, mce.base)
+}
+
+func validationSettingsEqual(left, right *collMeta) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	leftLevel, leftAction := left.effectiveValidation()
+	rightLevel, rightAction := right.effectiveValidation()
+	return documentsEqual(left.Validator, right.Validator) &&
+		leftLevel == rightLevel && leftAction == rightAction &&
+		mergeModeOrDefault(left.MergeMode) == mergeModeOrDefault(right.MergeMode)
+}
+
 func metaReasonCode(base *collMeta, ourDiff, theirDiff string) string {
 	switch {
 	case ourDiff == "deleted" && theirDiff != "deleted":
@@ -130,7 +150,7 @@ func firstNonEmpty(ss ...string) string {
 // metaFromResolveValue builds the collMeta for a "custom" metadata resolution,
 // starting from an existing side to preserve the collection UUID and timeseries
 // fields the user does not restate.
-func metaFromResolveValue(value *types.Document, mce *metaConflictEntry) *collMeta {
+func metaFromResolveValue(value *types.Document, mce *metaConflictEntry) (*collMeta, error) {
 	var m collMeta
 	switch {
 	case mce.ours != nil:
@@ -157,7 +177,14 @@ func metaFromResolveValue(value *types.Document, mce *metaConflictEntry) *collMe
 			m.ValidationAction = s
 		}
 	}
-	return &m
+	if v, err := value.Get("mergeMode"); err == nil {
+		s, ok := v.(string)
+		if !ok || !backends.ValidMergeMode(s) {
+			return nil, fmt.Errorf("mergeMode must be one of %v", backends.MergeModeNames())
+		}
+		m.MergeMode = s
+	}
+	return &m, nil
 }
 
 // reconcileMetaCollExistence makes the collection's DTBL entry in the resolved
@@ -234,7 +261,10 @@ func (b *Backend) resolveMetaConflict(ctx context.Context, db *dbState, ms *merg
 		return nil, fmt.Errorf("DumboDBResolveConflict: metadata conflict for %q is already resolved", params.Collection)
 	}
 
-	var newMeta *collMeta
+	var (
+		newMeta *collMeta
+		err     error
+	)
 	switch params.Resolution {
 	case "ours":
 		newMeta = mce.ours
@@ -244,7 +274,10 @@ func (b *Backend) resolveMetaConflict(ctx context.Context, db *dbState, ms *merg
 		if params.Value == nil {
 			return nil, fmt.Errorf("DumboDBResolveConflict: resolution %q requires a value document", params.Resolution)
 		}
-		newMeta = metaFromResolveValue(params.Value, mce)
+		newMeta, err = metaFromResolveValue(params.Value, mce)
+		if err != nil {
+			return nil, fmt.Errorf("DumboDBResolveConflict: invalid custom metadata for %q: %w", params.Collection, err)
+		}
 	default:
 		return nil, fmt.Errorf("DumboDBResolveConflict: unknown resolution %q (must be 'ours', 'theirs', or 'custom')", params.Resolution)
 	}

@@ -232,6 +232,7 @@ type CollectionMetadata struct {
 	Validator        *types.Document
 	ValidationLevel  string
 	ValidationAction string
+	MergeMode        string
 }
 
 // MetaConflict describes a collection whose durable metadata (validator/options)

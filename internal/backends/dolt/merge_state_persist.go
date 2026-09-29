@@ -16,6 +16,7 @@ package dolt
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"sort"
@@ -31,6 +32,8 @@ import (
 	"github.com/dolthub/dolt/go/store/val"
 	"github.com/dolthub/go-mysql-server/sql"
 )
+
+const deferredCollectionStatePrefix = "__dumbo_deferred_collection__"
 
 // An in-progress merge, cherry-pick, revert, or rebase lives in the branch
 // working set's Dolt MergeState/RebaseState. The working set carries both the
@@ -123,7 +126,7 @@ func (m *mergeInProgress) sideDescriptions() (ours, theirs string) {
 // at the namespace level rather than the document level, and which the user has
 // not resolved yet.
 func unsettledNamespaceEntries(ms *mergeInProgress) []string {
-	names := make([]string, 0, len(ms.viewConflicts)+len(ms.metaConflicts))
+	names := make([]string, 0, len(ms.viewConflicts)+len(ms.metaConflicts)+len(ms.deferredCollections))
 	for name, vce := range ms.viewConflicts {
 		if !vce.resolved {
 			names = append(names, name)
@@ -134,8 +137,28 @@ func unsettledNamespaceEntries(ms *mergeInProgress) []string {
 			names = append(names, name)
 		}
 	}
+	for name := range ms.deferredCollections {
+		names = append(names, deferredCollectionStatePrefix+base64.RawURLEncoding.EncodeToString([]byte(name)))
+	}
 	sort.Strings(names)
 	return names
+}
+
+func splitNamespaceState(names []string) (conflicts []string, deferred map[string]struct{}, err error) {
+	deferred = map[string]struct{}{}
+	for _, name := range names {
+		if !strings.HasPrefix(name, deferredCollectionStatePrefix) {
+			conflicts = append(conflicts, name)
+			continue
+		}
+		encoded := strings.TrimPrefix(name, deferredCollectionStatePrefix)
+		decoded, decodeErr := base64.RawURLEncoding.DecodeString(encoded)
+		if decodeErr != nil || len(decoded) == 0 {
+			return nil, nil, fmt.Errorf("invalid deferred collection state %q", name)
+		}
+		deferred[string(decoded)] = struct{}{}
+	}
+	return conflicts, deferred, nil
 }
 
 func commitForHash(ctx context.Context, state *dbState, h hash.Hash) (*doltdb.Commit, error) {
@@ -417,7 +440,12 @@ func mergeStateFromWS(ctx context.Context, state *dbState, branch string, ws *do
 	if err != nil {
 		return nil, err
 	}
-	if err := loadNamespaceConflicts(ctx, state, ms, doltdb.FlattenTableNames(stored.TablesWithSchemaConflicts()), oursDesc, theirsDesc); err != nil {
+	namespaceConflicts, deferredCollections, err := splitNamespaceState(doltdb.FlattenTableNames(stored.TablesWithSchemaConflicts()))
+	if err != nil {
+		return nil, err
+	}
+	ms.deferredCollections = deferredCollections
+	if err := loadNamespaceConflicts(ctx, state, ms, namespaceConflicts, oursDesc, theirsDesc); err != nil {
 		return nil, err
 	}
 	return ms, nil
@@ -594,6 +622,9 @@ func loadNamespaceConflicts(ctx context.Context, state *dbState, ms *mergeInProg
 // is the commit being replayed and theirs is the branch it lands on, so the
 // caller's own work sits on the same side it would for a merge.
 func operationSides(ctx context.Context, state *dbState, ms *mergeInProgress) (intoAM, fromAM, baseAM prolly.AddressMap, err error) {
+	if ms.isSessionCommit {
+		return ms.sessionIntoAM, ms.sessionFromAM, ms.sessionBaseAM, nil
+	}
 	amFor := func(h hash.Hash) (prolly.AddressMap, error) {
 		if h.IsEmpty() {
 			return prolly.NewEmptyAddressMap(state.ns)

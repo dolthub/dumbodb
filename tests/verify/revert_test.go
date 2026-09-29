@@ -34,7 +34,63 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
+
+func TestRevertValidatorConflictDefersDocuments(t *testing.T) {
+	env := startDumboDB(t)
+	ctx := context.Background()
+	dbName := fmt.Sprintf("revertval%d", rand.Int64N(1_000_000))
+	db := env.Client.Database(dbName)
+	require.NoError(t, db.CreateCollection(ctx, "items",
+		options.CreateCollection().SetValidator(valNonNegAge)))
+	_, err := db.Collection("items").InsertOne(ctx, bson.D{
+		{Key: "_id", Value: 1}, {Key: "age", Value: int32(25)},
+		{Key: "a", Value: "base"}, {Key: "b", Value: "base"},
+	})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, dbName, "base", "alice <alice@acme.com>")
+
+	require.NoError(t, db.RunCommand(ctx, bson.D{
+		{Key: "collMod", Value: "items"}, {Key: "validator", Value: ageGte(10)},
+	}).Err())
+	_, err = db.Collection("items").UpdateOne(ctx, bson.D{{Key: "_id", Value: 1}},
+		bson.D{{Key: "$set", Value: bson.D{{Key: "a", Value: "target"}}}})
+	require.NoError(t, err)
+	_, err = db.Collection("items").InsertOne(ctx,
+		bson.D{{Key: "_id", Value: 2}, {Key: "age", Value: int32(12)}})
+	require.NoError(t, err)
+	targetHash := dumboDBCommit(t, env, dbName, "target validator and data", "bob <bob@widgets.io>")
+
+	require.NoError(t, db.RunCommand(ctx, bson.D{
+		{Key: "collMod", Value: "items"}, {Key: "validator", Value: ageGte(3)},
+	}).Err())
+	_, err = db.Collection("items").UpdateOne(ctx, bson.D{{Key: "_id", Value: 1}},
+		bson.D{{Key: "$set", Value: bson.D{{Key: "b", Value: "main"}}}})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, dbName, "main validator and data", "alice <alice@acme.com>")
+
+	mainDB := env.Client.Database(dbName + "@main")
+	raw := runCommandRaw(t, mainDB, bson.D{{Key: "dumboRevert", Value: 1}, {Key: "commit", Value: targetHash}})
+	require.EqualValues(t, 0, raw["ok"])
+	require.Len(t, conflictsByType(t, mainDB, "metadata"), 1)
+	require.Empty(t, conflictsByType(t, mainDB, "document"))
+	var doc1 bson.M
+	require.NoError(t, mainDB.Collection("items").FindOne(ctx, bson.D{{Key: "_id", Value: 1}}).Decode(&doc1))
+	assert.Equal(t, "target", doc1["a"])
+	assert.Equal(t, "main", doc1["b"])
+	require.NoError(t, mainDB.Collection("items").FindOne(ctx, bson.D{{Key: "_id", Value: 2}}).Err())
+
+	mc := conflictsByType(t, mainDB, "metadata")[0]
+	require.NoError(t, resolveConflict(t, mainDB, "items", mc["conflictId"].(string), "theirs", nil))
+	raw = runCommandRaw(t, mainDB, bson.D{{Key: "dumboRevert", Value: 1}, {Key: "continue", Value: 1}})
+	require.EqualValues(t, 1, raw["ok"], "%v", raw)
+	require.NoError(t, mainDB.Collection("items").FindOne(ctx, bson.D{{Key: "_id", Value: 1}}).Decode(&doc1))
+	assert.Equal(t, "base", doc1["a"])
+	assert.Equal(t, "main", doc1["b"])
+	err = mainDB.Collection("items").FindOne(ctx, bson.D{{Key: "_id", Value: 2}}).Err()
+	assert.Error(t, err)
+}
 
 // revertVerifySetup creates the standard revert test scenario.
 // Returns hashC1 (initial commit) and hashC2 (adds _id:2).
