@@ -622,6 +622,9 @@ func loadNamespaceConflicts(ctx context.Context, state *dbState, ms *mergeInProg
 // is the commit being replayed and theirs is the branch it lands on, so the
 // caller's own work sits on the same side it would for a merge.
 func operationSides(ctx context.Context, state *dbState, ms *mergeInProgress) (intoAM, fromAM, baseAM prolly.AddressMap, err error) {
+	if ms.isSessionCommit {
+		return ms.sessionIntoAM, ms.sessionFromAM, ms.sessionBaseAM, nil
+	}
 	amFor := func(h hash.Hash) (prolly.AddressMap, error) {
 		if h.IsEmpty() {
 			return prolly.NewEmptyAddressMap(state.ns)

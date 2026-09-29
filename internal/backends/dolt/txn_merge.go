@@ -104,6 +104,9 @@ func (state *dbState) reconcileWorkingSets(ctx context.Context, branch string, b
 			metaConflicts:       metaConflicts,
 			deferredCollections: deferredCollections,
 			resolvedAM:          mergedAM,
+			sessionIntoAM:       oursAM,
+			sessionFromAM:       theirsAM,
+			sessionBaseAM:       baseAM,
 		}
 		return nil, unresolved, &backends.MergeConflictError{Conflicts: unresolved.summaries()}
 	}

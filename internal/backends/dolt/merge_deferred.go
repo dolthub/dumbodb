@@ -55,6 +55,8 @@ func setDeferredCollectionPlaceholders(ctx context.Context, mergedAM, placeholde
 
 func operationBaseHash(ctx context.Context, state *dbState, ms *mergeInProgress) (hash.Hash, error) {
 	switch {
+	case ms.isSessionCommit:
+		return ms.sessionBaseAM.HashOf(), nil
 	case ms.isRebase:
 		return firstParentHash(ctx, state, ms.rebaseCurrentPick)
 	case ms.isCherryPick:

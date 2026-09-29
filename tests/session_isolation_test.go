@@ -905,6 +905,11 @@ func TestSessionIsolation_MetadataConflictResolvable(t *testing.T) {
 
 	require.NoError(t, dbA.CreateCollection(ctx, "items",
 		options.CreateCollection().SetValidator(bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: int32(0)}}}})))
+	_, err := dbA.Collection("items").InsertOne(ctx, bson.D{
+		{Key: "_id", Value: 1}, {Key: "age", Value: int32(25)},
+		{Key: "a", Value: "base"}, {Key: "b", Value: "base"},
+	})
+	require.NoError(t, err)
 	require.NoError(t, dbA.RunCommand(ctx, bson.D{{Key: "doltCommit", Value: 1}, {Key: "message", Value: "seed"}}).Err())
 
 	cB := siClient(t, env)
@@ -918,6 +923,16 @@ func TestSessionIsolation_MetadataConflictResolvable(t *testing.T) {
 	}
 	require.NoError(t, collMod(dbA, 21))
 	require.NoError(t, collMod(dbB, 18))
+	_, err = dbA.Collection("items").UpdateOne(ctx, bson.D{{Key: "_id", Value: 1}},
+		bson.D{{Key: "$set", Value: bson.D{{Key: "a", Value: "A"}}}})
+	require.NoError(t, err)
+	_, err = dbA.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: 2}, {Key: "age", Value: int32(25)}})
+	require.NoError(t, err)
+	_, err = dbB.Collection("items").UpdateOne(ctx, bson.D{{Key: "_id", Value: 1}},
+		bson.D{{Key: "$set", Value: bson.D{{Key: "b", Value: "B"}}}})
+	require.NoError(t, err)
+	_, err = dbB.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: 3}, {Key: "age", Value: int32(25)}})
+	require.NoError(t, err)
 	require.NoError(t, dbA.RunCommand(ctx, bson.D{{Key: "doltCommit", Value: 1}, {Key: "message", Value: "A: age>=21"}}).Err())
 
 	require.Error(t, dbB.RunCommand(ctx, bson.D{{Key: "doltCommit", Value: 1}, {Key: "message", Value: "B: age>=18"}}).Err())
@@ -929,6 +944,17 @@ func TestSessionIsolation_MetadataConflictResolvable(t *testing.T) {
 	assert.Equal(t, "metadata", docField(conflicts[0], "type"))
 	assert.Equal(t, "items", docField(conflicts[0], "collection"))
 
+	var sessionDoc bson.M
+	require.NoError(t, dbB.Collection("items").FindOne(ctx, bson.D{{Key: "_id", Value: 1}}).Decode(&sessionDoc))
+	assert.Equal(t, "base", sessionDoc["a"], "conflicted session must not see branch data before resolution")
+	assert.Equal(t, "B", sessionDoc["b"])
+	require.Error(t, dbB.Collection("items").FindOne(ctx, bson.D{{Key: "_id", Value: 2}}).Err())
+	var branchDoc bson.M
+	require.NoError(t, dbA.Collection("items").FindOne(ctx, bson.D{{Key: "_id", Value: 1}}).Decode(&branchDoc))
+	assert.Equal(t, "A", branchDoc["a"])
+	assert.Equal(t, "base", branchDoc["b"], "shared branch must not see conflicted session data")
+	require.Error(t, dbA.Collection("items").FindOne(ctx, bson.D{{Key: "_id", Value: 3}}).Err())
+
 	require.NoError(t, dbB.RunCommand(ctx, bson.D{
 		{Key: "doltResolveConflict", Value: 1},
 		{Key: "collection", Value: "items"},
@@ -937,6 +963,12 @@ func TestSessionIsolation_MetadataConflictResolvable(t *testing.T) {
 	}).Err())
 	require.NoError(t, dbB.RunCommand(ctx, bson.D{{Key: "doltCommit", Value: 1}, {Key: "message", Value: "B resolved"}}).Err(),
 		"re-commit finalizes the resolved metadata merge")
+
+	require.NoError(t, dbA.Collection("items").FindOne(ctx, bson.D{{Key: "_id", Value: 1}}).Decode(&branchDoc))
+	assert.Equal(t, "A", branchDoc["a"])
+	assert.Equal(t, "B", branchDoc["b"])
+	require.NoError(t, dbA.Collection("items").FindOne(ctx, bson.D{{Key: "_id", Value: 2}}).Err())
+	require.NoError(t, dbA.Collection("items").FindOne(ctx, bson.D{{Key: "_id", Value: 3}}).Err())
 
 	for _, c := range conflicts {
 		assert.NotEqual(t, "__dumbo_catalog__", docField(c, "collection"))

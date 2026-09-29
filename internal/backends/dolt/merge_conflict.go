@@ -76,6 +76,9 @@ type mergeInProgress struct {
 	// the next dumboCommit once resolved. intoHash tracks the HEAD the merge was
 	// against.
 	isSessionCommit bool
+	sessionIntoAM   prolly.AddressMap
+	sessionFromAM   prolly.AddressMap
+	sessionBaseAM   prolly.AddressMap
 	// resolvedAM is the working AddressMap being built as conflicts are resolved.
 	// It starts as the partial merged AM (keeping "ours" for conflicting docs) and
 	// is updated as each conflict is resolved.

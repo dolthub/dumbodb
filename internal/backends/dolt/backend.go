@@ -1334,6 +1334,15 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 		if ms.hasUnresolvedConflicts() {
 			return nil, &backends.MergeConflictError{Conflicts: ms.summaries()}
 		}
+		if len(ms.deferredCollections) > 0 {
+			newConflicts, mergeErr := mergeDeferredCollections(ctx, db, ms)
+			if mergeErr != nil {
+				return nil, fmt.Errorf("dumboCommit: merging deferred collections for %q: %w", branch, mergeErr)
+			}
+			if newConflicts {
+				return nil, &backends.MergeConflictError{Conflicts: ms.summaries()}
+			}
+		}
 		_ = clearConflictArtifacts(ctx, db, ms)
 		if err := db.persistAM(ctx, branch, ms.resolvedAM); err != nil {
 			return nil, fmt.Errorf("dumboCommit: publishing the resolved merge for %q: %w", branch, err)
