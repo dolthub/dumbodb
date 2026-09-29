@@ -19,8 +19,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 )
 
-const mongoWriteConflictCode = handlererrors.ErrorCode(112)
-
 func TranslateBackendWriteError(err error) error {
 	if err == nil {
 		return nil
@@ -38,7 +36,7 @@ func TranslateBackendWriteError(err error) error {
 		)
 	}
 	if backends.ErrorCodeIs(err, backends.ErrorCodeWriteConflict) {
-		return handlererrors.NewCommandError(mongoWriteConflictCode, err)
+		return handlererrors.NewCommandError(handlererrors.ErrWriteConflict, err)
 	}
 	return err
 }

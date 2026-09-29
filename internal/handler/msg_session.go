@@ -77,7 +77,7 @@ func (h *Handler) MsgCommitTransaction(connCtx context.Context, msg *wire.OpMsg)
 		}
 		ci.SetInTransaction(false)
 		return nil, handlererrors.NewCommandError(
-			handlererrors.ErrorCode(251),
+			handlererrors.ErrNoSuchTransaction,
 			errors.New("Transaction was aborted by a prior server-side rejection."),
 		)
 	}

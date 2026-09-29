@@ -514,7 +514,7 @@ func (c *conn) route(connCtx context.Context, reqHeader *wire.MsgHeader, reqBody
 
 		if err == nil && startedTxn && c.h.SessionIsolation() {
 			err = handlererrors.NewCommandError(
-				handlererrors.ErrorCode(263),
+				handlererrors.ErrOperationNotSupportedInTransaction,
 				errSessionIsolationRejectStartTransaction,
 			)
 		}
@@ -522,7 +522,7 @@ func (c *conn) route(connCtx context.Context, reqHeader *wire.MsgHeader, reqBody
 		if err == nil && cmd != nil && cmd.BlockedInTxn && conninfo.Get(connCtx).InTransaction() {
 			c.h.AbortPendingTransaction(connCtx)
 			err = handlererrors.NewCommandError(
-				handlererrors.ErrorCode(263),
+				handlererrors.ErrOperationNotSupportedInTransaction,
 				fmt.Errorf("Cannot run '%s' in a multi-document transaction.", command),
 			)
 		}
@@ -872,12 +872,12 @@ func (c *conn) dispatchThroughSession(connCtx context.Context, msg *wire.OpMsg, 
 func shadowGoneError(s *sqlctx.Shadow) error {
 	if s != nil && s.Purged() {
 		return handlererrors.NewCommandError(
-			handlererrors.ErrorCode(251),
+			handlererrors.ErrNoSuchTransaction,
 			errors.New("Transaction has been aborted because the session was idle past the configured timeout."),
 		)
 	}
 	return handlererrors.NewCommandError(
-		handlererrors.ErrorCode(225),
+		handlererrors.ErrTransactionTooOld,
 		errors.New("session was taken over by a newer connection on this lsid"),
 	)
 }
