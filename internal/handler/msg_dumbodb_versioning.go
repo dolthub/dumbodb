@@ -1525,6 +1525,7 @@ func (h *Handler) MsgDumboDBConflicts(connCtx context.Context, msg *wire.OpMsg) 
 				"validator", validator,
 				"validationLevel", m.ValidationLevel,
 				"validationAction", m.ValidationAction,
+				"mergeMode", m.MergeMode,
 			))
 			if diffType != "" {
 				side.Set("diffType", diffType)

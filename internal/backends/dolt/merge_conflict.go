@@ -471,6 +471,7 @@ func collMetaToMetadata(m *collMeta) *backends.CollectionMetadata {
 		Validator:        m.Validator,
 		ValidationLevel:  level,
 		ValidationAction: action,
+		MergeMode:        string(mergeModeOrDefault(m.MergeMode)),
 	}
 }
 

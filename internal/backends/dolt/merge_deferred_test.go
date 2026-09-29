@@ -106,3 +106,25 @@ func TestDeferredCollectionNamespaceStateRejectsMalformedMarker(t *testing.T) {
 	_, _, err := splitNamespaceState([]string{deferredCollectionStatePrefix + "%%%"})
 	require.Error(t, err)
 }
+
+func TestMergeModeMetadataConflictProjectionAndCustomResolution(t *testing.T) {
+	mce := &metaConflictEntry{
+		base:   &collMeta{},
+		ours:   &collMeta{MergeMode: string(MergeModeDocumentDivergent)},
+		theirs: &collMeta{MergeMode: string(MergeModeFieldDivergent)},
+	}
+	require.Equal(t, string(MergeModeDocumentDivergent), collMetaToMetadata(mce.ours).MergeMode)
+	require.Equal(t, string(MergeModeFieldDivergent), collMetaToMetadata(mce.theirs).MergeMode)
+	require.Equal(t, string(DefaultMergeMode), collMetaToMetadata(mce.base).MergeMode)
+
+	value, err := types.NewDocument("mergeMode", string(MergeModeFieldDivergent))
+	require.NoError(t, err)
+	resolved, err := metaFromResolveValue(value, mce)
+	require.NoError(t, err)
+	require.Equal(t, string(MergeModeFieldDivergent), resolved.MergeMode)
+
+	invalid, err := types.NewDocument("mergeMode", "unknown")
+	require.NoError(t, err)
+	_, err = metaFromResolveValue(invalid, mce)
+	require.ErrorContains(t, err, "mergeMode must be one of")
+}
