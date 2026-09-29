@@ -1997,7 +1997,7 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 		return nil, fmt.Errorf("DumboDBMerge: loading base AM: %w", err)
 	}
 
-	mergedAM, conflicts, viewConflicts, metaConflicts, err := mergeAddressMapsWithConflicts(ctx, db, intoAM, fromAM, baseAM, fromHash, baseHash,
+	mergedAM, conflicts, viewConflicts, metaConflicts, deferredCollections, err := mergeAddressMapsWithConflicts(ctx, db, intoAM, fromAM, baseAM, fromHash, baseHash,
 		fmt.Sprintf("branch '%s' (ours)", params.Into), fmt.Sprintf("%s (theirs)", refLabel(ctx, db, params.From)))
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBMerge: %w", err)
@@ -2011,15 +2011,16 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 		}
 
 		db.mergeState = &mergeInProgress{
-			fromLabel:     refLabel(ctx, db, params.From),
-			intoBranch:    params.Into,
-			premergeAM:    preMergeAM,
-			fromHash:      fromHash,
-			intoHash:      intoHash,
-			conflicts:     conflicts,
-			viewConflicts: viewConflicts,
-			metaConflicts: metaConflicts,
-			resolvedAM:    mergedAM,
+			fromLabel:           refLabel(ctx, db, params.From),
+			intoBranch:          params.Into,
+			premergeAM:          preMergeAM,
+			fromHash:            fromHash,
+			intoHash:            intoHash,
+			conflicts:           conflicts,
+			viewConflicts:       viewConflicts,
+			metaConflicts:       metaConflicts,
+			deferredCollections: deferredCollections,
+			resolvedAM:          mergedAM,
 		}
 
 		// Update the in-memory branch AM so reads during conflict resolution
@@ -2260,7 +2261,7 @@ func (b *Backend) DumboDBCherryPick(ctx context.Context, params *backends.Cherry
 	}
 
 	// Perform the 3-way merge: apply cherry-pick diff (base->from) onto current HEAD (into).
-	mergedAM, conflicts, viewConflicts, metaConflicts, err := mergeAddressMapsWithConflicts(ctx, db, intoAM, fromAM, baseAM, pickHash, pickBaseHash,
+	mergedAM, conflicts, viewConflicts, metaConflicts, deferredCollections, err := mergeAddressMapsWithConflicts(ctx, db, intoAM, fromAM, baseAM, pickHash, pickBaseHash,
 		fmt.Sprintf("branch '%s' (ours)", branch), fmt.Sprintf("commit '%s' (theirs)", pickHash.String()))
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBCherryPick: %w", err)
@@ -2274,16 +2275,17 @@ func (b *Backend) DumboDBCherryPick(ctx context.Context, params *backends.Cherry
 		}
 
 		db.mergeState = &mergeInProgress{
-			intoBranch:    branch,
-			premergeAM:    prePickAM,
-			intoHash:      intoHash,
-			conflicts:     conflicts,
-			viewConflicts: viewConflicts,
-			metaConflicts: metaConflicts,
-			resolvedAM:    mergedAM,
-			isCherryPick:  true,
-			pickHash:      pickHash,
-			originalMsg:   originalMsg,
+			intoBranch:          branch,
+			premergeAM:          prePickAM,
+			intoHash:            intoHash,
+			conflicts:           conflicts,
+			viewConflicts:       viewConflicts,
+			metaConflicts:       metaConflicts,
+			deferredCollections: deferredCollections,
+			resolvedAM:          mergedAM,
+			isCherryPick:        true,
+			pickHash:            pickHash,
+			originalMsg:         originalMsg,
 		}
 
 		if wsErr := persistConflictState(ctx, db, db.mergeState); wsErr != nil {
@@ -3473,7 +3475,7 @@ func (b *Backend) replayRemainingCommits(ctx context.Context, db *dbState, ms *m
 		// is what holds the labels steady: a caller's own work is "ours" for a
 		// rebase just as it is for a merge, rather than changing sides because of
 		// how the replay happens to be implemented.
-		mergedAM, conflicts, viewConflicts, metaConflicts, err := mergeAddressMapsWithConflicts(ctx, db, fromAM, intoAM, baseAM, pickHash, pickBaseHash,
+		mergedAM, conflicts, viewConflicts, metaConflicts, deferredCollections, err := mergeAddressMapsWithConflicts(ctx, db, fromAM, intoAM, baseAM, pickHash, pickBaseHash,
 			fmt.Sprintf("commit '%s' (ours)", pickHash.String()), fmt.Sprintf("branch '%s' (theirs)", ms.ontoBranch))
 		if err != nil {
 			return nil, fmt.Errorf("replayRemainingCommits: merging commit %q: %w", pickHash, err)
@@ -3484,6 +3486,7 @@ func (b *Backend) replayRemainingCommits(ctx context.Context, db *dbState, ms *m
 			ms.conflicts = conflicts
 			ms.viewConflicts = viewConflicts
 			ms.metaConflicts = metaConflicts
+			ms.deferredCollections = deferredCollections
 			ms.resolvedAM = mergedAM
 			if wsErr := persistConflictState(ctx, db, ms); wsErr != nil {
 				return nil, fmt.Errorf("replayRemainingCommits: persisting conflict state: %w", wsErr)
@@ -3772,7 +3775,7 @@ func (b *Backend) DumboDBRevert(ctx context.Context, params *backends.RevertPara
 	//   into = intoAM    (current branch HEAD  -- "ours")
 	// theirHash = parentHash (the "from" side commit hash)
 	// baseHash  = revertHash (the "base" side commit hash)
-	mergedAM, conflicts, viewConflicts, metaConflicts, err := mergeAddressMapsWithConflicts(ctx, db, intoAM, parentAM, revertAM, parentHash, revertHash,
+	mergedAM, conflicts, viewConflicts, metaConflicts, deferredCollections, err := mergeAddressMapsWithConflicts(ctx, db, intoAM, parentAM, revertAM, parentHash, revertHash,
 		fmt.Sprintf("branch '%s' (ours)", branch), fmt.Sprintf("commit '%s' (theirs)", revertHash.String()))
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBRevert: %w", err)
@@ -3786,17 +3789,18 @@ func (b *Backend) DumboDBRevert(ctx context.Context, params *backends.RevertPara
 		}
 
 		db.mergeState = &mergeInProgress{
-			intoBranch:    branch,
-			premergeAM:    preRevertAM,
-			intoHash:      intoHash,
-			conflicts:     conflicts,
-			viewConflicts: viewConflicts,
-			metaConflicts: metaConflicts,
-			resolvedAM:    mergedAM,
-			isRevert:      true,
-			pickHash:      revertHash,
-			fromHash:      parentHash,
-			originalMsg:   originalMsg,
+			intoBranch:          branch,
+			premergeAM:          preRevertAM,
+			intoHash:            intoHash,
+			conflicts:           conflicts,
+			viewConflicts:       viewConflicts,
+			metaConflicts:       metaConflicts,
+			deferredCollections: deferredCollections,
+			resolvedAM:          mergedAM,
+			isRevert:            true,
+			pickHash:            revertHash,
+			fromHash:            parentHash,
+			originalMsg:         originalMsg,
 		}
 
 		if wsErr := persistConflictState(ctx, db, db.mergeState); wsErr != nil {

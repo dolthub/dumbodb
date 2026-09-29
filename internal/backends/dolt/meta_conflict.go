@@ -42,6 +42,25 @@ type metaConflictEntry struct {
 	resolved      bool
 }
 
+func governingMetadataConflict(mce *metaConflictEntry) bool {
+	if mce == nil {
+		return false
+	}
+	return !validationSettingsEqual(mce.ours, mce.theirs) &&
+		!validationSettingsEqual(mce.ours, mce.base) &&
+		!validationSettingsEqual(mce.theirs, mce.base)
+}
+
+func validationSettingsEqual(left, right *collMeta) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	leftLevel, leftAction := left.effectiveValidation()
+	rightLevel, rightAction := right.effectiveValidation()
+	return documentsEqual(left.Validator, right.Validator) &&
+		leftLevel == rightLevel && leftAction == rightAction
+}
+
 func metaReasonCode(base *collMeta, ourDiff, theirDiff string) string {
 	switch {
 	case ourDiff == "deleted" && theirDiff != "deleted":

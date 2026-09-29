@@ -85,7 +85,7 @@ func (state *dbState) reconcileWorkingSets(ctx context.Context, branch string, b
 		return nil, nil, fmt.Errorf("deriving base AM: %w", err)
 	}
 
-	mergedAM, conflicts, viewConflicts, metaConflicts, err := mergeAddressMapsWithConflicts(
+	mergedAM, conflicts, viewConflicts, metaConflicts, deferredCollections, err := mergeAddressMapsWithConflicts(
 		ctx, state, oursAM, theirsAM, baseAM, theirsHash, baseHash,
 		"your write (ours)", "the branch (theirs)")
 	if err != nil {
@@ -94,15 +94,16 @@ func (state *dbState) reconcileWorkingSets(ctx context.Context, branch string, b
 
 	if len(conflicts) > 0 || len(viewConflicts) > 0 || len(metaConflicts) > 0 {
 		unresolved := &mergeInProgress{
-			intoBranch:    branch,
-			fromLabel:     refLabel(ctx, state, branch),
-			premergeAM:    oursAM,
-			intoHash:      theirsHash,
-			fromHash:      theirsHash,
-			conflicts:     conflicts,
-			viewConflicts: viewConflicts,
-			metaConflicts: metaConflicts,
-			resolvedAM:    mergedAM,
+			intoBranch:          branch,
+			fromLabel:           refLabel(ctx, state, branch),
+			premergeAM:          oursAM,
+			intoHash:            theirsHash,
+			fromHash:            theirsHash,
+			conflicts:           conflicts,
+			viewConflicts:       viewConflicts,
+			metaConflicts:       metaConflicts,
+			deferredCollections: deferredCollections,
+			resolvedAM:          mergedAM,
 		}
 		return nil, unresolved, &backends.MergeConflictError{Conflicts: unresolved.summaries()}
 	}
