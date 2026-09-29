@@ -386,7 +386,7 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		)
 
 	default:
-		return nil, common.TranslateBackendWriteError(err)
+		return nil, common.TranslateBackendWriteError(connCtx, err)
 	}
 }
 

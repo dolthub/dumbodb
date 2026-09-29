@@ -176,7 +176,7 @@ func (h *Handler) MsgRenameCollection(connCtx context.Context, msg *wire.OpMsg) 
 			command,
 		)
 	default:
-		return nil, common.TranslateBackendWriteError(err)
+		return nil, common.TranslateBackendWriteError(connCtx, err)
 	}
 
 	return documentOpMsg(

@@ -15,11 +15,14 @@
 package common
 
 import (
+	"context"
+
 	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 )
 
-func TranslateBackendWriteError(err error) error {
+func TranslateBackendWriteError(ctx context.Context, err error) error {
 	if err == nil {
 		return nil
 	}
@@ -36,6 +39,13 @@ func TranslateBackendWriteError(err error) error {
 		)
 	}
 	if backends.ErrorCodeIs(err, backends.ErrorCodeWriteConflict) {
+		if ci := conninfo.GetIfPresent(ctx); ci != nil && ci.InTransaction() {
+			return handlererrors.NewCommandErrorWithLabels(
+				handlererrors.ErrWriteConflict,
+				err,
+				handlererrors.TransientTransactionErrorLabel,
+			)
+		}
 		return handlererrors.NewCommandError(handlererrors.ErrWriteConflict, err)
 	}
 	return err
