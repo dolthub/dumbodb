@@ -46,6 +46,7 @@ type UpdateParams struct {
 	Autocommit               bool            `dumbo:"autocommit,ignored"`
 	ClusterTime              any             `dumbo:"$clusterTime,ignored"`
 	ReadPreference           *types.Document `dumbo:"$readPreference,ignored"`
+	ReadConcern              *types.Document `dumbo:"readConcern,ignored"`
 
 	ApiVersion           string `dumbo:"apiVersion,ignored"`
 	ApiStrict            bool   `dumbo:"apiStrict,ignored"`
