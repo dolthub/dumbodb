@@ -30,6 +30,7 @@ type WriteConcernDecision struct {
 	SkipDurableSync bool
 	// Unsatisfiable is true when a single-node DumboDB cannot meet w.
 	Unsatisfiable bool
+	UnknownTag    bool
 }
 
 // DecideWriteConcern extracts the durability decision from a raw writeConcern
@@ -44,6 +45,7 @@ func DecideWriteConcern(wc any) WriteConcernDecision {
 
 	var skip bool
 	var unsatisfiable bool
+	var unknownTag bool
 
 	if v, err := doc.Get("w"); err == nil {
 		switch w := v.(type) {
@@ -63,7 +65,7 @@ func DecideWriteConcern(wc any) WriteConcernDecision {
 			}
 			unsatisfiable = w > 1
 		case string:
-			unsatisfiable = w != "majority"
+			unknownTag = w != "majority"
 		}
 	}
 
@@ -73,5 +75,5 @@ func DecideWriteConcern(wc any) WriteConcernDecision {
 		}
 	}
 
-	return WriteConcernDecision{SkipDurableSync: skip, Unsatisfiable: unsatisfiable}
+	return WriteConcernDecision{SkipDurableSync: skip, Unsatisfiable: unsatisfiable, UnknownTag: unknownTag}
 }

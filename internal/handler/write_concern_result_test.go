@@ -52,3 +52,35 @@ func TestWithWriteConcernResult(t *testing.T) {
 		t.Fatalf("code=%v", code)
 	}
 }
+
+func TestWithWriteConcernResultUnknownTag(t *testing.T) {
+	request := must.NotFail(documentOpMsg(must.NotFail(types.NewDocument(
+		"insert", "col",
+		"writeConcern", must.NotFail(types.NewDocument("w", "nonexistent")),
+	))))
+	response := must.NotFail(documentOpMsg(must.NotFail(types.NewDocument("n", int32(1), "ok", float64(1)))))
+
+	got, err := withWriteConcernResult(request, response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := opMsgDocument(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := doc.Get("writeConcernError")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeConcernError, ok := value.(*types.Document)
+	if !ok {
+		t.Fatalf("writeConcernError has type %T", value)
+	}
+	code, err := writeConcernError.Get("code")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code != int32(79) {
+		t.Fatalf("code=%v", code)
+	}
+}

@@ -28,7 +28,8 @@ func withWriteConcernResult(request, response *wire.OpMsg) (*wire.OpMsg, error) 
 		return nil, err
 	}
 	writeConcern, _ := requestDoc.Get("writeConcern")
-	if !common.DecideWriteConcern(writeConcern).Unsatisfiable {
+	decision := common.DecideWriteConcern(writeConcern)
+	if !decision.Unsatisfiable && !decision.UnknownTag {
 		return response, nil
 	}
 
@@ -36,10 +37,28 @@ func withWriteConcernResult(request, response *wire.OpMsg) (*wire.OpMsg, error) 
 	if err != nil {
 		return nil, err
 	}
+	code := int32(100)
+	codeName := "UnsatisfiableWriteConcern"
+	message := "Not enough data-bearing nodes"
+	if decision.UnknownTag {
+		code = 79
+		codeName = "UnknownReplWriteConcern"
+		message = "No write concern mode named '" + writeConcernTag(writeConcern) + "' found in replica set configuration"
+	}
 	responseDoc.Set("writeConcernError", must.NotFail(types.NewDocument(
-		"code", int32(100),
-		"codeName", "UnsatisfiableWriteConcern",
-		"errmsg", "Not enough data-bearing nodes",
+		"code", code,
+		"codeName", codeName,
+		"errmsg", message,
 	)))
 	return documentOpMsg(responseDoc)
+}
+
+func writeConcernTag(value any) string {
+	doc, ok := value.(*types.Document)
+	if !ok {
+		return ""
+	}
+	tag, _ := doc.Get("w")
+	name, _ := tag.(string)
+	return name
 }

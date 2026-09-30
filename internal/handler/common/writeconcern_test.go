@@ -29,22 +29,23 @@ func TestDecideWriteConcern(t *testing.T) {
 		wc                any
 		wantSkip          bool
 		wantUnsatisfiable bool
+		wantUnknownTag    bool
 	}{
-		{"nil", nil, false, false},
-		{"typed nil doc", (*types.Document)(nil), false, false},
-		{"empty doc (default w:1 j:implicit)", must.NotFail(types.NewDocument()), false, false},
-		{"j:true explicit", must.NotFail(types.NewDocument("j", true)), false, false},
-		{"j:false opts out of fsync", must.NotFail(types.NewDocument("j", false)), true, false},
-		{"w:1", must.NotFail(types.NewDocument("w", int32(1))), false, false},
-		{"w:2", must.NotFail(types.NewDocument("w", int32(2))), false, true},
-		{"w:0 fire-and-forget", must.NotFail(types.NewDocument("w", int32(0))), true, false},
-		{"w:0 (int64)", must.NotFail(types.NewDocument("w", int64(0))), true, false},
-		{"w:0 (float64)", must.NotFail(types.NewDocument("w", float64(0))), true, false},
-		{"w:majority string unchanged", must.NotFail(types.NewDocument("w", "majority")), false, false},
-		{"custom tag", must.NotFail(types.NewDocument("w", "east")), false, true},
-		{"wtimeout ignored", must.NotFail(types.NewDocument("w", int32(1), "wtimeout", int64(1000))), false, false},
-		{"w:0 + j:true still skips (w wins by itself)", must.NotFail(types.NewDocument("w", int32(0), "j", true)), true, false},
-		{"wrong shape (not a doc)", "not-a-doc", false, false},
+		{"nil", nil, false, false, false},
+		{"typed nil doc", (*types.Document)(nil), false, false, false},
+		{"empty doc (default w:1 j:implicit)", must.NotFail(types.NewDocument()), false, false, false},
+		{"j:true explicit", must.NotFail(types.NewDocument("j", true)), false, false, false},
+		{"j:false opts out of fsync", must.NotFail(types.NewDocument("j", false)), true, false, false},
+		{"w:1", must.NotFail(types.NewDocument("w", int32(1))), false, false, false},
+		{"w:2", must.NotFail(types.NewDocument("w", int32(2))), false, true, false},
+		{"w:0 fire-and-forget", must.NotFail(types.NewDocument("w", int32(0))), true, false, false},
+		{"w:0 (int64)", must.NotFail(types.NewDocument("w", int64(0))), true, false, false},
+		{"w:0 (float64)", must.NotFail(types.NewDocument("w", float64(0))), true, false, false},
+		{"w:majority string unchanged", must.NotFail(types.NewDocument("w", "majority")), false, false, false},
+		{"custom tag", must.NotFail(types.NewDocument("w", "east")), false, false, true},
+		{"wtimeout ignored", must.NotFail(types.NewDocument("w", int32(1), "wtimeout", int64(1000))), false, false, false},
+		{"w:0 + j:true still skips (w wins by itself)", must.NotFail(types.NewDocument("w", int32(0), "j", true)), true, false, false},
+		{"wrong shape (not a doc)", "not-a-doc", false, false, false},
 	}
 
 	for _, tc := range cases {
@@ -57,6 +58,9 @@ func TestDecideWriteConcern(t *testing.T) {
 			}
 			if got.Unsatisfiable != tc.wantUnsatisfiable {
 				t.Fatalf("Unsatisfiable = %v, want %v", got.Unsatisfiable, tc.wantUnsatisfiable)
+			}
+			if got.UnknownTag != tc.wantUnknownTag {
+				t.Fatalf("UnknownTag = %v, want %v", got.UnknownTag, tc.wantUnknownTag)
 			}
 		})
 	}
