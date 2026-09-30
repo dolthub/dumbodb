@@ -19,8 +19,7 @@ import (
 )
 
 // WriteConcernDecision captures the subset of MongoDB's writeConcern options
-// that affect DumboDB durability. Everything else (wtimeout, majority, custom
-// tags) is accepted but ignored because DumboDB is a single-node store.
+// that affect DumboDB durability and acknowledgement.
 type WriteConcernDecision struct {
 	// SkipDurableSync is true when the client opted out of a synchronous journal
 	// flush for this write. This is the union of two cases:
@@ -29,14 +28,14 @@ type WriteConcernDecision struct {
 	// In either case DumboDB is free to acknowledge the write before the NBS
 	// journal is fsync'd  -- a background flusher makes it durable later.
 	SkipDurableSync bool
+	// Unsatisfiable is true when a single-node DumboDB cannot meet w.
+	Unsatisfiable bool
 }
 
 // DecideWriteConcern extracts the durability decision from a raw writeConcern
 // document. A nil or missing document maps to the MongoDB default of
 // {w: 1, j: true (implicit)}, which keeps the historical fsync-every-write
-// behavior. Unrecognized or malformed writeConcern shapes are treated as the
-// default  -- we never error out on writeConcern because a single-node store
-// has no way to meaningfully reject the cluster-shaped concerns (majority, w>1).
+// behavior. Unrecognized or malformed writeConcern shapes use the default.
 func DecideWriteConcern(wc any) WriteConcernDecision {
 	doc, ok := wc.(*types.Document)
 	if !ok || doc == nil {
@@ -44,6 +43,7 @@ func DecideWriteConcern(wc any) WriteConcernDecision {
 	}
 
 	var skip bool
+	var unsatisfiable bool
 
 	if v, err := doc.Get("w"); err == nil {
 		switch w := v.(type) {
@@ -51,14 +51,19 @@ func DecideWriteConcern(wc any) WriteConcernDecision {
 			if w == 0 {
 				skip = true
 			}
+			unsatisfiable = w > 1
 		case int64:
 			if w == 0 {
 				skip = true
 			}
+			unsatisfiable = w > 1
 		case float64:
 			if w == 0 {
 				skip = true
 			}
+			unsatisfiable = w > 1
+		case string:
+			unsatisfiable = w != "majority"
 		}
 	}
 
@@ -68,5 +73,5 @@ func DecideWriteConcern(wc any) WriteConcernDecision {
 		}
 	}
 
-	return WriteConcernDecision{SkipDurableSync: skip}
+	return WriteConcernDecision{SkipDurableSync: skip, Unsatisfiable: unsatisfiable}
 }
