@@ -273,6 +273,9 @@ func (h *Handler) initCommands() {
 			}
 
 			res, handlerErr := next(ctx, msg)
+			if handlerErr == nil && res != nil {
+				res, handlerErr = h.withLogicalTime(res)
+			}
 
 			durationMs := time.Since(start).Milliseconds()
 

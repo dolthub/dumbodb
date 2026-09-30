@@ -74,7 +74,8 @@ type Handler struct {
 
 	bootstrapLatch atomic.Bool
 
-	authGen atomic.Uint64
+	authGen     atomic.Uint64
+	logicalTime atomic.Uint64
 
 	cappedCleanupStop chan struct{}
 }
