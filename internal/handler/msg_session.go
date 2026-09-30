@@ -83,7 +83,7 @@ func (h *Handler) MsgCommitTransaction(connCtx context.Context, msg *wire.OpMsg)
 	}
 	if sab, ok := h.b.(backends.SessionAwareBackend); ok {
 		if err := sab.OnTransactionCommit(connCtx, ci.Owner()); err != nil {
-			return nil, lazyerrors.Error(err)
+			return nil, handleTransactionCommitError(sab, ci, err)
 		}
 	}
 	ci.SetInTransaction(false)
@@ -93,6 +93,24 @@ func (h *Handler) MsgCommitTransaction(connCtx context.Context, msg *wire.OpMsg)
 			"ok", float64(1),
 		)),
 	)
+}
+
+func handleTransactionCommitError(
+	sab backends.SessionAwareBackend,
+	ci *conninfo.ConnInfo,
+	err error,
+) error {
+	var mergeConflict *backends.MergeConflictError
+	if errors.Is(err, backends.ErrWriteRaced) || errors.As(err, &mergeConflict) {
+		sab.OnTransactionAbort(ci.Owner())
+		ci.SetInTransaction(false)
+		return handlererrors.NewCommandErrorWithLabels(
+			handlererrors.ErrWriteConflict,
+			err,
+			handlererrors.TransientTransactionErrorLabel,
+		)
+	}
+	return lazyerrors.Error(err)
 }
 
 // MsgAbortTransaction implements the `abortTransaction` command.
