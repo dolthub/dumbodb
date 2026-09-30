@@ -74,7 +74,7 @@ func TestAwaitTopologyVersionRejectsFutureCounter(t *testing.T) {
 	handler := testTopologyHandler()
 	err := handler.awaitTopologyVersion(context.Background(), awaitableHelloRequest(handler.processID, 1, 0))
 	commandError, ok := err.(*handlererrors.CommandError)
-	if !ok || commandError.Code() != handlererrors.ErrorCode(31382) {
+	if !ok || commandError.Code() != handlererrors.ErrTopologyVersionProcessIDType {
 		t.Fatalf("error = %v, want code 31382", err)
 	}
 }

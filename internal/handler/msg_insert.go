@@ -256,11 +256,11 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 			}
 
 			if backends.ErrorCodeIs(err, backends.ErrorCodeReadOnlyDatabase, backends.ErrorCodeReadOnlyCollection) {
-				return nil, common.TranslateBackendWriteError(err)
+				return nil, common.TranslateBackendWriteError(connCtx, err)
 			}
 
 			if backends.ErrorCodeIs(err, backends.ErrorCodeWriteConflict) {
-				return nil, common.TranslateBackendWriteError(err)
+				return nil, common.TranslateBackendWriteError(connCtx, err)
 			}
 
 			if backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseNameIsInvalid) {

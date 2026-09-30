@@ -35,7 +35,8 @@ type writeError struct {
 //
 
 type WriteErrors struct {
-	errs []writeError
+	errs   []writeError
+	labels []string
 }
 
 // NewWriteErrorMsg creates a new protocol write error with given ErrorCode and message.
@@ -77,10 +78,18 @@ func (we *WriteErrors) Document() *wirebson.Document {
 		must.NoError(errs.Add(doc))
 	}
 
-	return must.NotFail(wirebson.NewDocument(
+	d := must.NotFail(wirebson.NewDocument(
 		"ok", float64(1),
 		"writeErrors", errs,
 	))
+	if len(we.labels) > 0 {
+		labels := wirebson.MakeArray(len(we.labels))
+		for _, label := range we.labels {
+			must.NoError(labels.Add(label))
+		}
+		must.NoError(d.Add("errorLabels", labels))
+	}
+	return d
 }
 
 func (we *WriteErrors) Info() *ErrInfo {
@@ -100,6 +109,7 @@ func (we *WriteErrors) Append(err error, index int32) {
 			errmsg: cmdErr.err.Error(),
 			index:  index,
 		})
+		we.labels = append(we.labels, cmdErr.labels...)
 
 	default:
 		we.errs = append(we.errs, writeError{
@@ -120,6 +130,7 @@ func (we *WriteErrors) Merge(we2 *WriteErrors, index int32) {
 		e.index = index
 		we.errs = append(we.errs, e)
 	}
+	we.labels = append(we.labels, we2.labels...)
 }
 
 var (

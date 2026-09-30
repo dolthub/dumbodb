@@ -321,7 +321,7 @@ func TestReplicationHeartbeatRejectsInvalidProtocolFields(t *testing.T) {
 	}{
 		{name: "config version type", field: "configVersion", value: "4", code: handlererrors.ErrTypeMismatch},
 		{name: "term type", field: "term", value: float64(4), code: handlererrors.ErrTypeMismatch},
-		{name: "heartbeat version", field: "hbv", value: int32(2), code: handlererrors.ErrorCode(40666)},
+		{name: "heartbeat version", field: "hbv", value: int32(2), code: handlererrors.ErrReplicaSetHeartbeatVersion},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -355,7 +355,7 @@ func TestReplSetUpdatePositionIsExplicitlyUnsupported(t *testing.T) {
 	handler := configuredReplicationHandler(t)
 	_, err := handler.MsgReplSetUpdatePositionUnsupported(context.Background(), wire.MustOpMsg("replSetUpdatePosition", int32(1), "$db", "admin"))
 	commandError, ok := err.(*handlererrors.CommandError)
-	if !ok || commandError.Code() != handlererrors.ErrorCode(115) {
+	if !ok || commandError.Code() != handlererrors.ErrCommandNotSupported {
 		t.Fatalf("error = %v, want code 115", err)
 	}
 }

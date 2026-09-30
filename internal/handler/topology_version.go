@@ -63,7 +63,7 @@ func (h *Handler) awaitTopologyVersion(ctx context.Context, request *types.Docum
 	}
 	if !hasTopologyVersion || !hasMaxAwaitTime {
 		return handlererrors.NewCommandErrorMsg(
-			handlererrors.ErrorCode(31368),
+			handlererrors.ErrTopologyVersionMissingProcessID,
 			"topologyVersion and maxAwaitTimeMS must be specified together",
 		)
 	}
@@ -85,7 +85,7 @@ func (h *Handler) awaitTopologyVersion(ctx context.Context, request *types.Docum
 	}
 	if requested.counter > current.counter {
 		return handlererrors.NewCommandErrorMsg(
-			handlererrors.ErrorCode(31382),
+			handlererrors.ErrTopologyVersionProcessIDType,
 			fmt.Sprintf("Received a topology version with counter: %d which is greater than the server topology version counter: %d", requested.counter, current.counter),
 		)
 	}
@@ -117,7 +117,7 @@ func validateExhaustHello(message *wire.OpMsg, request *types.Document) error {
 		return nil
 	}
 	return handlererrors.NewCommandErrorMsg(
-		handlererrors.ErrorCode(51756),
+		handlererrors.ErrAwaitableHelloTopologyVersionRequired,
 		"An isMaster or hello request with exhaust must specify topologyVersion and maxAwaitTimeMS",
 	)
 }
@@ -138,7 +138,7 @@ func parseTopologyVersion(value any) (topologyVersion, error) {
 		return topologyVersion{}, handlererrors.NewCommandErrorMsg(handlererrors.ErrTypeMismatch, "topologyVersion.counter must be a 64-bit integer")
 	}
 	if counter < 0 {
-		return topologyVersion{}, handlererrors.NewCommandErrorMsg(handlererrors.ErrorCode(31372), "topologyVersion must have a non-negative counter")
+		return topologyVersion{}, handlererrors.NewCommandErrorMsg(handlererrors.ErrTopologyVersionNegativeCounter, "topologyVersion must have a non-negative counter")
 	}
 	return topologyVersion{processID: processID, counter: counter}, nil
 }

@@ -81,7 +81,7 @@ func (h *Handler) MsgGetParameter(connCtx context.Context, msg *wire.OpMsg) (*wi
 
 	if resDoc.Len() < 1 {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrorCode(72),
+			handlererrors.ErrInvalidOptions,
 			"no option found to get",
 			document.Command(),
 		)

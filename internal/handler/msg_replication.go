@@ -51,7 +51,7 @@ func (h *Handler) MsgReplSetGetConfig(_ context.Context, _ *wire.OpMsg) (*wire.O
 		return nil, err
 	}
 	if state.Configuration == nil {
-		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrorCode(94), "no replica set config has been received")
+		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrNotYetInitialized, "no replica set config has been received")
 	}
 	return documentOpMsg(must.NotFail(types.NewDocument(
 		"config", replicaConfigurationDocument(*state.Configuration),
@@ -169,7 +169,7 @@ func (h *Handler) MsgReplSetHeartbeat(_ context.Context, msg *wire.OpMsg) (*wire
 	setValue, _ := request.Get("replSetHeartbeat")
 	setName, ok := setValue.(string)
 	if !ok || setName != state.SetName {
-		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrorCode(93), fmt.Sprintf("replSetHeartbeat set name %q does not match %q", setName, state.SetName))
+		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrInvalidReplicaSetConfig, fmt.Sprintf("replSetHeartbeat set name %q does not match %q", setName, state.SetName))
 	}
 	from, _ := request.Get("from")
 	fromHost, ok := from.(string)
@@ -197,7 +197,7 @@ func (h *Handler) MsgReplSetHeartbeat(_ context.Context, msg *wire.OpMsg) (*wire
 		return nil, err
 	}
 	if heartbeatVersion != 1 {
-		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrorCode(40666), fmt.Sprintf("Found invalid value for field hbv: %d", heartbeatVersion))
+		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrReplicaSetHeartbeatVersion, fmt.Sprintf("Found invalid value for field hbv: %d", heartbeatVersion))
 	}
 	fromID := int(fromIDValue)
 	primaryID := int(primaryIDValue)
@@ -256,12 +256,12 @@ func (h *Handler) MsgReplSetUpdatePositionUnsupported(_ context.Context, _ *wire
 }
 
 func downstreamReplicationUnsupportedError() error {
-	return handlererrors.NewCommandErrorMsg(handlererrors.ErrorCode(115), "DumboDB does not serve downstream oplog replication")
+	return handlererrors.NewCommandErrorMsg(handlererrors.ErrCommandNotSupported, "DumboDB does not serve downstream oplog replication")
 }
 
 func (h *Handler) replicationState() (topology.Snapshot, error) {
 	if h.ReplicationTopology == nil {
-		return topology.Snapshot{}, handlererrors.NewCommandErrorMsg(handlererrors.ErrorCode(76), "not running with --replSet")
+		return topology.Snapshot{}, handlererrors.NewCommandErrorMsg(handlererrors.ErrNoReplicationEnabled, "not running with --replSet")
 	}
 	return h.ReplicationTopology.Snapshot(), nil
 }

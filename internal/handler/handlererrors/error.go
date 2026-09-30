@@ -103,6 +103,8 @@ const (
 	// ErrInvalidNamespace indicates that the collection name is invalid.
 	ErrInvalidNamespace = ErrorCode(73) // InvalidNamespace
 
+	ErrNoReplicationEnabled = ErrorCode(76) // NoReplicationEnabled
+
 	// ErrIndexOptionsConflict indicates that index build process failed due to options conflict.
 	ErrIndexOptionsConflict = ErrorCode(85) // IndexOptionsConflict
 
@@ -110,6 +112,10 @@ const (
 	ErrIndexKeySpecsConflict = ErrorCode(86) // IndexKeySpecsConflict
 
 	ErrOperationFailed = ErrorCode(96) // OperationFailed
+
+	ErrWriteConflict = ErrorCode(112) // WriteConflict
+
+	ErrCommandNotSupported = ErrorCode(115) // CommandNotSupported
 
 	ErrDocumentValidationFailure = ErrorCode(121) // DocumentValidationFailure
 
@@ -129,6 +135,12 @@ const (
 
 	// ErrNotImplemented indicates that a flag or command is not implemented.
 	ErrNotImplemented = ErrorCode(238) // NotImplemented
+
+	ErrTransactionTooOld = ErrorCode(225) // TransactionTooOld
+
+	ErrNoSuchTransaction = ErrorCode(251) // NoSuchTransaction
+
+	ErrOperationNotSupportedInTransaction = ErrorCode(263) // OperationNotSupportedInTransaction
 
 	// ErrMechanismUnavailable indicates that the authentication mechanism is unavailable.
 	ErrMechanismUnavailable = ErrorCode(334) // MechanismUnavailable
@@ -430,6 +442,14 @@ const (
 	// ErrGeoNearNotAllowedInContext indicates that $geoNear/$near/$nearSphere
 	// were used in a context that does not sort (e.g. a $match stage or count).
 	ErrGeoNearNotAllowedInContext = ErrorCode(5626500) // Location5626500
+
+	ErrInvalidReplicaSetConfig               = ErrorCode(93)    // InvalidReplicaSetConfig
+	ErrNotYetInitialized                     = ErrorCode(94)    // NotYetInitialized
+	ErrTopologyVersionMissingProcessID       = ErrorCode(31368) // Location31368
+	ErrTopologyVersionNegativeCounter        = ErrorCode(31372) // Location31372
+	ErrTopologyVersionProcessIDType          = ErrorCode(31382) // Location31382
+	ErrReplicaSetHeartbeatVersion            = ErrorCode(40666) // Location40666
+	ErrAwaitableHelloTopologyVersionRequired = ErrorCode(51756) // Location51756
 )
 
 // ErrInfo represents additional optional error information.

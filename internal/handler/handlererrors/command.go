@@ -27,10 +27,17 @@ import (
 type CommandError struct {
 	// the order of fields is weird to make the struct smaller due to alignment
 
-	err  error
-	info *ErrInfo
-	code ErrorCode
+	err    error
+	info   *ErrInfo
+	labels []string
+	code   ErrorCode
 }
+
+const (
+	TransientTransactionErrorLabel      = "TransientTransactionError"
+	UnknownTransactionCommitResultLabel = "UnknownTransactionCommitResult"
+	RetryableWriteErrorLabel            = "RetryableWriteError"
+)
 
 // There should not be NewCommandError function variant that accepts printf-like format specifiers.
 // Let the caller do safe formatting.
@@ -46,6 +53,18 @@ func NewCommandError(code ErrorCode, err error) error {
 	return &CommandError{
 		code: code,
 		err:  err,
+	}
+}
+
+func NewCommandErrorWithLabels(code ErrorCode, err error, labels ...string) error {
+	if err == nil {
+		panic("err is nil")
+	}
+
+	return &CommandError{
+		code:   code,
+		err:    err,
+		labels: append([]string(nil), labels...),
 	}
 }
 
@@ -92,6 +111,13 @@ func (e *CommandError) Document() *wirebson.Document {
 	if e.code != errUnset {
 		must.NoError(d.Add("code", int32(e.code)))
 		must.NoError(d.Add("codeName", e.code.String()))
+	}
+	if len(e.labels) > 0 {
+		labels := wirebson.MakeArray(len(e.labels))
+		for _, label := range e.labels {
+			must.NoError(labels.Add(label))
+		}
+		must.NoError(d.Add("errorLabels", labels))
 	}
 
 	return d

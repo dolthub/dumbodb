@@ -125,7 +125,7 @@ func (h *Handler) updateDocument(ctx context.Context, params *common.UpdateParam
 		msg := fmt.Sprintf("Invalid collection name: %s", params.Collection)
 		return 0, 0, nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace, msg, "insert")
 	default:
-		return 0, 0, nil, common.TranslateBackendWriteError(err)
+		return 0, 0, nil, common.TranslateBackendWriteError(ctx, err)
 	}
 
 	var validator *types.Document
@@ -177,10 +177,10 @@ func (h *Handler) updateDocument(ctx context.Context, params *common.UpdateParam
 		result, err := common.UpdateDocument(ctx, c, "update", iter, &u, params.SkipDurableSync)
 		if err != nil {
 			if backends.ErrorCodeIs(err, backends.ErrorCodeReadOnlyDatabase, backends.ErrorCodeReadOnlyCollection) {
-				return 0, 0, nil, common.TranslateBackendWriteError(err)
+				return 0, 0, nil, common.TranslateBackendWriteError(ctx, err)
 			}
 			if backends.ErrorCodeIs(err, backends.ErrorCodeWriteConflict) {
-				return 0, 0, nil, common.TranslateBackendWriteError(err)
+				return 0, 0, nil, common.TranslateBackendWriteError(ctx, err)
 			}
 			return 0, 0, nil, lazyerrors.Error(err)
 		}

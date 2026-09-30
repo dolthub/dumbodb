@@ -327,7 +327,7 @@ func (h *Handler) ReconcileWriteBoundary(ctx context.Context) error {
 				return fmt.Errorf("%w: %w", ErrWriteRaced, err)
 			}
 			if backends.ErrorCodeIs(err, backends.ErrorCodeWriteConflict) {
-				return common.TranslateBackendWriteError(err)
+				return common.TranslateBackendWriteError(ctx, err)
 			}
 			return err
 		}
