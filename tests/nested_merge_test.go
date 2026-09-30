@@ -23,6 +23,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
 )
 
 func TestMergeMatrix_NestedDocument(t *testing.T) {
@@ -34,14 +35,16 @@ func TestMergeMatrix_NestedDocument(t *testing.T) {
 		oursField, theirsField string
 		oursValue, theirsValue any
 		want                   bson.M
-		convergent, divergent  bool
+		compareAndSwap         bool
+		wantConflicts          [5]bool
 	}{
-		{"disjoint", bson.M{"_id": int32(1), "meta": bson.M{"owner": "alice", "region": "eu"}}, "meta.owner", "meta.region", "bob", "us", bson.M{"_id": int32(1), "meta": bson.M{"owner": "bob", "region": "us"}}, false, false},
-		{"nested CAS", bson.M{"_id": int32(1), "meta": bson.M{"version": int32(1)}}, "meta.version", "meta.version", int32(2), int32(2), bson.M{"_id": int32(1), "meta": bson.M{"version": int32(2)}}, true, false},
-		{"deep disjoint", bson.M{"_id": int32(1), "meta": bson.M{"inner": bson.M{"deep": bson.M{"a": "old", "b": "old"}}}}, "meta.inner.deep.a", "meta.inner.deep.b", "left", "right", bson.M{"_id": int32(1), "meta": bson.M{"inner": bson.M{"deep": bson.M{"a": "left", "b": "right"}}}}, false, false},
-		{"deep divergent", bson.M{"_id": int32(1), "meta": bson.M{"inner": bson.M{"deep": bson.M{"value": "old"}}}}, "meta.inner.deep.value", "meta.inner.deep.value", "left", "right", nil, false, true},
+		{"disjoint", bson.M{"_id": int32(1), "meta": bson.M{"owner": "alice", "region": "eu"}}, "meta.owner", "meta.region", "bob", "us", bson.M{"_id": int32(1), "meta": bson.M{"owner": "bob", "region": "us"}}, false, [5]bool{false, false, false, true, true}},
+		{"nested CAS", bson.M{"_id": int32(1), "meta": bson.M{"version": int32(1)}}, "meta.version", "meta.version", int32(2), int32(2), bson.M{"_id": int32(1), "meta": bson.M{"version": int32(2)}}, true, [5]bool{true, true, false, true, false}},
+		{"deep disjoint", bson.M{"_id": int32(1), "meta": bson.M{"inner": bson.M{"deep": bson.M{"a": "old", "b": "old"}}}}, "meta.inner.deep.a", "meta.inner.deep.b", "left", "right", bson.M{"_id": int32(1), "meta": bson.M{"inner": bson.M{"deep": bson.M{"a": "left", "b": "right"}}}}, false, [5]bool{false, false, false, true, true}},
+		{"deep divergent", bson.M{"_id": int32(1), "meta": bson.M{"inner": bson.M{"deep": bson.M{"value": "old"}}}}, "meta.inner.deep.value", "meta.inner.deep.value", "left", "right", nil, false, [5]bool{true, true, true, true, true}},
 	} {
-		for _, mode := range []string{"", "fieldTouched", "fieldDivergent", "documentTouched", "documentDivergent"} {
+		// Expectation order: default, fieldTouched, fieldDivergent, documentTouched, documentDivergent.
+		for modeIndex, mode := range []string{"", "fieldTouched", "fieldDivergent", "documentTouched", "documentDivergent"} {
 			name := mode
 			if name == "" {
 				name = "default"
@@ -61,21 +64,25 @@ func TestMergeMatrix_NestedDocument(t *testing.T) {
 					{Key: "dumboBranch", Value: 1}, {Key: "action", Value: "add"}, {Key: "branch", Value: "feature"},
 				}).Err())
 				featureDB := env.Client.Database(dbName + "@feature")
-				_, err = featureDB.Collection("docs").UpdateOne(ctx, bson.D{{Key: "_id", Value: int32(1)}},
-					bson.D{{Key: "$set", Value: bson.D{{Key: scenario.theirsField, Value: scenario.theirsValue}}}})
-				require.NoError(t, err)
+				updateBranch := func(database *mongo.Database, field string, value any) {
+					filter := bson.D{{Key: "_id", Value: int32(1)}}
+					update := bson.D{{Key: "$set", Value: bson.D{{Key: field, Value: value}}}}
+					if scenario.compareAndSwap {
+						filter = append(filter, bson.E{Key: "meta.version", Value: int32(1)})
+						update = bson.D{{Key: "$inc", Value: bson.D{{Key: "meta.version", Value: int32(1)}}}}
+					}
+					result, updateErr := database.Collection("docs").UpdateOne(ctx, filter, update)
+					require.NoError(t, updateErr)
+					require.EqualValues(t, 1, result.MatchedCount, "each branch must match its own seeded version")
+				}
+				updateBranch(featureDB, scenario.theirsField, scenario.theirsValue)
 				dumboDBCommit(t, env, dbName+"@feature", "feature edits "+scenario.theirsField)
-				_, err = mainDB.Collection("docs").UpdateOne(ctx, bson.D{{Key: "_id", Value: int32(1)}},
-					bson.D{{Key: "$set", Value: bson.D{{Key: scenario.oursField, Value: scenario.oursValue}}}})
-				require.NoError(t, err)
+				updateBranch(mainDB, scenario.oursField, scenario.oursValue)
 				dumboDBCommit(t, env, dbName+"@main", "main edits "+scenario.oursField)
 				err = mainDB.RunCommand(ctx, bson.D{{Key: "dumboMerge", Value: 1}, {Key: "mergeIn", Value: "feature"}}).Err()
 				var conflicts bson.M
 				conflictErr := mainDB.RunCommand(ctx, bson.D{{Key: "dumboConflicts", Value: 1}}).Decode(&conflicts)
-				wantConflict := scenario.divergent || mode == "documentTouched" ||
-					(scenario.convergent && (mode == "" || mode == "fieldTouched")) ||
-					(!scenario.convergent && mode == "documentDivergent")
-				if wantConflict {
+				if scenario.wantConflicts[modeIndex] {
 					require.ErrorContains(t, err, "conflict")
 					require.NoError(t, conflictErr)
 					require.Len(t, conflicts["conflicts"], 1)
