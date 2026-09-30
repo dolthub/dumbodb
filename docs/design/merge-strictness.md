@@ -430,13 +430,17 @@ It is collection config, stored in the per-collection catalog document in
   materialized, as the validation defaults are.
 - The wire value is always the name, never a number.
 
-## 7. Still to pin
+### Field granularity
 
-**What counts as a field.** Today a top-level key, with subdocuments and arrays
-atomic. Full paths would let `a.b` and `a.c` be distinct, which a `fieldTouched`
-collection would want, but that is a real change to the differ and needs a
-companion answer for arrays, where element-wise identity is not well defined.
-Independent of the modes and decidable separately.
+**What counts as a field.** Existing subdocuments merge recursively, so `a.b`
+and `a.c` are distinct fields for the field modes. Only the root `_id` is
+excluded as document identity; a nested `_id` is a regular field. Arrays remain
+atomic, including documents inside them. Recursion requires a document in the
+base and both branches: concurrent creation of different subdocuments,
+parent deletion versus child modification, and divergent type replacements
+conflict. Document modes continue to compare whole documents.
+
+## 7. Still to pin
 
 **Whether the modes govern adds and deletes.** The matrix assumes they do. The
 consequence at the default is that two pipelines inserting an identical

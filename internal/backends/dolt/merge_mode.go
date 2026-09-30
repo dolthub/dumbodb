@@ -149,27 +149,37 @@ func (m MergeMode) conflicts(base, left, right *types.Document) bool {
 	switch m {
 	case MergeModeDocumentTouched:
 		return true
-	case MergeModeFieldTouched:
-		for k := range fo {
-			if _, ok := ft[k]; ok {
-				return true
-			}
-		}
-		return false
-	case MergeModeFieldDivergent:
-		for k := range fo {
-			if _, ok := ft[k]; !ok {
-				continue
-			}
-			if !fieldsEqual(left, right, k) {
-				return true
-			}
-		}
-		return false
+	case MergeModeFieldTouched, MergeModeFieldDivergent:
+		return m.fieldConflicts(base, left, right, true)
 	case MergeModeDocumentDivergent:
 		return !documentsEqual(left, right)
 	}
 	return true
+}
+
+// Only the root _id is identity; nested _id fields participate in conflicts.
+func (m MergeMode) fieldConflicts(base, left, right *types.Document, root bool) bool {
+	for _, key := range mergeDocumentKeys(base, left, right) {
+		if root && key == "_id" {
+			continue
+		}
+		baseValue, basePresent := getOrNil(base, key)
+		leftValue, leftPresent := getOrNil(left, key)
+		rightValue, rightPresent := getOrNil(right, key)
+		baseDoc, leftDoc, rightDoc, documents := nestedMergeDocuments(baseValue, leftValue, rightValue)
+		if documents {
+			if m.fieldConflicts(baseDoc, leftDoc, rightDoc, false) {
+				return true
+			}
+			continue
+		}
+		leftChanged := basePresent != leftPresent || !reflect.DeepEqual(baseValue, leftValue)
+		rightChanged := basePresent != rightPresent || !reflect.DeepEqual(baseValue, rightValue)
+		if leftChanged && rightChanged && (m == MergeModeFieldTouched || !fieldsEqual(left, right, key)) {
+			return true
+		}
+	}
+	return false
 }
 
 // rowMergePolicy adapts a merge mode to the callback Dolt's merge consults for

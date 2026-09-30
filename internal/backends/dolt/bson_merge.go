@@ -16,27 +16,17 @@ package dolt
 
 import (
 	"reflect"
+	"sort"
 
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// mergeBSONDoc performs a field-level three-way merge. Returns (nil,
-// true) on a conflict. Equality is reflect.DeepEqual on Get-returned
-// values, sufficient for scalar and shallow-container fields; deeper
-// container conflicts fall back to the prolly three-way differ.
+// mergeBSONDoc recursively merges existing documents. Arrays remain atomic.
+// A conflict returns (nil, true).
 func mergeBSONDoc(base, left, right *types.Document) (*types.Document, bool) {
-	keys := make(map[string]struct{})
-	for _, k := range base.Keys() {
-		keys[k] = struct{}{}
-	}
-	for _, k := range left.Keys() {
-		keys[k] = struct{}{}
-	}
-	for _, k := range right.Keys() {
-		keys[k] = struct{}{}
-	}
+	keys := mergeDocumentKeys(base, left, right)
 	out := types.MakeDocument(len(keys))
-	for k := range keys {
+	for _, k := range keys {
 		bVal, bOK := getOrNil(base, k)
 		lVal, lOK := getOrNil(left, k)
 		rVal, rOK := getOrNil(right, k)
@@ -76,7 +66,15 @@ func mergeBSONDoc(base, left, right *types.Document) (*types.Document, bool) {
 			case sameMod:
 				out.Set(k, lVal)
 			default:
-				return nil, true
+				baseDoc, leftDoc, rightDoc, documents := nestedMergeDocuments(bVal, lVal, rVal)
+				if !documents {
+					return nil, true
+				}
+				merged, conflict := mergeBSONDoc(baseDoc, leftDoc, rightDoc)
+				if conflict {
+					return nil, true
+				}
+				out.Set(k, merged)
 			}
 		case bOK && !lOK && !rOK:
 		}
@@ -85,7 +83,7 @@ func mergeBSONDoc(base, left, right *types.Document) (*types.Document, bool) {
 }
 
 func getOrNil(doc *types.Document, key string) (any, bool) {
-	if !doc.Has(key) {
+	if doc == nil || !doc.Has(key) {
 		return nil, false
 	}
 	v, err := doc.Get(key)
@@ -93,4 +91,26 @@ func getOrNil(doc *types.Document, key string) (any, bool) {
 		return nil, false
 	}
 	return v, true
+}
+
+func mergeDocumentKeys(documents ...*types.Document) []string {
+	uniqueKeys := make(map[string]struct{})
+	for _, document := range documents {
+		for _, key := range document.Keys() {
+			uniqueKeys[key] = struct{}{}
+		}
+	}
+	keys := make([]string, 0, len(uniqueKeys))
+	for key := range uniqueKeys {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func nestedMergeDocuments(base, left, right any) (*types.Document, *types.Document, *types.Document, bool) {
+	baseDoc, baseOK := base.(*types.Document)
+	leftDoc, leftOK := left.(*types.Document)
+	rightDoc, rightOK := right.(*types.Document)
+	return baseDoc, leftDoc, rightDoc, baseOK && leftOK && rightOK
 }
