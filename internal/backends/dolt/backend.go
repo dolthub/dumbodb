@@ -347,8 +347,10 @@ func (b *Backend) OnTransactionCommit(ctx context.Context, owner string) error {
 		}
 	}
 
-	// CommitWorkingSet (unlike CommitTransaction) doesn't reset ctx.Transaction.
-	sqlCtx.SetTransaction(nil)
+	if firstErr == nil {
+		// CommitWorkingSet (unlike CommitTransaction) doesn't reset ctx.Transaction.
+		sqlCtx.SetTransaction(nil)
+	}
 
 	b.releaseLocksForOwner(owner)
 	return firstErr

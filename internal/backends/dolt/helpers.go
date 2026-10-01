@@ -698,6 +698,9 @@ func (state *dbState) reconcileBranchForSession(
 		return nil, unresolved, err
 	}
 
+	if hook, ok := sqlCtx.Value(sessionPublishHookKey{}).(func()); ok {
+		hook()
+	}
 	if err := publishWorkingSet(sqlCtx, state.doltDB, merged, branch, forkPoint); err != nil {
 		return nil, nil, fmt.Errorf("persisting WS for %q: %w", branch, err)
 	}
@@ -711,6 +714,9 @@ func (state *dbState) reconcileBranchForSession(
 	}
 	return merged, nil, nil
 }
+
+// sessionPublishHookKey makes the post-reconcile publish race deterministic in backend tests.
+type sessionPublishHookKey struct{}
 
 // publishSessionOverlay reconciles this branch's session overlay onto the
 // branch before a commit is taken from it, so dumboCommit commits a working
