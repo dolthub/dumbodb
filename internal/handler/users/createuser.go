@@ -48,11 +48,6 @@ type CreateUserParams struct {
 func CreateUser(ctx context.Context, b backends.Backend, params *CreateUserParams) error {
 	must.NotBeZero(params)
 
-	credentials, err := MakeCredentials(params.Username, params.Password, params.Mechanisms)
-	if err != nil {
-		return err
-	}
-
 	roles, err := NormalizeRoles(params.Roles, params.Database)
 	if err != nil {
 		return err
@@ -61,12 +56,18 @@ func CreateUser(ctx context.Context, b backends.Backend, params *CreateUserParam
 	id := uuid.New()
 	saved := must.NotFail(types.NewDocument(
 		"_id", params.Database+"."+params.Username,
-		"credentials", credentials,
 		"user", params.Username,
 		"db", params.Database,
 		"roles", roles,
 		"userId", types.Binary{Subtype: types.BinaryUUID, B: must.NotFail(id.MarshalBinary())},
 	))
+	if params.Database != "$external" {
+		credentials, err := MakeCredentials(params.Username, params.Password, params.Mechanisms)
+		if err != nil {
+			return err
+		}
+		saved.Set("credentials", credentials)
+	}
 
 	if params.CustomData != nil {
 		saved.Set("customData", params.CustomData)

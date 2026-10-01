@@ -73,7 +73,7 @@ func (h *Handler) saslContinue(connCtx context.Context, doc *types.Document) (*t
 		)
 	}
 
-	_, _, conv, authDB := conninfo.Get(connCtx).Auth()
+	username, _, conv, authDB := conninfo.Get(connCtx).Auth()
 
 	if conv == nil {
 		h.L.WarnContext(connCtx, "saslContinue: no conversation to continue")
@@ -88,7 +88,7 @@ func (h *Handler) saslContinue(connCtx context.Context, doc *types.Document) (*t
 	valid := conv.Valid()
 
 	attrs := []any{
-		slog.String("username", conv.Username()),
+		slog.String("username", username),
 		slog.Bool("valid", valid),
 		slog.Bool("done", conv.Done()),
 	}
@@ -96,13 +96,13 @@ func (h *Handler) saslContinue(connCtx context.Context, doc *types.Document) (*t
 	if valid {
 		h.L.DebugContext(connCtx, "saslContinue: conversation success", attrs...)
 
-		if err = h.checkAuthRestrictions(connCtx, authDB, conv.Username()); err != nil {
+		if err = h.checkAuthRestrictions(connCtx, authDB, username); err != nil {
 			conninfo.Get(connCtx).SetAuth("", "", nil, "")
 			return nil, err
 		}
 
 		conninfo.Get(connCtx).SetBypassBackendAuth()
-		conninfo.Get(connCtx).SetSCRAMAuthenticated()
+		conninfo.Get(connCtx).SetAuthenticated()
 
 		return must.NotFail(types.NewDocument(
 			"conversationId", int32(1),

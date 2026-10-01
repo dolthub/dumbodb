@@ -51,6 +51,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 	"github.com/dolthub/dumbodb/internal/util/logging"
 	"github.com/dolthub/dumbodb/internal/util/must"
+	"github.com/dolthub/dumbodb/internal/util/tlsutil"
 )
 
 // Mode represents DumboDB mode of operation.
@@ -139,8 +140,25 @@ func (c *conn) run(ctx context.Context) (err error) {
 	defer func() {
 		cancel(lazyerrors.Errorf("run exits: %w", err))
 	}()
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-done:
+		case <-ctx.Done():
+			if e := c.netConn.SetDeadline(time.Unix(0, 0)); e != nil {
+				c.l.WarnContext(ctx, fmt.Sprintf("Failed to set deadline: %s", e))
+			}
+		}
+	}()
+	defer close(done)
 
 	connInfo := conninfo.New()
+	peerCertificate, usesTLS, err := tlsutil.PeerCertificate(ctx, c.netConn)
+	if err != nil {
+		return err
+	}
+	connInfo.SetPeerCertificate(peerCertificate)
+	connInfo.SetUsesTLS(usesTLS)
 	if c.netConn.RemoteAddr().Network() != "unix" {
 		connInfo.Peer, err = netip.ParseAddrPort(c.netConn.RemoteAddr().String())
 		if err != nil {
@@ -164,21 +182,6 @@ func (c *conn) run(ctx context.Context) (err error) {
 		}
 	}()
 
-	done := make(chan struct{})
-
-	// handle ctx cancellation
-	go func() {
-		select {
-		case <-done:
-			// nothing, let goroutine exit
-		case <-ctx.Done():
-			// unblocks ReadMessage below; any non-zero past value will do
-			if e := c.netConn.SetDeadline(time.Unix(0, 0)); e != nil {
-				c.l.WarnContext(ctx, fmt.Sprintf("Failed to set deadline: %s", e))
-			}
-		}
-	}()
-
 	defer func() {
 		if p := recover(); p != nil {
 			c.l.LogAttrs(ctx, logging.LevelDPanic, fmt.Sprint(p), logging.Error(err),
@@ -188,9 +191,6 @@ func (c *conn) run(ctx context.Context) (err error) {
 			// or cursors that may have been left open by the panicking goroutine.
 			cancel(lazyerrors.Errorf("panic recovered: %v", p))
 		}
-
-		// let goroutine above exit
-		close(done)
 	}()
 
 	bufr := bufio.NewReader(c.netConn)

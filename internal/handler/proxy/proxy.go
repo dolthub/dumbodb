@@ -58,7 +58,7 @@ func New(addr, certFile, keyFile, caFile string) (*Router, error) {
 
 // dialTLS connects to the given address using TLS.
 func dialTLS(addr, certFile, keyFile, caFile string) (net.Conn, error) {
-	config, err := tlsutil.Config(certFile, keyFile, caFile)
+	config, err := tlsutil.ClientConfig(certFile, keyFile, caFile)
 	if err != nil {
 		return nil, err
 	}

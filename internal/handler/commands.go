@@ -81,6 +81,7 @@ func (h *Handler) initCommands() {
 		// alphabetically.
 		"_isSelf":                  {Handler: h.MsgIsSelf, anonymous: true},
 		"aggregate":                {Handler: h.MsgAggregate, MutatesState: aggregateMutatesState, Help: "Returns aggregated data."},
+		"authenticate":             {Handler: h.MsgAuthenticate, anonymous: true},
 		"autoCompact":              {Handler: h.MsgAutoCompact, Help: "Enables or disables background compaction (MongoDB 8.0+)."},
 		"bulkWrite":                {Handler: h.MsgBulkWrite, MutatesState: alwaysMutatesState, WritesData: true, Help: "Performs multiple write operations across collections in a single command."},
 		"convertToCapped":          {Handler: h.MsgConvertToCapped, MutatesState: alwaysMutatesState, Help: "Converts an existing collection to a capped collection."},
@@ -216,9 +217,9 @@ func (h *Handler) initCommands() {
 			authed := inner
 			enableNewAuth := h.EnableNewAuth
 			inner = func(ctx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
-				authenticated := enableNewAuth || conninfo.Get(ctx).SCRAMAuthenticated()
+				authenticated := enableNewAuth || conninfo.Get(ctx).Authenticated()
 				if authenticated {
-					if err := checkSCRAMConversation(ctx, wireCommandName(msg), h.L); err != nil {
+					if err := checkAuthentication(ctx, wireCommandName(msg), h.L); err != nil {
 						if h.localhostExceptionApplies(ctx, wireCommandName(msg)) {
 							res, createErr := authed(ctx, msg)
 							if createErr == nil {
@@ -383,25 +384,29 @@ func wireCommandName(msg *wire.OpMsg) string {
 	return keys[0]
 }
 
-// checkSCRAMConversation returns error if SCRAM conversation is not valid.
-func checkSCRAMConversation(ctx context.Context, command string, l *slog.Logger) error {
-	_, _, conv, _ := conninfo.Get(ctx).Auth()
+func checkAuthentication(ctx context.Context, command string, l *slog.Logger) error {
+	ci := conninfo.Get(ctx)
+	if ci.Authenticated() {
+		return nil
+	}
+
+	_, _, conv, _ := ci.Auth()
 
 	switch {
 	case conv == nil:
-		l.WarnContext(ctx, "checkSCRAMConversation: no conversation")
+		l.WarnContext(ctx, "checkAuthentication: no conversation")
 
 	case !conv.Valid():
 		l.WarnContext(
 			ctx,
-			"checkSCRAMConversation: invalid conversation",
+			"checkAuthentication: invalid conversation",
 			slog.String("username", conv.Username()), slog.Bool("valid", conv.Valid()), slog.Bool("done", conv.Done()),
 		)
 
 	default:
 		l.DebugContext(
 			ctx,
-			"checkSCRAMConversation: passed",
+			"checkAuthentication: passed",
 			slog.String("username", conv.Username()), slog.Bool("valid", conv.Valid()), slog.Bool("done", conv.Done()),
 		)
 
@@ -411,7 +416,7 @@ func checkSCRAMConversation(ctx context.Context, command string, l *slog.Logger)
 	return handlererrors.NewCommandErrorMsgWithArgument(
 		handlererrors.ErrUnauthorized,
 		fmt.Sprintf("Command %s requires authentication", command),
-		"checkSCRAMConversation",
+		"checkAuthentication",
 	)
 }
 

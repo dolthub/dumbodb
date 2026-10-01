@@ -24,9 +24,11 @@ func (h *Handler) postProcessResponse(ctx context.Context, request, response *wi
 	current := h.applyResponsePostProcessor(ctx, "write concern", response, func() (*wire.OpMsg, error) {
 		return withWriteConcernResult(request, response)
 	})
-	current = h.applyResponsePostProcessor(ctx, "logical time", current, func() (*wire.OpMsg, error) {
-		return h.withLogicalTime(current)
-	})
+	if h.ReplicationTopology != nil && h.ReplicationTopology.Snapshot().Configuration != nil {
+		current = h.applyResponsePostProcessor(ctx, "logical time", current, func() (*wire.OpMsg, error) {
+			return h.withLogicalTime(current)
+		})
+	}
 	return current
 }
 

@@ -42,7 +42,7 @@ func (h *Handler) MsgLogout(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 
 	ci := conninfo.Get(connCtx)
 
-	if user, _, _, _ := ci.Auth(); h.EnableNewAuth && user == "" && !ci.SCRAMAuthenticated() {
+	if user, _, _, _ := ci.Auth(); h.EnableNewAuth && user == "" && !ci.Authenticated() {
 		return nil, handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrUnauthorized,
 			"Command logout requires authentication",
@@ -50,7 +50,7 @@ func (h *Handler) MsgLogout(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 	}
 
 	ci.SetAuth("", "", nil, "")
-	ci.ClearSCRAMAuthenticated()
+	ci.ClearAuthenticated()
 
 	return documentOpMsg(
 		must.NotFail(types.NewDocument(

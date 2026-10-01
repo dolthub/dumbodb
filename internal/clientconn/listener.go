@@ -44,11 +44,9 @@ type Listener struct {
 
 	tcpListener  net.Listener
 	unixListener net.Listener
-	tlsListener  net.Listener
 
 	tcpListenerReady  chan struct{}
 	unixListenerReady chan struct{}
-	tlsListenerReady  chan struct{}
 	listenersClosed   chan struct{}
 }
 
@@ -56,10 +54,15 @@ type NewListenerOpts struct {
 	TCP  string
 	Unix string
 
-	TLS         string
-	TLSCertFile string
-	TLSKeyFile  string
-	TLSCAFile   string
+	TLS                                    bool
+	TLSCertFile                            string
+	TLSKeyFile                             string
+	TLSKeyPassword                         string
+	TLSCAFile                              string
+	TLSCRLFile                             string
+	TLSAllowConnectionsWithoutCertificates bool
+	TLSDisabledProtocols                   []uint16
+	TLSAcceptPlaintext                     bool
 
 	ProxyAddr        string
 	ProxyTLSCertFile string
@@ -80,7 +83,6 @@ func Listen(opts *NewListenerOpts) (*Listener, error) {
 		ll:                ll,
 		tcpListenerReady:  make(chan struct{}),
 		unixListenerReady: make(chan struct{}),
-		tlsListenerReady:  make(chan struct{}),
 		listenersClosed:   make(chan struct{}),
 	}
 
@@ -95,12 +97,37 @@ func Listen(opts *NewListenerOpts) (*Listener, error) {
 	}()
 
 	if l.TCP != "" {
-		if l.tcpListener, err = net.Listen("tcp", l.TCP); err != nil {
+		protocol := "TCP"
+		var config *tls.Config
+		if l.TLS {
+			if config, err = tlsutil.ServerConfig(tlsutil.ServerConfigOptions{
+				CertificateFile:                     l.TLSCertFile,
+				KeyFile:                             l.TLSKeyFile,
+				KeyPassword:                         l.TLSKeyPassword,
+				CAFile:                              l.TLSCAFile,
+				CRLFile:                             l.TLSCRLFile,
+				AllowConnectionsWithoutCertificates: l.TLSAllowConnectionsWithoutCertificates,
+				DisabledProtocols:                   l.TLSDisabledProtocols,
+			}); err != nil {
+				return nil, err
+			}
+		}
+		l.tcpListener, err = net.Listen("tcp", l.TCP)
+		if err != nil {
 			return nil, lazyerrors.Error(err)
+		}
+		if l.TLS {
+			if l.TLSAcceptPlaintext {
+				l.tcpListener = tlsutil.OptionalListener(l.tcpListener, config)
+				protocol = "TCP/TLS"
+			} else {
+				l.tcpListener = tls.NewListener(l.tcpListener, config)
+				protocol = "TLS"
+			}
 		}
 
 		close(l.tcpListenerReady)
-		ll.InfoContext(ctx, fmt.Sprintf("Listening on TCP %s...", l.TCPAddr()))
+		ll.InfoContext(ctx, fmt.Sprintf("Listening on %s %s...", protocol, l.TCPAddr()))
 	}
 
 	if l.Unix != "" {
@@ -110,22 +137,6 @@ func Listen(opts *NewListenerOpts) (*Listener, error) {
 
 		close(l.unixListenerReady)
 		ll.InfoContext(ctx, fmt.Sprintf("Listening on Unix %s...", l.UnixAddr()))
-	}
-
-	if l.TLS != "" {
-		var config *tls.Config
-
-		if config, err = tlsutil.Config(l.TLSCertFile, l.TLSKeyFile, l.TLSCAFile); err != nil {
-			// this error is user visible, do not use lazyerror as it makes less readable
-			return nil, err
-		}
-
-		if l.tlsListener, err = tls.Listen("tcp", l.TLS, config); err != nil {
-			return nil, lazyerrors.Error(err)
-		}
-
-		close(l.tlsListenerReady)
-		ll.InfoContext(ctx, fmt.Sprintf("Listening on TLS %s...", l.TLSAddr()))
 	}
 
 	return l, nil
@@ -163,19 +174,6 @@ func (l *Listener) Run(ctx context.Context) {
 		}()
 	}
 
-	if l.TLS != "" {
-		wg.Add(1)
-
-		go func() {
-			defer func() {
-				l.ll.InfoContext(ctx, fmt.Sprintf("%s stopped", l.TLSAddr()))
-				wg.Done()
-			}()
-
-			acceptLoop(ctx, l.tlsListener, &wg, l)
-		}()
-	}
-
 	<-ctx.Done()
 
 	if l.tcpListener != nil {
@@ -184,10 +182,6 @@ func (l *Listener) Run(ctx context.Context) {
 
 	if l.unixListener != nil {
 		_ = l.unixListener.Close()
-	}
-
-	if l.tlsListener != nil {
-		_ = l.tlsListener.Close()
 	}
 
 	close(l.listenersClosed)
@@ -288,12 +282,3 @@ func (l *Listener) UnixAddr() net.Addr {
 	must.NotBeZero(l.unixListener)
 	return l.unixListener.Addr()
 }
-
-// TLSAddr returns TLS listener's address.
-// It can be used to determine an actually used port, if it was zero.
-func (l *Listener) TLSAddr() net.Addr {
-	<-l.tlsListenerReady
-	must.NotBeZero(l.tlsListener)
-	return l.tlsListener.Addr()
-}
-

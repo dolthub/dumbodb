@@ -18,6 +18,7 @@ package conninfo
 import (
 	"context"
 	"crypto/rand"
+	"crypto/x509"
 	"encoding/hex"
 	"fmt"
 	"net/netip"
@@ -44,8 +45,9 @@ type ConnInfo struct {
 	Peer  netip.AddrPort
 	Local netip.AddrPort
 
-	username string // protected by rw
-	password string // protected by rw
+	username string            // protected by rw
+	password string            // protected by rw
+	peerCert *x509.Certificate // protected by rw
 
 	lsid             string         // protected by rw
 	cachedShadow     *sqlctx.Shadow // protected by rw
@@ -59,15 +61,16 @@ type ConnInfo struct {
 	txnAborted    bool // protected by rw; set when server rejects a txn op, makes subsequent commitTransaction return NoSuchTransaction
 
 	metadataRecv bool // protected by rw
+	usesTLS      bool // protected by rw
 
 	// If true, backend implementations should not perform authentication
 	// by adding username and password to the connection string.
 	// It is set to true for background connections (such us capped collections cleanup)
 	// and by the new authentication.
 	// See where it is used for more details.
-	bypassBackendAuth  bool // protected by rw
-	scramAuthenticated bool // protected by rw
-	reauthPending      bool // protected by rw
+	bypassBackendAuth bool // protected by rw
+	authenticated     bool // protected by rw
+	reauthPending     bool // protected by rw
 
 	cachedPrivs   authz.PrivilegeSet // protected by rw
 	cachedPrivGen uint64             // protected by rw
@@ -97,6 +100,34 @@ func (connInfo *ConnInfo) Username() string {
 	defer connInfo.rw.RUnlock()
 
 	return connInfo.username
+}
+
+func (connInfo *ConnInfo) PeerCertificate() *x509.Certificate {
+	connInfo.rw.RLock()
+	defer connInfo.rw.RUnlock()
+
+	return connInfo.peerCert
+}
+
+func (connInfo *ConnInfo) SetPeerCertificate(certificate *x509.Certificate) {
+	connInfo.rw.Lock()
+	defer connInfo.rw.Unlock()
+
+	connInfo.peerCert = certificate
+}
+
+func (connInfo *ConnInfo) UsesTLS() bool {
+	connInfo.rw.RLock()
+	defer connInfo.rw.RUnlock()
+
+	return connInfo.usesTLS
+}
+
+func (connInfo *ConnInfo) SetUsesTLS(usesTLS bool) {
+	connInfo.rw.Lock()
+	defer connInfo.rw.Unlock()
+
+	connInfo.usesTLS = usesTLS
 }
 
 // Auth returns stored username, password (for PLAIN mechanism), SCRAM server conversation (if any) and user's authentication db.
@@ -132,25 +163,25 @@ func (connInfo *ConnInfo) SetMetadataRecv() {
 	connInfo.metadataRecv = true
 }
 
-func (connInfo *ConnInfo) SetSCRAMAuthenticated() {
+func (connInfo *ConnInfo) SetAuthenticated() {
 	connInfo.rw.Lock()
 	defer connInfo.rw.Unlock()
 
-	connInfo.scramAuthenticated = true
+	connInfo.authenticated = true
 }
 
-func (connInfo *ConnInfo) ClearSCRAMAuthenticated() {
+func (connInfo *ConnInfo) ClearAuthenticated() {
 	connInfo.rw.Lock()
 	defer connInfo.rw.Unlock()
 
-	connInfo.scramAuthenticated = false
+	connInfo.authenticated = false
 }
 
-func (connInfo *ConnInfo) SCRAMAuthenticated() bool {
+func (connInfo *ConnInfo) Authenticated() bool {
 	connInfo.rw.RLock()
 	defer connInfo.rw.RUnlock()
 
-	return connInfo.scramAuthenticated
+	return connInfo.authenticated
 }
 
 func (connInfo *ConnInfo) SetReauthPending(v bool) {

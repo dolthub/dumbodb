@@ -225,7 +225,7 @@ func TestSASLStart_SecondAuthBeginsButDoesNotAdoptIdentity(t *testing.T) {
 
 	ci := conninfo.New()
 	ci.SetAuth("alice", "", nil, "admin")
-	ci.SetSCRAMAuthenticated()
+	ci.SetAuthenticated()
 	ctx := conninfo.Ctx(context.Background(), ci)
 
 	_, err = h.commands["saslStart"].Handler(ctx, saslStartMsg(t))
@@ -241,7 +241,7 @@ func TestSASLContinue_RejectsPendingReauthAndKeepsFirstUser(t *testing.T) {
 
 	ci := conninfo.New()
 	ci.SetAuth("alice", "", nil, "admin")
-	ci.SetSCRAMAuthenticated()
+	ci.SetAuthenticated()
 	ci.SetReauthPending(true)
 	ctx := conninfo.Ctx(context.Background(), ci)
 
@@ -251,7 +251,7 @@ func TestSASLContinue_RejectsPendingReauthAndKeepsFirstUser(t *testing.T) {
 	require.Equal(t, handlererrors.ErrAuthenticationFailed, code)
 
 	require.False(t, ci.ReauthPending())
-	require.True(t, ci.SCRAMAuthenticated())
+	require.True(t, ci.Authenticated())
 	user, _, _, _ := ci.Auth()
 	require.Equal(t, "alice", user)
 }
@@ -267,12 +267,12 @@ func TestSASLStart_AllowedOnUnauthenticatedConnection(t *testing.T) {
 	require.False(t, isForcedLoginError(err), "saslStart must not be gated, got %v", err)
 }
 
-func TestLogout_ClearsAuthAndSCRAMLatch(t *testing.T) {
+func TestLogout_ClearsAuthAndAuthenticatedLatch(t *testing.T) {
 	h := authGateHandler(t, true)
 
 	ci := conninfo.New()
 	ci.SetAuth("alice", "", nil, "admin")
-	ci.SetSCRAMAuthenticated()
+	ci.SetAuthenticated()
 	ctx := conninfo.Ctx(context.Background(), ci)
 
 	_, err := h.commands["logout"].Handler(ctx, gateCmd(t, "logout"))
@@ -280,7 +280,7 @@ func TestLogout_ClearsAuthAndSCRAMLatch(t *testing.T) {
 
 	user, _, _, _ := ci.Auth()
 	require.Equal(t, "", user, "logout must clear the authenticated user")
-	require.False(t, ci.SCRAMAuthenticated(), "logout must clear the scramAuthenticated latch")
+	require.False(t, ci.Authenticated(), "logout must clear the authenticated latch")
 }
 
 func TestConnectionStatus_ReportsUserAndStoredRoles(t *testing.T) {
