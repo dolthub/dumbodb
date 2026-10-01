@@ -82,6 +82,7 @@ func authenticateMsg(t *testing.T, user *string) *wire.OpMsg {
 
 func x509Context(certificate *x509.Certificate) (context.Context, *conninfo.ConnInfo) {
 	ci := conninfo.New()
+	ci.SetUsesTLS(true)
 	ci.SetPeerCertificate(certificate)
 	return conninfo.Ctx(context.Background(), ci), ci
 }
@@ -133,12 +134,24 @@ func TestAuthenticateX509RejectsClaimedIdentity(t *testing.T) {
 	require.False(t, ci.Authenticated())
 }
 
-func TestAuthenticateX509RequiresCertificate(t *testing.T) {
+func TestAuthenticateX509RequiresTLS(t *testing.T) {
 	h := authGateHandler(t, true)
 	ctx := conninfo.Ctx(context.Background(), conninfo.New())
 
 	_, err := h.commands["authenticate"].Handler(ctx, authenticateMsg(t, nil))
 	requireCommandCode(t, err, handlererrors.ErrAuthenticationFailed)
+	require.Contains(t, err.Error(), "requires a TLS connection")
+}
+
+func TestAuthenticateX509RequiresCertificate(t *testing.T) {
+	h := authGateHandler(t, true)
+	ci := conninfo.New()
+	ci.SetUsesTLS(true)
+	ctx := conninfo.Ctx(context.Background(), ci)
+
+	_, err := h.commands["authenticate"].Handler(ctx, authenticateMsg(t, nil))
+	requireCommandCode(t, err, handlererrors.ErrAuthenticationFailed)
+	require.Contains(t, err.Error(), "requires a verified client certificate")
 }
 
 func TestAuthenticateX509RequiresStoredUser(t *testing.T) {

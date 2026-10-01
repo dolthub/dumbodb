@@ -61,9 +61,14 @@ func (h *Handler) MsgAuthenticate(connCtx context.Context, msg *wire.OpMsg) (*wi
 		return nil, authenticationFailed("MONGODB-X509 authentication must use the $external database")
 	}
 
-	certificate := conninfo.Get(connCtx).PeerCertificate()
+	ci := conninfo.Get(connCtx)
+	if !ci.UsesTLS() {
+		return nil, authenticationFailed("MONGODB-X509 authentication requires a TLS connection")
+	}
+
+	certificate := ci.PeerCertificate()
 	if certificate == nil {
-		return nil, authenticationFailed("Authentication failed.")
+		return nil, authenticationFailed("MONGODB-X509 authentication requires a verified client certificate")
 	}
 
 	subject, err := x509Subject(certificate)
@@ -94,7 +99,6 @@ func (h *Handler) MsgAuthenticate(connCtx context.Context, msg *wire.OpMsg) (*wi
 		return nil, err
 	}
 
-	ci := conninfo.Get(connCtx)
 	ci.SetAuth(subject, "", nil, "$external")
 	ci.SetBypassBackendAuth()
 	ci.SetAuthenticated()

@@ -153,11 +153,12 @@ func (c *conn) run(ctx context.Context) (err error) {
 	defer close(done)
 
 	connInfo := conninfo.New()
-	peerCertificate, err := tlsutil.PeerCertificate(ctx, c.netConn)
+	peerCertificate, usesTLS, err := tlsutil.PeerCertificate(ctx, c.netConn)
 	if err != nil {
 		return err
 	}
 	connInfo.SetPeerCertificate(peerCertificate)
+	connInfo.SetUsesTLS(usesTLS)
 	if c.netConn.RemoteAddr().Network() != "unix" {
 		connInfo.Peer, err = netip.ParseAddrPort(c.netConn.RemoteAddr().String())
 		if err != nil {

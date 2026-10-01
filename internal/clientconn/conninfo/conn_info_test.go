@@ -37,9 +37,12 @@ func TestLSIDRoundTrip(t *testing.T) {
 func TestPeerCertificateRoundTrip(t *testing.T) {
 	c := New()
 	assert.Nil(t, c.PeerCertificate())
+	assert.False(t, c.UsesTLS())
 	certificate := &x509.Certificate{RawSubject: []byte("subject")}
+	c.SetUsesTLS(true)
 	c.SetPeerCertificate(certificate)
 	assert.Same(t, certificate, c.PeerCertificate())
+	assert.True(t, c.UsesTLS())
 }
 
 func TestOwnerPrefersLSID(t *testing.T) {

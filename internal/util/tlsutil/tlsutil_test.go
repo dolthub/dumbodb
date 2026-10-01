@@ -321,12 +321,41 @@ func TestPeerCertificate(t *testing.T) {
 					handshakeResult <- client.HandshakeContext(context.Background())
 				}()
 
-				certificate, err := PeerCertificate(context.Background(), server)
+				certificate, usesTLS, err := PeerCertificate(context.Background(), server)
 				require.NoError(t, err)
+				require.True(t, usesTLS)
 				require.Equal(t, clientCertificate.Raw, certificate.Raw)
 				require.NoError(t, <-handshakeResult)
 			})
 		}
+	}
+}
+
+func TestPeerCertificatePlaintext(t *testing.T) {
+	for _, optional := range []bool{false, true} {
+		t.Run(fmt.Sprintf("optional=%t", optional), func(t *testing.T) {
+			serverConn, clientConn := net.Pipe()
+			defer serverConn.Close()
+			defer clientConn.Close()
+
+			var server net.Conn = serverConn
+			writeResult := make(chan error, 1)
+			if optional {
+				server = &optionalTLSConn{Conn: serverConn}
+				go func() {
+					_, err := clientConn.Write([]byte{1, 2, 3})
+					writeResult <- err
+				}()
+			}
+
+			certificate, usesTLS, err := PeerCertificate(context.Background(), server)
+			require.NoError(t, err)
+			require.Nil(t, certificate)
+			require.False(t, usesTLS)
+			if optional {
+				require.NoError(t, <-writeResult)
+			}
+		})
 	}
 }
 

@@ -61,6 +61,7 @@ type ConnInfo struct {
 	txnAborted    bool // protected by rw; set when server rejects a txn op, makes subsequent commitTransaction return NoSuchTransaction
 
 	metadataRecv bool // protected by rw
+	usesTLS      bool // protected by rw
 
 	// If true, backend implementations should not perform authentication
 	// by adding username and password to the connection string.
@@ -113,6 +114,20 @@ func (connInfo *ConnInfo) SetPeerCertificate(certificate *x509.Certificate) {
 	defer connInfo.rw.Unlock()
 
 	connInfo.peerCert = certificate
+}
+
+func (connInfo *ConnInfo) UsesTLS() bool {
+	connInfo.rw.RLock()
+	defer connInfo.rw.RUnlock()
+
+	return connInfo.usesTLS
+}
+
+func (connInfo *ConnInfo) SetUsesTLS(usesTLS bool) {
+	connInfo.rw.Lock()
+	defer connInfo.rw.Unlock()
+
+	connInfo.usesTLS = usesTLS
 }
 
 // Auth returns stored username, password (for PLAIN mechanism), SCRAM server conversation (if any) and user's authentication db.
