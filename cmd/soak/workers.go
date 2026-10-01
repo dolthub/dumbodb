@@ -16,8 +16,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -313,9 +315,10 @@ func (w *workload) runVCSWorker(ctx context.Context, uri, collName string, worke
 			key := fmt.Sprintf("vcs-w%d-main-%d", workerID, time.Now().UnixNano())
 			_, _ = mainColl.InsertOne(ctx, makeDoc(r, key, pickSize(r)))
 		}
-		if err := runCmd(ctx, mainDB, 30*time.Second, bson.D{{"dumboCommit", 1}, {"message", fmt.Sprintf("vcs-w%d main commit", workerID)}}); err != nil {
-			w.errs.record("vcs-commit", err)
-		}
+		recordVCSFailure(w.errs, "vcs-commit", runCmd(ctx, mainDB, 30*time.Second, bson.D{
+			{"dumboCommit", 1},
+			{"message", fmt.Sprintf("vcs-w%d main commit", workerID)},
+		}))
 
 		// Create + populate + commit on the feature branch.
 		branch := fmt.Sprintf("vcs-w%d-b%d", workerID, branchSeq.Add(1))
@@ -332,23 +335,35 @@ func (w *workload) runVCSWorker(ctx context.Context, uri, collName string, worke
 			w.errs.record("vcs-commit", err)
 		}
 
-		// Merge the branch back to main. Conflicts can arise when
-		// other workers (or other VCS workers) touched main between
-		// the branch-off and the merge; those count as errors.
-		if err := runCmd(ctx, mainDB, 60*time.Second, bson.D{
+		// Merge the branch back to main.
+		recordVCSFailure(w.errs, "vcs-merge", runCmd(ctx, mainDB, 60*time.Second, bson.D{
 			{"dumboMerge", 1},
 			{"mergeIn", branch},
 			{"message", fmt.Sprintf("soak merge of %s", branch)},
 			{"author", "soak <soak@dumbodb>"},
-		}); err != nil {
-			w.errs.record("vcs-merge", err)
-		}
+		}))
 
 		w.cycles.Add(1)
 		if !sleep(ctx, opsInterval*30) {
 			return
 		}
 	}
+}
+
+func recordVCSFailure(stats *errorStats, operation string, err error) {
+	if err != nil && !expectedVCSContention(err) {
+		stats.record(operation, err)
+	}
+}
+
+func expectedVCSContention(err error) bool {
+	var commandErr mongo.CommandError
+	if !errors.As(err, &commandErr) || commandErr.Code != 96 {
+		return false
+	}
+	message := strings.ToLower(commandErr.Message)
+	return strings.Contains(message, "target has uncommitted changes") ||
+		strings.Contains(message, "optimistic lock failed")
 }
 
 // runCmd is a small helper that scopes a timeout, dispatches the
