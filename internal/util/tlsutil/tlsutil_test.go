@@ -33,6 +33,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/FerretDB/wire"
 	"github.com/stretchr/testify/require"
 	"github.com/youmark/pkcs8"
 )
@@ -237,8 +238,8 @@ func TestOptionalTLSConn(t *testing.T) {
 		useTLS  bool
 		payload []byte
 	}{
-		{name: "plaintext", payload: []byte("plaintext")},
-		{name: "plaintext starts with TLS content type", payload: []byte{0x16, 0x00, 0x00, 0x00, 'x', 'x'}},
+		{name: "plaintext", payload: []byte("plaintext message")},
+		{name: "plaintext starts with TLS content type", payload: []byte{0x16, 0x00, 0x00, 0x00, 'x', 'x', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},
 		{name: "TLS", useTLS: true, payload: []byte("encrypted")},
 	}
 	for _, test := range tests {
@@ -280,11 +281,13 @@ func TestOptionalTLSConnDoesNotMisrouteMongoMessageLength(t *testing.T) {
 			defer serverConn.Close()
 			defer clientConn.Close()
 
-			header := make([]byte, 16)
-			binary.LittleEndian.PutUint32(header, length)
+			message := make([]byte, 16+2048)
+			binary.LittleEndian.PutUint32(message[0:4], length)
+			binary.LittleEndian.PutUint32(message[4:8], 260)
+			binary.LittleEndian.PutUint32(message[12:16], uint32(wire.OpCodeMsg))
 			writeResult := make(chan error, 1)
 			go func() {
-				_, err := clientConn.Write(header)
+				_, err := clientConn.Write(message)
 				writeResult <- err
 			}()
 
@@ -293,10 +296,10 @@ func TestOptionalTLSConnDoesNotMisrouteMongoMessageLength(t *testing.T) {
 			_, selectedTLS := optional.selected.(*tls.Conn)
 			require.False(t, selectedTLS)
 
-			received := make([]byte, len(header))
+			received := make([]byte, len(message))
 			_, err := io.ReadFull(optional, received)
 			require.NoError(t, err)
-			require.Equal(t, header, received)
+			require.Equal(t, message, received)
 			require.NoError(t, <-writeResult)
 		})
 	}
@@ -373,7 +376,7 @@ func TestPeerCertificatePlaintext(t *testing.T) {
 			if optional {
 				server = &optionalTLSConn{Conn: serverConn}
 				go func() {
-					_, err := clientConn.Write([]byte{1, 2, 3, 4, 5, 6})
+					_, err := clientConn.Write(make([]byte, wire.MsgHeaderLen))
 					writeResult <- err
 				}()
 			}

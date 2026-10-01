@@ -21,6 +21,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/binary"
 	"encoding/pem"
 	"fmt"
 	"net"
@@ -29,6 +30,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/FerretDB/wire"
 	"github.com/youmark/pkcs8"
 )
 
@@ -159,9 +161,9 @@ func (c *optionalTLSConn) Write(p []byte) (int, error) {
 func (c *optionalTLSConn) selectProtocol() {
 	c.once.Do(func() {
 		reader := bufio.NewReader(c.Conn)
-		prefix, _ := reader.Peek(6)
+		prefix, _ := reader.Peek(wire.MsgHeaderLen)
 		var selected net.Conn = &bufferedConn{Conn: c.Conn, reader: reader}
-		if looksLikeTLSClientHello(prefix) {
+		if !looksLikeMongoWireRequest(prefix) && looksLikeTLSClientHello(prefix) {
 			selected = tls.Server(selected, c.config)
 		}
 		c.selected = selected
@@ -169,11 +171,33 @@ func (c *optionalTLSConn) selectProtocol() {
 }
 
 func looksLikeTLSClientHello(prefix []byte) bool {
-	if len(prefix) < 6 || prefix[0] != 0x16 || prefix[1] != 0x03 || prefix[2] < 0x01 || prefix[2] > 0x03 {
+	if len(prefix) < 11 || prefix[0] != 0x16 || prefix[1] != 0x03 || prefix[2] < 0x01 || prefix[2] > 0x03 {
 		return false
 	}
 	recordLength := int(prefix[3])<<8 | int(prefix[4])
-	return recordLength >= 4 && recordLength <= 1<<14 && prefix[5] == 0x01
+	handshakeLength := int(prefix[6])<<16 | int(prefix[7])<<8 | int(prefix[8])
+	return recordLength >= 45 && recordLength <= 1<<14 &&
+		prefix[5] == 0x01 && handshakeLength >= 41 &&
+		prefix[9] == 0x03 && prefix[10] >= 0x01 && prefix[10] <= 0x03
+}
+
+func looksLikeMongoWireRequest(prefix []byte) bool {
+	if len(prefix) < wire.MsgHeaderLen {
+		return false
+	}
+	messageLength := int32(binary.LittleEndian.Uint32(prefix[0:4]))
+	responseTo := int32(binary.LittleEndian.Uint32(prefix[8:12]))
+	if messageLength < wire.MsgHeaderLen || messageLength > wire.MaxMsgLen || responseTo != 0 {
+		return false
+	}
+	opCode := wire.OpCode(binary.LittleEndian.Uint32(prefix[12:16]))
+	switch opCode {
+	case wire.OpCodeUpdate, wire.OpCodeInsert, wire.OpCodeGetByOID, wire.OpCodeQuery,
+		wire.OpCodeGetMore, wire.OpCodeDelete, wire.OpCodeKillCursors, wire.OpCodeCompressed, wire.OpCodeMsg:
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *bufferedConn) Read(p []byte) (int, error) {
