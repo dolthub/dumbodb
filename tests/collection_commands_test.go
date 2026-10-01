@@ -98,18 +98,18 @@ func TestCompact_EmptyCollection(t *testing.T) {
 	}).Decode(&res)
 	require.NoError(t, err, "compact on empty collection must succeed")
 
-	// Extract bytesFreed and verify the rest of the document is {ok: 1}.
 	var bytesFreed interface{}
-	filtered := make(bson.D, 0, len(res))
+	var ok interface{}
 	for _, el := range res {
-		if el.Key == "bytesFreed" {
+		switch el.Key {
+		case "bytesFreed":
 			bytesFreed = el.Value
-		} else {
-			filtered = append(filtered, el)
+		case "ok":
+			ok = el.Value
 		}
 	}
-	assert.NotNil(t, bytesFreed, "response must contain bytesFreed field")
-	assert.Equal(t, bson.D{{Key: "ok", Value: float64(1)}}, filtered)
+	assert.EqualValues(t, 0, bytesFreed)
+	assert.EqualValues(t, 1, ok)
 }
 
 // TestCompact_NonExistentCollection verifies that compact on a collection that
