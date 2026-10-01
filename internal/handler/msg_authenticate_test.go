@@ -153,6 +153,22 @@ func TestAuthenticateX509RejectsClaimedIdentity(t *testing.T) {
 	require.False(t, ci.Authenticated())
 }
 
+func TestAuthenticateX509RejectsReauthentication(t *testing.T) {
+	h := authGateHandler(t, true)
+	certificate, subject := testX509Certificate(t)
+	insertX509User(t, h, subject)
+	ctx, ci := x509Context(certificate)
+	ci.SetAuth("root", "", nil, "admin")
+	ci.SetAuthenticated()
+
+	_, err := h.commands["authenticate"].Handler(ctx, authenticateMsg(t, nil))
+	requireCommandCode(t, err, handlererrors.ErrAuthenticationFailed)
+	username, _, _, db := ci.Auth()
+	require.Equal(t, "root", username)
+	require.Equal(t, "admin", db)
+	require.True(t, ci.Authenticated())
+}
+
 func TestAuthenticateX509RequiresTLS(t *testing.T) {
 	h := authGateHandler(t, true)
 	ctx := conninfo.Ctx(context.Background(), conninfo.New())

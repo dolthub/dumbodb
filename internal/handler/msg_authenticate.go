@@ -64,6 +64,9 @@ func (h *Handler) MsgAuthenticate(connCtx context.Context, msg *wire.OpMsg) (*wi
 	}
 
 	ci := conninfo.Get(connCtx)
+	if ci.Authenticated() {
+		return nil, authenticationFailed("Authentication failed.")
+	}
 	if !ci.UsesTLS() {
 		return nil, authenticationFailed("MONGODB-X509 authentication requires a TLS connection")
 	}
