@@ -347,8 +347,10 @@ func (b *Backend) OnTransactionCommit(ctx context.Context, owner string) error {
 		}
 	}
 
-	// CommitWorkingSet (unlike CommitTransaction) doesn't reset ctx.Transaction.
-	sqlCtx.SetTransaction(nil)
+	if firstErr == nil {
+		// CommitWorkingSet (unlike CommitTransaction) doesn't reset ctx.Transaction.
+		sqlCtx.SetTransaction(nil)
+	}
 
 	b.releaseLocksForOwner(owner)
 	return firstErr
@@ -1980,18 +1982,15 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 
 	// Fast-forward: Into's HEAD is an ancestor of From's HEAD.
 	if baseHash == intoHash && !params.NoFF {
-		if _, ffErr := db.datasDB.SetHead(ctx, intoBranchDS, fromHash, ""); ffErr != nil {
-			return nil, fmt.Errorf("DumboDBMerge: fast-forward: advancing branch pointer: %w", ffErr)
+		wsRef := doltref.NewWorkingSetRef("heads/" + params.Into)
+		if _, ffErr := db.datasDB.FastForward(ctx, intoBranchDS, fromHash, wsRef.String(), false); ffErr != nil {
+			return nil, fmt.Errorf("DumboDBMerge: fast-forward: %w", ffErr)
 		}
-		// Update WS for any Into branch, not just defaultBranch: the
-		// eager working_set ref would otherwise stay at the pre-FF root.
-		ffAM, ffAMErr := amFromCommitHash(ctx, db, fromHash.String())
-		if ffAMErr != nil {
-			return nil, fmt.Errorf("DumboDBMerge: fast-forward: loading AM: %w", ffAMErr)
+		if reloadErr := db.reloadBranchWSFromDisk(ctx, params.Into); reloadErr != nil {
+			return nil, fmt.Errorf("DumboDBMerge: fast-forward: refreshing working set: %w", reloadErr)
 		}
-		db.setAM(ctx, params.Into, ffAM)
-		if err := db.persistAM(ctx, params.Into, ffAM); err != nil {
-			return nil, fmt.Errorf("DumboDBMerge: fast-forward: updating working set: %w", err)
+		if ws, wsErr := db.loadBranchWS(ctx, params.Into); wsErr == nil {
+			db.pushWSToSession(ctx, params.Into, ws)
 		}
 		return &backends.MergeResult{
 			CommitID: fromHash.String(),
