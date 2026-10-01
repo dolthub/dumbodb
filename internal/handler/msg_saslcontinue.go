@@ -102,7 +102,7 @@ func (h *Handler) saslContinue(connCtx context.Context, doc *types.Document) (*t
 		}
 
 		conninfo.Get(connCtx).SetBypassBackendAuth()
-		conninfo.Get(connCtx).SetSCRAMAuthenticated()
+		conninfo.Get(connCtx).SetAuthenticated()
 
 		return must.NotFail(types.NewDocument(
 			"conversationId", int32(1),

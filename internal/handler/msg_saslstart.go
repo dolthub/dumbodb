@@ -326,7 +326,7 @@ func (h *Handler) saslStartSCRAM(ctx context.Context, dbName, mechanism string, 
 
 	ci := conninfo.Get(ctx)
 
-	if ci.SCRAMAuthenticated() {
+	if ci.Authenticated() {
 		ci.SetReauthPending(true)
 		return response, nil
 	}

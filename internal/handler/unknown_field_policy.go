@@ -110,7 +110,7 @@ var unknownFieldPolicies = map[string]unknownFieldPolicy{
 	"aggregate": strictRejects, "explain": strictRejects, "bulkWrite": strictRejects,
 
 	// --- auth handshake ---
-	"saslStart": strictRejects, "saslContinue": strictRejects,
+	"authenticate": strictRejects, "saslStart": strictRejects, "saslContinue": strictRejects,
 
 	// --- DDL / introspection with larger MongoDB field sets (validated allow-lists) ---
 	"create": strictRejects, "createIndexes": strictRejects,

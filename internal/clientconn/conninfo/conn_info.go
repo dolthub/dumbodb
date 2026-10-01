@@ -67,9 +67,9 @@ type ConnInfo struct {
 	// It is set to true for background connections (such us capped collections cleanup)
 	// and by the new authentication.
 	// See where it is used for more details.
-	bypassBackendAuth  bool // protected by rw
-	scramAuthenticated bool // protected by rw
-	reauthPending      bool // protected by rw
+	bypassBackendAuth bool // protected by rw
+	authenticated     bool // protected by rw
+	reauthPending     bool // protected by rw
 
 	cachedPrivs   authz.PrivilegeSet // protected by rw
 	cachedPrivGen uint64             // protected by rw
@@ -148,25 +148,25 @@ func (connInfo *ConnInfo) SetMetadataRecv() {
 	connInfo.metadataRecv = true
 }
 
-func (connInfo *ConnInfo) SetSCRAMAuthenticated() {
+func (connInfo *ConnInfo) SetAuthenticated() {
 	connInfo.rw.Lock()
 	defer connInfo.rw.Unlock()
 
-	connInfo.scramAuthenticated = true
+	connInfo.authenticated = true
 }
 
-func (connInfo *ConnInfo) ClearSCRAMAuthenticated() {
+func (connInfo *ConnInfo) ClearAuthenticated() {
 	connInfo.rw.Lock()
 	defer connInfo.rw.Unlock()
 
-	connInfo.scramAuthenticated = false
+	connInfo.authenticated = false
 }
 
-func (connInfo *ConnInfo) SCRAMAuthenticated() bool {
+func (connInfo *ConnInfo) Authenticated() bool {
 	connInfo.rw.RLock()
 	defer connInfo.rw.RUnlock()
 
-	return connInfo.scramAuthenticated
+	return connInfo.authenticated
 }
 
 func (connInfo *ConnInfo) SetReauthPending(v bool) {
