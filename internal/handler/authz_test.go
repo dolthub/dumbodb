@@ -145,6 +145,53 @@ func TestAuthorize_UpdateUserRequiresPrivilegePerField(t *testing.T) {
 	require.NoError(t, h.authorize(anyUserAdmin, updateUser("reader", "mydb", "roles", readRole)))
 }
 
+func TestAuthorize_GrantsCheckEachRoleAndPrivilegeDB(t *testing.T) {
+	h := authGateHandler(t, true)
+	createUserWithRole(t, h, "mydb", "dbUserAdmin", "userAdmin")
+	createUserWithRole(t, h, "admin", "adminUserAdmin", "userAdmin")
+	createUserWithRole(t, h, "admin", "anyUserAdmin", "userAdminAnyDatabase")
+
+	authAs := func(user, db string) context.Context {
+		ci := conninfo.New()
+		ci.SetAuth(user, "", nil, db)
+		return conninfo.Ctx(context.Background(), ci)
+	}
+	roleRef := func(role, db string) *types.Document { return must.NotFail(types.NewDocument("role", role, "db", db)) }
+	command := func(name, target, db string, fields ...any) *wire.OpMsg {
+		pairs := append([]any{name, target}, fields...)
+		pairs = append(pairs, "$db", db)
+		return must.NotFail(documentOpMsg(must.NotFail(types.NewDocument(pairs...))))
+	}
+	rootRoles := must.NotFail(types.NewArray(roleRef("root", "admin")))
+	mydbFind := must.NotFail(types.NewArray(must.NotFail(types.NewDocument(
+		"resource", must.NotFail(types.NewDocument("db", "mydb", "collection", "")),
+		"actions", must.NotFail(types.NewArray("find")),
+	))))
+	clusterStatus := must.NotFail(types.NewArray(must.NotFail(types.NewDocument(
+		"resource", must.NotFail(types.NewDocument("cluster", true)),
+		"actions", must.NotFail(types.NewArray("serverStatus")),
+	))))
+
+	dbUserAdmin := authAs("dbUserAdmin", "mydb")
+	require.NoError(t, h.authorize(dbUserAdmin, command("grantRolesToUser", "u", "mydb", "roles", must.NotFail(types.NewArray("read")))))
+	require.True(t, isUnauthorized(t, h.authorize(dbUserAdmin, command("grantRolesToUser", "dbUserAdmin", "mydb", "roles", rootRoles))))
+	require.True(t, isUnauthorized(t, h.authorize(dbUserAdmin, command("revokeRolesFromUser", "u", "mydb", "roles", rootRoles))))
+	require.True(t, isUnauthorized(t, h.authorize(dbUserAdmin, command("grantRolesToRole", "r", "mydb", "roles", rootRoles))))
+	require.True(t, isUnauthorized(t, h.authorize(dbUserAdmin, command("createUser", "u2", "mydb", "pwd", "pw", "roles", rootRoles))))
+	require.True(t, isUnauthorized(t, h.authorize(dbUserAdmin, command("createRole", "r2", "mydb", "privileges", types.MakeArray(0), "roles", rootRoles))))
+	require.True(t, isUnauthorized(t, h.authorize(dbUserAdmin, command("updateRole", "r", "mydb", "roles", types.MakeArray(0)))))
+	require.NoError(t, h.authorize(dbUserAdmin, command("grantPrivilegesToRole", "r", "mydb", "privileges", mydbFind)))
+
+	adminUserAdmin := authAs("adminUserAdmin", "admin")
+	require.NoError(t, h.authorize(adminUserAdmin, command("grantRolesToUser", "u", "mydb", "roles", must.NotFail(types.NewArray(roleRef("read", "admin"))))))
+	require.NoError(t, h.authorize(adminUserAdmin, command("grantPrivilegesToRole", "r", "admin", "privileges", clusterStatus)))
+	require.True(t, isUnauthorized(t, h.authorize(adminUserAdmin, command("grantPrivilegesToRole", "r", "admin", "privileges", mydbFind))))
+
+	anyUserAdmin := authAs("anyUserAdmin", "admin")
+	require.NoError(t, h.authorize(anyUserAdmin, command("grantRolesToUser", "u", "mydb", "roles", rootRoles)))
+	require.NoError(t, h.authorize(anyUserAdmin, command("updateRole", "r", "mydb", "roles", rootRoles)))
+}
+
 func TestAuthorize_UnmappedCommandNeedsNoPrivilege(t *testing.T) {
 	h := authGateHandler(t, true)
 	createUserWithRole(t, h, "mydb", "reader", "read")

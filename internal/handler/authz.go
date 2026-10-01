@@ -24,7 +24,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
-	"github.com/dolthub/dumbodb/internal/handler/users"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
@@ -92,21 +91,12 @@ var commandPrivileges = map[string][]commandPrivilege{
 	"dbStats":                  {{authz.ActionDBStats, scopeDatabase}},
 	"listCollections":          {{authz.ActionListCollections, scopeDatabase}},
 	"dropDatabase":             {{authz.ActionDropDatabase, scopeDatabase}},
-	"createUser":               {{authz.ActionCreateUser, scopeDatabase}},
 	"dropUser":                 {{authz.ActionDropUser, scopeDatabase}},
 	"dropAllUsersFromDatabase": {{authz.ActionDropUser, scopeDatabase}},
 	"usersInfo":                {{authz.ActionViewUser, scopeDatabase}},
-	"createRole":               {{authz.ActionCreateRole, scopeDatabase}},
-	"updateRole":               {{authz.ActionGrantRole, scopeDatabase}},
 	"dropRole":                 {{authz.ActionDropRole, scopeDatabase}},
 	"dropAllRolesFromDatabase": {{authz.ActionDropRole, scopeDatabase}},
 	"rolesInfo":                {{authz.ActionViewRole, scopeDatabase}},
-	"grantRolesToUser":         {{authz.ActionGrantRole, scopeDatabase}},
-	"revokeRolesFromUser":      {{authz.ActionRevokeRole, scopeDatabase}},
-	"grantPrivilegesToRole":    {{authz.ActionGrantRole, scopeDatabase}},
-	"revokePrivilegesFromRole": {{authz.ActionRevokeRole, scopeDatabase}},
-	"grantRolesToRole":         {{authz.ActionGrantRole, scopeDatabase}},
-	"revokeRolesFromRole":      {{authz.ActionRevokeRole, scopeDatabase}},
 
 	"serverStatus":  {{authz.ActionServerStatus, scopeCluster}},
 	"listDatabases": {{authz.ActionListDatabases, scopeCluster}},
@@ -122,6 +112,9 @@ func (h *Handler) authorize(ctx context.Context, msg *wire.OpMsg) error {
 
 	if command == "updateUser" {
 		return h.authorizeUpdateUser(ctx, msg, db, collection)
+	}
+	if checks, ok := grantCommandChecks[command]; ok {
+		return h.authorizeGrantCommand(ctx, msg, command, db, checks)
 	}
 
 	reqs, ok := commandPrivileges[command]
@@ -183,7 +176,10 @@ func (h *Handler) authorizeUpdateUser(ctx context.Context, msg *wire.OpMsg, db, 
 		authorized = authorized && privs.Authorized(authz.ActionSetAuthenticationRestriction, dbResource)
 	}
 	if authorized && document.Has("roles") {
-		authorized, err = canReplaceUserRoles(document, db, privs)
+		authorized, err = allGrantChecksPass(privs, document, db, []grantCheck{
+			actionOnAnyNormalResource(authz.ActionRevokeRole),
+			actionOnEachRoleDB(authz.ActionGrantRole),
+		})
 		if err != nil {
 			return err
 		}
@@ -195,30 +191,146 @@ func (h *Handler) authorizeUpdateUser(ctx context.Context, msg *wire.OpMsg, db, 
 	return nil
 }
 
-func canReplaceUserRoles(document *types.Document, db string, privs authz.PrivilegeSet) (bool, error) {
-	if !privs.AuthorizedOnAnyNormalResource(authz.ActionRevokeRole) {
-		return false, nil
-	}
+// grantCheck reports whether privs allow one part of a user- or
+// role-management command run on db.
+type grantCheck func(privs authz.PrivilegeSet, document *types.Document, db string) (bool, error)
 
-	roles, err := common.GetRequiredParam[*types.Array](document, "roles")
+// grantCommandChecks follows MongoDB 8.0 (user_management_commands_common.cpp):
+// a granted or revoked role or privilege is authorized against its own
+// database, not the database the command runs on.
+var grantCommandChecks = map[string][]grantCheck{
+	"createUser": {
+		actionOnCommandDB(authz.ActionCreateUser),
+		actionOnEachRoleDB(authz.ActionGrantRole),
+		authenticationRestrictionsAllowed,
+	},
+	"createRole": {
+		actionOnCommandDB(authz.ActionCreateRole),
+		actionOnEachRoleDB(authz.ActionGrantRole),
+		actionOnEachPrivilegeDB(authz.ActionGrantRole),
+		authenticationRestrictionsAllowed,
+	},
+	"updateRole": {
+		actionOnAnyNormalResource(authz.ActionRevokeRole),
+		actionOnEachRoleDB(authz.ActionGrantRole),
+		actionOnEachPrivilegeDB(authz.ActionGrantRole),
+		authenticationRestrictionsAllowed,
+	},
+	"grantRolesToUser":         {actionOnEachRoleDB(authz.ActionGrantRole)},
+	"grantRolesToRole":         {actionOnEachRoleDB(authz.ActionGrantRole)},
+	"revokeRolesFromUser":      {actionOnEachRoleDB(authz.ActionRevokeRole)},
+	"revokeRolesFromRole":      {actionOnEachRoleDB(authz.ActionRevokeRole)},
+	"grantPrivilegesToRole":    {actionOnEachPrivilegeDB(authz.ActionGrantRole)},
+	"revokePrivilegesFromRole": {actionOnEachPrivilegeDB(authz.ActionRevokeRole)},
+}
+
+func (h *Handler) authorizeGrantCommand(ctx context.Context, msg *wire.OpMsg, command, db string, checks []grantCheck) error {
+	document, err := opMsgDocument(msg)
 	if err != nil {
-		return false, err
+		return err
 	}
 
-	normalized, err := users.NormalizeRoles(roles, db)
+	privs, err := h.effectivePrivileges(ctx)
 	if err != nil {
-		return false, err
+		return err
 	}
 
-	for i := 0; i < normalized.Len(); i++ {
-		role := must.NotFail(normalized.Get(i)).(*types.Document)
-		roleDB, _ := role.Get("db")
-		roleDBName, _ := roleDB.(string)
-		if !privs.Authorized(authz.ActionGrantRole, authz.DatabaseResource(roleDBName)) {
-			return false, nil
+	authorized, err := allGrantChecksPass(privs, document, db, checks)
+	if err != nil {
+		return err
+	}
+	if !authorized {
+		return unauthorizedCommandError(msg, command, db)
+	}
+	return nil
+}
+
+func allGrantChecksPass(privs authz.PrivilegeSet, document *types.Document, db string, checks []grantCheck) (bool, error) {
+	for _, check := range checks {
+		authorized, err := check(privs, document, db)
+		if err != nil || !authorized {
+			return false, err
 		}
 	}
 	return true, nil
+}
+
+func actionOnCommandDB(action authz.Action) grantCheck {
+	return func(privs authz.PrivilegeSet, _ *types.Document, db string) (bool, error) {
+		return privs.Authorized(action, authz.DatabaseResource(db)), nil
+	}
+}
+
+func actionOnAnyNormalResource(action authz.Action) grantCheck {
+	return func(privs authz.PrivilegeSet, _ *types.Document, _ string) (bool, error) {
+		return privs.AuthorizedOnAnyNormalResource(action), nil
+	}
+}
+
+// actionOnEachRoleDB checks action on the database of every role named in the
+// command's roles field; bare role names resolve to db.
+func actionOnEachRoleDB(action authz.Action) grantCheck {
+	return func(privs authz.PrivilegeSet, document *types.Document, db string) (bool, error) {
+		roles, err := common.GetOptionalParam[*types.Array](document, "roles", nil)
+		if err != nil {
+			return false, err
+		}
+
+		normalized, err := normalizeRoleRefs(roles, db)
+		if err != nil {
+			return false, err
+		}
+
+		for i := 0; i < normalized.Len(); i++ {
+			role := must.NotFail(normalized.Get(i)).(*types.Document)
+			roleDB := must.NotFail(role.Get("db")).(string)
+			if !privs.Authorized(action, authz.DatabaseResource(roleDB)) {
+				return false, nil
+			}
+		}
+		return true, nil
+	}
+}
+
+// actionOnEachPrivilegeDB checks action on the database of every privilege's
+// resource. Cluster, any-resource, and any-database resources are checked
+// against admin.
+func actionOnEachPrivilegeDB(action authz.Action) grantCheck {
+	return func(privs authz.PrivilegeSet, document *types.Document, _ string) (bool, error) {
+		privileges, err := common.GetOptionalParam[*types.Array](document, "privileges", nil)
+		if err != nil {
+			return false, err
+		}
+		if privileges == nil {
+			return true, nil
+		}
+
+		for i := 0; i < privileges.Len(); i++ {
+			privilege, ok := must.NotFail(privileges.Get(i)).(*types.Document)
+			if !ok {
+				return false, handlererrors.NewCommandErrorMsg(handlererrors.ErrBadValue, "privilege entry must be a document")
+			}
+
+			resourceValue, _ := privilege.Get("resource")
+			resourceDoc, _ := resourceValue.(*types.Document)
+			resource := parseResourceDoc(resourceDoc)
+			authDB := "admin"
+			if !resource.Cluster && !resource.AnyResource && resource.DB != "" {
+				authDB = resource.DB
+			}
+			if !privs.Authorized(action, authz.DatabaseResource(authDB)) {
+				return false, nil
+			}
+		}
+		return true, nil
+	}
+}
+
+func authenticationRestrictionsAllowed(privs authz.PrivilegeSet, document *types.Document, db string) (bool, error) {
+	if !document.Has("authenticationRestrictions") {
+		return true, nil
+	}
+	return privs.Authorized(authz.ActionSetAuthenticationRestriction, authz.DatabaseResource(db)), nil
 }
 
 func unauthorizedCommandError(msg *wire.OpMsg, command, db string) error {
