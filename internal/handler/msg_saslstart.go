@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/FerretDB/wire"
 	"github.com/xdg-go/scram"
@@ -211,18 +212,10 @@ func (h *Handler) scramCredentialLookup(ctx context.Context, dbName, username, m
 		}
 
 		if matches {
-			credentials := must.NotFail(v.Get("credentials")).(*types.Document)
-
-			if !credentials.Has(mechanism) {
-				return nil, handlererrors.NewCommandErrorMsgWithArgument(
-					handlererrors.ErrMechanismUnavailable,
-					fmt.Sprintf(
-						"Unable to use %s based authentication for user without any %s credentials registered",
-						mechanism,
-						mechanism,
-					),
-					mechanism,
-				)
+			credentialsValue, credentialsErr := v.Get("credentials")
+			credentials, credentialsOK := credentialsValue.(*types.Document)
+			if credentialsErr != nil || !credentialsOK || !credentials.Has(mechanism) {
+				return nil, scramMechanismUnavailable(mechanism)
 			}
 
 			cred := must.NotFail(credentials.Get(mechanism)).(*types.Document)
@@ -251,6 +244,23 @@ func (h *Handler) scramCredentialLookup(ctx context.Context, dbName, username, m
 	)
 }
 
+func scramMechanismUnavailable(mechanism string) error {
+	return handlererrors.NewCommandErrorMsgWithArgument(
+		handlererrors.ErrMechanismUnavailable,
+		fmt.Sprintf(
+			"Unable to use %s based authentication for user without any %s credentials registered",
+			mechanism,
+			mechanism,
+		),
+		mechanism,
+	)
+}
+
+func decodeSCRAMUsername(username string) string {
+	username = strings.ReplaceAll(username, "=2C", ",")
+	return strings.ReplaceAll(username, "=3D", "=")
+}
+
 // saslStartSCRAM extracts the initial challenge and attempts to move the
 // authentication conversation forward returning a challenge response.
 func (h *Handler) saslStartSCRAM(ctx context.Context, dbName, mechanism string, doc *types.Document) (string, error) {
@@ -276,8 +286,10 @@ func (h *Handler) saslStartSCRAM(ctx context.Context, dbName, mechanism string, 
 	}
 
 	var lookupCmdErr *handlererrors.CommandError
+	var authenticatedUsername string
 
 	scramServer, err := f.NewServer(func(username string) (scram.StoredCredentials, error) {
+		username = decodeSCRAMUsername(username)
 		cred, lookupErr := h.scramCredentialLookup(ctx, dbName, username, mechanism)
 		if lookupErr != nil {
 			var cmdErr *handlererrors.CommandError
@@ -288,6 +300,7 @@ func (h *Handler) saslStartSCRAM(ctx context.Context, dbName, mechanism string, 
 			return scram.StoredCredentials{}, lookupErr
 		}
 
+		authenticatedUsername = username
 		return *cred, nil
 	})
 	if err != nil {
@@ -332,7 +345,7 @@ func (h *Handler) saslStartSCRAM(ctx context.Context, dbName, mechanism string, 
 	}
 
 	ci.SetReauthPending(false)
-	ci.SetAuth(conv.Username(), "", conv, dbName)
+	ci.SetAuth(authenticatedUsername, "", conv, dbName)
 
 	return response, nil
 }
