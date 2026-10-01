@@ -15,6 +15,7 @@
 package tlsutil
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -22,6 +23,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"fmt"
 	"io"
 	"math/big"
 	"net"
@@ -86,7 +88,7 @@ func TestServerConfigRejectsLegacyEncryptedPrivateKey(t *testing.T) {
 }
 
 func TestVerifyChainRevocation(t *testing.T) {
-	issuer, issuerKey, certificate := certificateChain(t)
+	issuer, issuerKey, certificate, _ := certificateChain(t)
 	now := time.Now()
 	tests := []struct {
 		name      string
@@ -137,7 +139,7 @@ func TestVerifyChainRevocation(t *testing.T) {
 
 func TestServerConfigRejectsRevokedClientCertificate(t *testing.T) {
 	now := time.Now()
-	issuer, issuerKey, clientCertificate := certificateChain(t)
+	issuer, issuerKey, clientCertificate, _ := certificateChain(t)
 	serverFile := writeCertificateKeyFile(t, now.Add(-time.Hour), now.Add(time.Hour))
 	caFile := filepath.Join(t.TempDir(), "ca.pem")
 	require.NoError(t, os.WriteFile(caFile, pem.EncodeToMemory(&pem.Block{
@@ -270,7 +272,65 @@ func TestOptionalTLSConn(t *testing.T) {
 	}
 }
 
-func certificateChain(t *testing.T) (*x509.Certificate, *ecdsa.PrivateKey, *x509.Certificate) {
+func TestPeerCertificate(t *testing.T) {
+	now := time.Now()
+	serverFile := writeCertificateKeyFile(t, now.Add(-time.Hour), now.Add(time.Hour))
+	issuer, _, clientCertificate, clientKey := certificateChain(t)
+	caFile := filepath.Join(t.TempDir(), "ca.pem")
+	require.NoError(t, os.WriteFile(caFile, pem.EncodeToMemory(&pem.Block{
+		Type: "CERTIFICATE", Bytes: issuer.Raw,
+	}), 0o600))
+	serverConfig, err := ServerConfig(ServerConfigOptions{
+		CertificateFile: serverFile,
+		KeyFile:         serverFile,
+		CAFile:          caFile,
+	})
+	require.NoError(t, err)
+	serverCertificate, err := x509.ParseCertificate(serverConfig.Certificates[0].Certificate[0])
+	require.NoError(t, err)
+	serverRoots := x509.NewCertPool()
+	serverRoots.AddCert(serverCertificate)
+	clientConfig := &tls.Config{
+		Certificates: []tls.Certificate{{
+			Certificate: [][]byte{clientCertificate.Raw},
+			PrivateKey:  clientKey,
+		}},
+		MinVersion: tls.VersionTLS12,
+		RootCAs:    serverRoots,
+		ServerName: "localhost",
+	}
+
+	for _, clientAuth := range []tls.ClientAuthType{tls.RequireAndVerifyClientCert, tls.VerifyClientCertIfGiven} {
+		for _, optionalListener := range []bool{false, true} {
+			name := fmt.Sprintf("clientAuth=%d/optionalListener=%t", clientAuth, optionalListener)
+			t.Run(name, func(t *testing.T) {
+				config := serverConfig.Clone()
+				config.ClientAuth = clientAuth
+				serverConn, clientConn := net.Pipe()
+				defer serverConn.Close()
+				defer clientConn.Close()
+				require.NoError(t, serverConn.SetDeadline(time.Now().Add(5*time.Second)))
+				require.NoError(t, clientConn.SetDeadline(time.Now().Add(5*time.Second)))
+				var server net.Conn = tls.Server(serverConn, config)
+				if optionalListener {
+					server = &optionalTLSConn{Conn: serverConn, config: config}
+				}
+				client := tls.Client(clientConn, clientConfig)
+				handshakeResult := make(chan error, 1)
+				go func() {
+					handshakeResult <- client.HandshakeContext(context.Background())
+				}()
+
+				certificate, err := PeerCertificate(context.Background(), server)
+				require.NoError(t, err)
+				require.Equal(t, clientCertificate.Raw, certificate.Raw)
+				require.NoError(t, <-handshakeResult)
+			})
+		}
+	}
+}
+
+func certificateChain(t *testing.T) (*x509.Certificate, *ecdsa.PrivateKey, *x509.Certificate, *ecdsa.PrivateKey) {
 	t.Helper()
 	now := time.Now()
 	issuerKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -303,7 +363,7 @@ func certificateChain(t *testing.T) (*x509.Certificate, *ecdsa.PrivateKey, *x509
 	require.NoError(t, err)
 	certificate, err := x509.ParseCertificate(certificateDER)
 	require.NoError(t, err)
-	return issuer, issuerKey, certificate
+	return issuer, issuerKey, certificate, certificateKey
 }
 
 func revocationList(

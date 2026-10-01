@@ -18,6 +18,7 @@ package tlsutil
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
@@ -115,6 +116,26 @@ func ServerConfig(opts ServerConfigOptions) (*tls.Config, error) {
 // OptionalListener accepts both TLS and plaintext connections.
 func OptionalListener(listener net.Listener, config *tls.Config) net.Listener {
 	return &optionalTLSListener{Listener: listener, config: config}
+}
+
+// PeerCertificate returns the verified leaf certificate presented by the client.
+func PeerCertificate(ctx context.Context, conn net.Conn) (*x509.Certificate, error) {
+	if optional, ok := conn.(*optionalTLSConn); ok {
+		optional.selectProtocol()
+		conn = optional.selected
+	}
+	tlsConn, ok := conn.(*tls.Conn)
+	if !ok {
+		return nil, nil
+	}
+	if err := tlsConn.HandshakeContext(ctx); err != nil {
+		return nil, err
+	}
+	verifiedChains := tlsConn.ConnectionState().VerifiedChains
+	if len(verifiedChains) == 0 || len(verifiedChains[0]) == 0 {
+		return nil, nil
+	}
+	return verifiedChains[0][0], nil
 }
 
 func (l *optionalTLSListener) Accept() (net.Conn, error) {

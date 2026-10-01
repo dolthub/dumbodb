@@ -18,6 +18,7 @@ package conninfo
 import (
 	"context"
 	"crypto/rand"
+	"crypto/x509"
 	"encoding/hex"
 	"fmt"
 	"net/netip"
@@ -44,8 +45,9 @@ type ConnInfo struct {
 	Peer  netip.AddrPort
 	Local netip.AddrPort
 
-	username string // protected by rw
-	password string // protected by rw
+	username string            // protected by rw
+	password string            // protected by rw
+	peerCert *x509.Certificate // protected by rw
 
 	lsid             string         // protected by rw
 	cachedShadow     *sqlctx.Shadow // protected by rw
@@ -97,6 +99,20 @@ func (connInfo *ConnInfo) Username() string {
 	defer connInfo.rw.RUnlock()
 
 	return connInfo.username
+}
+
+func (connInfo *ConnInfo) PeerCertificate() *x509.Certificate {
+	connInfo.rw.RLock()
+	defer connInfo.rw.RUnlock()
+
+	return connInfo.peerCert
+}
+
+func (connInfo *ConnInfo) SetPeerCertificate(certificate *x509.Certificate) {
+	connInfo.rw.Lock()
+	defer connInfo.rw.Unlock()
+
+	connInfo.peerCert = certificate
 }
 
 // Auth returns stored username, password (for PLAIN mechanism), SCRAM server conversation (if any) and user's authentication db.
