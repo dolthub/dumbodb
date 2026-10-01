@@ -22,7 +22,9 @@ import (
 
 	"github.com/dolthub/dumbodb/internal/authz"
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
+	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/handler/users"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
@@ -93,7 +95,6 @@ var commandPrivileges = map[string][]commandPrivilege{
 	"createUser":               {{authz.ActionCreateUser, scopeDatabase}},
 	"dropUser":                 {{authz.ActionDropUser, scopeDatabase}},
 	"dropAllUsersFromDatabase": {{authz.ActionDropUser, scopeDatabase}},
-	"updateUser":               {{authz.ActionChangePassword, scopeDatabase}},
 	"usersInfo":                {{authz.ActionViewUser, scopeDatabase}},
 	"createRole":               {{authz.ActionCreateRole, scopeDatabase}},
 	"updateRole":               {{authz.ActionGrantRole, scopeDatabase}},
@@ -119,6 +120,10 @@ var commandPrivileges = map[string][]commandPrivilege{
 func (h *Handler) authorize(ctx context.Context, msg *wire.OpMsg) error {
 	command, db, collection := wireCommandTarget(msg)
 
+	if command == "updateUser" {
+		return h.authorizeUpdateUser(ctx, msg, db, collection)
+	}
+
 	reqs, ok := commandPrivileges[command]
 	if !ok {
 		return nil
@@ -134,20 +139,98 @@ func (h *Handler) authorize(ctx context.Context, msg *wire.OpMsg) error {
 		if privs.Authorized(r.action, target) {
 			continue
 		}
-		if h.selfServiceAllowed(ctx, command, db, collection, r.action, privs) {
+		if h.selfServiceAllowed(ctx, command, db, collection) {
 			continue
 		}
-		commandEcho := command
-		if doc, derr := opMsgDocument(msg); derr == nil {
-			commandEcho = mongoCommandString(doc)
-		}
-		return handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrUnauthorized,
-			fmt.Sprintf("not authorized on %s to execute command %s", db, commandEcho),
-			command,
-		)
+		return unauthorizedCommandError(msg, command, db)
 	}
 	return nil
+}
+
+// authorizeUpdateUser requires a privilege for each field the command changes,
+// matching MongoDB 8.0: roles need revokeRole on any normal resource (the
+// roles being replaced are unknown) plus grantRole on each granted role's db.
+// commitIdentity is DumboDB-only and has no self-service action.
+func (h *Handler) authorizeUpdateUser(ctx context.Context, msg *wire.OpMsg, db, targetUser string) error {
+	document, err := opMsgDocument(msg)
+	if err != nil {
+		return err
+	}
+
+	privs, err := h.effectivePrivileges(ctx)
+	if err != nil {
+		return err
+	}
+
+	user, _, _, userDB := conninfo.Get(ctx).Auth()
+	isSelf := targetUser != "" && targetUser == user && db == userDB
+	dbResource := authz.DatabaseResource(db)
+	allowedWithSelfService := func(action, ownAction authz.Action) bool {
+		return privs.Authorized(action, dbResource) || (isSelf && privs.Authorized(ownAction, dbResource))
+	}
+
+	authorized := true
+	if document.Has("pwd") || document.Has("mechanisms") {
+		authorized = authorized && allowedWithSelfService(authz.ActionChangePassword, authz.ActionChangeOwnPassword)
+	}
+	if document.Has("customData") {
+		authorized = authorized && allowedWithSelfService(authz.ActionChangeCustomData, authz.ActionChangeOwnCustomData)
+	}
+	if document.Has("commitIdentity") {
+		authorized = authorized && privs.Authorized(authz.ActionChangeCustomData, dbResource)
+	}
+	if document.Has("authenticationRestrictions") {
+		authorized = authorized && privs.Authorized(authz.ActionSetAuthenticationRestriction, dbResource)
+	}
+	if authorized && document.Has("roles") {
+		authorized, err = canReplaceUserRoles(document, db, privs)
+		if err != nil {
+			return err
+		}
+	}
+
+	if !authorized {
+		return unauthorizedCommandError(msg, "updateUser", db)
+	}
+	return nil
+}
+
+func canReplaceUserRoles(document *types.Document, db string, privs authz.PrivilegeSet) (bool, error) {
+	if !privs.AuthorizedOnAnyNormalResource(authz.ActionRevokeRole) {
+		return false, nil
+	}
+
+	roles, err := common.GetRequiredParam[*types.Array](document, "roles")
+	if err != nil {
+		return false, err
+	}
+
+	normalized, err := users.NormalizeRoles(roles, db)
+	if err != nil {
+		return false, err
+	}
+
+	for i := 0; i < normalized.Len(); i++ {
+		role := must.NotFail(normalized.Get(i)).(*types.Document)
+		roleDB, _ := role.Get("db")
+		roleDBName, _ := roleDB.(string)
+		if !privs.Authorized(authz.ActionGrantRole, authz.DatabaseResource(roleDBName)) {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func unauthorizedCommandError(msg *wire.OpMsg, command, db string) error {
+	commandEcho := command
+	if doc, err := opMsgDocument(msg); err == nil {
+		commandEcho = mongoCommandString(doc)
+	}
+	return handlererrors.NewCommandErrorMsgWithArgument(
+		handlererrors.ErrUnauthorized,
+		fmt.Sprintf("not authorized on %s to execute command %s", db, commandEcho),
+		command,
+	)
 }
 
 func targetResource(scope resourceScope, db, collection string) authz.Resource {
@@ -161,23 +244,12 @@ func targetResource(scope resourceScope, db, collection string) authz.Resource {
 	}
 }
 
-func (h *Handler) selfServiceAllowed(ctx context.Context, command, db, targetUser string, action authz.Action, privs authz.PrivilegeSet) bool {
+func (h *Handler) selfServiceAllowed(ctx context.Context, command, db, targetUser string) bool {
 	user, _, _, userDB := conninfo.Get(ctx).Auth()
 	if targetUser == "" || targetUser != user || db != userDB {
 		return false
 	}
-	switch command {
-	case "usersInfo":
-		return true
-	case "updateUser":
-		switch action {
-		case authz.ActionChangePassword:
-			return privs.Authorized(authz.ActionChangeOwnPassword, authz.DatabaseResource(db))
-		case authz.ActionChangeCustomData:
-			return privs.Authorized(authz.ActionChangeOwnCustomData, authz.DatabaseResource(db))
-		}
-	}
-	return false
+	return command == "usersInfo"
 }
 
 func (h *Handler) effectivePrivileges(ctx context.Context) (authz.PrivilegeSet, error) {

@@ -113,6 +113,12 @@ type Privilege struct {
 
 type PrivilegeSet []Privilege
 
+// AuthorizedOnAnyNormalResource reports whether action is granted on every
+// non-system collection of every database (MongoDB's anyNormalResource).
+func (ps PrivilegeSet) AuthorizedOnAnyNormalResource(action Action) bool {
+	return ps.Authorized(action, Resource{})
+}
+
 func (ps PrivilegeSet) Authorized(action Action, target Resource) bool {
 	for _, p := range ps {
 		if !p.Resource.Covers(target) {
