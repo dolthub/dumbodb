@@ -159,13 +159,21 @@ func (c *optionalTLSConn) Write(p []byte) (int, error) {
 func (c *optionalTLSConn) selectProtocol() {
 	c.once.Do(func() {
 		reader := bufio.NewReader(c.Conn)
-		prefix, _ := reader.Peek(3)
+		prefix, _ := reader.Peek(6)
 		var selected net.Conn = &bufferedConn{Conn: c.Conn, reader: reader}
-		if len(prefix) == 3 && prefix[0] == 0x16 && prefix[1] == 0x03 && prefix[2] >= 0x01 && prefix[2] <= 0x04 {
+		if looksLikeTLSClientHello(prefix) {
 			selected = tls.Server(selected, c.config)
 		}
 		c.selected = selected
 	})
+}
+
+func looksLikeTLSClientHello(prefix []byte) bool {
+	if len(prefix) < 6 || prefix[0] != 0x16 || prefix[1] != 0x03 || prefix[2] < 0x01 || prefix[2] > 0x03 {
+		return false
+	}
+	recordLength := int(prefix[3])<<8 | int(prefix[4])
+	return recordLength >= 4 && recordLength <= 1<<14 && prefix[5] == 0x01
 }
 
 func (c *bufferedConn) Read(p []byte) (int, error) {

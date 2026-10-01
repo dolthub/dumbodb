@@ -22,6 +22,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/binary"
 	"encoding/pem"
 	"fmt"
 	"io"
@@ -237,7 +238,7 @@ func TestOptionalTLSConn(t *testing.T) {
 		payload []byte
 	}{
 		{name: "plaintext", payload: []byte("plaintext")},
-		{name: "plaintext starts with TLS content type", payload: []byte{0x16, 0x00, 0x00, 0x00, 'x'}},
+		{name: "plaintext starts with TLS content type", payload: []byte{0x16, 0x00, 0x00, 0x00, 'x', 'x'}},
 		{name: "TLS", useTLS: true, payload: []byte("encrypted")},
 	}
 	for _, test := range tests {
@@ -267,6 +268,35 @@ func TestOptionalTLSConn(t *testing.T) {
 			_, err = io.ReadFull(optional, received)
 			require.NoError(t, err)
 			require.Equal(t, test.payload, received)
+			require.NoError(t, <-writeResult)
+		})
+	}
+}
+
+func TestOptionalTLSConnDoesNotMisrouteMongoMessageLength(t *testing.T) {
+	for _, length := range []uint32{66326, 131862, 197398, 262934} {
+		t.Run(fmt.Sprint(length), func(t *testing.T) {
+			serverConn, clientConn := net.Pipe()
+			defer serverConn.Close()
+			defer clientConn.Close()
+
+			header := make([]byte, 16)
+			binary.LittleEndian.PutUint32(header, length)
+			writeResult := make(chan error, 1)
+			go func() {
+				_, err := clientConn.Write(header)
+				writeResult <- err
+			}()
+
+			optional := &optionalTLSConn{Conn: serverConn, config: new(tls.Config)}
+			optional.selectProtocol()
+			_, selectedTLS := optional.selected.(*tls.Conn)
+			require.False(t, selectedTLS)
+
+			received := make([]byte, len(header))
+			_, err := io.ReadFull(optional, received)
+			require.NoError(t, err)
+			require.Equal(t, header, received)
 			require.NoError(t, <-writeResult)
 		})
 	}
@@ -343,7 +373,7 @@ func TestPeerCertificatePlaintext(t *testing.T) {
 			if optional {
 				server = &optionalTLSConn{Conn: serverConn}
 				go func() {
-					_, err := clientConn.Write([]byte{1, 2, 3})
+					_, err := clientConn.Write([]byte{1, 2, 3, 4, 5, 6})
 					writeResult <- err
 				}()
 			}
