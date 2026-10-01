@@ -20,6 +20,8 @@ import (
 	"crypto/x509/pkix"
 	"encoding/asn1"
 	"fmt"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/FerretDB/wire"
 
@@ -115,7 +117,25 @@ func x509Subject(certificate *x509.Certificate) (string, error) {
 	if len(rest) != 0 {
 		return "", fmt.Errorf("certificate subject contains trailing ASN.1 data")
 	}
-	return subject.String(), nil
+	return escapeRFC2253NonASCII(subject.String()), nil
+}
+
+func escapeRFC2253NonASCII(subject string) string {
+	const uppercaseHex = "0123456789ABCDEF"
+
+	var escaped strings.Builder
+	escaped.Grow(len(subject))
+	for index := 0; index < len(subject); index++ {
+		value := subject[index]
+		if value < utf8.RuneSelf {
+			escaped.WriteByte(value)
+			continue
+		}
+		escaped.WriteByte('\\')
+		escaped.WriteByte(uppercaseHex[value>>4])
+		escaped.WriteByte(uppercaseHex[value&0x0f])
+	}
+	return escaped.String()
 }
 
 func authenticationFailed(message string) error {

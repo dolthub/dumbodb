@@ -102,6 +102,25 @@ func TestX509SubjectUsesRawRDNOrder(t *testing.T) {
 	require.Equal(t, expected, subject)
 }
 
+func TestAuthenticateX509EscapesNonASCII(t *testing.T) {
+	h := authGateHandler(t, true)
+	raw := must.NotFail(asn1.Marshal(pkix.RDNSequence{
+		{{Type: commonNameOID, Value: "Zo\u00eb M\u00fcller"}},
+		{{Type: organizationOID, Value: "Example"}},
+	}))
+	certificate := &x509.Certificate{RawSubject: raw}
+	subject := "O=Example,CN=Zo\\C3\\AB M\\C3\\BCller"
+	insertX509User(t, h, subject)
+	ctx, ci := x509Context(certificate)
+
+	_, err := h.commands["authenticate"].Handler(ctx, authenticateMsg(t, nil))
+	require.NoError(t, err)
+	require.True(t, ci.Authenticated())
+	username, _, _, db := ci.Auth()
+	require.Equal(t, subject, username)
+	require.Equal(t, "$external", db)
+}
+
 func TestAuthenticateX509(t *testing.T) {
 	h := authGateHandler(t, true)
 	certificate, subject := testX509Certificate(t)
