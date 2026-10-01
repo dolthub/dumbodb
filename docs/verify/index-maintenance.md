@@ -6,9 +6,6 @@ indexes adjust per element, and sparse / partial indexes track
 membership as documents change. Work through each scenario top to
 bottom. Each section builds on the previous setup.
 
-These scenarios verify behaviors W2, W3, W5, M1, and M2 from
-`docs/design/secondary-index-structural-sharing.md`.
-
 > **Automated equivalent:** `tests/verify/index_maintenance_test.go`
 > (`TestIndexMaintenanceVerify`) covers every scenario in this
 > document as sequential subtests using the same setup. Run it with:
@@ -419,7 +416,7 @@ Key checks:
 
 ## Not verifiable from mongosh
 
-Two contracts from the same design doc are storage-level and have no
+Two contracts are storage-level and have no
 wire-visible signal: a no-op update leaving the index root hash
 untouched (W4), and chunk-level structural sharing across writes (P2).
 They are covered by `internal/backends/dolt/index_write_maintenance_test.go`.

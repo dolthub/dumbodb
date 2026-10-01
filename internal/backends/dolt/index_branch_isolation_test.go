@@ -15,7 +15,6 @@
 package dolt
 
 // Tests asserting that secondary index metadata and data are branch-scoped.
-// See docs/design/branch-scoped-index-metadata.md section 5.2.
 //
 // These tests fail today (commit 5f06cd8 and earlier) because dbState's
 // index caches (state.indexes, state.secIndexMaps, state.collIndexAMs) have

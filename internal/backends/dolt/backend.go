@@ -1057,7 +1057,6 @@ func (b *Backend) getOrOpenDBLocked(ctx context.Context, dbName string, create b
 
 	// Secondary indexes resolve per-collection from each branch's DTBL on
 	// first read via the resolver in index_resolve.go; no eager hydration.
-	// See docs/design/branch-scoped-index-metadata.md section 3.5.
 
 	// Restore any in-progress merge/cherry-pick/rebase state persisted from a
 	// previous server session. Errors are non-fatal: if the state file is corrupted

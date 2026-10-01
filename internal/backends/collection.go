@@ -662,8 +662,6 @@ var (
 // conflict. Touched means a side wrote it at all; Divergent means the two
 // sides wrote it differently. The unit is the whole document or a single
 // field. These are the wire values, and the only values a client may set.
-//
-// See docs/design/merge-strictness.md.
 const (
 	MergeModeDocumentTouched   = "documentTouched"
 	MergeModeFieldTouched      = "fieldTouched"

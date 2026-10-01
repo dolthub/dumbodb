@@ -14,9 +14,6 @@
 
 package dolt
 
-// Behaviors B2 and B4 of
-// docs/design/secondary-index-structural-sharing.md.
-
 import (
 	"context"
 	"reflect"

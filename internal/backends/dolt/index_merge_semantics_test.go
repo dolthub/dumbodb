@@ -14,9 +14,6 @@
 
 package dolt
 
-// Behaviors B2, B5, B6, and C1-C5 of
-// docs/design/secondary-index-structural-sharing.md.
-
 import (
 	"context"
 	"reflect"
@@ -69,8 +66,7 @@ func continueMerge(t *testing.T, b *Backend, dbName, into string) {
 	}
 }
 
-// Index-driven lookups must equal full-scan results (design doc 2.6
-// self-consistency invariant).
+// Index-driven lookups must equal full-scan results.
 func indexConsistentWithScan(t *testing.T, ctx context.Context, coll backends.Collection, field string, values []string) {
 	t.Helper()
 	for _, v := range values {

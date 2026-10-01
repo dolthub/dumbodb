@@ -24,7 +24,7 @@ underlying repository, and vice versa.
 
 > **Authentication note.** Under `--auth`, `doltTag` **rejects** a client-supplied
 > `author` with `IDLUnknownField` (40415); the tagger is the authenticated user's
-> identity (see `docs/design/commit-identity.md`). This guide assumes `--auth` is off.
+> identity. This guide assumes `--auth` is off.
 
 ## Prerequisites
 

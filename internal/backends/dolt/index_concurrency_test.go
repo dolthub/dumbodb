@@ -15,8 +15,7 @@
 package dolt
 
 // Concurrency and memo-behaviour tests for the branch-scoped index
-// resolver. See docs/design/branch-scoped-index-metadata.md sections
-// 5.5 and 5.6.
+// resolver.
 
 import (
 	"context"
@@ -125,8 +124,7 @@ func TestMemo_DistinctEntriesForDistinctDefinitions(t *testing.T) {
 	branchFrom(t, b, "testdb", "main", "feat")
 
 	// Drop and recreate by_x on feat with a different field. Index names
-	// are immutable per (per docs/design/secondary-index-structural-
-	// sharing.md), so this is in spirit a different index sharing a
+	// are immutable, so this is in spirit a different index sharing a
 	// name -- which is the only way to get same-name-different-spec on
 	// two branches.
 	featItems := collAt(t, b, "testdb", "feat", collName)

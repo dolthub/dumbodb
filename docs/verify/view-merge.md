@@ -11,8 +11,6 @@ This is a DumboDB-only capability: MongoDB has no versioning analogue, so there
 is no parity comparison. Work through each scenario top to bottom in `mongosh`;
 each uses its own database so they are independent.
 
-These scenarios verify the design in `docs/design/live-views.md` section 4.7.
-
 > **Automated equivalent:** `tests/verify/view_merge_test.go`
 > (`TestViewMergeVerify`) covers every scenario in this document as subtests
 > using the same setup. Run it with:

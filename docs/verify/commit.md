@@ -21,7 +21,7 @@ scenario top to bottom. Each section builds on the previous setup.
 
 > **Authentication note.** Under `--auth`, `doltCommit` **rejects** a client-supplied
 > `author`/`committer` with `IDLUnknownField` (40415): the server stamps the
-> authenticated user's identity (see `docs/design/commit-identity.md`). The `author`
+> authenticated user's identity. The `author`
 > column above and the scenarios below assume `--auth` is off.
 
 ## Prerequisites

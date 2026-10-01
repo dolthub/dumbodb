@@ -899,7 +899,7 @@ func (state *dbState) updateWorkingRoot(ctx context.Context, branch, commitMsg s
 	// so honoring skipSync here would lose data on server restart. The
 	// wire-level writeConcern.j=false is now a no-op for autoCommit /
 	// non-txn writes; session-isolation may grow a commit-time fsync
-	// skip as a future refinement (see docs/design/branch-ws-singletons.md).
+	// skip as a future refinement.
 	_ = skipSync
 	if err := state.updateBranchWS(ctx, branch, func(_ *doltdb.WorkingSet) (*doltdb.WorkingSet, error) {
 		return newWS, nil

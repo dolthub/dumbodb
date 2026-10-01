@@ -16,8 +16,6 @@ package dolt
 
 // Secondary-index resolution from the session's working root.
 //
-// See docs/design/branch-scoped-index-metadata.md sections 3.3 and 6.4.
-//
 // All functions in this file are pure with respect to dbState: they read
 // from the chunk store, NodeStore, and ValueStore handed to them, but
 // touch no in-memory caches keyed by collection name. The single

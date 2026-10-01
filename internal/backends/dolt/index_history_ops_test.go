@@ -14,8 +14,7 @@
 
 package dolt
 
-// Behavior B7 of docs/design/secondary-index-structural-sharing.md:
-// cherry-pick, rebase, and revert share the merge machinery and must
+// Cherry-pick, rebase, and revert share the merge machinery and must
 // maintain indexes the same way.
 
 import (

@@ -14,8 +14,7 @@
 
 package dolt
 
-// Secondary-index maintenance for the 3-way collection merge
-// (behaviors B2-B6, docs/design/secondary-index-structural-sharing.md).
+// Secondary-index maintenance for the 3-way collection merge.
 // Indexes are merged by riding the primary diff stream, NOT by
 // 3-way-merging the index maps: field-level document resolution can
 // produce docs whose entries exist in neither parent's index.
@@ -90,8 +89,7 @@ type indexMergeSurvivor struct {
 	removed map[string]struct{}     // full entry key removed this merge
 }
 
-// reconcileIndexSets implements the B5 case table (design doc section
-// 2.5): a definition change (drop or redefine) beats an untouched
+// reconcileIndexSets: a definition change (drop or redefine) beats an untouched
 // side; competing definition changes are an error.
 func reconcileIndexSets(intoSet, fromSet, baseSet map[string]*resolvedIndexEntry) (survivors []*indexMergeSurvivor, seeds map[string]struct {
 	entry    *resolvedIndexEntry

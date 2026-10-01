@@ -65,7 +65,7 @@ func (b *Backend) RunUnderGCSafepointKeeper(_ context.Context, fn func() error) 
 
 // sessionAwareSafepoint mirrors dprocedures.sessionAwareSafepointController.
 // The structure is copied (~30 lines) rather than extracted from dolt
-// per the GC design doc: the controller is small and stable; extracting
+// because the controller is small and stable; extracting
 // it would require lifting it out of a package that imports the SQL
 // engine; dumbo has slightly different lifecycle requirements that
 // would clutter a parameterized version.

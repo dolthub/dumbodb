@@ -14,9 +14,6 @@
 
 package index
 
-// Behaviors T1 and T2 of
-// docs/design/secondary-index-structural-sharing.md.
-
 import (
 	"bytes"
 	"math"
