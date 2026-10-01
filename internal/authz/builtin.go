@@ -68,6 +68,10 @@ func IsBuiltinRoleOnDB(role, db string) bool {
 }
 
 func BuiltinRoleNames(db string) []string {
+	if db == "$external" {
+		return nil
+	}
+
 	names := []string{"read", "readWrite", "dbAdmin", "userAdmin", "dbOwner"}
 	if db == "admin" {
 		names = append(names,

@@ -168,9 +168,10 @@ func (h *Handler) MsgCreateUser(connCtx context.Context, msg *wire.OpMsg) (*wire
 		}
 	}
 
+	var userPassword password.Password
 	if document.Has("pwd") {
 		pwd, _ := document.Get("pwd")
-		userPassword, ok := pwd.(string)
+		passwordValue, ok := pwd.(string)
 
 		if !ok {
 			return nil, handlererrors.NewCommandErrorMsg(
@@ -181,40 +182,42 @@ func (h *Handler) MsgCreateUser(connCtx context.Context, msg *wire.OpMsg) (*wire
 			)
 		}
 
-		if userPassword == "" {
+		if passwordValue == "" {
 			return nil, handlererrors.NewCommandErrorMsg(
 				handlererrors.ErrSetEmptyPassword,
 				"Password cannot be empty",
 			)
 		}
 
-		err = users.CreateUser(connCtx, h.b, &users.CreateUserParams{
-			Database:                   dbName,
-			Username:                   username,
-			Password:                   password.WrapPassword(userPassword),
-			Mechanisms:                 mechanisms,
-			Roles:                      roles,
-			AuthenticationRestrictions: restrictions,
-			CustomData:                 customData,
-			CommitIdentity:             commitIdentity,
-		})
-		if err != nil {
-			if backends.ErrorCodeIs(err, backends.ErrorCodeInsertDuplicateID) {
-				return nil, handlererrors.NewCommandErrorMsg(
-					handlererrors.ErrUserAlreadyExists,
-					fmt.Sprintf("User \"%s@%s\" already exists", username, dbName),
-				)
-			}
+		userPassword = password.WrapPassword(passwordValue)
+	}
 
-			if strings.Contains(err.Error(), "prohibited character") {
-				return nil, handlererrors.NewCommandErrorMsg(
-					handlererrors.ErrStringProhibited,
-					"Error preflighting normalization: U_STRINGPREP_PROHIBITED_ERROR",
-				)
-			}
-
-			return nil, lazyerrors.Error(err)
+	err = users.CreateUser(connCtx, h.b, &users.CreateUserParams{
+		Database:                   dbName,
+		Username:                   username,
+		Password:                   userPassword,
+		Mechanisms:                 mechanisms,
+		Roles:                      roles,
+		AuthenticationRestrictions: restrictions,
+		CustomData:                 customData,
+		CommitIdentity:             commitIdentity,
+	})
+	if err != nil {
+		if backends.ErrorCodeIs(err, backends.ErrorCodeInsertDuplicateID) {
+			return nil, handlererrors.NewCommandErrorMsg(
+				handlererrors.ErrUserAlreadyExists,
+				fmt.Sprintf("User \"%s@%s\" already exists", username, dbName),
+			)
 		}
+
+		if strings.Contains(err.Error(), "prohibited character") {
+			return nil, handlererrors.NewCommandErrorMsg(
+				handlererrors.ErrStringProhibited,
+				"Error preflighting normalization: U_STRINGPREP_PROHIBITED_ERROR",
+			)
+		}
+
+		return nil, lazyerrors.Error(err)
 	}
 
 	h.BumpAuthGeneration()

@@ -88,3 +88,8 @@ func TestBuiltinRoleUnknown(t *testing.T) {
 	require.True(t, IsBuiltinRole("readWrite"))
 	require.True(t, IsBuiltinRole("root"))
 }
+
+func TestBuiltinRolesDoNotExistOnExternal(t *testing.T) {
+	require.Empty(t, BuiltinRoleNames("$external"))
+	require.False(t, IsBuiltinRoleOnDB("readWrite", "$external"))
+}
