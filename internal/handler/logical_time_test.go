@@ -26,6 +26,7 @@ import (
 func TestWithLogicalTime(t *testing.T) {
 	h := &Handler{}
 	response := must.NotFail(documentOpMsg(must.NotFail(types.NewDocument("ok", float64(1)))))
+	response.Flags = wire.OpMsgFlags(wire.OpMsgMoreToCome)
 
 	first, err := h.withLogicalTime(response)
 	if err != nil {
@@ -40,6 +41,9 @@ func TestWithLogicalTime(t *testing.T) {
 	secondTime := responseLogicalTime(t, second)
 	if secondTime <= firstTime {
 		t.Fatalf("logical time did not advance: first=%v second=%v", firstTime, secondTime)
+	}
+	if !first.Flags.FlagSet(wire.OpMsgMoreToCome) || !second.Flags.FlagSet(wire.OpMsgMoreToCome) {
+		t.Fatal("logical-time post-processing dropped moreToCome")
 	}
 }
 

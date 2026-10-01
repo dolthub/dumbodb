@@ -17,6 +17,8 @@ package handler
 import (
 	"testing"
 
+	"github.com/FerretDB/wire"
+
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
@@ -27,6 +29,7 @@ func TestWithWriteConcernResult(t *testing.T) {
 		"writeConcern", must.NotFail(types.NewDocument("w", int32(2), "wtimeout", int32(100))),
 	))))
 	response := must.NotFail(documentOpMsg(must.NotFail(types.NewDocument("n", int32(1), "ok", float64(1)))))
+	response.Flags = wire.OpMsgFlags(wire.OpMsgMoreToCome)
 
 	got, err := withWriteConcernResult(request, response)
 	if err != nil {
@@ -50,6 +53,9 @@ func TestWithWriteConcernResult(t *testing.T) {
 	}
 	if code != int32(100) {
 		t.Fatalf("code=%v", code)
+	}
+	if !got.Flags.FlagSet(wire.OpMsgMoreToCome) {
+		t.Fatal("write-concern post-processing dropped moreToCome")
 	}
 }
 

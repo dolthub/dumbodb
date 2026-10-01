@@ -50,7 +50,12 @@ func withWriteConcernResult(request, response *wire.OpMsg) (*wire.OpMsg, error) 
 		"codeName", codeName,
 		"errmsg", message,
 	)))
-	return documentOpMsg(responseDoc)
+	result, err := documentOpMsg(responseDoc)
+	if err != nil {
+		return nil, err
+	}
+	result.Flags = response.Flags
+	return result, nil
 }
 
 func writeConcernTag(value any) string {

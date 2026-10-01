@@ -37,7 +37,12 @@ func (h *Handler) withLogicalTime(msg *wire.OpMsg) (*wire.OpMsg, error) {
 			"keyId", int64(0),
 		)),
 	)))
-	return documentOpMsg(doc)
+	response, err := documentOpMsg(doc)
+	if err != nil {
+		return nil, err
+	}
+	response.Flags = msg.Flags
+	return response, nil
 }
 
 func (h *Handler) nextLogicalTime() types.Timestamp {
