@@ -23,7 +23,7 @@ underlying repository, and vice versa.
 \* `name` is required for create and delete; omit it to list all tags.
 
 > **Authentication note.** Under `--auth`, `doltTag` **rejects** a client-supplied
-> `author` with `IDLUnknownField` (40415); the tagger is the authenticated user's
+> `author`/`committer` with `IDLUnknownField` (40415); the tagger is the authenticated user's
 > identity. This guide assumes `--auth` is off.
 
 ## Prerequisites
