@@ -498,6 +498,11 @@ func newBackend(dataDir string, l *slog.Logger, autoCommit, sessionIsolation boo
 
 	b.gcController = gcctx.NewGCSafepointController()
 	b.backgroundRP = &backgroundGCRootsProvider{}
+	// The controller only visits providers it has seen begin a command.
+	if err := b.gcController.SessionCommandBegin(b.backgroundRP); err != nil {
+		return nil, fmt.Errorf("registering background GC roots provider: %w", err)
+	}
+	b.gcController.SessionCommandEnd(b.backgroundRP)
 	provider, err := newDumbodbProvider(dataDir, b.lookupDbStateForDsess, b.openDbNames, b.gcController)
 	if err != nil {
 		return nil, fmt.Errorf("constructing dsess provider: %w", err)
@@ -1057,7 +1062,6 @@ func (b *Backend) getOrOpenDBLocked(ctx context.Context, dbName string, create b
 
 	// Secondary indexes resolve per-collection from each branch's DTBL on
 	// first read via the resolver in index_resolve.go; no eager hydration.
-	// See docs/design/branch-scoped-index-metadata.md section 3.5.
 
 	// Restore any in-progress merge/cherry-pick/rebase state persisted from a
 	// previous server session. Errors are non-fatal: if the state file is corrupted
@@ -1281,6 +1285,21 @@ func publishWorkingSet(ctx context.Context, ddb *doltdb.DoltDB, ws *doltdb.Worki
 // callers are establishing a ref that should not exist yet -- a new database, a
 // new branch, a clone -- so there is no fork point to hold them to. Anything
 // that reconciles against existing contents must use publishWorkingSet.
+// initializeBranchWorkingSet sets branch's working set to a clean copy of the
+// branch head.
+func initializeBranchWorkingSet(ctx context.Context, ddb *doltdb.DoltDB, branch string) error {
+	headCommit, err := ddb.ResolveCommitRef(ctx, doltref.NewBranchRef(branch))
+	if err != nil {
+		return err
+	}
+	rv, err := headCommit.GetRootValue(ctx)
+	if err != nil {
+		return err
+	}
+	wsRef := doltref.NewWorkingSetRef("heads/" + branch)
+	return initializeWorkingSet(ctx, ddb, doltdb.EmptyWorkingSet(wsRef).WithWorkingRoot(rv).WithStagedRoot(rv), branch)
+}
+
 func initializeWorkingSet(ctx context.Context, ddb *doltdb.DoltDB, ws *doltdb.WorkingSet, branch string) error {
 	wsRef := doltref.NewWorkingSetRef("heads/" + branch)
 	var prevHash hash.Hash
@@ -1560,13 +1579,8 @@ func dumboDBBranchCreate(ctx context.Context, db *dbState, params *backends.Bran
 
 	// Eagerly create the working_set ref; dolt creates it lazily on
 	// checkout, but session-isolation writes without checking out.
-	branchRef := doltref.NewBranchRef(params.Name)
-	if headCommit, hcErr := db.doltDB.ResolveCommitRef(ctx, branchRef); hcErr == nil {
-		if rv, rvErr := headCommit.GetRootValue(ctx); rvErr == nil {
-			wsRef := doltref.NewWorkingSetRef("heads/" + params.Name)
-			emptyWS := doltdb.EmptyWorkingSet(wsRef).WithWorkingRoot(rv).WithStagedRoot(rv)
-			_ = initializeWorkingSet(ctx, db.doltDB, emptyWS, params.Name)
-		}
+	if err = initializeBranchWorkingSet(ctx, db.doltDB, params.Name); err != nil {
+		return nil, fmt.Errorf("DumboDBBranch: initializing working set for branch %q: %w", params.Name, err)
 	}
 
 	// Refresh tx.dbStartPoints; otherwise subsequent writes to the new

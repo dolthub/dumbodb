@@ -34,7 +34,7 @@ func doc(t *testing.T, pairs ...any) *types.Document {
 	return d
 }
 
-// The scenario matrix of docs/design/merge-strictness.md, over documents.
+// The merge mode scenario matrix, over documents.
 // Column order is documentTouched, fieldTouched, fieldDivergent,
 // documentDivergent.
 func TestMergeModeScenarioMatrix(t *testing.T) {

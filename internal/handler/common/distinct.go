@@ -25,6 +25,7 @@ import (
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 
+	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/commonpath"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
@@ -249,10 +250,11 @@ func numericFloatKey(f float64) []byte {
 //
 // If the key is found in the document, and the value is an array, each element of the array is added to the result.
 // Otherwise, the value itself is added to the result.
-func FilterDistinctValues(iter types.DocumentsIterator, key string) (*types.Array, error) {
+func FilterDistinctValues(iter types.DocumentsIterator, key string, cmp *collation.Comparator) (*types.Array, error) {
 	defer iter.Close()
 
 	dedup := newDistinctSet()
+	dedup.cmp = cmp
 
 	path, err := types.NewPathFromString(key)
 	if err != nil {
@@ -340,6 +342,8 @@ type distinctSet struct {
 	seen    map[string]struct{}
 	complex []any
 	values  []any
+	// cmp, when set, makes strings equal under the collation duplicates.
+	cmp *collation.Comparator
 }
 
 func newDistinctSet() *distinctSet {
@@ -348,13 +352,12 @@ func newDistinctSet() *distinctSet {
 
 // add appends v to the set if not already present.
 func (s *distinctSet) add(v any) {
+	if str, isString := v.(string); isString && s.cmp != nil {
+		s.addKeyed(append([]byte{tagString}, s.cmp.Key(str)...), v)
+		return
+	}
 	if k, ok := distinctKey(v); ok {
-		ks := string(k)
-		if _, dup := s.seen[ks]; dup {
-			return
-		}
-		s.seen[ks] = struct{}{}
-		s.values = append(s.values, v)
+		s.addKeyed(k, v)
 		return
 	}
 
@@ -366,6 +369,15 @@ func (s *distinctSet) add(v any) {
 		}
 	}
 	s.complex = append(s.complex, v)
+	s.values = append(s.values, v)
+}
+
+func (s *distinctSet) addKeyed(key []byte, v any) {
+	ks := string(key)
+	if _, dup := s.seen[ks]; dup {
+		return
+	}
+	s.seen[ks] = struct{}{}
 	s.values = append(s.values, v)
 }
 

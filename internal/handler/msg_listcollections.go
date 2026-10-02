@@ -110,6 +110,9 @@ func (h *Handler) MsgListCollections(connCtx context.Context, msg *wire.OpMsg) (
 			} else {
 				options.Set("pipeline", types.MakeArray(0))
 			}
+			if resolved := collation.Parse(collection.Collation).Resolve(); resolved != nil {
+				options.Set("collation", resolved)
+			}
 			info.Set("readOnly", true)
 		} else if collection.IsTimeSeries {
 			collType = "timeseries"

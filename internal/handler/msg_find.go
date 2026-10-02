@@ -96,10 +96,11 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 	// source collection with the view's defining pipeline applied; the find's
 	// own filter/sort/skip/limit/projection are layered on top below.
 	var (
-		isView       bool
-		viewName     string
-		viewOn       string
-		viewPipeline *types.Array
+		isView        bool
+		viewName      string
+		viewOn        string
+		viewPipeline  *types.Array
+		viewCollation *types.Document
 	)
 
 	if cInfo.IsView {
@@ -107,6 +108,7 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 		viewName = cInfo.Name
 		viewOn = cInfo.ViewOn
 		viewPipeline = cInfo.ViewPipeline
+		viewCollation = cInfo.Collation
 
 		params.Collection = cInfo.ViewOn
 		viewSourceParam := backends.ListCollectionsParams{Name: cInfo.ViewOn}
@@ -132,8 +134,14 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 	}
 
 	// Resolve the effective collation: a find with no collation of its own
-	// inherits the collection's default.
-	params.Collation = collation.Effective(params.Collation, cInfo.Collation)
+	// inherits the collection's default; a find on a view runs under the view's.
+	if isView {
+		if params.Collation, err = viewReadCollation(params.Collation, viewCollation); err != nil {
+			return nil, err
+		}
+	} else {
+		params.Collation = collation.Effective(params.Collation, cInfo.Collation)
+	}
 
 	capped := cInfo.Capped()
 	if params.Tailable {
@@ -187,7 +195,8 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 
 	var srcIter types.DocumentsIterator
 	if isView {
-		srcIter, err = viewSourceIterator(ctx, db, viewName, viewOn, viewPipeline, closer, h.DisablePushdown, h.EnableNestedPushdown)
+		viewCmp := collation.Parse(params.Collation).Comparator()
+		srcIter, err = viewSourceIterator(ctx, db, viewName, viewOn, viewPipeline, viewCmp, closer, h.DisablePushdown, h.EnableNestedPushdown)
 	} else {
 		var queryRes *backends.QueryResult
 		if queryRes, err = coll.Query(ctx, qp); err != nil {

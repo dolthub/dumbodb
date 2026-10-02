@@ -292,12 +292,6 @@ func (cc *collectionContract) Explain(ctx context.Context, params *ExplainParams
 
 type InsertAllParams struct {
 	Docs []*types.Document
-
-	// SkipDurableSync, when true, tells the backend the client opted out of a
-	// synchronous journal fsync via MongoDB writeConcern (j:false or w:0).
-	// Backends that support it may acknowledge before the write is durable and
-	// rely on a periodic background flush.
-	SkipDurableSync bool
 }
 
 type InsertAllResult struct{}
@@ -342,10 +336,6 @@ type UpdateAllParams struct {
 	// the document wholesale. A nil or empty entry, or a nil FieldMutations
 	// slice altogether, means the backend must write Docs[i] in full.
 	FieldMutations [][]FieldMutation
-
-	// SkipDurableSync, when true, tells the backend the client opted out of a
-	// synchronous journal fsync via MongoDB writeConcern. See InsertAllParams.
-	SkipDurableSync bool
 }
 
 // FieldMutation describes a single field-level change applied to a document.
@@ -405,10 +395,6 @@ func (cc *collectionContract) UpdateAll(ctx context.Context, params *UpdateAllPa
 type DeleteAllParams struct {
 	IDs       []any
 	RecordIDs []int64
-
-	// SkipDurableSync, when true, tells the backend the client opted out of a
-	// synchronous journal fsync via MongoDB writeConcern. See InsertAllParams.
-	SkipDurableSync bool
 }
 
 type DeleteAllResult struct {
@@ -662,8 +648,6 @@ var (
 // conflict. Touched means a side wrote it at all; Divergent means the two
 // sides wrote it differently. The unit is the whole document or a single
 // field. These are the wire values, and the only values a client may set.
-//
-// See docs/design/merge-strictness.md.
 const (
 	MergeModeDocumentTouched   = "documentTouched"
 	MergeModeFieldTouched      = "fieldTouched"

@@ -11,8 +11,8 @@ scenario top to bottom. Each section builds on the previous setup.
 > ```
 
 > **Authentication note.** Under `--auth`, `doltRevert` **rejects** a client-supplied
-> `author` with `IDLUnknownField` (40415); identity comes from the authenticated
-> user (see `docs/design/commit-identity.md`). This guide assumes `--auth` is off.
+> `author`/`committer` with `IDLUnknownField` (40415); identity comes from the authenticated
+> user. This guide assumes `--auth` is off.
 
 ## Prerequisites
 

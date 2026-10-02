@@ -51,11 +51,6 @@ type UpdateParams struct {
 	ApiVersion           string `dumbo:"apiVersion,ignored"`
 	ApiStrict            bool   `dumbo:"apiStrict,ignored"`
 	ApiDeprecationErrors bool   `dumbo:"apiDeprecationErrors,ignored"`
-
-	// SkipDurableSync is derived from WriteConcern in GetUpdateParams and
-	// propagated into backend params so the storage layer can skip the
-	// synchronous NBS journal fsync. Not populated from the wire.
-	SkipDurableSync bool `dumbo:"-"`
 }
 
 //nolint:vet // for readability
@@ -115,8 +110,6 @@ func GetUpdateParams(document *types.Document, l *slog.Logger) (*UpdateParams, e
 	if err != nil {
 		return nil, err
 	}
-
-	params.SkipDurableSync = DecideWriteConcern(params.WriteConcern).SkipDurableSync
 
 	if len(params.Updates) > 0 {
 		for i := range params.Updates {

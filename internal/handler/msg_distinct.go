@@ -66,16 +66,21 @@ func (h *Handler) MsgDistinct(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 		return nil, lazyerrors.Error(err)
 	}
 	if viewInfo != nil && viewInfo.IsView {
+		if params.Collation, err = viewReadCollation(params.Collation, viewInfo.Collation); err != nil {
+			return nil, err
+		}
+		cmp := collation.Parse(params.Collation).Comparator()
+
 		closer := iterator.NewMultiCloser()
 		defer closer.Close()
 
-		iter, verr := viewSourceIterator(connCtx, db, viewInfo.Name, viewInfo.ViewOn, viewInfo.ViewPipeline, closer, h.DisablePushdown, h.EnableNestedPushdown)
+		iter, verr := viewSourceIterator(connCtx, db, viewInfo.Name, viewInfo.ViewOn, viewInfo.ViewPipeline, cmp, closer, h.DisablePushdown, h.EnableNestedPushdown)
 		if verr != nil {
 			return nil, verr
 		}
-		iter = common.FilterIterator(iter, closer, params.Filter)
+		iter = common.FilterIteratorColl(iter, closer, params.Filter, cmp)
 
-		distinct, derr := common.FilterDistinctValues(iter, params.Key)
+		distinct, derr := common.FilterDistinctValues(iter, params.Key, cmp)
 		if derr != nil {
 			return nil, lazyerrors.Error(derr)
 		}
@@ -97,10 +102,15 @@ func (h *Handler) MsgDistinct(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 		return nil, lazyerrors.Error(err)
 	}
 
+	params.Collation = h.effectiveCollation(connCtx, db, params.Collection, params.Collation)
+
+	cmp := collation.Parse(params.Collation).Comparator()
+
 	// Fast path: when the request has no filter and the backend exposes a
 	// DistinctScanner, let it serve the query from a secondary index without
-	// reading every document.
-	if params.Filter.Len() == 0 {
+	// reading every document. The scan de-duplicates by bytes, so it cannot
+	// serve a collated distinct.
+	if params.Filter.Len() == 0 && cmp == nil {
 		if ds, ok := c.(backends.DistinctScanner); ok {
 			res, err := ds.DistinctScan(connCtx, &backends.DistinctParams{Key: params.Key})
 			if err != nil {
@@ -124,10 +134,6 @@ func (h *Handler) MsgDistinct(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 	closer := iterator.NewMultiCloser()
 	defer closer.Close()
 
-	params.Collation = h.effectiveCollation(connCtx, db, params.Collection, params.Collation)
-
-	cmp := collation.Parse(params.Collation).Comparator()
-
 	var qp backends.QueryParams
 	qp.Collated = cmp != nil
 	if !h.DisablePushdown {
@@ -143,7 +149,7 @@ func (h *Handler) MsgDistinct(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 
 	iter := common.FilterIteratorColl(queryRes.Iter, closer, params.Filter, cmp)
 
-	distinct, err := common.FilterDistinctValues(iter, params.Key)
+	distinct, err := common.FilterDistinctValues(iter, params.Key, cmp)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
 	}

@@ -14,8 +14,7 @@
 
 package dolt
 
-// Test helpers for branch-scoped index behaviour. See
-// docs/design/branch-scoped-index-metadata.md section 5.1.
+// Test helpers for branch-scoped index behaviour.
 
 import (
 	"context"

@@ -134,7 +134,7 @@ func (h *Handler) MsgListIndexes(connCtx context.Context, msg *wire.OpMsg) (*wir
 
 		// Echo the resolved collation: MongoDB's server defaults filled in plus
 		// the ICU version. The version is DumboDB's real linked ICU, not Mongo's
-		// 57.1 (an intended divergence, see the ICU binding design).
+		// 57.1 (an intended divergence).
 		if index.Collation != nil {
 			if resolved := collation.Parse(index.Collation).Resolve(); resolved != nil {
 				indexDoc.Set("collation", resolved)

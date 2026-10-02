@@ -109,8 +109,7 @@ Key checks:
 - The error carries code `10107` and codeName `NotWritablePrimary`, matching
   MongoDB exactly, because client retry logic keys off the code.
 - The message is `not primary`. MongoDB still sends the legacy `not master`
-  here; DumboDB deliberately does not. That deviation is recorded in the
-  replication design document.
+  here; DumboDB deliberately does not.
 - The document count does not change. A refusal that still wrote would be
   worse than no refusal at all.
 

@@ -73,23 +73,30 @@ func (h *Handler) MsgCount(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMs
 	// the view's source with the view's defining pipeline applied, then the
 	// filter/skip/limit. This bypasses the backend fast paths below, which would
 	// count the (empty) view collection and return 0.
-	params.Collation = h.effectiveCollation(connCtx, db, params.Collection, params.Collation)
-
-	cmp := collation.Parse(params.Collation).Comparator()
-
 	collParam := backends.ListCollectionsParams{Name: params.Collection}
 	cList, err := db.ListCollections(connCtx, &collParam)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
 	}
 
-	if len(cList.Collections) > 0 && cList.Collections[0].IsView {
+	isView := len(cList.Collections) > 0 && cList.Collections[0].IsView
+	if isView {
+		if params.Collation, err = viewReadCollation(params.Collation, cList.Collections[0].Collation); err != nil {
+			return nil, err
+		}
+	} else {
+		params.Collation = h.effectiveCollation(connCtx, db, params.Collection, params.Collation)
+	}
+
+	cmp := collation.Parse(params.Collation).Comparator()
+
+	if isView {
 		view := cList.Collections[0]
 
 		closer := iterator.NewMultiCloser()
 		defer closer.Close()
 
-		iter, verr := viewSourceIterator(connCtx, db, view.Name, view.ViewOn, view.ViewPipeline, closer, h.DisablePushdown, h.EnableNestedPushdown)
+		iter, verr := viewSourceIterator(connCtx, db, view.Name, view.ViewOn, view.ViewPipeline, cmp, closer, h.DisablePushdown, h.EnableNestedPushdown)
 		if verr != nil {
 			return nil, verr
 		}

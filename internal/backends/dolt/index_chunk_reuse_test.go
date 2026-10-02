@@ -14,8 +14,7 @@
 
 package dolt
 
-// Behavior B3 of docs/design/secondary-index-structural-sharing.md,
-// plus the chunk-walk helpers shared by the structural-sharing tests.
+// Chunk-walk helpers shared by the structural-sharing tests.
 
 import (
 	"context"

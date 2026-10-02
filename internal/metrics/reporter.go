@@ -14,7 +14,7 @@
 
 // Package metrics phones DumboDB usage home to the DoltHub metrics server so
 // running servers can be counted. It is self-contained: its only inputs are the
-// values RunReporter receives. See docs/design/metrics-phone-home.md.
+// values RunReporter receives.
 package metrics
 
 import (

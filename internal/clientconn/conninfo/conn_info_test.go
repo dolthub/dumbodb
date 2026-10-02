@@ -51,6 +51,22 @@ func TestOwnerPrefersLSID(t *testing.T) {
 	assert.Equal(t, "\x00real-lsid-uuid", c.Owner())
 }
 
+func TestOwnerIsScopedToUserAndAuthDB(t *testing.T) {
+	onApp, onAdmin := New(), New()
+	onApp.SetAuth("alice", "", nil, "app")
+	onAdmin.SetAuth("alice", "", nil, "admin")
+	onApp.SetLSID("same-lsid")
+	onAdmin.SetLSID("same-lsid")
+
+	assert.Equal(t, "alice@app\x00same-lsid", onApp.Owner())
+	assert.NotEqual(t, onApp.Owner(), onAdmin.Owner())
+
+	principal, id, ok := SplitSessionKey(onApp.Owner())
+	require.True(t, ok)
+	assert.Equal(t, "alice@app", principal)
+	assert.Equal(t, "same-lsid", id)
+}
+
 func TestOwnerFallsBackToConnSyntheticID(t *testing.T) {
 	c1 := New()
 	c2 := New()

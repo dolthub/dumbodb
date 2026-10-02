@@ -22,6 +22,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/netip"
+	"strings"
 	"sync"
 
 	"github.com/xdg-go/scram"
@@ -368,17 +369,31 @@ func (connInfo *ConnInfo) Owner() string {
 	if id == "" {
 		id = fmt.Sprintf("conn:%p", connInfo)
 	}
-	user, _, _, _ := connInfo.Auth()
-	return sessionKey(user, id)
+	return sessionKey(connInfo.SessionPrincipal(), id)
 }
 
 func (connInfo *ConnInfo) SessionKeyFor(id string) string {
-	user, _, _, _ := connInfo.Auth()
-	return sessionKey(user, id)
+	return sessionKey(connInfo.SessionPrincipal(), id)
 }
 
-func sessionKey(user, id string) string {
-	return user + "\x00" + id
+// SessionPrincipal is the authenticated user as "user@db", or "" when
+// unauthenticated. Sessions are owned by a principal, so the same lsid from a
+// different principal is a different session.
+func (connInfo *ConnInfo) SessionPrincipal() string {
+	user, _, _, db := connInfo.Auth()
+	if user == "" {
+		return ""
+	}
+	return user + "@" + db
+}
+
+// SplitSessionKey returns the principal and lsid of a session registry key.
+func SplitSessionKey(key string) (principal, id string, ok bool) {
+	return strings.Cut(key, "\x00")
+}
+
+func sessionKey(principal, id string) string {
+	return principal + "\x00" + id
 }
 
 // Ctx returns a derived context with the given ConnInfo.
