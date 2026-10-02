@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
@@ -30,20 +31,61 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends"
 )
 
-// backgroundGCRootsProvider is the GCRootsProvider used by
-// RunUnderGCSafepointKeeper to bracket background mutators (capped
-// collection cleanup today; future GC-triggered tasks tomorrow). It
-// holds no per-session state and reports no extra roots: every chunk
-// the background tick writes goes through updateBranchWS, which fsyncs
-// the on-disk working_set ref before the chunk is otherwise reachable.
-// GC's standard disk-ref walk covers all of it.
+// backgroundGCRootsProvider is the backend's own GCRootsProvider. It is
+// registered with the safepoint controller at startup so every GC visits it.
 //
-// The bracket exists not for root accounting but to gate GC's
-// pre-finalize safepoint on the tick's completion, so chunk-store
-// rewrites do not race the tick's in-flight ops.
-type backgroundGCRootsProvider struct{}
+// It reports the roots pinned by open query iterators: a cursor between
+// batches iterates a prolly map that may no longer be reachable from any ref
+// or session, and GC must not sweep it.
+//
+// RunUnderGCSafepointKeeper also uses it to bracket background mutators
+// (capped collection cleanup). Their chunks need no root accounting -- every
+// chunk the background tick writes goes through updateBranchWS, which fsyncs
+// the on-disk working_set ref first -- the bracket only gates GC's
+// pre-finalize safepoint on the tick's completion.
+type backgroundGCRootsProvider struct {
+	mu     sync.Mutex
+	pinned map[string]map[hash.Hash]int
+}
 
-func (*backgroundGCRootsProvider) VisitGCRoots(_ context.Context, _ string, _ func(hash.Hash) bool) error {
+// pinRoot keeps root reachable for GC of database db until the returned
+// release func is called.
+func (p *backgroundGCRootsProvider) pinRoot(db string, root hash.Hash) (release func()) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.pinned == nil {
+		p.pinned = make(map[string]map[hash.Hash]int)
+	}
+	if p.pinned[db] == nil {
+		p.pinned[db] = make(map[hash.Hash]int)
+	}
+	p.pinned[db][root]++
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			p.mu.Lock()
+			defer p.mu.Unlock()
+			if p.pinned[db][root]--; p.pinned[db][root] <= 0 {
+				delete(p.pinned[db], root)
+			}
+		})
+	}
+}
+
+func (p *backgroundGCRootsProvider) VisitGCRoots(_ context.Context, db string, keep func(hash.Hash) bool) error {
+	p.mu.Lock()
+	roots := make([]hash.Hash, 0, len(p.pinned[db]))
+	for root := range p.pinned[db] {
+		roots = append(roots, root)
+	}
+	p.mu.Unlock()
+
+	for _, root := range roots {
+		if keep(root) {
+			return fmt.Errorf("gc safepoint: could not keep root %s of an open cursor", root)
+		}
+	}
 	return nil
 }
 

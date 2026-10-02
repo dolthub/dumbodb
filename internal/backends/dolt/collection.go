@@ -166,9 +166,11 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 		pf = buildScanPrefilter(params.Filter)
 	}
 
-	return &backends.QueryResult{
-		Iter: newMapIter(ctx, state.ns, m, reverse, limit, onlyRecordIDs, pf),
-	}, nil
+	iter := newMapIter(ctx, state.ns, m, reverse, limit, onlyRecordIDs, pf)
+	if mi, ok := iter.(*mapIter); ok && state.backend != nil && state.backend.backgroundRP != nil {
+		mi.release = state.backend.backgroundRP.pinRoot(state.name, m.HashOf())
+	}
+	return &backends.QueryResult{Iter: iter}, nil
 }
 
 // buildScanPrefilter returns a byte-level predicate over a document's raw
@@ -3392,6 +3394,8 @@ type mapIter struct {
 	// true means "may match  -- run the full filter downstream." A nil
 	// prefilter keeps the unconditional full-scan behavior.
 	prefilter func([]byte) bool
+	// release, if set, unpins the iterated map's root from GC on Close.
+	release func()
 }
 
 func newMapIter(ctx context.Context, ns tree.NodeStore, m prolly.Map, reverse bool, limit int64, onlyRecordID bool, prefilter func([]byte) bool) types.DocumentsIterator {
@@ -3479,7 +3483,11 @@ func (it *mapIter) Next() (struct{}, *types.Document, error) {
 	}
 }
 
-func (it *mapIter) Close() {}
+func (it *mapIter) Close() {
+	if it.release != nil {
+		it.release()
+	}
+}
 
 type emptyIter struct{}
 

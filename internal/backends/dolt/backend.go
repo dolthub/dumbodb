@@ -498,6 +498,11 @@ func newBackend(dataDir string, l *slog.Logger, autoCommit, sessionIsolation boo
 
 	b.gcController = gcctx.NewGCSafepointController()
 	b.backgroundRP = &backgroundGCRootsProvider{}
+	// The controller only visits providers it has seen begin a command.
+	if err := b.gcController.SessionCommandBegin(b.backgroundRP); err != nil {
+		return nil, fmt.Errorf("registering background GC roots provider: %w", err)
+	}
+	b.gcController.SessionCommandEnd(b.backgroundRP)
 	provider, err := newDumbodbProvider(dataDir, b.lookupDbStateForDsess, b.openDbNames, b.gcController)
 	if err != nil {
 		return nil, fmt.Errorf("constructing dsess provider: %w", err)
