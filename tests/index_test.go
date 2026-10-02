@@ -132,6 +132,33 @@ func TestIndex_Collation_CreateOne(t *testing.T) {
 	require.Equal(t, "username_1", name)
 }
 
+func TestIndex_Collation_IdIndexPinnedToCollectionDefault(t *testing.T) {
+	env := startDumboDB(t)
+	ctx := context.Background()
+	db := env.Collection(t).Database()
+	require.NoError(t, db.CreateCollection(ctx, "en2", options.CreateCollection().SetCollation(&options.Collation{Locale: "en", Strength: 2})))
+	coll := db.Collection("en2")
+
+	idIndex := func(collation *options.Collation) mongo.IndexModel {
+		opts := options.Index().SetName("_id_")
+		if collation != nil {
+			opts.SetCollation(collation)
+		}
+		return mongo.IndexModel{Keys: bson.D{{Key: "_id", Value: 1}}, Options: opts}
+	}
+
+	_, err := coll.Indexes().CreateOne(ctx, idIndex(&options.Collation{Locale: "fr"}))
+	var cmdErr mongo.CommandError
+	require.ErrorAs(t, err, &cmdErr)
+	require.EqualValues(t, 2, cmdErr.Code)
+	require.Contains(t, cmdErr.Message, "The _id index must have the same collation as the collection")
+
+	_, err = coll.Indexes().CreateOne(ctx, idIndex(&options.Collation{Locale: "en", Strength: 2}))
+	require.NoError(t, err)
+	_, err = coll.Indexes().CreateOne(ctx, idIndex(nil))
+	require.NoError(t, err)
+}
+
 // TestIndex_WildcardProjection_CreateOne verifies wildcard index with projection (do-81xd).
 func TestIndex_WildcardProjection_CreateOne(t *testing.T) {
 	env := startDumboDB(t)
