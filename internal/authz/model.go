@@ -64,6 +64,7 @@ const (
 	ActionViewUser                     Action = "viewUser"
 	ActionViewRole                     Action = "viewRole"
 	ActionSetAuthenticationRestriction Action = "setAuthenticationRestriction"
+	ActionListSessions                 Action = "listSessions"
 
 	AnyAction Action = "anyAction"
 )

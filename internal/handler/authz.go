@@ -116,7 +116,16 @@ func (h *Handler) authorize(ctx context.Context, msg *wire.OpMsg) error {
 	if checks, ok := grantCommandChecks[command]; ok {
 		return h.authorizeGrantCommand(ctx, msg, command, db, checks)
 	}
+	if command == "aggregate" {
+		if pipeline, stage := listSessionsPipeline(msg); stage != nil {
+			return h.authorizeListSessions(ctx, msg, db, collection, pipeline, stage)
+		}
+	}
 
+	return h.authorizeByCommandPrivileges(ctx, msg, command, db, collection)
+}
+
+func (h *Handler) authorizeByCommandPrivileges(ctx context.Context, msg *wire.OpMsg, command, db, collection string) error {
 	reqs, ok := commandPrivileges[command]
 	if !ok {
 		return nil
@@ -187,6 +196,68 @@ func (h *Handler) authorizeUpdateUser(ctx context.Context, msg *wire.OpMsg, db, 
 
 	if !authorized {
 		return unauthorizedCommandError(msg, "updateUser", db)
+	}
+	return nil
+}
+
+// listSessionsPipeline returns the pipeline and its first stage when the
+// pipeline starts with $listLocalSessions or $listSessions.
+func listSessionsPipeline(msg *wire.OpMsg) (*types.Array, *types.Document) {
+	document, err := opMsgDocument(msg)
+	if err != nil {
+		return nil, nil
+	}
+	pipeline, _ := common.GetOptionalParam[*types.Array](document, "pipeline", nil)
+	if pipeline == nil || pipeline.Len() == 0 {
+		return nil, nil
+	}
+	stage, _ := must.NotFail(pipeline.Get(0)).(*types.Document)
+	if stage == nil || stage.Len() == 0 {
+		return nil, nil
+	}
+	switch stage.Command() {
+	case "$listLocalSessions", "$listSessions":
+		return pipeline, stage
+	}
+	return nil, nil
+}
+
+// readOnlyFollowUpStages may follow a session listing without further
+// privileges; any other stage also needs the ordinary aggregate privileges.
+var readOnlyFollowUpStages = map[string]struct{}{
+	"$match": {}, "$project": {}, "$addFields": {}, "$set": {}, "$unset": {},
+	"$sort": {}, "$limit": {}, "$skip": {}, "$count": {}, "$group": {},
+	"$sortByCount": {}, "$replaceRoot": {}, "$replaceWith": {}, "$unwind": {},
+}
+
+// authorizeListSessions follows MongoDB 8.0: listing one's own sessions needs
+// no privilege; allUsers or another user's sessions needs listSessions on the
+// cluster.
+func (h *Handler) authorizeListSessions(ctx context.Context, msg *wire.OpMsg, db, collection string, pipeline *types.Array, stage *types.Document) error {
+	caller := conninfo.Get(ctx).SessionPrincipal()
+	spec, err := parseListSessionsSpec(stage, caller)
+	if err != nil {
+		return err
+	}
+
+	if spec.requiresListSessionsPrivilege(caller) {
+		privs, err := h.effectivePrivileges(ctx)
+		if err != nil {
+			return err
+		}
+		if !privs.Authorized(authz.ActionListSessions, authz.ClusterResource) {
+			return unauthorizedCommandError(msg, "aggregate", db)
+		}
+	}
+
+	for i := 1; i < pipeline.Len(); i++ {
+		next, _ := must.NotFail(pipeline.Get(i)).(*types.Document)
+		if next == nil || next.Len() == 0 {
+			continue
+		}
+		if _, ok := readOnlyFollowUpStages[next.Command()]; !ok {
+			return h.authorizeByCommandPrivileges(ctx, msg, "aggregate", db, collection)
+		}
 	}
 	return nil
 }

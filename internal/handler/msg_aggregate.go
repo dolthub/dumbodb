@@ -24,6 +24,7 @@ import (
 	"math"
 	"net"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -673,7 +674,7 @@ func (h *Handler) aggregateDatabase(connCtx context.Context, document *types.Doc
 	}
 
 	if stageName == "$listLocalSessions" {
-		return h.aggregateListLocalSessions(connCtx, dbName)
+		return h.aggregateListLocalSessions(connCtx, dbName, firstStage)
 	}
 
 	return documentOpMsg(
@@ -689,27 +690,31 @@ func (h *Handler) aggregateDatabase(connCtx context.Context, document *types.Doc
 }
 
 // aggregateListLocalSessions implements the $listLocalSessions source
-// stage: one document per logical session cached on this node. Each
-// session's _id.id is the lsid UUID and _id.uid is the SHA-256 digest of
-// the authenticated user (the empty-string digest when unauthenticated),
-// matching MongoDB's session identity encoding.
-func (h *Handler) aggregateListLocalSessions(connCtx context.Context, dbName string) (*wire.OpMsg, error) {
+// stage: one document per logical session cached on this node and owned by a
+// principal the spec selects. Each session's _id.id is the lsid UUID and
+// _id.uid is SHA256("user@db") (SHA256("") when unauthenticated), matching
+// MongoDB's session identity encoding.
+func (h *Handler) aggregateListLocalSessions(connCtx context.Context, dbName string, stage *types.Document) (*wire.OpMsg, error) {
+	spec, err := parseListSessionsSpec(stage, conninfo.Get(connCtx).SessionPrincipal())
+	if err != nil {
+		return nil, err
+	}
+
 	firstBatch := types.MakeArray(0)
 	if reg := h.SessionRegistry(); reg != nil {
 		for _, s := range reg.Snapshot() {
-			// The registry key is sessionKey(user, id) == user + "\x00" + id.
+			principal, id, ok := conninfo.SplitSessionKey(s.Lsid)
+			if !ok || !spec.includes(principal) {
+				continue
+			}
 			// Only real driver lsids (a 16-byte hex UUID) have a MongoDB
 			// counterpart; skip synthetic ids assigned to connections that
 			// never supplied an lsid.
-			user, id, ok := strings.Cut(s.Lsid, "\x00")
-			if !ok {
-				continue
-			}
 			idBytes, err := hex.DecodeString(id)
 			if err != nil || len(idBytes) != 16 {
 				continue
 			}
-			uidSum := sha256.Sum256([]byte(user))
+			uidSum := sha256.Sum256([]byte(principal))
 			firstBatch.Append(must.NotFail(types.NewDocument(
 				"_id", must.NotFail(types.NewDocument(
 					"id", types.Binary{Subtype: types.BinaryUUID, B: idBytes},
@@ -730,6 +735,85 @@ func (h *Handler) aggregateListLocalSessions(connCtx context.Context, dbName str
 			"ok", float64(1),
 		)),
 	)
+}
+
+// listSessionsSpec is the parsed argument of $listLocalSessions or
+// $listSessions. Without allUsers it selects sessions owned by principals
+// ("user@db"); an empty spec selects the caller's own.
+type listSessionsSpec struct {
+	allUsers   bool
+	principals []string
+}
+
+func (spec listSessionsSpec) includes(principal string) bool {
+	return spec.allUsers || slices.Contains(spec.principals, principal)
+}
+
+// requiresListSessionsPrivilege reports whether the spec reaches beyond the
+// caller's own sessions.
+func (spec listSessionsSpec) requiresListSessionsPrivilege(callerPrincipal string) bool {
+	if spec.allUsers {
+		return true
+	}
+	for _, p := range spec.principals {
+		if p != callerPrincipal {
+			return true
+		}
+	}
+	return false
+}
+
+func parseListSessionsSpec(stage *types.Document, callerPrincipal string) (listSessionsSpec, error) {
+	stageName := stage.Command()
+	value := must.NotFail(stage.Get(stageName))
+	options, ok := value.(*types.Document)
+	if !ok {
+		return listSessionsSpec{}, handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrTypeMismatch,
+			fmt.Sprintf("%s options must be specified in an object, but found: %s", stageName, handlerparams.AliasFromType(value)),
+		)
+	}
+
+	var spec listSessionsSpec
+	if v, err := options.Get("allUsers"); err == nil {
+		spec.allUsers, _ = v.(bool)
+	}
+
+	if v, err := options.Get("users"); err == nil {
+		users, ok := v.(*types.Array)
+		if !ok {
+			return listSessionsSpec{}, handlererrors.NewCommandErrorMsg(handlererrors.ErrTypeMismatch, stageName+" users must be an array")
+		}
+		for i := 0; i < users.Len(); i++ {
+			user, _ := must.NotFail(users.Get(i)).(*types.Document)
+			var name, db string
+			var nameOK, dbOK bool
+			if user != nil {
+				nameValue, _ := user.Get("user")
+				dbValue, _ := user.Get("db")
+				name, nameOK = nameValue.(string)
+				db, dbOK = dbValue.(string)
+			}
+			if !nameOK || !dbOK {
+				return listSessionsSpec{}, handlererrors.NewCommandErrorMsg(
+					handlererrors.ErrTypeMismatch,
+					stageName+" users entries must be objects with string user and db fields",
+				)
+			}
+			spec.principals = append(spec.principals, name+"@"+db)
+		}
+	}
+
+	if spec.allUsers && len(spec.principals) > 0 {
+		return listSessionsSpec{}, handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrBadValue,
+			stageName+" may not specify {allUsers:true} and {users:[...]} at the same time",
+		)
+	}
+	if !spec.allUsers && len(spec.principals) == 0 {
+		spec.principals = []string{callerPrincipal}
+	}
+	return spec, nil
 }
 
 // aggregateDocuments runs a database-level pipeline whose source stage is
