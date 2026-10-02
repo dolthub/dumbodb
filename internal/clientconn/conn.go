@@ -141,7 +141,7 @@ func (c *conn) run(ctx context.Context) (err error) {
 		cancel(lazyerrors.Errorf("run exits: %w", err))
 	}()
 	done := make(chan struct{})
-	go func() {
+	go func(ctx context.Context) {
 		select {
 		case <-done:
 		case <-ctx.Done():
@@ -149,7 +149,7 @@ func (c *conn) run(ctx context.Context) (err error) {
 				c.l.WarnContext(ctx, fmt.Sprintf("Failed to set deadline: %s", e))
 			}
 		}
-	}()
+	}(ctx)
 	defer close(done)
 
 	connInfo := conninfo.New()

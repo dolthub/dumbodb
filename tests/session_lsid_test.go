@@ -17,13 +17,17 @@ package tests
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"math/rand/v2"
 	"sync"
 	"testing"
 
+	"github.com/FerretDB/wire"
+	"github.com/FerretDB/wire/wirebson"
+	"github.com/FerretDB/wire/wireclient"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/v2/bson"
-	"go.mongodb.org/mongo-driver/v2/mongo"
 )
 
 // One lsid on several connections must keep working. MongoDB drivers pool
@@ -31,10 +35,11 @@ import (
 // handed to whichever connection needs it and one lsid reaches many
 // connections over the life of a client. That is ordinary, not a takeover.
 //
-// Driving one explicit session from several goroutines is the stand-in: it
-// puts one lsid on several connections at once, which is the same server-side
-// condition a pooled implicit session produces over time, and it produces it
-// reliably instead of waiting on pool timing.
+// Sending one lsid from several raw connections at once is the stand-in: it
+// is the same server-side condition a pooled implicit session produces over
+// time, and it produces it reliably instead of waiting on pool timing. Raw
+// connections are used because a driver Session is not safe for concurrent
+// use and the driver has no way to send a caller-chosen lsid.
 //
 // Before the fix this failed 302 of 320 operations with code 225, "session was
 // taken over by a newer connection on this lsid".
@@ -44,30 +49,25 @@ func TestSession_OneLsidAcrossManyConnections(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
 	dbName := fmt.Sprintf("lsid_%d", rand.Int64N(1_000_000))
+	lsidUUID := uuid.New()
+	lsid := wirebson.MustDocument("id", wirebson.Binary{B: lsidUUID[:], Subtype: wirebson.BinaryUUID})
 
-	client := siClient(t, env)
-	sess, err := client.StartSession()
-	require.NoError(t, err)
-	defer sess.EndSession(ctx)
-
-	coll := client.Database(dbName).Collection("docs")
 	failures := make([][]error, workers)
 
 	var writers sync.WaitGroup
 	for w := 0; w < workers; w++ {
+		conn, err := wireclient.Connect(ctx, fmt.Sprintf("mongodb://127.0.0.1:%d/", env.Port), slog.New(slog.DiscardHandler))
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = conn.Close() })
+
 		writers.Add(1)
 		go func(w int) {
 			defer writers.Done()
-			_ = mongo.WithSession(ctx, sess, func(sc context.Context) error {
-				for i := 0; i < perWorker; i++ {
-					if _, err := coll.InsertOne(sc, bson.D{
-						{Key: "_id", Value: w*1000 + i},
-					}); err != nil {
-						failures[w] = append(failures[w], err)
-					}
+			for i := 0; i < perWorker; i++ {
+				if err := insertWithLSID(ctx, conn, dbName, lsid, int32(w*1000+i)); err != nil {
+					failures[w] = append(failures[w], err)
 				}
-				return nil
-			})
+			}
 		}(w)
 	}
 	writers.Wait()
@@ -85,7 +85,31 @@ func TestSession_OneLsidAcrossManyConnections(t *testing.T) {
 	require.Zero(t, failed,
 		"%d of %d writes failed on a shared lsid; first: %v", failed, workers*perWorker, first)
 
-	count, err := coll.CountDocuments(ctx, bson.D{})
+	count, err := siClient(t, env).Database(dbName).Collection("docs").CountDocuments(ctx, bson.D{})
 	require.NoError(t, err)
 	require.EqualValues(t, workers*perWorker, count, "every acknowledged insert must be stored")
+}
+
+func insertWithLSID(ctx context.Context, conn *wireclient.Conn, dbName string, lsid *wirebson.Document, id int32) error {
+	_, resBody, err := conn.Request(ctx, wire.MustOpMsg(
+		"insert", "docs",
+		"documents", wirebson.MustArray(wirebson.MustDocument("_id", id)),
+		"lsid", lsid,
+		"$db", dbName,
+	))
+	if err != nil {
+		return err
+	}
+	raw, err := resBody.(*wire.OpMsg).RawDocument()
+	if err != nil {
+		return err
+	}
+	res, err := raw.Decode()
+	if err != nil {
+		return err
+	}
+	if ok, _ := res.Get("ok").(float64); ok != 1 || res.Get("writeErrors") != nil {
+		return fmt.Errorf("insert %d failed: %v", id, res)
+	}
+	return nil
 }
