@@ -120,6 +120,10 @@ func (h *Handler) authorize(ctx context.Context, msg *wire.OpMsg) error {
 		if pipeline, stage := listSessionsPipeline(msg); stage != nil {
 			return h.authorizeListSessions(ctx, msg, db, collection, pipeline, stage)
 		}
+		if err := h.authorizeByCommandPrivileges(ctx, msg, command, db, collection); err != nil {
+			return err
+		}
+		return h.authorizeAggregationStages(ctx, msg, db)
 	}
 
 	return h.authorizeByCommandPrivileges(ctx, msg, command, db, collection)
@@ -256,10 +260,167 @@ func (h *Handler) authorizeListSessions(ctx context.Context, msg *wire.OpMsg, db
 			continue
 		}
 		if _, ok := readOnlyFollowUpStages[next.Command()]; !ok {
-			return h.authorizeByCommandPrivileges(ctx, msg, "aggregate", db, collection)
+			if err := h.authorizeByCommandPrivileges(ctx, msg, "aggregate", db, collection); err != nil {
+				return err
+			}
+			return h.authorizeAggregationStages(ctx, msg, db)
 		}
 	}
 	return nil
+}
+
+// stagePrivilege is one privilege an aggregation stage requires.
+type stagePrivilege struct {
+	resource authz.Resource
+	action   authz.Action
+}
+
+// authorizeAggregationStages checks the privileges an aggregation's stages
+// require beyond reading its source collection.
+func (h *Handler) authorizeAggregationStages(ctx context.Context, msg *wire.OpMsg, db string) error {
+	document, err := opMsgDocument(msg)
+	if err != nil {
+		return err
+	}
+	pipeline, _ := common.GetOptionalParam[*types.Array](document, "pipeline", nil)
+	bypass, _ := document.Get("bypassDocumentValidation")
+	required := pipelineStagePrivileges(pipeline, db, bypass == true)
+	if len(required) == 0 {
+		return nil
+	}
+
+	privs, err := h.effectivePrivileges(ctx)
+	if err != nil {
+		return err
+	}
+	for _, r := range required {
+		if !privs.Authorized(r.action, r.resource) {
+			return unauthorizedCommandError(msg, "aggregate", db)
+		}
+	}
+	return nil
+}
+
+// pipelineStagePrivileges follows MongoDB 8.0: $out needs insert and remove on
+// its target; $merge needs insert when unmatched documents are inserted and
+// update unless a match fails; $lookup, $graphLookup, and $unionWith need find
+// on the foreign collection unless their sub-pipeline supplies its own source
+// ($documents). Sub-pipelines, including $facet's, add their own stages'
+// requirements.
+func pipelineStagePrivileges(pipeline *types.Array, db string, bypassValidation bool) []stagePrivilege {
+	if pipeline == nil {
+		return nil
+	}
+
+	var required []stagePrivilege
+	requireOn := func(targetDB, coll string, actions ...authz.Action) {
+		if bypassValidation {
+			actions = append(actions, authz.ActionBypassDocumentValidation)
+		}
+		for _, a := range actions {
+			required = append(required, stagePrivilege{authz.CollectionResource(targetDB, coll), a})
+		}
+	}
+	readFrom := func(coll string, sub *types.Array) {
+		if !startsWithOwnSource(sub) {
+			required = append(required, stagePrivilege{authz.CollectionResource(db, coll), authz.ActionFind})
+		}
+		required = append(required, pipelineStagePrivileges(sub, db, bypassValidation)...)
+	}
+
+	for i := 0; i < pipeline.Len(); i++ {
+		stage, _ := must.NotFail(pipeline.Get(i)).(*types.Document)
+		if stage == nil || stage.Len() == 0 {
+			continue
+		}
+		spec := must.NotFail(stage.Get(stage.Command()))
+
+		switch stage.Command() {
+		case "$out":
+			targetDB, coll := stageTarget(spec, "db", "coll", db)
+			requireOn(targetDB, coll, authz.ActionInsert, authz.ActionRemove)
+		case "$merge":
+			specDoc, _ := spec.(*types.Document)
+			into := spec
+			whenMatched, whenNotMatched := any("merge"), any("insert")
+			if specDoc != nil {
+				into, _ = specDoc.Get("into")
+				if v, err := specDoc.Get("whenMatched"); err == nil {
+					whenMatched = v
+				}
+				if v, err := specDoc.Get("whenNotMatched"); err == nil {
+					whenNotMatched = v
+				}
+			}
+			targetDB, coll := stageTarget(into, "db", "coll", db)
+			var actions []authz.Action
+			if whenNotMatched == "insert" {
+				actions = append(actions, authz.ActionInsert)
+			}
+			if whenMatched != "fail" {
+				actions = append(actions, authz.ActionUpdate)
+			}
+			requireOn(targetDB, coll, actions...)
+		case "$lookup", "$graphLookup":
+			specDoc, _ := spec.(*types.Document)
+			if specDoc == nil {
+				continue
+			}
+			from, _ := specDoc.Get("from")
+			fromName, _ := from.(string)
+			sub, _ := specDoc.Get("pipeline")
+			subArr, _ := sub.(*types.Array)
+			readFrom(fromName, subArr)
+		case "$unionWith":
+			_, coll := stageTarget(spec, "", "coll", db)
+			var subArr *types.Array
+			if specDoc, ok := spec.(*types.Document); ok {
+				sub, _ := specDoc.Get("pipeline")
+				subArr, _ = sub.(*types.Array)
+			}
+			readFrom(coll, subArr)
+		case "$facet":
+			facets, _ := spec.(*types.Document)
+			if facets == nil {
+				continue
+			}
+			for _, key := range facets.Keys() {
+				sub, _ := must.NotFail(facets.Get(key)).(*types.Array)
+				required = append(required, pipelineStagePrivileges(sub, db, bypassValidation)...)
+			}
+		}
+	}
+	return required
+}
+
+// stageTarget reads a stage target given as a collection name or as a document
+// with collection (and, when dbField is set, database) fields.
+func stageTarget(spec any, dbField, collField, defaultDB string) (string, string) {
+	switch v := spec.(type) {
+	case string:
+		return defaultDB, v
+	case *types.Document:
+		targetDB := defaultDB
+		if dbField != "" {
+			if d, _ := v.Get(dbField); d != nil {
+				if name, ok := d.(string); ok {
+					targetDB = name
+				}
+			}
+		}
+		coll, _ := v.Get(collField)
+		collName, _ := coll.(string)
+		return targetDB, collName
+	}
+	return defaultDB, ""
+}
+
+func startsWithOwnSource(pipeline *types.Array) bool {
+	if pipeline == nil || pipeline.Len() == 0 {
+		return false
+	}
+	first, _ := must.NotFail(pipeline.Get(0)).(*types.Document)
+	return first != nil && first.Len() > 0 && first.Command() == "$documents"
 }
 
 // grantCheck reports whether privs allow one part of a user- or
