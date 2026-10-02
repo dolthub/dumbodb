@@ -151,8 +151,11 @@ func NewLookupStage(stage *types.Document, fetcher CollectionFetcher) (aggregati
 
 			l.letVars = letDoc
 		}
-	} else if hasLocalField {
-		// Simple equality join form.
+	}
+
+	// localField/foreignField select the foreign documents; with a pipeline
+	// (the concise form) the pipeline then runs on those matches only.
+	if hasLocalField {
 		localFieldVal, lErr := specDoc.Get("localField")
 		if lErr != nil {
 			return nil, lazyerrors.Error(lErr)
@@ -187,7 +190,9 @@ func NewLookupStage(stage *types.Document, fetcher CollectionFetcher) (aggregati
 
 		l.localField = localField
 		l.foreignField = foreignField
-	} else {
+	}
+
+	if !hasPipeline && !hasLocalField {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrFailedToParse,
 			"$lookup requires either 'localField'/'foreignField' or 'pipeline'",
@@ -196,6 +201,20 @@ func NewLookupStage(stage *types.Document, fetcher CollectionFetcher) (aggregati
 	}
 
 	return l, nil
+}
+
+// equalityMatches returns the foreign documents whose foreignField matches
+// doc's localField under MongoDB's equality join semantics.
+func (l *lookup) equalityMatches(doc *types.Document, fromDocs []*types.Document) []*types.Document {
+	localVal := getFieldValue(doc, l.localField)
+
+	matched := make([]*types.Document, 0)
+	for _, fromDoc := range fromDocs {
+		if lookupValuesMatch(localVal, getFieldValue(fromDoc, l.foreignField)) {
+			matched = append(matched, fromDoc)
+		}
+	}
+	return matched
 }
 
 func (l *lookup) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
@@ -215,7 +234,12 @@ func (l *lookup) Process(ctx context.Context, iter types.DocumentsIterator, clos
 	if l.pipeline != nil {
 		// Pipeline form: run the pipeline against the from collection for each input doc.
 		for _, doc := range docs {
-			matched, pErr := l.runPipeline(ctx, fromDocs, doc)
+			candidates := fromDocs
+			if l.localField != "" {
+				candidates = l.equalityMatches(doc, fromDocs)
+			}
+
+			matched, pErr := l.runPipeline(ctx, candidates, doc)
 			if pErr != nil {
 				return nil, pErr
 			}
@@ -236,16 +260,9 @@ func (l *lookup) Process(ctx context.Context, iter types.DocumentsIterator, clos
 		// localField (treated as a singleton when scalar) equals any element of
 		// foreignField (treated as a singleton when scalar).
 		for _, doc := range docs {
-			localVal := getFieldValue(doc, l.localField)
-
-			matched := make([]*types.Document, 0)
-
-			for _, fromDoc := range fromDocs {
-				foreignVal := getFieldValue(fromDoc, l.foreignField)
-
-				if lookupValuesMatch(localVal, foreignVal) {
-					matched = append(matched, fromDoc.DeepCopy())
-				}
+			matched := l.equalityMatches(doc, fromDocs)
+			for i, m := range matched {
+				matched[i] = m.DeepCopy()
 			}
 
 			newDoc := doc.DeepCopy()
