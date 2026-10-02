@@ -260,22 +260,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 
 		switch d.Command() {
 		case "$lookup", "$graphLookup":
-			// $lookup and $graphLookup require database access to fetch the "from" collection.
-			fetcher := func(ctx context.Context, collName string) ([]*types.Document, error) {
-				fromColl, collErr := db.Collection(collName)
-				if collErr != nil {
-					return nil, collErr
-				}
-
-				qRes, qErr := fromColl.Query(ctx, new(backends.QueryParams))
-				if qErr != nil {
-					return nil, qErr
-				}
-
-				defer qRes.Iter.Close()
-
-				return iterator.ConsumeValues(qRes.Iter)
-			}
+			fetcher := foreignCollectionFetcher(db)
 
 			if d.Command() == "$graphLookup" {
 				s, err = stages.NewGraphLookupStage(d, fetcher)

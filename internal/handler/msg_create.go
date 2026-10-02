@@ -337,6 +337,9 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		if verr := validateViewChainAcyclic(connCtx, db, collectionName, params.ViewOn); verr != nil {
 			return nil, verr
 		}
+		if verr := validateViewDependenciesAcyclic(connCtx, db, collectionName, params.ViewOn, params.ViewPipeline, "create"); verr != nil {
+			return nil, verr
+		}
 	}
 
 	err = db.CreateCollection(connCtx, &params)
