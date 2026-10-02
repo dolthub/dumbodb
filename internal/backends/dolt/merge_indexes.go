@@ -28,6 +28,7 @@ import (
 	"github.com/dolthub/dolt/go/store/prolly"
 
 	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/collation"
 	idxpkg "github.com/dolthub/dumbodb/internal/index"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
@@ -54,7 +55,10 @@ func indexSetFromAM(ctx context.Context, state *dbState, am prolly.AddressMap) (
 // indexSpecEqual compares definitions only: content (map root) and the
 // sticky Lossy/Multikey flags never count as definition changes.
 func indexSpecEqual(a, b backends.IndexInfo) bool {
-	if a.Name != b.Name || a.Unique != b.Unique || a.Sparse != b.Sparse {
+	if a.Name != b.Name || a.Unique != b.Unique || a.Sparse != b.Sparse || a.Hidden != b.Hidden {
+		return false
+	}
+	if collation.Parse(a.Collation).Identity() != collation.Parse(b.Collation).Identity() {
 		return false
 	}
 	if len(a.Key) != len(b.Key) {

@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
@@ -477,4 +478,76 @@ func TestResolvedMergeCommitIndexConsistency(t *testing.T) {
 	continueMerge(t, b, "testdb", "main")
 
 	indexConsistentWithScan(t, ctx, coll, "field", []string{"base", "ours", "theirs", "custom"})
+}
+
+// Collation and hidden are part of an index definition: redefining an index
+// with either on one branch beats the untouched other side, and the winner's
+// keys are built under its own collation.
+func TestIndexRedefinitionByCollationOrHiddenWinsMerge(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	enS2 := mustDoc(t, "locale", "en", "strength", int32(2))
+
+	for name, redefined := range map[string]backends.IndexInfo{
+		"collation": {Name: "by_field", Key: []backends.IndexKeyPair{{Field: "field"}}, Collation: enS2},
+		"hidden":    {Name: "by_field", Key: []backends.IndexKeyPair{{Field: "field"}}, Hidden: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			b := newTestBackend(t)
+			insertDoc(t, b, "testdb", "items", mustDoc(t, "_id", int32(1), "field", "Apple"))
+			createIndex(t, ctx, collAt(t, b, "testdb", "main", "items"), "by_field", "field")
+			commitDB(t, b, "testdb", "base")
+			branchFrom(t, b, "testdb", "main", "feat")
+
+			mainColl := collAt(t, b, "testdb", "main", "items")
+			if _, err := mainColl.DropIndexes(ctx, &backends.DropIndexesParams{Indexes: []string{"by_field"}}); err != nil {
+				t.Fatalf("DropIndexes: %v", err)
+			}
+			if _, err := mainColl.CreateIndexes(ctx, &backends.CreateIndexesParams{Indexes: []backends.IndexInfo{redefined}}); err != nil {
+				t.Fatalf("CreateIndexes: %v", err)
+			}
+			commitBranch(t, b, "testdb", "main", "main: redefine by_field")
+
+			insertOne(t, ctx, collAt(t, b, "testdb", "feat", "items"), mustDoc(t, "_id", int32(2), "field", "APPLE"))
+			commitBranch(t, b, "testdb", "feat", "feat: APPLE")
+
+			mergeBranches(t, b, "testdb", "main", "feat")
+
+			merged := collAt(t, b, "testdb", "main", "items")
+			res, err := merged.ListIndexes(ctx, nil)
+			if err != nil {
+				t.Fatalf("ListIndexes: %v", err)
+			}
+			var got *backends.IndexInfo
+			for i := range res.Indexes {
+				if res.Indexes[i].Name == "by_field" {
+					got = &res.Indexes[i]
+				}
+			}
+			if got == nil {
+				t.Fatalf("by_field missing after merge")
+			}
+			if got.Hidden != redefined.Hidden || !sameIndexCollation(got.Collation, redefined.Collation) {
+				t.Fatalf("redefined index did not win: hidden=%v collation=%v", got.Hidden, got.Collation)
+			}
+
+			if redefined.Collation != nil {
+				docs := drainQuery(t, ctx, merged, &backends.QueryParams{
+					Filter:    mustDoc(t, "field", "apple"),
+					Collated:  true,
+					Collation: redefined.Collation,
+				})
+				ids := idsInDocs(t, docs)
+				sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+				if !reflect.DeepEqual(ids, []int32{1, 2}) {
+					t.Errorf("collated lookup after merge = %v, want [1 2]: winner keys not built under its collation", ids)
+				}
+			}
+		})
+	}
+}
+
+func sameIndexCollation(a, b *types.Document) bool {
+	return collation.Parse(a).Identity() == collation.Parse(b).Identity()
 }
