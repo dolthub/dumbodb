@@ -234,7 +234,7 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 			docsIndexes = append(docsIndexes, i)
 		}
 
-		if _, err = c.InsertAll(connCtx, &backends.InsertAllParams{Docs: docs, SkipDurableSync: params.SkipDurableSync}); err == nil {
+		if _, err = c.InsertAll(connCtx, &backends.InsertAllParams{Docs: docs}); err == nil {
 			inserted += int32(len(docs))
 
 			if params.Ordered && len(writeErrors) > 0 {
@@ -247,8 +247,7 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		// insert doc one by one upon failing on batch insertion
 		for j, doc := range docs {
 			if _, err = c.InsertAll(connCtx, &backends.InsertAllParams{
-				Docs:            []*types.Document{doc},
-				SkipDurableSync: params.SkipDurableSync,
+				Docs: []*types.Document{doc},
 			}); err == nil {
 				inserted++
 

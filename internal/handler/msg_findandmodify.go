@@ -198,7 +198,7 @@ func (h *Handler) findAndModifyDocument(ctx context.Context, params *common.Find
 		}
 
 		if doc != nil {
-			if _, err = c.DeleteAll(ctx, &backends.DeleteAllParams{IDs: []any{must.NotFail(doc.Get("_id"))}, SkipDurableSync: params.SkipDurableSync}); err != nil {
+			if _, err = c.DeleteAll(ctx, &backends.DeleteAllParams{IDs: []any{must.NotFail(doc.Get("_id"))}}); err != nil {
 				return nil, lazyerrors.Error(err)
 			}
 			result.modified = 1
@@ -224,7 +224,7 @@ func (h *Handler) findAndModifyDocument(ctx context.Context, params *common.Find
 		ValidationAction:   valAction,
 	}
 
-	updateRes, err := common.UpdateDocument(ctx, c, "findAndModify", iter, update, params.SkipDurableSync)
+	updateRes, err := common.UpdateDocument(ctx, c, "findAndModify", iter, update)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
 	}

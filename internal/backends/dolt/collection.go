@@ -1777,11 +1777,6 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 		return nil, err
 	}
 
-	// autoCommit=true creates a dolt commit on every write, which already
-	// triggers its own NBS journal fsync  -- deferring the working-set update but
-	// still committing synchronously would leave history and working set
-	// inconsistent, so we only honor SkipDurableSync when autoCommit is off.
-	//
 	// The resolver reads per-branch index state from disk, so the resulting AM
 	// reflects only this branch's writes -- no cross-branch leakage.
 	infos, idxMaps, err := resolveBranchIndexState(ctx, c, state)
@@ -1797,14 +1792,13 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 		return nil, fmt.Errorf("building index AM: %w", err)
 	}
 
-	skipSync := params.SkipDurableSync && !c.db.backend.autoCommit
 	dtblHash, err := state.dtblHashForCollection(ctx, c.name, newMap, newIdxAM, hash.Hash{})
 	if err != nil {
 		return nil, err
 	}
-	if err := state.updateAddressMapWithSync(ctx, c.db.rootish, fmt.Sprintf("auto: insert %d docs into %s", len(params.Docs), c.name), func(ed prolly.AddressMapEditor) error {
+	if err := state.updateAddressMap(ctx, c.db.rootish, fmt.Sprintf("auto: insert %d docs into %s", len(params.Docs), c.name), func(ed prolly.AddressMapEditor) error {
 		return ed.Update(ctx, c.name, dtblHash)
-	}, skipSync); err != nil {
+	}); err != nil {
 		return nil, err
 	}
 
@@ -1906,9 +1900,9 @@ func (c *collection) BulkLoadInitialSync(ctx context.Context, documents []*types
 	if err != nil {
 		return err
 	}
-	return state.updateAddressMapWithSync(ctx, c.db.rootish, fmt.Sprintf("initial sync: load %d docs into %s", len(documents), c.name), func(editor prolly.AddressMapEditor) error {
+	return state.updateAddressMap(ctx, c.db.rootish, fmt.Sprintf("initial sync: load %d docs into %s", len(documents), c.name), func(editor prolly.AddressMapEditor) error {
 		return editor.Update(ctx, c.name, dtblHash)
-	}, true)
+	})
 }
 
 func existsID(ctx context.Context, m prolly.Map, h [20]byte) (bool, error) {
@@ -2092,14 +2086,13 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 		return nil, fmt.Errorf("building index AM: %w", err)
 	}
 
-	skipSync := params.SkipDurableSync && !c.db.backend.autoCommit
 	dtblHash, err := state.dtblHashForCollection(ctx, c.name, newMap, curIdxAM, hash.Hash{})
 	if err != nil {
 		return nil, err
 	}
-	if err := state.updateAddressMapWithSync(ctx, c.db.rootish, fmt.Sprintf("auto: update %s", c.name), func(ed prolly.AddressMapEditor) error {
+	if err := state.updateAddressMap(ctx, c.db.rootish, fmt.Sprintf("auto: update %s", c.name), func(ed prolly.AddressMapEditor) error {
 		return ed.Update(ctx, c.name, dtblHash)
-	}, skipSync); err != nil {
+	}); err != nil {
 		return nil, err
 	}
 
@@ -2253,14 +2246,13 @@ func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllPa
 		return nil, fmt.Errorf("building index AM: %w", err)
 	}
 
-	skipSync := params.SkipDurableSync && !c.db.backend.autoCommit
 	dtblHash, err := state.dtblHashForCollection(ctx, c.name, newMap, curIdxAM, hash.Hash{})
 	if err != nil {
 		return nil, err
 	}
-	if err := state.updateAddressMapWithSync(ctx, c.db.rootish, fmt.Sprintf("auto: delete from %s", c.name), func(ed prolly.AddressMapEditor) error {
+	if err := state.updateAddressMap(ctx, c.db.rootish, fmt.Sprintf("auto: delete from %s", c.name), func(ed prolly.AddressMapEditor) error {
 		return ed.Update(ctx, c.name, dtblHash)
-	}, skipSync); err != nil {
+	}); err != nil {
 		return nil, err
 	}
 
