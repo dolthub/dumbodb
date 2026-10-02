@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/stages"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
@@ -36,8 +37,9 @@ const maxViewDepth = 20
 // buildViewPipelineStages compiles a view's pipeline into executable stages
 // ($lookup/$graphLookup get a collection fetcher; the rest go through
 // stages.NewStage) and also returns the raw stage documents, which the pushdown
-// analysis needs in their original form.
-func buildViewPipelineStages(db backends.Database, viewPipeline *types.Array) ([]aggregations.Stage, []any, error) {
+// analysis needs in their original form. A non-nil cmp is the view's collation;
+// $match and $sort compare strings under it.
+func buildViewPipelineStages(db backends.Database, viewPipeline *types.Array, cmp *collation.Comparator) ([]aggregations.Stage, []any, error) {
 	if viewPipeline == nil || viewPipeline.Len() == 0 {
 		return nil, nil, nil
 	}
@@ -45,7 +47,7 @@ func buildViewPipelineStages(db backends.Database, viewPipeline *types.Array) ([
 	stageDocs := must.NotFail(iterator.ConsumeValues(viewPipeline.Iterator()))
 	result := make([]aggregations.Stage, 0, len(stageDocs))
 
-	for _, v := range stageDocs {
+	for i, v := range stageDocs {
 		vd, ok := v.(*types.Document)
 		if !ok {
 			return nil, nil, lazyerrors.Errorf("view pipeline stage is not a document: %T", v)
@@ -77,6 +79,10 @@ func buildViewPipelineStages(db backends.Database, viewPipeline *types.Array) ([
 			} else {
 				vs, err = stages.NewLookupStage(vd, fetcher)
 			}
+		case "$match":
+			vs, err = stages.NewMatchStage(vd, cmp)
+		case "$sort":
+			vs, err = stages.NewSortStage(vd, sortLimitBound(stageDocs, i), cmp)
 		default:
 			vs, err = stages.NewStage(vd)
 		}
@@ -89,6 +95,18 @@ func buildViewPipelineStages(db backends.Database, viewPipeline *types.Array) ([
 	}
 
 	return result, stageDocs, nil
+}
+
+// viewReadCollation returns the collation a read on a view runs under: the
+// view's own. MongoDB rejects an operation collation that differs from it.
+func viewReadCollation(opCollation, viewCollation *types.Document) (*types.Document, error) {
+	if opCollation != nil && !sameCollation(opCollation, viewCollation) {
+		return nil, handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrOptionNotSupportedOnView,
+			"Cannot override a view's default collation",
+		)
+	}
+	return viewCollation, nil
 }
 
 // lookupCollectionInfo returns the CollectionInfo for name, or nil if no such
@@ -109,8 +127,8 @@ func lookupCollectionInfo(ctx context.Context, db backends.Database, name string
 // stages and raw stage documents in resolved order (inner views prepended).
 // viewName seeds cycle detection; enforces GraphContainsCycle and the maximum
 // nesting depth (ViewDepthLimitExceeded), matching MongoDB.
-func resolveViewChain(ctx context.Context, db backends.Database, viewName, viewOn string, viewPipeline *types.Array) (string, []aggregations.Stage, []any, error) {
-	viewStages, rawStages, err := buildViewPipelineStages(db, viewPipeline)
+func resolveViewChain(ctx context.Context, db backends.Database, viewName, viewOn string, viewPipeline *types.Array, cmp *collation.Comparator) (string, []aggregations.Stage, []any, error) {
+	viewStages, rawStages, err := buildViewPipelineStages(db, viewPipeline, cmp)
 	if err != nil {
 		return "", nil, nil, err
 	}
@@ -145,7 +163,7 @@ func resolveViewChain(ctx context.Context, db backends.Database, viewName, viewO
 		}
 		seen[source] = struct{}{}
 
-		innerStages, innerRaw, err := buildViewPipelineStages(db, srcInfo.ViewPipeline)
+		innerStages, innerRaw, err := buildViewPipelineStages(db, srcInfo.ViewPipeline, cmp)
 		if err != nil {
 			return "", nil, nil, err
 		}
@@ -200,8 +218,8 @@ func validateViewChainAcyclic(ctx context.Context, db backends.Database, viewNam
 // Callers layer their own filter, sort, projection, skip and limit on top of
 // the returned iterator, matching how MongoDB resolves a read against a view to
 // an aggregation over its source.
-func viewSourceIterator(ctx context.Context, db backends.Database, viewName, viewOn string, viewPipeline *types.Array, closer *iterator.MultiCloser, disablePushdown, enableNestedPushdown bool) (types.DocumentsIterator, error) { //nolint:lll // for readability
-	baseCollection, viewStages, rawStages, err := resolveViewChain(ctx, db, viewName, viewOn, viewPipeline)
+func viewSourceIterator(ctx context.Context, db backends.Database, viewName, viewOn string, viewPipeline *types.Array, cmp *collation.Comparator, closer *iterator.MultiCloser, disablePushdown, enableNestedPushdown bool) (types.DocumentsIterator, error) { //nolint:lll // for readability
+	baseCollection, viewStages, rawStages, err := resolveViewChain(ctx, db, viewName, viewOn, viewPipeline, cmp)
 	if err != nil {
 		return nil, err
 	}
@@ -218,7 +236,7 @@ func viewSourceIterator(ctx context.Context, db backends.Database, viewName, vie
 	// direct-aggregate path exactly. The user's own find filter is layered on the
 	// returned iterator by the caller and is NOT pushed here (view stages may
 	// rename or compute fields, making that unsound).
-	qp := new(backends.QueryParams)
+	qp := &backends.QueryParams{Collated: cmp != nil}
 	filter, _ := aggregations.GetPushdownQuery(rawStages)
 
 	if !disablePushdown {

@@ -143,6 +143,16 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		return nil, lazyerrors.Error(err)
 	}
 
+	if target, lookupErr := lookupCollectionInfo(connCtx, db, cName); lookupErr == nil && target != nil && target.IsView {
+		opCollation, _ := document.Get("collation")
+		opCollationDoc, _ := opCollation.(*types.Document)
+		viewCollation, vErr := viewReadCollation(opCollationDoc, target.Collation)
+		if vErr != nil {
+			return nil, vErr
+		}
+		collCmp = collation.Parse(viewCollation).Comparator()
+	}
+
 	username := conninfo.Get(connCtx).Username()
 
 	v, _ := document.Get("maxTimeMS")
@@ -501,7 +511,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 
 		if cInfo.IsView {
 			view := cList.Collections[0]
-			baseCollection, viewStages, _, vErr := resolveViewChain(ctx, db, view.Name, view.ViewOn, view.ViewPipeline)
+			baseCollection, viewStages, _, vErr := resolveViewChain(ctx, db, view.Name, view.ViewOn, view.ViewPipeline, collCmp)
 			if vErr != nil {
 				closer.Close()
 				return nil, handleMaxTimeMSError(vErr, maxTimeMS, "aggregate")
