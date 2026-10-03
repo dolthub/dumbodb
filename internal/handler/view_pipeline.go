@@ -21,6 +21,7 @@ import (
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/collation"
+	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/stages"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
@@ -85,54 +86,95 @@ func buildViewPipelineStages(db backends.Database, viewPipeline *types.Array, cm
 
 type foreignViewDepthKey struct{}
 
-// foreignCollectionFetcher returns the documents of a $lookup/$graphLookup
-// "from" namespace. A view is resolved to its output under its own collation.
-// Nesting through foreign views is bounded by the view depth limit, so a view
-// that looks up from itself fails instead of recursing forever.
+// foreignCollectionFetcher reads the "from" namespace of $lookup/$graphLookup
+// from db.
 func foreignCollectionFetcher(db backends.Database) stages.CollectionFetcher {
-	return func(ctx context.Context, collName string) ([]*types.Document, error) {
-		info, err := lookupCollectionInfo(ctx, db, collName)
+	return &foreignFetcher{db: db}
+}
+
+type foreignFetcher struct {
+	db backends.Database
+}
+
+// Fetch returns the documents of collName that match filter, letting the
+// backend use an index for it. A view is resolved to its output under its own
+// collation. Nesting through foreign views is bounded by the view depth limit,
+// so a view that looks up from itself fails instead of recursing forever.
+func (f *foreignFetcher) Fetch(ctx context.Context, collName string, filter *types.Document) ([]*types.Document, error) {
+	db := f.db
+	info, err := lookupCollectionInfo(ctx, db, collName)
+	if err != nil {
+		return nil, err
+	}
+
+	if info != nil && info.IsView {
+		depth, _ := ctx.Value(foreignViewDepthKey{}).(int)
+		if depth >= maxViewDepth {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrViewDepthLimitExceeded,
+				fmt.Sprintf("View depth limit exceeded; maximum depth is %d", maxViewDepth),
+				"pipeline",
+			)
+		}
+		ctx = context.WithValue(ctx, foreignViewDepthKey{}, depth+1)
+
+		closer := iterator.NewMultiCloser()
+		defer closer.Close()
+
+		cmp := collation.Parse(info.Collation).Comparator()
+		iter, err := viewSourceIterator(ctx, db, info.Name, info.ViewOn, info.ViewPipeline, cmp, closer, false, false)
 		if err != nil {
 			return nil, err
 		}
-
-		if info != nil && info.IsView {
-			depth, _ := ctx.Value(foreignViewDepthKey{}).(int)
-			if depth >= maxViewDepth {
-				return nil, handlererrors.NewCommandErrorMsgWithArgument(
-					handlererrors.ErrViewDepthLimitExceeded,
-					fmt.Sprintf("View depth limit exceeded; maximum depth is %d", maxViewDepth),
-					"pipeline",
-				)
-			}
-			ctx = context.WithValue(ctx, foreignViewDepthKey{}, depth+1)
-
-			closer := iterator.NewMultiCloser()
-			defer closer.Close()
-
-			cmp := collation.Parse(info.Collation).Comparator()
-			iter, err := viewSourceIterator(ctx, db, info.Name, info.ViewOn, info.ViewPipeline, cmp, closer, false, false)
-			if err != nil {
-				return nil, err
-			}
-			defer iter.Close()
-
-			return iterator.ConsumeValues(iter)
+		defer iter.Close()
+		if filter != nil {
+			iter = common.FilterIterator(iter, closer, filter)
 		}
 
-		fromColl, err := db.Collection(collName)
-		if err != nil {
-			return nil, err
-		}
+		return iterator.ConsumeValues(iter)
+	}
 
-		qRes, err := fromColl.Query(ctx, new(backends.QueryParams))
-		if err != nil {
-			return nil, err
-		}
-		defer qRes.Iter.Close()
+	fromColl, err := db.Collection(collName)
+	if err != nil {
+		return nil, err
+	}
 
+	qRes, err := fromColl.Query(ctx, &backends.QueryParams{Filter: filter})
+	if err != nil {
+		return nil, err
+	}
+	defer qRes.Iter.Close()
+	if filter == nil {
 		return iterator.ConsumeValues(qRes.Iter)
 	}
+
+	closer := iterator.NewMultiCloser()
+	defer closer.Close()
+	return iterator.ConsumeValues(common.FilterIterator(qRes.Iter, closer, filter))
+}
+
+// IndexedField reports whether collName has a single-field index on field that
+// the backend can use for an equality or $in filter without a collation.
+func (f *foreignFetcher) IndexedField(ctx context.Context, collName, field string) bool {
+	info, err := lookupCollectionInfo(ctx, f.db, collName)
+	if err != nil || info == nil || info.IsView {
+		return false
+	}
+	coll, err := f.db.Collection(collName)
+	if err != nil {
+		return false
+	}
+	res, err := coll.ListIndexes(ctx, new(backends.ListIndexesParams))
+	if err != nil {
+		return false
+	}
+	for _, idx := range res.Indexes {
+		if len(idx.Key) == 1 && idx.Key[0].Field == field && !idx.Lossy &&
+			idx.PartialFilterExpression == nil && collation.Parse(idx.Collation).IsSimple() {
+			return true
+		}
+	}
+	return false
 }
 
 // viewReadCollation returns the collation a read on a view runs under: the

@@ -195,7 +195,7 @@ func (gl *graphLookup) Process(ctx context.Context, iter types.DocumentsIterator
 		return nil, lazyerrors.Error(err)
 	}
 
-	fromDocs, err := gl.fetcher(ctx, gl.from)
+	fromDocs, err := gl.fetcher.Fetch(ctx, gl.from, nil)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
 	}

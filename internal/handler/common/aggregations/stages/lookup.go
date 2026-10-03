@@ -18,18 +18,79 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
+	"time"
 
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// CollectionFetcher is a function that retrieves all documents from a named collection.
-// It is used by the $lookup stage to access the "from" collection.
-type CollectionFetcher func(ctx context.Context, collectionName string) ([]*types.Document, error)
+// CollectionFetcher reads the foreign side of $lookup and $graphLookup.
+type CollectionFetcher interface {
+	// Fetch returns the documents of collectionName that match filter (all of
+	// them when filter is nil). It may return extra documents; callers apply
+	// their own matching, and must not modify the returned documents.
+	Fetch(ctx context.Context, collectionName string, filter *types.Document) ([]*types.Document, error)
+
+	// IndexedField reports whether an equality filter on field of
+	// collectionName can be served by an index.
+	IndexedField(ctx context.Context, collectionName, field string) bool
+}
+
+// FetcherFunc adapts a function to a CollectionFetcher that has no indexes.
+type FetcherFunc func(ctx context.Context, collectionName string, filter *types.Document) ([]*types.Document, error)
+
+func (f FetcherFunc) Fetch(ctx context.Context, collectionName string, filter *types.Document) ([]*types.Document, error) {
+	return f(ctx, collectionName, filter)
+}
+
+func (FetcherFunc) IndexedField(context.Context, string, string) bool { return false }
+
+// cachingFetcher remembers unfiltered fetches and index answers for the
+// duration of one stage, so a $lookup nested in a sub-pipeline does not reload
+// the same collection for every outer document.
+type cachingFetcher struct {
+	CollectionFetcher
+	all     map[string][]*types.Document
+	indexed map[string]bool
+}
+
+func withFetchCache(f CollectionFetcher) CollectionFetcher {
+	if c, ok := f.(*cachingFetcher); ok {
+		return c
+	}
+	return &cachingFetcher{CollectionFetcher: f, all: map[string][]*types.Document{}, indexed: map[string]bool{}}
+}
+
+func (c *cachingFetcher) Fetch(ctx context.Context, collectionName string, filter *types.Document) ([]*types.Document, error) {
+	if filter != nil {
+		return c.CollectionFetcher.Fetch(ctx, collectionName, filter)
+	}
+	if docs, ok := c.all[collectionName]; ok {
+		return docs, nil
+	}
+	docs, err := c.CollectionFetcher.Fetch(ctx, collectionName, nil)
+	if err != nil {
+		return nil, err
+	}
+	c.all[collectionName] = docs
+	return docs, nil
+}
+
+func (c *cachingFetcher) IndexedField(ctx context.Context, collectionName, field string) bool {
+	key := collectionName + "\x00" + field
+	indexed, ok := c.indexed[key]
+	if !ok {
+		indexed = c.CollectionFetcher.IndexedField(ctx, collectionName, field)
+		c.indexed[key] = indexed
+	}
+	return indexed
+}
 
 // lookup represents $lookup stage.
 //
@@ -223,10 +284,26 @@ func (l *lookup) Process(ctx context.Context, iter types.DocumentsIterator, clos
 		return nil, lazyerrors.Error(err)
 	}
 
-	// Fetch all documents from the "from" collection.
-	fromDocs, err := l.fetcher(ctx, l.from)
-	if err != nil {
-		return nil, lazyerrors.Error(err)
+	fetcher := withFetchCache(l.fetcher)
+
+	// With an index on the joined field, ask the backend for just the matching
+	// documents; without one, load the collection once and join in memory.
+	var fetchFilter *types.Document
+	if l.localField != "" && fetcher.IndexedField(ctx, l.from, l.foreignField) {
+		fetchFilter = equalityFetchFilter(docs, l.localField, l.foreignField)
+	}
+	perDocField := ""
+	if l.pipeline != nil && l.localField == "" {
+		if field := leadingMatchEqualityField(l.pipeline); field != "" && fetcher.IndexedField(ctx, l.from, field) {
+			perDocField = field
+		}
+	}
+
+	var fromDocs []*types.Document
+	if perDocField == "" {
+		if fromDocs, err = fetcher.Fetch(ctx, l.from, fetchFilter); err != nil {
+			return nil, lazyerrors.Error(err)
+		}
 	}
 
 	out := make([]*types.Document, 0, len(docs))
@@ -235,11 +312,16 @@ func (l *lookup) Process(ctx context.Context, iter types.DocumentsIterator, clos
 		// Pipeline form: run the pipeline against the from collection for each input doc.
 		for _, doc := range docs {
 			candidates := fromDocs
+			if perDocField != "" {
+				if candidates, err = l.perDocCandidates(ctx, fetcher, doc, perDocField); err != nil {
+					return nil, lazyerrors.Error(err)
+				}
+			}
 			if l.localField != "" {
-				candidates = l.equalityMatches(doc, fromDocs)
+				candidates = l.equalityMatches(doc, candidates)
 			}
 
-			matched, pErr := l.runPipeline(ctx, candidates, doc)
+			matched, pErr := l.runPipeline(ctx, fetcher, candidates, doc)
 			if pErr != nil {
 				return nil, pErr
 			}
@@ -286,32 +368,61 @@ func (l *lookup) Process(ctx context.Context, iter types.DocumentsIterator, clos
 // runPipeline runs the $lookup pipeline form against a set of documents.
 // It evaluates let variables from localDoc, substitutes them into the pipeline spec,
 // and executes each stage in sequence. Nested $lookup stages are supported.
-func (l *lookup) runPipeline(ctx context.Context, fromDocs []*types.Document, localDoc *types.Document) ([]*types.Document, error) {
-	// Compute variable bindings from let.
+// letBindings evaluates the let variables against localDoc.
+func (l *lookup) letBindings(localDoc *types.Document) (map[string]any, error) {
 	vars := map[string]any{}
-
-	if l.letVars != nil {
-		letIter := l.letVars.Iterator()
-		defer letIter.Close()
-
-		for {
-			k, v, err := letIter.Next()
-			if errors.Is(err, iterator.ErrIteratorDone) {
-				break
-			}
-
-			if err != nil {
-				return nil, lazyerrors.Error(err)
-			}
-
-			vars[k] = evaluateLetExpr(v, localDoc)
-		}
+	if l.letVars == nil {
+		return vars, nil
 	}
 
-	// Build the initial set of documents.
-	current := make([]*types.Document, len(fromDocs))
-	for i, d := range fromDocs {
-		current[i] = d.DeepCopy()
+	letIter := l.letVars.Iterator()
+	defer letIter.Close()
+
+	for {
+		k, v, err := letIter.Next()
+		if errors.Is(err, iterator.ErrIteratorDone) {
+			return vars, nil
+		}
+		if err != nil {
+			return nil, lazyerrors.Error(err)
+		}
+		vars[k] = evaluateLetExpr(v, localDoc)
+	}
+}
+
+// perDocCandidates fetches, for one input document, the foreign documents the
+// sub-pipeline's leading equality on field can match, falling back to the whole
+// collection when the compared value cannot be pushed down.
+func (l *lookup) perDocCandidates(ctx context.Context, fetcher CollectionFetcher, doc *types.Document, field string) ([]*types.Document, error) {
+	vars, err := l.letBindings(doc)
+	if err != nil {
+		return nil, err
+	}
+	first := must.NotFail(l.pipeline.Get(0)).(*types.Document)
+	value, ok := leadingMatchEqualityValue(substituteVarsInDoc(first, vars), field)
+	if !ok {
+		return fetcher.Fetch(ctx, l.from, nil)
+	}
+	return fetcher.Fetch(ctx, l.from, must.NotFail(types.NewDocument(field, value)))
+}
+
+func (l *lookup) runPipeline(ctx context.Context, fetcher CollectionFetcher, fromDocs []*types.Document, localDoc *types.Document) ([]*types.Document, error) {
+	vars, err := l.letBindings(localDoc)
+	if err != nil {
+		return nil, err
+	}
+
+	// fromDocs may be shared: run leading $match stages on them directly (they
+	// do not modify documents) and copy only the survivors.
+	current := fromDocs
+	copied := false
+	copyCurrent := func() {
+		copies := make([]*types.Document, len(current))
+		for i, d := range current {
+			copies[i] = d.DeepCopy()
+		}
+		current = copies
+		copied = true
 	}
 
 	// Execute each pipeline stage.
@@ -344,13 +455,17 @@ func (l *lookup) runPipeline(ctx context.Context, fromDocs []*types.Document, lo
 		var stage aggregations.Stage
 
 		if substituted.Command() == "$lookup" {
-			stage, err = NewLookupStage(substituted, l.fetcher)
+			stage, err = NewLookupStage(substituted, fetcher)
 		} else {
 			stage, err = NewStage(substituted)
 		}
 
 		if err != nil {
 			return nil, err
+		}
+
+		if !copied && substituted.Command() != "$match" {
+			copyCurrent()
 		}
 
 		// Run the stage against the current set of documents.
@@ -371,7 +486,87 @@ func (l *lookup) runPipeline(ctx context.Context, fromDocs []*types.Document, lo
 		}
 	}
 
+	if !copied {
+		copyCurrent()
+	}
 	return current, nil
+}
+
+// leadingMatchEqualityField returns the foreign field compared for equality by
+// a sub-pipeline that starts with {$match: {$expr: {$eq: ["$field", x]}}} (in
+// either operand order), or "" when the pipeline does not start that way.
+func leadingMatchEqualityField(pipeline *types.Array) string {
+	field, _, ok := leadingExprEquality(pipeline)
+	if !ok {
+		return ""
+	}
+	return field
+}
+
+// leadingMatchEqualityValue returns the value compared with field by the
+// already-substituted leading $match stage, if it is a scalar that an
+// equality filter on field matches the same way.
+func leadingMatchEqualityValue(substitutedMatch *types.Document, field string) (any, bool) {
+	gotField, value, ok := leadingExprEquality(must.NotFail(types.NewArray(substitutedMatch)))
+	if !ok || gotField != field {
+		return nil, false
+	}
+	switch v := value.(type) {
+	case string:
+		if strings.HasPrefix(v, "$") {
+			return nil, false
+		}
+	case int32, int64, bool, types.ObjectID, time.Time:
+	case float64:
+		if math.IsNaN(v) {
+			return nil, false
+		}
+	default:
+		return nil, false
+	}
+	return value, true
+}
+
+func leadingExprEquality(pipeline *types.Array) (field string, other any, ok bool) {
+	if pipeline == nil || pipeline.Len() == 0 {
+		return "", nil, false
+	}
+	stage, _ := must.NotFail(pipeline.Get(0)).(*types.Document)
+	if stage == nil || stage.Len() != 1 || stage.Command() != "$match" {
+		return "", nil, false
+	}
+	match, _ := must.NotFail(stage.Get("$match")).(*types.Document)
+	if match == nil || match.Len() != 1 || match.Command() != "$expr" {
+		return "", nil, false
+	}
+	expr, _ := must.NotFail(match.Get("$expr")).(*types.Document)
+	if expr == nil || expr.Len() != 1 || expr.Command() != "$eq" {
+		return "", nil, false
+	}
+	operands, _ := must.NotFail(expr.Get("$eq")).(*types.Array)
+	if operands == nil || operands.Len() != 2 {
+		return "", nil, false
+	}
+
+	isFieldPath := func(v any) (string, bool) {
+		s, isStr := v.(string)
+		if !isStr || !strings.HasPrefix(s, "$") || strings.HasPrefix(s, "$$") || len(s) < 2 {
+			return "", false
+		}
+		return s[1:], true
+	}
+	a, b := must.NotFail(operands.Get(0)), must.NotFail(operands.Get(1))
+	if f, isPath := isFieldPath(a); isPath {
+		if _, bothPaths := isFieldPath(b); !bothPaths {
+			return f, b, true
+		}
+	}
+	if f, isPath := isFieldPath(b); isPath {
+		if _, bothPaths := isFieldPath(a); !bothPaths {
+			return f, a, true
+		}
+	}
+	return "", nil, false
 }
 
 // evaluateLetExpr evaluates a let variable expression against a local document.
@@ -608,8 +803,55 @@ func valuesEqual(a, b any) bool {
 		return ok && av == bv
 	}
 
-	// Fallback: compare string representations.
-	return fmt.Sprintf("%v", a) == fmt.Sprintf("%v", b)
+	return types.Compare(a, b) == types.Equal
+}
+
+// equalityFetchFilter returns {foreignField: {$in: [...]}} over the scalar
+// localField values of docs, which selects every foreign document an equality
+// join can match. It returns nil (fetch everything) when a value is missing,
+// null, empty, or not a plain scalar, since $in would not match those the same
+// way.
+func equalityFetchFilter(docs []*types.Document, localField, foreignField string) *types.Document {
+	values := types.MakeArray(len(docs))
+	seen := make(map[string]struct{}, len(docs))
+	add := func(v any) bool {
+		switch v := v.(type) {
+		case string, int32, int64, bool, types.ObjectID, time.Time:
+		case float64:
+			if math.IsNaN(v) {
+				return false
+			}
+		default:
+			return false
+		}
+		key := fmt.Sprintf("%T|%v", v, v)
+		if _, dup := seen[key]; !dup {
+			seen[key] = struct{}{}
+			values.Append(v)
+		}
+		return true
+	}
+
+	for _, doc := range docs {
+		v := getFieldValue(doc, localField)
+		arr, isArr := v.(*types.Array)
+		if !isArr {
+			if !add(v) {
+				return nil
+			}
+			continue
+		}
+		if arr.Len() == 0 {
+			return nil
+		}
+		for i := 0; i < arr.Len(); i++ {
+			if !add(must.NotFail(arr.Get(i))) {
+				return nil
+			}
+		}
+	}
+
+	return must.NotFail(types.NewDocument(foreignField, must.NotFail(types.NewDocument("$in", values))))
 }
 
 var (

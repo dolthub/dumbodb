@@ -35,9 +35,9 @@ import (
 
 // makeFetcher builds a CollectionFetcher that returns docs for a named collection.
 func makeFetcher(collections map[string][]*types.Document) stages.CollectionFetcher {
-	return func(_ context.Context, name string) ([]*types.Document, error) {
+	return stages.FetcherFunc(func(_ context.Context, name string, _ *types.Document) ([]*types.Document, error) {
 		return collections[name], nil
-	}
+	})
 }
 
 // collectResults drains an iterator into a slice.

@@ -415,6 +415,9 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 		startKey     []byte
 		stopKey      []byte
 		usable       bool
+		// pointRanges, when set, replaces [startKey, stopKey) with one range
+		// per $in value.
+		pointRanges [][2][]byte
 	)
 
 	for _, k := range filter.Keys() {
@@ -434,6 +437,14 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 		v, err := filter.Get(k)
 		if err != nil {
 			continue
+		}
+		if queryCmp == nil && !entry.compound {
+			if ranges, ok := indexPointRangesForIn(v); ok {
+				chosenMapIdx = entry.mapIdx
+				pointRanges = ranges
+				usable = true
+				break
+			}
 		}
 		if queryCmp != nil {
 			v = collateFilterValue(v, queryCmp)
@@ -475,9 +486,29 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 	if primaryCount > 0 {
 		maxResults = int(primaryCount) / 2
 	}
-	primaryIDBytesList, exceeded, err := idxpkg.RangeLookupCapped(ctx, idxMap, startKey, stopKey, maxResults)
-	if err != nil {
-		return nil, false, err
+	var primaryIDBytesList [][]byte
+	exceeded := false
+	if pointRanges != nil {
+		for _, r := range pointRanges {
+			remaining := -1
+			if maxResults >= 0 {
+				remaining = maxResults - len(primaryIDBytesList)
+			}
+			ids, rangeExceeded, err := idxpkg.RangeLookupCapped(ctx, idxMap, r[0], r[1], remaining)
+			if err != nil {
+				return nil, false, err
+			}
+			primaryIDBytesList = append(primaryIDBytesList, ids...)
+			if rangeExceeded {
+				exceeded = true
+				break
+			}
+		}
+	} else {
+		primaryIDBytesList, exceeded, err = idxpkg.RangeLookupCapped(ctx, idxMap, startKey, stopKey, maxResults)
+		if err != nil {
+			return nil, false, err
+		}
 	}
 	if exceeded {
 		// Caller will fall through to the sequential primary scan, which is
@@ -515,6 +546,32 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 	}
 
 	return docs, true, nil
+}
+
+// indexPointRangesForIn returns one point range per value of a
+// {field: {$in: [...]}} clause. Like a bare equality, it declines values the
+// byte-level index cannot match faithfully (null, arrays, documents, regexes,
+// Decimal128), so those fall back to a scan.
+func indexPointRangesForIn(v any) ([][2][]byte, bool) {
+	opDoc, isOp := v.(*types.Document)
+	if !isOp || opDoc.Len() != 1 || opDoc.Keys()[0] != "$in" {
+		return nil, false
+	}
+	values, isArr := must.NotFail(opDoc.Get("$in")).(*types.Array)
+	if !isArr {
+		return nil, false
+	}
+
+	ranges := make([][2][]byte, 0, values.Len())
+	for i := 0; i < values.Len(); i++ {
+		value := must.NotFail(values.Get(i))
+		switch value.(type) {
+		case nil, types.NullType, *types.Array, *types.Document, types.Regex, types.Decimal128:
+			return nil, false
+		}
+		ranges = append(ranges, [2][]byte{idxpkg.LowerBoundInclusive(value), idxpkg.UpperBoundInclusive(value)})
+	}
+	return ranges, true
 }
 
 // indexBoundsForFilterValue translates the value side of a single
