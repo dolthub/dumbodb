@@ -195,16 +195,22 @@ func (gl *graphLookup) Process(ctx context.Context, iter types.DocumentsIterator
 		return nil, lazyerrors.Error(err)
 	}
 
-	fromDocs, err := gl.fetcher.Fetch(ctx, gl.from, nil)
-	if err != nil {
-		return nil, lazyerrors.Error(err)
+	fetcher := withFetchCache(gl.fetcher)
+	var src graphSource
+	if fetcher.IndexedField(ctx, gl.from, gl.connectToField) {
+		src = &indexedGraphSource{fetcher: fetcher, from: gl.from, connectToField: gl.connectToField}
+	} else {
+		fromDocs, fErr := fetcher.Fetch(ctx, gl.from, nil)
+		if fErr != nil {
+			return nil, lazyerrors.Error(fErr)
+		}
+		src = newGraphIndex(fromDocs, gl.connectToField)
 	}
 
-	idx := newGraphIndex(fromDocs, gl.connectToField)
 	out := make([]*types.Document, 0, len(docs))
 
 	for _, doc := range docs {
-		visited, gErr := gl.traverse(doc, idx)
+		visited, gErr := gl.traverse(ctx, doc, src)
 		if gErr != nil {
 			return nil, gErr
 		}
@@ -239,7 +245,7 @@ func (gl *graphLookup) Process(ctx context.Context, iter types.DocumentsIterator
 // reverse order (deepest first). Within each depth level, results appear in _id-ascending
 // order (collection-scan proxy). Concretely, for a chain a(d0)->b(d1)->c(d2), MongoDB
 // returns [a, c, b]  -- depth-0 first, then d2 before d1.
-func (gl *graphLookup) traverse(doc *types.Document, idx *graphIndex) ([]*types.Document, error) {
+func (gl *graphLookup) traverse(ctx context.Context, doc *types.Document, src graphSource) ([]*types.Document, error) {
 	// searchedKeys guards against re-processing the same connectToField search value.
 	searchedKeys := make(map[string]bool)
 
@@ -263,11 +269,13 @@ func (gl *graphLookup) traverse(doc *types.Document, idx *graphIndex) ([]*types.
 		// even if a doc's connectFromField re-enqueues a value seen at a prior level,
 		// it is silently dropped.
 		frontierSet := make(map[string]bool, len(frontier))
+		var frontierValues []any
 		for _, searchVal := range frontier {
 			key := fmt.Sprintf("%v", searchVal)
 			if !searchedKeys[key] {
 				frontierSet[key] = true
 				searchedKeys[key] = true
+				frontierValues = append(frontierValues, searchVal)
 			}
 		}
 
@@ -283,8 +291,11 @@ func (gl *graphLookup) traverse(doc *types.Document, idx *graphIndex) ([]*types.
 
 		// Visit this level's matches in _id order, regardless of which frontier
 		// value they match, as MongoDB's per-level collection scan does.
-		for _, pos := range idx.positionsFor(frontierSet) {
-			fromDoc := idx.sorted[pos]
+		matches, mErr := src.levelMatches(ctx, frontierSet, frontierValues)
+		if mErr != nil {
+			return nil, lazyerrors.Error(mErr)
+		}
+		for _, fromDoc := range matches {
 
 			if gl.restrictSearchWithMatch != nil {
 				matched, mErr := common.FilterDocument(fromDoc, gl.restrictSearchWithMatch)
@@ -348,6 +359,73 @@ func (gl *graphLookup) traverse(doc *types.Document, idx *graphIndex) ([]*types.
 	return results, nil
 }
 
+// graphSource returns, in _id order, the foreign documents whose
+// connectToField key is in keys; values are the frontier values behind keys.
+type graphSource interface {
+	levelMatches(ctx context.Context, keys map[string]bool, values []any) ([]*types.Document, error)
+}
+
+// indexedGraphSource fetches each traversal level's matches through the index
+// on connectToField. A level with a value that cannot be pushed down reads the
+// whole collection, loaded once.
+type indexedGraphSource struct {
+	fetcher        CollectionFetcher
+	from           string
+	connectToField string
+	all            *graphIndex
+}
+
+func (src *indexedGraphSource) levelMatches(ctx context.Context, keys map[string]bool, values []any) ([]*types.Document, error) {
+	filter := equalityFetchFilter(valuesAsDocs(values), "v", src.connectToField)
+	if filter == nil {
+		if src.all == nil {
+			docs, err := src.fetcher.Fetch(ctx, src.from, nil)
+			if err != nil {
+				return nil, err
+			}
+			src.all = newGraphIndex(docs, src.connectToField)
+		}
+		return src.all.levelMatches(ctx, keys, values)
+	}
+
+	fetched, err := src.fetcher.Fetch(ctx, src.from, filter)
+	if err != nil {
+		return nil, err
+	}
+	matches := make([]*types.Document, 0, len(fetched))
+	for _, d := range fetched {
+		if keys[fmt.Sprintf("%v", getFieldValue(d, src.connectToField))] {
+			matches = append(matches, d)
+		}
+	}
+	sortByID(matches)
+	return matches, nil
+}
+
+// valuesAsDocs wraps values as {v: value} documents for equalityFetchFilter.
+func valuesAsDocs(values []any) []*types.Document {
+	docs := make([]*types.Document, 0, len(values))
+	for _, v := range values {
+		d := new(types.Document)
+		if v != nil {
+			d.Set("v", v)
+		}
+		docs = append(docs, d)
+	}
+	return docs
+}
+
+func sortByID(docs []*types.Document) {
+	stdsort.SliceStable(docs, func(i, j int) bool {
+		idI, errI := docs[i].Get("_id")
+		idJ, errJ := docs[j].Get("_id")
+		if errI != nil || errJ != nil {
+			return false
+		}
+		return types.CompareOrder(idI, idJ, types.Ascending) == types.Less
+	})
+}
+
 // graphIndex holds the foreign documents sorted by _id, with their positions
 // grouped by connectToField key, so a traversal level reads only its matches.
 type graphIndex struct {
@@ -358,14 +436,7 @@ type graphIndex struct {
 func newGraphIndex(fromDocs []*types.Document, connectToField string) *graphIndex {
 	sorted := make([]*types.Document, len(fromDocs))
 	copy(sorted, fromDocs)
-	stdsort.SliceStable(sorted, func(i, j int) bool {
-		idI, errI := sorted[i].Get("_id")
-		idJ, errJ := sorted[j].Get("_id")
-		if errI != nil || errJ != nil {
-			return false
-		}
-		return types.CompareOrder(idI, idJ, types.Ascending) == types.Less
-	})
+	sortByID(sorted)
 
 	byKey := make(map[string][]int)
 	for pos, d := range sorted {
@@ -375,15 +446,18 @@ func newGraphIndex(fromDocs []*types.Document, connectToField string) *graphInde
 	return &graphIndex{sorted: sorted, byKey: byKey}
 }
 
-// positionsFor returns, in ascending _id order, the positions of the documents
-// whose connectToField key is in keys.
-func (idx *graphIndex) positionsFor(keys map[string]bool) []int {
+func (idx *graphIndex) levelMatches(_ context.Context, keys map[string]bool, _ []any) ([]*types.Document, error) {
 	var positions []int
 	for key := range keys {
 		positions = append(positions, idx.byKey[key]...)
 	}
 	stdsort.Ints(positions)
-	return positions
+
+	matches := make([]*types.Document, len(positions))
+	for i, pos := range positions {
+		matches[i] = idx.sorted[pos]
+	}
+	return matches, nil
 }
 
 // evaluateStartWith evaluates the startWith expression against an input document,

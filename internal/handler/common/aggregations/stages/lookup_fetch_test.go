@@ -16,10 +16,12 @@ package stages
 
 import (
 	"context"
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/must"
@@ -125,4 +127,125 @@ func TestLookupPipeline_DoesNotModifySharedForeignDocuments(t *testing.T) {
 		require.False(t, f.Has("touched"), "a pipeline stage modified a fetched document")
 	}
 	require.Equal(t, 1, fetcher.fetches, "an unindexed pipeline lookup loads the collection once")
+}
+
+// The hash index must find exactly what comparing against every foreign
+// document finds.
+func TestEqualityIndex_MatchesFullScan(t *testing.T) {
+	const p53 = int64(1) << 53
+	values := []any{
+		int32(5), int64(5), float64(5), float64(5.5), "5", true, false,
+		int32(0), math.Copysign(0, -1), p53, p53 + 1, float64(p53), float64(p53) + 2,
+		math.NaN(), math.Inf(1), types.Null, nil,
+		arr(int32(5), "x"), arr(), arr(arr(int32(5))),
+		doc("a", int32(1)), types.ObjectID{1},
+	}
+
+	var foreign []*types.Document
+	for i, v := range values {
+		if v == nil {
+			foreign = append(foreign, doc("_id", int32(i)))
+			continue
+		}
+		foreign = append(foreign, doc("_id", int32(i), "k", v))
+	}
+
+	l := &lookup{localField: "ref", foreignField: "k"}
+	idx := newEqualityIndex(foreign, "k")
+
+	for _, local := range values {
+		input := doc("_id", int32(-1))
+		if local != nil {
+			input = doc("_id", int32(-1), "ref", local)
+		}
+
+		var want []*types.Document
+		for _, f := range foreign {
+			if lookupValuesMatch(getFieldValue(input, "ref"), getFieldValue(f, "k")) {
+				want = append(want, f)
+			}
+		}
+
+		got := l.equalityMatches(input, idx)
+		require.Equal(t, len(want), len(got), "local value %#v", local)
+		for i := range want {
+			require.Same(t, want[i], got[i], "local value %#v", local)
+		}
+	}
+}
+
+// filteringFetcher reports an index on every field and applies the filter, as
+// the backend does.
+type filteringFetcher struct {
+	docs    []*types.Document
+	fetches int
+}
+
+func (f *filteringFetcher) Fetch(_ context.Context, _ string, filter *types.Document) ([]*types.Document, error) {
+	f.fetches++
+	if filter == nil {
+		return f.docs, nil
+	}
+	var out []*types.Document
+	for _, d := range f.docs {
+		matched, err := common.FilterDocument(d, filter)
+		if err != nil {
+			return nil, err
+		}
+		if matched {
+			out = append(out, d)
+		}
+	}
+	return out, nil
+}
+
+func (f *filteringFetcher) IndexedField(context.Context, string, string) bool { return true }
+
+// Fetching each traversal level through an index returns exactly what the
+// in-memory traversal returns, in the same order.
+func TestGraphLookup_IndexedSourceMatchesInMemory(t *testing.T) {
+	emps := []*types.Document{
+		doc("_id", int32(5), "name", "e", "boss", "c"),
+		doc("_id", int32(1), "name", "a", "boss", types.Null),
+		doc("_id", int32(4), "name", "d", "boss", "b"),
+		doc("_id", int32(2), "name", "b", "boss", "a"),
+		doc("_id", int32(3), "name", "c", "boss", "a"),
+		doc("_id", int32(6), "name", "loop1", "boss", "loop2"),
+		doc("_id", int32(7), "name", "loop2", "boss", "loop1"),
+	}
+	inputs := []*types.Document{
+		doc("_id", "q1", "start", "e"),
+		doc("_id", "q2", "start", "d"),
+		doc("_id", "q3", "start", "loop1"),
+		doc("_id", "q4", "start", types.Null),
+	}
+	spec := doc("$graphLookup", doc(
+		"from", "emps", "startWith", "$start", "connectFromField", "boss",
+		"connectToField", "name", "as", "chain", "depthField", "depth",
+	))
+
+	run := func(fetcher CollectionFetcher) []*types.Document {
+		s, err := NewGraphLookupStage(spec, fetcher)
+		require.NoError(t, err)
+		closer := iterator.NewMultiCloser()
+		defer closer.Close()
+		out, err := s.Process(context.Background(), iterator.Values(iterator.ForSlice(inputs)), closer)
+		require.NoError(t, err)
+		results, err := iterator.ConsumeValues(out)
+		require.NoError(t, err)
+		return results
+	}
+
+	inMemory := run(FetcherFunc(func(context.Context, string, *types.Document) ([]*types.Document, error) {
+		return emps, nil
+	}))
+	indexed := &filteringFetcher{docs: emps}
+	viaIndex := run(indexed)
+
+	require.Len(t, viaIndex, len(inMemory))
+	for i := range inMemory {
+		require.Equal(t, types.Compare(inMemory[i], viaIndex[i]), types.Equal,
+			"input %d: in memory %v, via index %v", i, inMemory[i], viaIndex[i])
+	}
+	require.Greater(t, indexed.fetches, 1, "levels were not fetched through the index")
 }

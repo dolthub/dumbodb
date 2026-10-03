@@ -19,6 +19,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	stdsort "sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -56,15 +58,37 @@ func (FetcherFunc) IndexedField(context.Context, string, string) bool { return f
 // the same collection for every outer document.
 type cachingFetcher struct {
 	CollectionFetcher
-	all     map[string][]*types.Document
-	indexed map[string]bool
+	all       map[string][]*types.Document
+	indexed   map[string]bool
+	eqIndexes map[string]*equalityIndex
 }
 
-func withFetchCache(f CollectionFetcher) CollectionFetcher {
+func withFetchCache(f CollectionFetcher) *cachingFetcher {
 	if c, ok := f.(*cachingFetcher); ok {
 		return c
 	}
-	return &cachingFetcher{CollectionFetcher: f, all: map[string][]*types.Document{}, indexed: map[string]bool{}}
+	return &cachingFetcher{
+		CollectionFetcher: f,
+		all:               map[string][]*types.Document{},
+		indexed:           map[string]bool{},
+		eqIndexes:         map[string]*equalityIndex{},
+	}
+}
+
+// unfilteredEqualityIndex returns the equality index on field over the cached
+// unfiltered documents of collectionName, building it once.
+func (c *cachingFetcher) unfilteredEqualityIndex(ctx context.Context, collectionName, field string) (*equalityIndex, error) {
+	key := collectionName + "\x00" + field
+	if idx, ok := c.eqIndexes[key]; ok {
+		return idx, nil
+	}
+	docs, err := c.Fetch(ctx, collectionName, nil)
+	if err != nil {
+		return nil, err
+	}
+	idx := newEqualityIndex(docs, field)
+	c.eqIndexes[key] = idx
+	return idx, nil
 }
 
 func (c *cachingFetcher) Fetch(ctx context.Context, collectionName string, filter *types.Document) ([]*types.Document, error) {
@@ -264,13 +288,113 @@ func NewLookupStage(stage *types.Document, fetcher CollectionFetcher) (aggregati
 	return l, nil
 }
 
+// equalityIndex groups foreign documents by the keys of their foreignField
+// values, so an equality join considers only an input document's candidates
+// instead of every foreign document. Any two values valuesEqual treats as equal
+// share a key; documents with a value that has no key are always candidates.
+type equalityIndex struct {
+	docs    []*types.Document
+	byKey   map[string][]int
+	unkeyed []int
+}
+
+func newEqualityIndex(docs []*types.Document, foreignField string) *equalityIndex {
+	idx := &equalityIndex{docs: docs, byKey: make(map[string][]int)}
+	for pos, d := range docs {
+		keys, ok := equalityKeys(getFieldValue(d, foreignField))
+		if !ok {
+			idx.unkeyed = append(idx.unkeyed, pos)
+			continue
+		}
+		for _, key := range keys {
+			idx.byKey[key] = append(idx.byKey[key], pos)
+		}
+	}
+	return idx
+}
+
+// candidates returns, in their original order, the foreign documents that can
+// equal localVal: all of them when localVal has no key.
+func (idx *equalityIndex) candidates(localVal any) []*types.Document {
+	keys, ok := equalityKeys(localVal)
+	if !ok {
+		return idx.docs
+	}
+
+	positions := append([]int(nil), idx.unkeyed...)
+	for _, key := range keys {
+		positions = append(positions, idx.byKey[key]...)
+	}
+	stdsort.Ints(positions)
+
+	out := make([]*types.Document, 0, len(positions))
+	for i, pos := range positions {
+		if i > 0 && positions[i-1] == pos {
+			continue
+		}
+		out = append(out, idx.docs[pos])
+	}
+	return out
+}
+
+// equalityKeys returns the keys of a join value, one per element of an array.
+// It reports false when the value (or an element) has no key: anything but
+// strings, booleans, and numbers, and integers too large to compare with a
+// double exactly.
+func equalityKeys(v any) ([]string, bool) {
+	arr, isArr := v.(*types.Array)
+	if !isArr {
+		key, ok := equalityKey(v)
+		return []string{key}, ok
+	}
+
+	keys := make([]string, 0, arr.Len())
+	for i := 0; i < arr.Len(); i++ {
+		key, ok := equalityKey(must.NotFail(arr.Get(i)))
+		if !ok {
+			return nil, false
+		}
+		keys = append(keys, key)
+	}
+	return keys, true
+}
+
+// maxExactJoinInt bounds the integers whose double conversion is exact, so an
+// integer and a double that compare equal also share a key.
+const maxExactJoinInt = 1 << 53
+
+func equalityKey(v any) (string, bool) {
+	switch v := v.(type) {
+	case string:
+		return "s" + v, true
+	case bool:
+		return "b" + strconv.FormatBool(v), true
+	case int32:
+		return "n" + strconv.FormatInt(int64(v), 10), true
+	case int64:
+		if v <= -maxExactJoinInt || v >= maxExactJoinInt {
+			return "", false
+		}
+		return "n" + strconv.FormatInt(v, 10), true
+	case float64:
+		if math.IsNaN(v) {
+			return "", false
+		}
+		if v == math.Trunc(v) && v > -maxExactJoinInt && v < maxExactJoinInt {
+			return "n" + strconv.FormatInt(int64(v), 10), true
+		}
+		return "f" + strconv.FormatFloat(v, 'g', -1, 64), true
+	}
+	return "", false
+}
+
 // equalityMatches returns the foreign documents whose foreignField matches
 // doc's localField under MongoDB's equality join semantics.
-func (l *lookup) equalityMatches(doc *types.Document, fromDocs []*types.Document) []*types.Document {
+func (l *lookup) equalityMatches(doc *types.Document, idx *equalityIndex) []*types.Document {
 	localVal := getFieldValue(doc, l.localField)
 
 	matched := make([]*types.Document, 0)
-	for _, fromDoc := range fromDocs {
+	for _, fromDoc := range idx.candidates(localVal) {
 		if lookupValuesMatch(localVal, getFieldValue(fromDoc, l.foreignField)) {
 			matched = append(matched, fromDoc)
 		}
@@ -306,6 +430,19 @@ func (l *lookup) Process(ctx context.Context, iter types.DocumentsIterator, clos
 		}
 	}
 
+	var eqIdx *equalityIndex
+	switch {
+	case l.localField == "":
+	case fetchFilter == nil:
+		// fromDocs is the cached whole collection; share its index with
+		// other lookups in this stage, such as nested ones.
+		if eqIdx, err = fetcher.unfilteredEqualityIndex(ctx, l.from, l.foreignField); err != nil {
+			return nil, lazyerrors.Error(err)
+		}
+	default:
+		eqIdx = newEqualityIndex(fromDocs, l.foreignField)
+	}
+
 	out := make([]*types.Document, 0, len(docs))
 
 	if l.pipeline != nil {
@@ -317,8 +454,8 @@ func (l *lookup) Process(ctx context.Context, iter types.DocumentsIterator, clos
 					return nil, lazyerrors.Error(err)
 				}
 			}
-			if l.localField != "" {
-				candidates = l.equalityMatches(doc, candidates)
+			if eqIdx != nil {
+				candidates = l.equalityMatches(doc, eqIdx)
 			}
 
 			matched, pErr := l.runPipeline(ctx, fetcher, candidates, doc)
@@ -342,7 +479,7 @@ func (l *lookup) Process(ctx context.Context, iter types.DocumentsIterator, clos
 		// localField (treated as a singleton when scalar) equals any element of
 		// foreignField (treated as a singleton when scalar).
 		for _, doc := range docs {
-			matched := l.equalityMatches(doc, fromDocs)
+			matched := l.equalityMatches(doc, eqIdx)
 			for i, m := range matched {
 				matched[i] = m.DeepCopy()
 			}
