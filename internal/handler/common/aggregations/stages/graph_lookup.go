@@ -200,10 +200,11 @@ func (gl *graphLookup) Process(ctx context.Context, iter types.DocumentsIterator
 		return nil, lazyerrors.Error(err)
 	}
 
+	idx := newGraphIndex(fromDocs, gl.connectToField)
 	out := make([]*types.Document, 0, len(docs))
 
 	for _, doc := range docs {
-		visited, gErr := gl.traverse(doc, fromDocs)
+		visited, gErr := gl.traverse(doc, idx)
 		if gErr != nil {
 			return nil, gErr
 		}
@@ -238,22 +239,7 @@ func (gl *graphLookup) Process(ctx context.Context, iter types.DocumentsIterator
 // reverse order (deepest first). Within each depth level, results appear in _id-ascending
 // order (collection-scan proxy). Concretely, for a chain a(d0)->b(d1)->c(d2), MongoDB
 // returns [a, c, b]  -- depth-0 first, then d2 before d1.
-func (gl *graphLookup) traverse(doc *types.Document, fromDocs []*types.Document) ([]*types.Document, error) {
-	// Sort fromDocs by _id ascending once. All per-level scans then proceed in this
-	// fixed order, so within-level results always appear in _id order  -- matching
-	// MongoDB's collection-scan ordering guarantee.
-	sorted := make([]*types.Document, len(fromDocs))
-	copy(sorted, fromDocs)
-	stdsort.SliceStable(sorted, func(i, j int) bool {
-		idI, errI := sorted[i].Get("_id")
-		idJ, errJ := sorted[j].Get("_id")
-		if errI != nil || errJ != nil {
-			return false
-		}
-		return types.CompareOrder(idI, idJ, types.Ascending) == types.Less
-	})
-	fromDocs = sorted
-
+func (gl *graphLookup) traverse(doc *types.Document, idx *graphIndex) ([]*types.Document, error) {
 	// searchedKeys guards against re-processing the same connectToField search value.
 	searchedKeys := make(map[string]bool)
 
@@ -295,17 +281,10 @@ func (gl *graphLookup) traverse(doc *types.Document, fromDocs []*types.Document)
 
 		var levelDocs []*types.Document
 
-		// Scan fromDocs in sorted order  -- the outer loop is the collection, not the
-		// frontier. This matches MongoDB's per-level collection scan: all frontier values
-		// are checked against each document as it is encountered, so within a depth level
-		// documents are emitted in _id order regardless of which frontier value they match.
-		for _, fromDoc := range fromDocs {
-			toVal := getFieldValue(fromDoc, gl.connectToField)
-			toKey := fmt.Sprintf("%v", toVal)
-
-			if !frontierSet[toKey] {
-				continue
-			}
+		// Visit this level's matches in _id order, regardless of which frontier
+		// value they match, as MongoDB's per-level collection scan does.
+		for _, pos := range idx.positionsFor(frontierSet) {
+			fromDoc := idx.sorted[pos]
 
 			if gl.restrictSearchWithMatch != nil {
 				matched, mErr := common.FilterDocument(fromDoc, gl.restrictSearchWithMatch)
@@ -367,6 +346,44 @@ func (gl *graphLookup) traverse(doc *types.Document, fromDocs []*types.Document)
 	}
 
 	return results, nil
+}
+
+// graphIndex holds the foreign documents sorted by _id, with their positions
+// grouped by connectToField key, so a traversal level reads only its matches.
+type graphIndex struct {
+	sorted []*types.Document
+	byKey  map[string][]int
+}
+
+func newGraphIndex(fromDocs []*types.Document, connectToField string) *graphIndex {
+	sorted := make([]*types.Document, len(fromDocs))
+	copy(sorted, fromDocs)
+	stdsort.SliceStable(sorted, func(i, j int) bool {
+		idI, errI := sorted[i].Get("_id")
+		idJ, errJ := sorted[j].Get("_id")
+		if errI != nil || errJ != nil {
+			return false
+		}
+		return types.CompareOrder(idI, idJ, types.Ascending) == types.Less
+	})
+
+	byKey := make(map[string][]int)
+	for pos, d := range sorted {
+		key := fmt.Sprintf("%v", getFieldValue(d, connectToField))
+		byKey[key] = append(byKey[key], pos)
+	}
+	return &graphIndex{sorted: sorted, byKey: byKey}
+}
+
+// positionsFor returns, in ascending _id order, the positions of the documents
+// whose connectToField key is in keys.
+func (idx *graphIndex) positionsFor(keys map[string]bool) []int {
+	var positions []int
+	for key := range keys {
+		positions = append(positions, idx.byKey[key]...)
+	}
+	stdsort.Ints(positions)
+	return positions
 }
 
 // evaluateStartWith evaluates the startWith expression against an input document,
