@@ -39,8 +39,8 @@ type connectorClient struct {
 	connector *transport.Connector
 }
 
-func newConnectorClient(host, memberHost string) heartbeatClient {
-	return &connectorClient{connector: transport.NewMemberConnector(host, memberHost, []string{"snappy", "zstd", "zlib"})}
+func newConnectorClient(host, memberHost string, options ...transport.MemberOptions) heartbeatClient {
+	return &connectorClient{connector: transport.NewMemberConnector(host, memberHost, []string{"snappy", "zstd", "zlib"}, options...)}
 }
 
 func (c *connectorClient) Request(ctx context.Context, request *wire.OpMsg) (*wire.OpMsg, error) {
@@ -79,7 +79,7 @@ type HeartbeatMesh struct {
 	peers map[string]*heartbeatPeer
 }
 
-func NewHeartbeatMesh(manager *Manager, logger *slog.Logger) *HeartbeatMesh {
+func NewHeartbeatMesh(manager *Manager, logger *slog.Logger, options ...transport.MemberOptions) *HeartbeatMesh {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -89,7 +89,7 @@ func NewHeartbeatMesh(manager *Manager, logger *slog.Logger) *HeartbeatMesh {
 		interval: defaultHeartbeatInterval,
 		timeout:  defaultHeartbeatTimeout,
 		newClient: func(host string) heartbeatClient {
-			return newConnectorClient(host, manager.Snapshot().MemberHost)
+			return newConnectorClient(host, manager.Snapshot().MemberHost, options...)
 		},
 		now:   time.Now,
 		peers: make(map[string]*heartbeatPeer),

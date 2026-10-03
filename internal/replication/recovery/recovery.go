@@ -49,8 +49,8 @@ type connectorClient struct {
 	connector *transport.Connector
 }
 
-func newSourceClient(source, memberHost string) sourceClient {
-	return &connectorClient{connector: transport.NewMemberConnector(source, memberHost, []string{"snappy", "zstd", "zlib"})}
+func newSourceClient(source, memberHost string, options ...transport.MemberOptions) sourceClient {
+	return &connectorClient{connector: transport.NewMemberConnector(source, memberHost, []string{"snappy", "zstd", "zlib"}, options...)}
 }
 
 func (c *connectorClient) Request(ctx context.Context, request *wire.OpMsg) (*wire.OpMsg, error) {
@@ -77,12 +77,19 @@ type Recovery struct {
 	client  func(string, string) sourceClient
 }
 
-func New(backendValue backends.Backend, store *control.Store, manager *topology.Manager) (*Recovery, error) {
+func New(backendValue backends.Backend, store *control.Store, manager *topology.Manager, options ...transport.MemberOptions) (*Recovery, error) {
 	versioned, ok := backendValue.(backend)
 	if !ok || store == nil || manager == nil {
 		return nil, errors.New("rollback recovery requires versioned backend, control store, and topology manager")
 	}
-	return &Recovery{backend: versioned, store: store, manager: manager, client: newSourceClient}, nil
+	return &Recovery{
+		backend: versioned,
+		store:   store,
+		manager: manager,
+		client: func(source, memberHost string) sourceClient {
+			return newSourceClient(source, memberHost, options...)
+		},
+	}, nil
 }
 
 func (r *Recovery) Run(ctx context.Context) error {

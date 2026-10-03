@@ -205,7 +205,11 @@ func (c *bufferedConn) Read(p []byte) (int, error) {
 }
 
 func ClientConfig(certFile, keyFile, caFile string) (*tls.Config, error) {
-	config, ca, err := config(certFile, keyFile, "", caFile)
+	return ClientConfigWithPassword(certFile, keyFile, "", caFile)
+}
+
+func ClientConfigWithPassword(certFile, keyFile, keyPassword, caFile string) (*tls.Config, error) {
+	config, ca, err := config(certFile, keyFile, keyPassword, caFile)
 	if err != nil {
 		return nil, err
 	}

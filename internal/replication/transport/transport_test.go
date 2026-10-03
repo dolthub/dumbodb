@@ -28,6 +28,9 @@ import (
 
 	"github.com/FerretDB/wire"
 	"github.com/FerretDB/wire/wirebson"
+	"github.com/xdg-go/scram"
+
+	"github.com/dolthub/dumbodb/internal/replication/membership"
 )
 
 func TestRequestCorrelatesResponse(t *testing.T) {
@@ -300,6 +303,88 @@ func TestAuthenticationCommandsAreNotCompressed(t *testing.T) {
 		if _, err := connection.Request(context.Background(), wire.MustOpMsg(command, int32(1), "$db", "admin")); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestAuthenticateMember(t *testing.T) {
+	credentials, err := membership.New("abcdefghijklmnop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverEngine, err := scram.SHA256.NewServer(func(username string) (scram.StoredCredentials, error) {
+		if username != membership.Username {
+			t.Fatalf("username = %q", username)
+		}
+		stored, _ := credentials.StoredCredentials(membership.Mechanism)
+		return stored, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	serverErr := make(chan error, 1)
+	go func() {
+		reader := bufio.NewReader(server)
+		conversation := serverEngine.NewConversation()
+		for range 3 {
+			header, err := readHeader(reader)
+			if err != nil {
+				serverErr <- err
+				return
+			}
+			body := make([]byte, int(header.MessageLength)-wire.MsgHeaderLen)
+			if _, err := io.ReadFull(reader, body); err != nil {
+				serverErr <- err
+				return
+			}
+			var request wire.OpMsg
+			if err := request.UnmarshalBinaryNocopy(body); err != nil {
+				serverErr <- err
+				return
+			}
+			raw, err := request.RawDocument()
+			if err != nil {
+				serverErr <- err
+				return
+			}
+			document, err := raw.Decode()
+			if err != nil {
+				serverErr <- err
+				return
+			}
+			payload, ok := document.Get("payload").(wirebson.Binary)
+			if !ok {
+				serverErr <- errors.New("authentication payload is not binary")
+				return
+			}
+			response := ""
+			done := conversation.Valid()
+			if !done {
+				response, err = conversation.Step(string(payload.B))
+				if err != nil {
+					serverErr <- err
+					return
+				}
+			}
+			writeTestMessage(t, server, header.RequestID+1, header.RequestID, wire.MustOpMsg(
+				"conversationId", int32(1),
+				"done", done,
+				"payload", wirebson.Binary{B: []byte(response)},
+				"ok", float64(1),
+			))
+		}
+		serverErr <- nil
+	}()
+
+	connection := New(client)
+	if err := connection.AuthenticateMember(context.Background(), credentials); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatal(err)
 	}
 }
 

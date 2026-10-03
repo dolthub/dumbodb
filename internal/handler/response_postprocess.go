@@ -26,7 +26,7 @@ func (h *Handler) postProcessResponse(ctx context.Context, request, response *wi
 	})
 	if h.ReplicationTopology != nil && h.ReplicationTopology.Snapshot().Configuration != nil {
 		current = h.applyResponsePostProcessor(ctx, "logical time", current, func() (*wire.OpMsg, error) {
-			return h.withLogicalTime(current)
+			return h.withLogicalTime(ctx, current)
 		})
 	}
 	return current

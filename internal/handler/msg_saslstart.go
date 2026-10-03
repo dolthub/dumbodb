@@ -31,6 +31,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
+	"github.com/dolthub/dumbodb/internal/replication/membership"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
@@ -176,6 +177,13 @@ func saslStartPlain(ctx context.Context, dbName string, doc *types.Document) err
 
 // scramCredentialLookup looks up an user's credentials in the database.
 func (h *Handler) scramCredentialLookup(ctx context.Context, dbName, username, mechanism string) (*scram.StoredCredentials, error) { //nolint:lll // for readability
+	if h.MembershipCredentials != nil && dbName == membership.Database && username == membership.Username {
+		credentials, ok := h.MembershipCredentials.StoredCredentials(mechanism)
+		if !ok {
+			return nil, scramMechanismUnavailable(mechanism)
+		}
+		return &credentials, nil
+	}
 	adminDB, err := h.b.Database("admin")
 	if err != nil {
 		return nil, lazyerrors.Error(err)

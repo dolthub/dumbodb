@@ -49,6 +49,7 @@ type Runtime struct {
 	publisher             *publication.Publisher
 	recovery              *recovery.Recovery
 	counterOperationKinds func(oplog.Entry) ([]string, error)
+	memberOptions         []transport.MemberOptions
 }
 
 func New(
@@ -57,6 +58,7 @@ func New(
 	manager *topology.Manager,
 	logger *slog.Logger,
 	bumpAuthGeneration func(),
+	memberOptions ...transport.MemberOptions,
 ) (*Runtime, error) {
 	if backend == nil || store == nil || manager == nil {
 		return nil, errors.New("replication runtime requires backend, control store, and topology manager")
@@ -72,7 +74,7 @@ func New(
 	if err != nil {
 		return nil, err
 	}
-	recoveryManager, err := recovery.New(versioned, store, manager)
+	recoveryManager, err := recovery.New(versioned, store, manager, memberOptions...)
 	if err != nil {
 		return nil, err
 	}
@@ -80,6 +82,7 @@ func New(
 		backend: versioned, store: store, manager: manager, logger: logger,
 		bumpAuth: bumpAuthGeneration, publisher: publisher, recovery: recoveryManager,
 		counterOperationKinds: oplog.CounterOperationKinds,
+		memberOptions:         append([]transport.MemberOptions(nil), memberOptions...),
 	}, nil
 }
 
@@ -97,7 +100,7 @@ func (r *Runtime) Run(ctx context.Context) {
 	}
 	reportContext, cancelReport := context.WithCancel(ctx)
 	defer cancelReport()
-	reporter := topology.NewProgressReporter(r.manager, r.logger)
+	reporter := topology.NewProgressReporter(r.manager, r.logger, r.memberOptions...)
 	go reporter.Run(reportContext)
 	for ctx.Err() == nil {
 		r.manager.SetRuntimePhase("recovering")
@@ -181,7 +184,7 @@ func (r *Runtime) runInitialSync(ctx context.Context, source string) error {
 	}
 	stopMonitoring := r.monitorBuffer(ctx, buffer)
 	defer stopMonitoring()
-	fetcher, err := oplog.NewFetcher(r.manager, buffer, r.logger)
+	fetcher, err := oplog.NewFetcher(r.manager, buffer, r.logger, r.memberOptions...)
 	if err != nil {
 		return err
 	}
@@ -189,7 +192,7 @@ func (r *Runtime) runInitialSync(ctx context.Context, source string) error {
 	if err != nil {
 		return err
 	}
-	connector := transport.NewMemberConnector(source, r.manager.Snapshot().MemberHost, []string{"snappy", "zstd", "zlib"})
+	connector := transport.NewMemberConnector(source, r.manager.Snapshot().MemberHost, []string{"snappy", "zstd", "zlib"}, r.memberOptions...)
 	defer connector.Close()
 	client, err := connector.Connection(ctx)
 	if err != nil {
@@ -227,7 +230,7 @@ func (r *Runtime) runSteady(ctx context.Context) error {
 	}
 	stopMonitoring := r.monitorBuffer(ctx, buffer)
 	defer stopMonitoring()
-	fetcher, err := oplog.NewFetcher(r.manager, buffer, r.logger)
+	fetcher, err := oplog.NewFetcher(r.manager, buffer, r.logger, r.memberOptions...)
 	if err != nil {
 		return err
 	}

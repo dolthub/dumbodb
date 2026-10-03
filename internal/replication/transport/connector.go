@@ -16,10 +16,13 @@ package transport
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
 	"sync"
+
+	"github.com/dolthub/dumbodb/internal/replication/membership"
 )
 
 type dialFunc func(context.Context, string) (net.Conn, error)
@@ -31,19 +34,41 @@ type Connector struct {
 	compressors []string
 	dial        dialFunc
 	connection  *Connection
+	credentials *membership.Credentials
 	closed      bool
+}
+
+type MemberOptions struct {
+	Credentials *membership.Credentials
+	TLSConfig   *tls.Config
 }
 
 func NewConnector(address string, compressors []string) *Connector {
 	return NewMemberConnector(address, "", compressors)
 }
 
-func NewMemberConnector(address, hostInfo string, compressors []string) *Connector {
-	dialer := &net.Dialer{}
+func NewMemberConnector(address, hostInfo string, compressors []string, options ...MemberOptions) *Connector {
+	var configured MemberOptions
+	if len(options) != 0 {
+		configured = options[0]
+	}
+	var dialer dialFunc
+	if configured.TLSConfig != nil {
+		tlsDialer := &tls.Dialer{NetDialer: &net.Dialer{}, Config: configured.TLSConfig.Clone()}
+		dialer = func(ctx context.Context, address string) (net.Conn, error) {
+			return tlsDialer.DialContext(ctx, "tcp", address)
+		}
+	} else {
+		networkDialer := &net.Dialer{}
+		dialer = func(ctx context.Context, address string) (net.Conn, error) {
+			return networkDialer.DialContext(ctx, "tcp", address)
+		}
+	}
 	connector := newConnector(address, compressors, func(ctx context.Context, address string) (net.Conn, error) {
-		return dialer.DialContext(ctx, "tcp", address)
+		return dialer(ctx, address)
 	})
 	connector.hostInfo = hostInfo
+	connector.credentials = configured.Credentials
 	return connector
 }
 
@@ -107,6 +132,12 @@ func (c *Connector) connectLocked(ctx context.Context) (*Connection, error) {
 	if _, err := connection.MemberHello(ctx, c.hostInfo, c.compressors); err != nil {
 		_ = connection.Close()
 		return nil, fmt.Errorf("handshake with MongoDB member %q: %w", c.address, err)
+	}
+	if c.credentials != nil {
+		if err := connection.AuthenticateMember(ctx, c.credentials); err != nil {
+			_ = connection.Close()
+			return nil, fmt.Errorf("authenticate with MongoDB member %q: %w", c.address, err)
+		}
 	}
 	c.connection = connection
 	return connection, nil

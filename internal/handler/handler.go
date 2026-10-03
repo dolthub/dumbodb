@@ -31,6 +31,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/clientconn/cursor"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/users"
+	"github.com/dolthub/dumbodb/internal/replication/membership"
 	"github.com/dolthub/dumbodb/internal/replication/topology"
 	"github.com/dolthub/dumbodb/internal/sqlctx"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -86,10 +87,11 @@ func (h *Handler) BumpAuthGeneration() { h.authGen.Add(1) }
 //
 //nolint:vet // for readability
 type NewOpts struct {
-	Backend             backends.Backend
-	TCPHost             string
-	ReplSetName         string
-	ReplicationTopology *topology.Manager
+	Backend               backends.Backend
+	TCPHost               string
+	ReplSetName           string
+	ReplicationTopology   *topology.Manager
+	MembershipCredentials *membership.Credentials
 
 	SetupDatabase string
 	SetupUsername string

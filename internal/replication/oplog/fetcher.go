@@ -48,8 +48,8 @@ type connectorFetchClient struct {
 	connector *transport.Connector
 }
 
-func newConnectorFetchClient(source, memberHost string) fetchClient {
-	return &connectorFetchClient{connector: transport.NewMemberConnector(source, memberHost, []string{"snappy", "zstd", "zlib"})}
+func newConnectorFetchClient(source, memberHost string, options ...transport.MemberOptions) fetchClient {
+	return &connectorFetchClient{connector: transport.NewMemberConnector(source, memberHost, []string{"snappy", "zstd", "zlib"}, options...)}
 }
 
 func (c *connectorFetchClient) Request(ctx context.Context, message *wire.OpMsg) (*wire.OpMsg, error) {
@@ -90,7 +90,7 @@ type Fetcher struct {
 	retryWait time.Duration
 }
 
-func NewFetcher(manager *topology.Manager, buffer *Buffer, logger *slog.Logger) (*Fetcher, error) {
+func NewFetcher(manager *topology.Manager, buffer *Buffer, logger *slog.Logger, options ...transport.MemberOptions) (*Fetcher, error) {
 	if manager == nil || buffer == nil {
 		return nil, errors.New("oplog fetcher requires topology manager and buffer")
 	}
@@ -103,10 +103,12 @@ func NewFetcher(manager *topology.Manager, buffer *Buffer, logger *slog.Logger) 
 		}
 	}
 	return &Fetcher{
-		manager:   manager,
-		buffer:    buffer,
-		logger:    logger,
-		newClient: newConnectorFetchClient,
+		manager: manager,
+		buffer:  buffer,
+		logger:  logger,
+		newClient: func(source, memberHost string) fetchClient {
+			return newConnectorFetchClient(source, memberHost, options...)
+		},
 		exhaust:   true,
 		retryWait: time.Second,
 	}, nil

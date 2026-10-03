@@ -20,6 +20,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/dolthub/dumbodb/internal/replication/membership"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
@@ -36,4 +37,21 @@ func TestHelloReturnsEmptySASLMechanismArrayForUnknownUser(t *testing.T) {
 	mechanisms, ok := responseValue(response, "saslSupportedMechs").(*types.Array)
 	require.True(t, ok)
 	require.Zero(t, mechanisms.Len())
+}
+
+func TestHelloReturnsInternalMembershipMechanisms(t *testing.T) {
+	handler := authGateHandler(t, false)
+	credentials, err := membership.New("abcdefghijklmnop")
+	require.NoError(t, err)
+	handler.MembershipCredentials = credentials
+	request := must.NotFail(types.NewDocument(
+		"hello", int32(1),
+		"saslSupportedMechs", "local.__system",
+		"$db", "admin",
+	))
+	response, err := handler.hello(context.Background(), request, "127.0.0.1:27017", "rs0")
+	require.NoError(t, err)
+	mechanisms := responseValue(response, "saslSupportedMechs").(*types.Array)
+	require.Equal(t, membership.Mechanism, must.NotFail(mechanisms.Get(0)))
+	require.Equal(t, membership.MechanismSHA1, must.NotFail(mechanisms.Get(1)))
 }

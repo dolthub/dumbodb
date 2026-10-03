@@ -35,6 +35,7 @@ import (
 	"github.com/golang/snappy"
 	"github.com/klauspost/compress/zstd"
 
+	"github.com/dolthub/dumbodb/internal/replication/membership"
 	"github.com/dolthub/dumbodb/internal/version"
 )
 
@@ -245,6 +246,82 @@ func compressionArray(value any) (*wirebson.Array, error) {
 	default:
 		return nil, fmt.Errorf("MongoDB member returned invalid compressor list type %T", value)
 	}
+}
+
+func (c *Connection) AuthenticateMember(ctx context.Context, credentials *membership.Credentials) error {
+	conversation := credentials.NewConversation()
+	payload, err := conversation.Step("")
+	if err != nil {
+		return fmt.Errorf("starting internal SCRAM conversation: %w", err)
+	}
+	response, err := c.Request(ctx, wire.MustOpMsg(
+		"saslStart", int32(1),
+		"mechanism", membership.Mechanism,
+		"options", wirebson.MustDocument("skipEmptyExchange", true),
+		"payload", wirebson.Binary{B: []byte(payload)},
+		"$db", membership.Database,
+	))
+	if err != nil {
+		return err
+	}
+	for {
+		document, err := decodeSuccessfulResponse(response, "saslStart")
+		if err != nil {
+			return err
+		}
+		serverPayload, ok := document.Get("payload").(wirebson.Binary)
+		if !ok {
+			return fmt.Errorf("MongoDB member returned invalid SCRAM payload type %T", document.Get("payload"))
+		}
+		done, ok := document.Get("done").(bool)
+		if !ok {
+			return fmt.Errorf("MongoDB member returned invalid SCRAM done type %T", document.Get("done"))
+		}
+		if conversation.Done() {
+			if done && conversation.Valid() {
+				return nil
+			}
+			return errors.New("MongoDB member did not end a completed SCRAM conversation")
+		}
+		payload, err = conversation.Step(string(serverPayload.B))
+		if err != nil {
+			return fmt.Errorf("internal SCRAM conversation failed: %w", err)
+		}
+		if done {
+			if !conversation.Done() || !conversation.Valid() {
+				return errors.New("MongoDB member ended an invalid SCRAM conversation")
+			}
+			return nil
+		}
+		conversationID, ok := document.Get("conversationId").(int32)
+		if !ok {
+			return fmt.Errorf("MongoDB member returned invalid SCRAM conversationId type %T", document.Get("conversationId"))
+		}
+		response, err = c.Request(ctx, wire.MustOpMsg(
+			"saslContinue", int32(1),
+			"conversationId", conversationID,
+			"payload", wirebson.Binary{B: []byte(payload)},
+			"$db", membership.Database,
+		))
+		if err != nil {
+			return err
+		}
+	}
+}
+
+func decodeSuccessfulResponse(response *wire.OpMsg, command string) (*wirebson.Document, error) {
+	raw, err := response.RawDocument()
+	if err != nil {
+		return nil, fmt.Errorf("decoding %s response: %w", command, err)
+	}
+	document, err := raw.Decode()
+	if err != nil {
+		return nil, fmt.Errorf("decoding %s response BSON: %w", command, err)
+	}
+	if ok, _ := document.Get("ok").(float64); ok != 1 {
+		return nil, fmt.Errorf("MongoDB member %s failed: %v", command, document.Get("errmsg"))
+	}
+	return document, nil
 }
 
 func (c *Connection) Request(ctx context.Context, message *wire.OpMsg) (*wire.OpMsg, error) {

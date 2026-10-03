@@ -15,10 +15,14 @@
 package handler
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/FerretDB/wire"
 
+	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
+	"github.com/dolthub/dumbodb/internal/replication/membership"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
@@ -28,11 +32,11 @@ func TestWithLogicalTime(t *testing.T) {
 	response := must.NotFail(documentOpMsg(must.NotFail(types.NewDocument("ok", float64(1)))))
 	response.Flags = wire.OpMsgFlags(wire.OpMsgMoreToCome)
 
-	first, err := h.withLogicalTime(response)
+	first, err := h.withLogicalTime(context.Background(), response)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := h.withLogicalTime(response)
+	second, err := h.withLogicalTime(context.Background(), response)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,6 +48,42 @@ func TestWithLogicalTime(t *testing.T) {
 	}
 	if !first.Flags.FlagSet(wire.OpMsgMoreToCome) || !second.Flags.FlagSet(wire.OpMsgMoreToCome) {
 		t.Fatal("logical-time post-processing dropped moreToCome")
+	}
+}
+
+func TestInternalLogicalTimeRequiresMembershipAuthentication(t *testing.T) {
+	h := &Handler{NewOpts: &NewOpts{}}
+	logicalTime := types.NewTimestamp(time.Now().UTC(), 7)
+	request := must.NotFail(documentOpMsg(must.NotFail(types.NewDocument(
+		"ping", int32(1),
+		"$clusterTime", must.NotFail(types.NewDocument("clusterTime", logicalTime)),
+		"$db", "admin",
+	))))
+	info := conninfo.New()
+	ctx := conninfo.Ctx(context.Background(), info)
+	if err := h.observeLogicalTime(ctx, request); err == nil {
+		t.Fatal("observeLogicalTime accepted unsigned time before membership authentication")
+	}
+	info.SetAuth(membership.Username, "", nil, membership.Database)
+	info.SetAuthenticated()
+	if err := h.observeLogicalTime(ctx, request); err != nil {
+		t.Fatal(err)
+	}
+	if h.logicalTime.Load() != uint64(logicalTime) {
+		t.Fatalf("logical time = %d, want %d", h.logicalTime.Load(), logicalTime)
+	}
+
+	response, err := h.withLogicalTime(ctx, wire.MustOpMsg("ok", float64(1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := opMsgDocument(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clusterTime := must.NotFail(document.Get("$clusterTime")).(*types.Document)
+	if clusterTime.Has("signature") {
+		t.Fatal("internal $clusterTime response contains a signature")
 	}
 }
 

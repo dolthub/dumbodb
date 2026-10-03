@@ -26,6 +26,7 @@ import (
 	"github.com/FerretDB/wire/wirebson"
 
 	"github.com/dolthub/dumbodb/internal/replication/control"
+	"github.com/dolthub/dumbodb/internal/replication/transport"
 )
 
 const (
@@ -46,7 +47,7 @@ type ProgressReporter struct {
 	wake         chan struct{}
 }
 
-func NewProgressReporter(manager *Manager, logger *slog.Logger) *ProgressReporter {
+func NewProgressReporter(manager *Manager, logger *slog.Logger, options ...transport.MemberOptions) *ProgressReporter {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -56,7 +57,7 @@ func NewProgressReporter(manager *Manager, logger *slog.Logger) *ProgressReporte
 		interval: defaultPositionReportInterval,
 		timeout:  defaultPositionReportTimeout,
 		newClient: func(host string) heartbeatClient {
-			return newConnectorClient(host, manager.Snapshot().MemberHost)
+			return newConnectorClient(host, manager.Snapshot().MemberHost, options...)
 		},
 		wake: make(chan struct{}, 1),
 	}

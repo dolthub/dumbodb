@@ -40,10 +40,13 @@ import (
 	"github.com/dolthub/dumbodb/internal/handler/registry"
 	"github.com/dolthub/dumbodb/internal/metrics"
 	"github.com/dolthub/dumbodb/internal/replication/control"
+	"github.com/dolthub/dumbodb/internal/replication/membership"
 	replicationruntime "github.com/dolthub/dumbodb/internal/replication/runtime"
 	"github.com/dolthub/dumbodb/internal/replication/topology"
+	"github.com/dolthub/dumbodb/internal/replication/transport"
 	"github.com/dolthub/dumbodb/internal/util/logging"
 	"github.com/dolthub/dumbodb/internal/util/state"
+	"github.com/dolthub/dumbodb/internal/util/tlsutil"
 	"github.com/dolthub/dumbodb/internal/version"
 )
 
@@ -97,6 +100,9 @@ func run(logger *slog.Logger) error {
 	tlsCRLFile := fs.String("tlsCRLFile", "", "certificate revocation list for client certificate verification")
 	tlsDisabledProtocols := fs.String("tlsDisabledProtocols", "", "comma-separated TLS protocol versions to disable")
 	tlsAllowConnectionsWithoutCertificates := fs.Bool("tlsAllowConnectionsWithoutCertificates", false, "allow TLS clients without certificates")
+	tlsClusterFile := fs.String("tlsClusterFile", "", "certificate and private key PEM file for replica-set TLS")
+	tlsClusterPassword := fs.String("tlsClusterPassword", "", "password for an encrypted replica-set TLS private key")
+	tlsClusterCAFile := fs.String("tlsClusterCAFile", "", "certificate authority PEM file for replica-set TLS")
 	registerUnsupportedTLSFlags(fs)
 	logLevel := fs.String("log-level", "info", "log level (debug, info, warn, error)")
 	autoCommit := fs.Bool("auto-commit", false, "automatically commit each write (insert/update/delete) to Dolt history")
@@ -110,6 +116,7 @@ func run(logger *slog.Logger) error {
 	noMetrics := fs.Bool("no-metrics", false, "disable anonymous daily usage metrics reported to DoltHub")
 	auth := fs.Bool("auth", false, "enable access control (forced login; an authenticated connection has full access)")
 	replSetName := fs.String("replSet", "", "replica set name for inbound MongoDB replication")
+	keyFile := fs.String("keyFile", "", "shared key file for replica-set membership authentication")
 	fs.Parse(os.Args[1:])
 
 	if err := rejectUnsupportedTLSFlags(fs); err != nil {
@@ -120,7 +127,16 @@ func run(logger *slog.Logger) error {
 	if parseErr != nil {
 		return parseErr
 	}
+	if err := validateMembershipFlags(*auth, *replSetName, *keyFile); err != nil {
+		return err
+	}
+	if *keyFile != "" {
+		*auth = true
+	}
 	if err := validateTLSFlags(*tlsMode, *tlsCertificateKeyFile, *tlsCertificateKeyFilePassword, *tlsCAFile, *tlsCRLFile, tlsDisabledProtocolsSet, *tlsAllowConnectionsWithoutCertificates); err != nil {
+		return err
+	}
+	if err := validateClusterTLSFlags(*tlsMode, *replSetName, *tlsClusterFile, *tlsClusterPassword, *tlsClusterCAFile); err != nil {
 		return err
 	}
 
@@ -162,10 +178,34 @@ func run(logger *slog.Logger) error {
 	}
 
 	replicationConfiguration, replicationEnabled := replicationControlConfiguration(*replSetName, *addr)
+	var err error
+	var membershipCredentials *membership.Credentials
+	if *keyFile != "" {
+		membershipCredentials, err = membership.LoadKeyFile(*keyFile)
+		if err != nil {
+			return err
+		}
+	}
+	memberOptions := transport.MemberOptions{Credentials: membershipCredentials}
+	if replicationEnabled && (*tlsMode == "preferTLS" || *tlsMode == "requireTLS") {
+		certificateFile := *tlsClusterFile
+		certificatePassword := *tlsClusterPassword
+		caFile := *tlsClusterCAFile
+		if certificateFile == "" {
+			certificateFile = *tlsCertificateKeyFile
+			certificatePassword = *tlsCertificateKeyFilePassword
+		}
+		if caFile == "" {
+			caFile = *tlsCAFile
+		}
+		memberOptions.TLSConfig, err = tlsutil.ClientConfigWithPassword(certificateFile, certificateFile, certificatePassword, caFile)
+		if err != nil {
+			return fmt.Errorf("replica-set TLS configuration: %w", err)
+		}
+	}
 	var replicationTopology *topology.Manager
 	var replicationControlStore *control.Store
 	var handlerBackend backends.Backend
-	var err error
 	if replicationEnabled {
 		handlerBackend, err = dolt.NewBackend(*dataDir, logger, *autoCommit, sessionIsolation, *sessionTimeout, *sessionSweepPeriod)
 		if err != nil {
@@ -185,17 +225,18 @@ func run(logger *slog.Logger) error {
 	stateProvider := state.NewProvider()
 
 	h, closeBackend, err := registry.NewHandler("dolt", &registry.NewHandlerOpts{
-		Backend:             handlerBackend,
-		Logger:              logger,
-		StateProvider:       stateProvider,
-		TCPHost:             *addr,
-		ReplSetName:         *replSetName,
-		ReplicationTopology: replicationTopology,
-		DoltDataDir:         *dataDir,
-		AutoCommit:          *autoCommit,
-		SessionIsolation:    sessionIsolation,
-		SessionTimeout:      *sessionTimeout,
-		SessionSweepPeriod:  *sessionSweepPeriod,
+		Backend:               handlerBackend,
+		Logger:                logger,
+		StateProvider:         stateProvider,
+		TCPHost:               *addr,
+		ReplSetName:           *replSetName,
+		ReplicationTopology:   replicationTopology,
+		MembershipCredentials: membershipCredentials,
+		DoltDataDir:           *dataDir,
+		AutoCommit:            *autoCommit,
+		SessionIsolation:      sessionIsolation,
+		SessionTimeout:        *sessionTimeout,
+		SessionSweepPeriod:    *sessionSweepPeriod,
 		TestOpts: registry.TestOpts{
 			EnableNewAuth: *auth,
 		},
@@ -236,8 +277,8 @@ func run(logger *slog.Logger) error {
 	}
 	go metrics.RunReporter(ctx, logger, version.Get().Version, metricsEnabled)
 	if replicationTopology != nil {
-		go topology.NewHeartbeatMesh(replicationTopology, logger).Run(ctx)
-		runtime, err := replicationruntime.New(h.Backend, replicationControlStore, replicationTopology, logger, h.BumpAuthGeneration)
+		go topology.NewHeartbeatMesh(replicationTopology, logger, memberOptions).Run(ctx)
+		runtime, err := replicationruntime.New(h.Backend, replicationControlStore, replicationTopology, logger, h.BumpAuthGeneration, memberOptions)
 		if err != nil {
 			return err
 		}
@@ -253,9 +294,6 @@ func registerUnsupportedTLSFlags(fs *flag.FlagSet) {
 	fs.Bool("tlsOnNormalPorts", false, "unsupported MongoDB TLS option")
 	fs.Bool("tlsAllowInvalidCertificates", false, "unsupported MongoDB replica-set TLS option")
 	fs.Bool("tlsAllowInvalidHostnames", false, "unsupported MongoDB replica-set TLS option")
-	fs.String("tlsClusterFile", "", "unsupported MongoDB replica-set TLS option")
-	fs.String("tlsClusterPassword", "", "unsupported MongoDB replica-set TLS option")
-	fs.String("tlsClusterCAFile", "", "unsupported MongoDB replica-set TLS option")
 	fs.String("tlsClusterAuthX509ExtensionValue", "", "unsupported MongoDB replica-set TLS option")
 	fs.String("tlsClusterAuthX509Attributes", "", "unsupported MongoDB replica-set TLS option")
 }
@@ -266,7 +304,7 @@ func rejectUnsupportedTLSFlags(fs *flag.FlagSet) error {
 		if unsupported == nil {
 			switch f.Name {
 			case "tlsAllowInvalidCertificates", "tlsAllowInvalidHostnames", "tlsLogVersions",
-				"tlsOnNormalPorts", "tlsClusterFile", "tlsClusterPassword", "tlsClusterCAFile",
+				"tlsOnNormalPorts",
 				"tlsClusterAuthX509ExtensionValue", "tlsClusterAuthX509Attributes":
 				unsupported = f
 			}
@@ -277,12 +315,35 @@ func rejectUnsupportedTLSFlags(fs *flag.FlagSet) error {
 	}
 	switch unsupported.Name {
 	case "tlsAllowInvalidCertificates", "tlsAllowInvalidHostnames",
-		"tlsClusterFile", "tlsClusterPassword", "tlsClusterCAFile",
 		"tlsClusterAuthX509ExtensionValue", "tlsClusterAuthX509Attributes":
 		return fmt.Errorf("--%s is a MongoDB replica-set TLS option that DumboDB does not support", unsupported.Name)
 	default:
 		return fmt.Errorf("--%s is a MongoDB TLS option that DumboDB does not support", unsupported.Name)
 	}
+}
+
+func validateMembershipFlags(auth bool, replSetName, keyFile string) error {
+	if keyFile != "" && replSetName == "" {
+		return fmt.Errorf("--keyFile requires --replSet")
+	}
+	if auth && replSetName != "" && keyFile == "" {
+		return fmt.Errorf("--keyFile is required when --auth and --replSet are enabled")
+	}
+	return nil
+}
+
+func validateClusterTLSFlags(tlsMode, replSetName, clusterFile, clusterPassword, clusterCAFile string) error {
+	configured := clusterFile != "" || clusterPassword != "" || clusterCAFile != ""
+	if configured && replSetName == "" {
+		return fmt.Errorf("replica-set TLS options require --replSet")
+	}
+	if configured && tlsMode == "disabled" {
+		return fmt.Errorf("replica-set TLS options require TLS to be enabled")
+	}
+	if clusterPassword != "" && clusterFile == "" {
+		return fmt.Errorf("--tlsClusterPassword requires --tlsClusterFile")
+	}
+	return nil
 }
 
 func flagWasSet(fs *flag.FlagSet, name string) bool {

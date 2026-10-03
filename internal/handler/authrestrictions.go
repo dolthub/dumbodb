@@ -20,11 +20,15 @@ import (
 
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/replication/membership"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 func (h *Handler) checkAuthRestrictions(ctx context.Context, db, user string) error {
+	if h.MembershipCredentials != nil && db == membership.Database && user == membership.Username {
+		return nil
+	}
 	doc, err := h.loadUserDoc(ctx, db, user)
 	if err != nil {
 		return err
