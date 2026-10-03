@@ -15,12 +15,15 @@
 package handler
 
 import (
+	"bytes"
 	"context"
+	"encoding/hex"
 	"testing"
 	"time"
 
 	"github.com/FerretDB/wire"
 
+	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/replication/membership"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -84,6 +87,61 @@ func TestInternalLogicalTimeRequiresMembershipAuthentication(t *testing.T) {
 	clusterTime := must.NotFail(document.Get("$clusterTime")).(*types.Document)
 	if clusterTime.Has("signature") {
 		t.Fatal("internal $clusterTime response contains a signature")
+	}
+}
+
+func TestAuthenticatedExternalLogicalTimeUsesReplicatedKey(t *testing.T) {
+	h := authGateHandler(t, true)
+	h.MembershipCredentials = must.NotFail(membership.New("abcdef"))
+	database := must.NotFail(h.b.Database("admin"))
+	collection := must.NotFail(database.Collection("system.keys"))
+	keyBytes := make([]byte, 20)
+	for index := range keyBytes {
+		keyBytes[index] = byte(index)
+	}
+	keyID := int64(7692235776586678278)
+	expiresAt := types.NewTimestamp(time.Now().Add(time.Hour).UTC(), 1)
+	key := must.NotFail(types.NewDocument(
+		"_id", keyID,
+		"purpose", "HMAC",
+		"key", types.Binary{Subtype: types.BinaryGeneric, B: keyBytes},
+		"expiresAt", expiresAt,
+	))
+	if _, err := collection.InsertAll(context.Background(), &backends.InsertAllParams{Docs: []*types.Document{key}}); err != nil {
+		t.Fatal(err)
+	}
+
+	info := conninfo.New()
+	info.SetAuth("root", "", nil, "admin")
+	info.SetAuthenticated()
+	ctx := conninfo.Ctx(context.Background(), info)
+	response, err := h.withLogicalTime(ctx, wire.MustOpMsg("ok", float64(1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := must.NotFail(opMsgDocument(response))
+	clusterTime := must.NotFail(document.Get("$clusterTime")).(*types.Document)
+	timestamp := must.NotFail(clusterTime.Get("clusterTime")).(types.Timestamp)
+	signature := must.NotFail(clusterTime.Get("signature")).(*types.Document)
+	if got := must.NotFail(signature.Get("keyId")); got != keyID {
+		t.Fatalf("keyId = %v, want %d", got, keyID)
+	}
+	hash := must.NotFail(signature.Get("hash")).(types.Binary)
+	want := signLogicalTime(timestamp, keyBytes)
+	if !bytes.Equal(hash.B, want) {
+		t.Fatalf("signature = %x, want %x", hash.B, want)
+	}
+}
+
+func TestSignLogicalTimeMatchesMongoDBTimeProof(t *testing.T) {
+	key := make([]byte, 20)
+	for index := range key {
+		key[index] = byte(index)
+	}
+	logicalTime := types.Timestamp(uint64(0x01020304)<<32 | 0x05060708)
+	want := must.NotFail(hex.DecodeString("571773887c9fb972c000feb1a444a8d8f235907c"))
+	if got := signLogicalTime(logicalTime, key); !bytes.Equal(got, want) {
+		t.Fatalf("signature = %x, want %x", got, want)
 	}
 }
 

@@ -78,6 +78,10 @@ type Handler struct {
 	authGen     atomic.Uint64
 	logicalTime atomic.Uint64
 
+	logicalTimeKeyMu           sync.Mutex
+	logicalTimeKey             logicalTimeSigningKey
+	logicalTimeKeyRefreshAfter time.Time
+
 	cappedCleanupStop chan struct{}
 }
 

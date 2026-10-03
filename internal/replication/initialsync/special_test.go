@@ -49,19 +49,23 @@ func TestMaterializeSpecialDatabasesTranslatesAuthAndMetadata(t *testing.T) {
 	}
 	userUUID := uuid.MustParse("12345678-1234-4234-9234-123456789abc")
 	roleUUID := uuid.MustParse("23456781-2341-4342-8342-234567819abc")
+	keyUUID := uuid.MustParse("34567812-3412-4434-8434-34567812abcd")
 	transactionUUID := uuid.MustParse("87654321-4321-4321-8321-cba987654321")
 	user := initialSyncUserDocument()
 	role := initialSyncRoleDocument()
+	clusterKey := initialSyncKeyDocument()
 	transaction := initialSyncTransactionDocument()
 	client := &boundaryClient{responses: []*wire.OpMsg{
 		cloneCursorResponse(t, "firstBatch", 0, "admin.system.users", must.NotFail(types.NewDocument("$recordId", int64(1))), user),
 		cloneCursorResponse(t, "firstBatch", 0, "admin.system.roles", must.NotFail(types.NewDocument("$recordId", int64(1))), role),
+		cloneCursorResponse(t, "firstBatch", 0, "admin.system.keys", must.NotFail(types.NewDocument("$recordId", int64(1))), clusterKey),
 		cloneCursorResponse(t, "firstBatch", 0, "config.transactions", must.NotFail(types.NewDocument("$recordId", int64(1))), transaction),
 	}}
 	databases := []Database{
 		{Name: "admin", Special: true, Collections: []Collection{
 			{Name: "system.users", SourceUUID: userUUID.String(), UUIDBinary: uuidBinaryForInitialSync(userUUID)},
 			{Name: "system.roles", SourceUUID: roleUUID.String(), UUIDBinary: uuidBinaryForInitialSync(roleUUID)},
+			{Name: "system.keys", SourceUUID: keyUUID.String(), UUIDBinary: uuidBinaryForInitialSync(keyUUID)},
 			{Name: "system.version"},
 		}},
 		{Name: "config", Special: true, Collections: []Collection{
@@ -108,8 +112,20 @@ func TestMaterializeSpecialDatabasesTranslatesAuthAndMetadata(t *testing.T) {
 	if types.Compare(gotTransaction, transaction) != types.Equal {
 		t.Fatalf("initial-sync transaction = %v, want %v", gotTransaction, transaction)
 	}
-	if len(client.requests) != 3 {
-		t.Fatalf("clone requests = %d, want 3", len(client.requests))
+	keyDocument := must.NotFail(types.NewDocument("_id", must.NotFail(clusterKey.Get("_id"))))
+	gotKey, err := applier.KeyDocument(ctx, keyDocument)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"_id", "purpose", "key", "expiresAt"} {
+		got, _ := gotKey.Get(field)
+		want, _ := clusterKey.Get(field)
+		if types.Compare(got, want) != types.Equal {
+			t.Fatalf("initial-sync key %s = %v, want %v", field, got, want)
+		}
+	}
+	if len(client.requests) != 4 {
+		t.Fatalf("clone requests = %d, want 4", len(client.requests))
 	}
 	databasesResult, err := backend.ListDatabases(ctx, nil)
 	if err != nil {
@@ -167,6 +183,15 @@ func initialSyncTransactionDocument() *types.Document {
 		"lastWriteOpTime", must.NotFail(types.NewDocument("ts", types.Timestamp(uint64(100)<<32|3), "t", int64(8))),
 		"lastWriteDate", time.Unix(100, 0).UTC(),
 		"state", "prepared",
+	))
+}
+
+func initialSyncKeyDocument() *types.Document {
+	return must.NotFail(types.NewDocument(
+		"_id", int64(7692235776586678278),
+		"purpose", "HMAC",
+		"key", types.Binary{Subtype: types.BinaryGeneric, B: make([]byte, 20)},
+		"expiresAt", types.Timestamp(uint64(200)<<32|1),
 	))
 }
 

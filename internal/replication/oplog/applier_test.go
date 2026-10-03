@@ -133,6 +133,39 @@ func TestApplierRoutesReplicatedAuthAndInvalidatesGeneration(t *testing.T) {
 	}
 }
 
+func TestApplierStoresReplicatedClusterKeys(t *testing.T) {
+	ctx := context.Background()
+	_, applier, _ := newTestApplier(t)
+	key := replicatedClusterKey()
+	if err := applier.Apply(ctx, makeOplogEntry(t, 1, "i", replicationspecial.KeysNamespace, "", key, nil)); err != nil {
+		t.Fatal(err)
+	}
+	documentKey := must.NotFail(types.NewDocument("_id", must.NotFail(key.Get("_id"))))
+	diff := must.NotFail(types.NewDocument("u", must.NotFail(types.NewDocument(
+		"expiresAt", types.Timestamp(uint64(300)<<32|1),
+	))))
+	update := must.NotFail(types.NewDocument("$v", int32(2), "diff", diff))
+	if err := applier.Apply(ctx, makeOplogEntry(t, 2, "u", replicationspecial.KeysNamespace, "", update, documentKey)); err != nil {
+		t.Fatal(err)
+	}
+	if err := applier.Apply(ctx, makeOplogEntry(t, 2, "u", replicationspecial.KeysNamespace, "", update, documentKey)); err != nil {
+		t.Fatalf("idempotent cluster key update: %v", err)
+	}
+	stored, err := applier.special.KeyDocument(ctx, documentKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expiresAt, _ := stored.Get("expiresAt"); expiresAt != types.Timestamp(uint64(300)<<32|1) {
+		t.Fatalf("expiresAt = %v", expiresAt)
+	}
+	if err := applier.Apply(ctx, makeOplogEntry(t, 3, "d", replicationspecial.KeysNamespace, "", documentKey, nil)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := applier.special.KeyDocument(ctx, documentKey); err == nil {
+		t.Fatal("deleted cluster key remains materialized")
+	}
+}
+
 func TestApplierStoresConfigMetadataWithoutCreatingConfigDatabase(t *testing.T) {
 	ctx := context.Background()
 	backend, applier, _ := newTestApplier(t)
@@ -755,6 +788,15 @@ func replicatedAuthUser() *types.Document {
 		"_id", "sales.ada", "userId", uuidBinary(uuid.MustParse("12345678-1234-4234-9234-123456789abc")),
 		"user", "ada", "db", "sales", "credentials", must.NotFail(types.NewDocument("SCRAM-SHA-256", credential)),
 		"roles", must.NotFail(types.NewArray(must.NotFail(types.NewDocument("role", "readWrite", "db", "sales")))),
+	))
+}
+
+func replicatedClusterKey() *types.Document {
+	return must.NotFail(types.NewDocument(
+		"_id", int64(7692235776586678278),
+		"purpose", "HMAC",
+		"key", types.Binary{Subtype: types.BinaryGeneric, B: make([]byte, 20)},
+		"expiresAt", types.Timestamp(uint64(200)<<32|1),
 	))
 }
 
