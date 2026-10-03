@@ -283,6 +283,10 @@ func compareNumbers(a float64, b int64) CompareResult {
 }
 
 func compareNumeric(v1, v2 any) (CompareResult, bool) {
+	if res, ok := compareNumericFast(v1, v2); ok {
+		return res, true
+	}
+
 	c1, r1, ok1 := numericParts(v1)
 	c2, r2, ok2 := numericParts(v2)
 	if !ok1 || !ok2 {
@@ -295,6 +299,58 @@ func compareNumeric(v1, v2 any) (CompareResult, bool) {
 		return CompareResult(r1.Cmp(r2)), true
 	}
 	return Equal, true
+}
+
+// maxExactFloatInt is the largest magnitude below which every integer converts
+// to float64 exactly.
+const maxExactFloatInt = 1 << 53
+
+// compareNumericFast compares int32, int64, and float64 values without
+// allocating, with the same result as the exact rational comparison. It
+// reports false for other types and for integers too large to convert to
+// float64 exactly.
+func compareNumericFast(v1, v2 any) (CompareResult, bool) {
+	i1, isInt1 := asInt64(v1)
+	i2, isInt2 := asInt64(v2)
+	f1, isFloat1 := v1.(float64)
+	f2, isFloat2 := v2.(float64)
+
+	switch {
+	case isInt1 && isInt2:
+		return compareOrdered(i1, i2), true
+	case isFloat1 && isFloat2:
+		return compareFloats(f1, f2), true
+	case isInt1 && isFloat2 && i1 > -maxExactFloatInt && i1 < maxExactFloatInt:
+		return compareFloats(float64(i1), f2), true
+	case isFloat1 && isInt2 && i2 > -maxExactFloatInt && i2 < maxExactFloatInt:
+		return compareFloats(f1, float64(i2)), true
+	}
+	return Equal, false
+}
+
+func asInt64(v any) (int64, bool) {
+	switch v := v.(type) {
+	case int32:
+		return int64(v), true
+	case int64:
+		return v, true
+	}
+	return 0, false
+}
+
+// compareFloats orders NaN below every other number and equal to itself, as
+// numericParts does.
+func compareFloats(a, b float64) CompareResult {
+	aNaN, bNaN := math.IsNaN(a), math.IsNaN(b)
+	switch {
+	case aNaN && bNaN:
+		return Equal
+	case aNaN:
+		return Less
+	case bNaN:
+		return Greater
+	}
+	return compareOrdered(a, b)
 }
 
 const (
