@@ -118,10 +118,12 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 	var inserted int32
 	var writeErrors []*mongo.WriteError
 
+	batchCap := min(h.BatchSize, params.Docs.Len())
+
 	var done bool
 	for !done {
-		docs := make([]*types.Document, 0, h.BatchSize)
-		docsIndexes := make([]int, 0, h.BatchSize)
+		docs := make([]*types.Document, 0, batchCap)
+		docsIndexes := make([]int, 0, batchCap)
 
 		for j := 0; j < h.BatchSize; j++ {
 			var i int
