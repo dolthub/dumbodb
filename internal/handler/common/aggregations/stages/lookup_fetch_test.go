@@ -249,3 +249,89 @@ func TestGraphLookup_IndexedSourceMatchesInMemory(t *testing.T) {
 	}
 	require.Greater(t, indexed.fetches, 1, "levels were not fetched through the index")
 }
+
+type recordingFetcher struct {
+	filteringFetcher
+	indexedFields map[string]bool
+	filters       []*types.Document
+}
+
+func (f *recordingFetcher) Fetch(ctx context.Context, name string, filter *types.Document) ([]*types.Document, error) {
+	f.filters = append(f.filters, filter)
+	return f.filteringFetcher.Fetch(ctx, name, filter)
+}
+
+func (f *recordingFetcher) IndexedField(_ context.Context, _ string, field string) bool {
+	return f.indexedFields[field]
+}
+
+// With an index on the joined field, every level of a (nested) $lookup must
+// fetch through it, and the result must match the unindexed in-memory join.
+func TestLookup_IndexedForeignFieldIsUsedAtEveryLevel(t *testing.T) {
+	var foreign []*types.Document
+	for i := int32(0); i < 20; i++ {
+		foreign = append(foreign, doc("_id", i, "i", i, "grp", i%5))
+	}
+	orders := []*types.Document{
+		doc("_id", "o1", "ref", int32(3)),
+		doc("_id", "o2", "ref", int32(12)),
+		doc("_id", "o3", "ref", int32(19)),
+		doc("_id", "o4", "ref", int32(25)),
+	}
+
+	equality := func(local, as string, pipeline ...any) *types.Document {
+		spec := doc("from", "f", "localField", local, "foreignField", "i", "as", as)
+		if len(pipeline) > 0 {
+			spec.Set("pipeline", arr(pipeline...))
+		}
+		return doc("$lookup", spec)
+	}
+	letPipeline := func(local, as string, rest ...any) *types.Document {
+		return doc("$lookup", doc(
+			"from", "f",
+			"let", doc("v", "$"+local),
+			"pipeline", arr(append([]any{exprEqMatch("$i", "$$v")}, rest...)...),
+			"as", as,
+		))
+	}
+
+	for name, spec := range map[string]*types.Document{
+		"equality":              equality("ref", "j"),
+		"let pipeline":          letPipeline("ref", "j"),
+		"nested equality":       equality("ref", "j", equality("grp", "g")),
+		"nested three levels":   equality("ref", "j", equality("grp", "g", equality("grp", "h"))),
+		"nested let pipeline":   letPipeline("ref", "j", letPipeline("grp", "g")),
+		"let pipeline equality": letPipeline("ref", "j", equality("grp", "g")),
+	} {
+		t.Run(name, func(t *testing.T) {
+			run := func(fetcher CollectionFetcher) []*types.Document {
+				s, err := NewLookupStage(spec, fetcher)
+				require.NoError(t, err)
+				closer := iterator.NewMultiCloser()
+				defer closer.Close()
+				out, err := s.Process(context.Background(), iterator.Values(iterator.ForSlice(orders)), closer)
+				require.NoError(t, err)
+				results, err := iterator.ConsumeValues(out)
+				require.NoError(t, err)
+				return results
+			}
+
+			inMemory := run(FetcherFunc(func(context.Context, string, *types.Document) ([]*types.Document, error) {
+				return foreign, nil
+			}))
+			indexed := &recordingFetcher{filteringFetcher: filteringFetcher{docs: foreign}, indexedFields: map[string]bool{"i": true}}
+			viaIndex := run(indexed)
+
+			require.Len(t, viaIndex, len(inMemory))
+			for i := range inMemory {
+				require.Equal(t, types.Equal, types.Compare(inMemory[i], viaIndex[i]),
+					"order %d: in memory %v, via index %v", i, inMemory[i], viaIndex[i])
+			}
+			require.NotEmpty(t, indexed.filters)
+			for _, filter := range indexed.filters {
+				require.NotNil(t, filter, "a level loaded the whole collection instead of using the index")
+				require.True(t, filter.Has("i"), "fetch filter %v is not on the indexed field", filter)
+			}
+		})
+	}
+}
