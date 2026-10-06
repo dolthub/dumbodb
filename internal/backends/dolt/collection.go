@@ -3320,7 +3320,7 @@ func writeDocToValue(ctx context.Context, ns tree.NodeStore, doc *types.Document
 // *val.ByteArray takes the byte-level splice path so unchanged chunks
 // stay deduplicated.
 func applyFieldMutations(ctx context.Context, ns tree.NodeStore, v val.Tuple, mutations []backends.FieldMutation) ([]byte, error) {
-	result, ok, err := valDescFor(ns).GetBytesAdaptiveValue(ctx, 0, ns, v)
+	result, ok, err := storedValueReadDesc.GetBytesAdaptiveValue(ctx, 0, ns, v)
 	if err != nil {
 		return nil, fmt.Errorf("reading bytes value from tuple: %w", err)
 	}
@@ -3407,14 +3407,7 @@ func decodeDocFromJSON(storedBytes []byte) (*types.Document, error) {
 }
 
 func decodeDocument(data []byte) (*types.Document, error) {
-	doc, err := bson.ToDocumentHandlingMinMaxKey(wirebson.RawDocument(data))
-	if err != nil {
-		return nil, fmt.Errorf("decoding document: %w", err)
-	}
-	if doc != nil {
-		return doc, nil
-	}
-	doc, err = bson.ToDocument(wirebson.RawDocument(data))
+	doc, err := bson.ToDocument(wirebson.RawDocument(data))
 	if err != nil {
 		return nil, fmt.Errorf("decoding document: %w", err)
 	}

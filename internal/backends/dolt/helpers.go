@@ -65,6 +65,10 @@ func valDescFor(ns tree.NodeStore) *val.TupleDesc {
 	)
 }
 
+// storedValueReadDesc only locates the stored document field; reading an
+// adaptive value takes the NodeStore as an argument and never compares.
+var storedValueReadDesc = val.NewTupleDescriptor(val.Type{Enc: val.BytesAdaptiveEnc, Nullable: false})
+
 var bufPool = pool.NewBuffPool()
 
 // newEmptyMap creates an empty prolly.Map with our schema.
