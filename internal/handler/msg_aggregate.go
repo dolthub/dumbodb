@@ -557,7 +557,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 
 	cursorID := cursor.ID
 
-	docs, err := iterator.ConsumeValuesN(cursor, int(batchSize))
+	docs, done, err := cursor.NextBatch(int(batchSize), types.MaxDocumentLen)
 	if err != nil {
 		h.cursors.CloseAndRemove(cursor)
 		return nil, wrapAggregateExecutorError(handleMaxTimeMSError(err, maxTimeMS, "aggregate"))
@@ -577,7 +577,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		firstBatch.Append(doc)
 	}
 
-	if firstBatch.Len() < int(batchSize) {
+	if done {
 		// let the client know that there are no more results
 		cursorID = 0
 
@@ -884,7 +884,7 @@ func (h *Handler) aggregateDocuments(connCtx context.Context, document, firstSta
 
 	cursorID := cur.ID
 
-	docs, err := iterator.ConsumeValuesN(cur, int(batchSize))
+	docs, done, err := cur.NextBatch(int(batchSize), types.MaxDocumentLen)
 	if err != nil {
 		h.cursors.CloseAndRemove(cur)
 		return nil, err
@@ -895,7 +895,7 @@ func (h *Handler) aggregateDocuments(connCtx context.Context, document, firstSta
 		firstBatch.Append(doc)
 	}
 
-	if firstBatch.Len() < int(batchSize) {
+	if done {
 		cursorID = 0
 		cur.Close()
 	}

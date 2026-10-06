@@ -24,7 +24,9 @@
 package cursor
 
 import (
+	"errors"
 	"log/slog"
+	"strconv"
 	"sync"
 	"time"
 
@@ -61,6 +63,7 @@ type Cursor struct {
 
 	created time.Time
 	iter    types.DocumentsIterator // protected by m
+	pending *types.Document         // protected by m
 	*NewParams
 	r            *Registry
 	l            *slog.Logger
@@ -140,6 +143,54 @@ func (c *Cursor) Next() (struct{}, *types.Document, error) {
 	}
 
 	return zero, doc, err
+}
+
+// NextBatch returns the next batch: up to maxDocs documents (unlimited when
+// maxDocs < 0), ending before the document that would take the batch's BSON
+// size past maxBytes. The first document is always included, and a document
+// left out starts the next batch. done reports that the results are exhausted,
+// in which case the cursor is closed, as it is on error.
+func (c *Cursor) NextBatch(maxDocs, maxBytes int) (batch []*types.Document, done bool, err error) {
+	size := 0
+	for maxDocs < 0 || len(batch) < maxDocs {
+		doc, err := c.nextPendingFirst()
+		if errors.Is(err, iterator.ErrIteratorDone) {
+			c.Close()
+			return batch, true, nil
+		}
+		if err != nil {
+			c.Close()
+			return nil, false, lazyerrors.Error(err)
+		}
+
+		docSize := batchElementSize(len(batch), doc)
+		if len(batch) > 0 && size+docSize > maxBytes {
+			c.m.Lock()
+			c.pending = doc
+			c.m.Unlock()
+			return batch, false, nil
+		}
+		batch = append(batch, doc)
+		size += docSize
+	}
+	return batch, false, nil
+}
+
+func (c *Cursor) nextPendingFirst() (*types.Document, error) {
+	c.m.Lock()
+	doc := c.pending
+	c.pending = nil
+	c.m.Unlock()
+	if doc != nil {
+		return doc, nil
+	}
+	_, doc, err := c.Next()
+	return doc, err
+}
+
+// batchElementSize is the encoded size of doc as element i of a batch array.
+func batchElementSize(i int, doc *types.Document) int {
+	return 1 + len(strconv.Itoa(i)) + 1 + doc.BSONSize()
 }
 
 // Close implements types.DocumentsIterator interface.

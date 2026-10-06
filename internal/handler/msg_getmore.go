@@ -175,17 +175,13 @@ func (h *Handler) MsgGetMore(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 		)
 	}
 
-	v, _ = document.Get("batchSize")
-	if v == nil || types.Compare(v, int32(0)) == types.Equal {
-		// Use 16MB batchSize limit.
-		// Unlimited default batchSize is used for missing batchSize and zero values,
-		// set 250 assuming it is small enough not to crash DumboDB.
-		v = int32(250)
-	}
-
-	batchSize, err := handlerparams.GetValidatedNumberParamWithMinValue(document.Command(), "batchSize", v, 0)
-	if err != nil {
-		return nil, err
+	// A missing or zero batchSize puts no count limit on the batch; the size
+	// limit still applies.
+	batchSize := int64(-1)
+	if v, _ = document.Get("batchSize"); v != nil && types.Compare(v, int32(0)) != types.Equal {
+		if batchSize, err = handlerparams.GetValidatedNumberParamWithMinValue(document.Command(), "batchSize", v, 0); err != nil {
+			return nil, err
+		}
 	}
 
 	if c.DB != db || c.Collection != collection {
@@ -205,14 +201,14 @@ func (h *Handler) MsgGetMore(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 		return nil, downstreamReplicationUnsupportedError()
 	}
 
-	nextBatch, err := h.makeNextBatch(c, batchSize)
+	nextBatch, done, err := h.makeNextBatch(c, batchSize)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
 	}
 
 	switch c.Type {
 	case cursor.Normal:
-		if nextBatch.Len() < int(batchSize) {
+		if done {
 			// The cursor is already closed and removed;
 			// let the client know that there are no more results.
 			cursorID = 0
@@ -244,7 +240,7 @@ func (h *Handler) MsgGetMore(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 			}
 
 			if nextBatch.Len() == 0 {
-				nextBatch, err = h.makeNextBatch(c, batchSize)
+				nextBatch, _, err = h.makeNextBatch(c, batchSize)
 				if err != nil {
 					return nil, lazyerrors.Error(err)
 				}
@@ -279,11 +275,12 @@ func (h *Handler) MsgGetMore(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 	)
 }
 
-// makeNextBatch returns the next batch of documents from the cursor.
-func (h *Handler) makeNextBatch(c *cursor.Cursor, batchSize int64) (*types.Array, error) {
-	docs, err := iterator.ConsumeValuesN(c, int(batchSize))
+// makeNextBatch returns the next batch of documents from the cursor and
+// whether the cursor is exhausted. A negative batchSize sets no count limit.
+func (h *Handler) makeNextBatch(c *cursor.Cursor, batchSize int64) (*types.Array, bool, error) {
+	docs, done, err := c.NextBatch(int(batchSize), types.MaxDocumentLen)
 	if err != nil {
-		return nil, lazyerrors.Error(err)
+		return nil, false, lazyerrors.Error(err)
 	}
 
 	h.L.Debug(
@@ -299,7 +296,7 @@ func (h *Handler) makeNextBatch(c *cursor.Cursor, batchSize int64) (*types.Array
 		nextBatch.Append(doc)
 	}
 
-	return nextBatch, nil
+	return nextBatch, done, nil
 }
 
 // awaitDataParams contains parameters that can be passed to awaitData function.
@@ -364,7 +361,7 @@ func (h *Handler) awaitData(ctx context.Context, params *awaitDataParams) (resBa
 			return
 		}
 
-		resBatch, err = h.makeNextBatch(c, params.batchSize)
+		resBatch, _, err = h.makeNextBatch(c, params.batchSize)
 		if err != nil {
 			return
 		}

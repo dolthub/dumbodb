@@ -239,7 +239,7 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 
 	cursorID := c.ID
 
-	docs, err := iterator.ConsumeValuesN(c, int(params.BatchSize))
+	docs, done, err := c.NextBatch(int(params.BatchSize), types.MaxDocumentLen)
 	if err != nil {
 		h.cursors.CloseAndRemove(c)
 		return nil, wrapFindExecutorError(handleMaxTimeMSError(err, params.MaxTimeMS, "find"), params.DB+"."+params.Collection)
@@ -255,7 +255,7 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 		slog.Bool("single_batch", params.SingleBatch),
 	)
 
-	if params.SingleBatch || len(docs) < int(params.BatchSize) {
+	if params.SingleBatch || done {
 		c.Close()
 
 		// It is not entirely clear if we should do that; more tests are needed.
