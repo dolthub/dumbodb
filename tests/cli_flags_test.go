@@ -150,9 +150,10 @@ func TestAutoCommitFlag(t *testing.T) {
 		"auto-commit must produce at least Initialize + 1 auto-insert commit")
 }
 
-// TestAutoCommitSessionIsolationMutuallyExclusive: the server refuses to start
-// when both --auto-commit and --session-isolation are set.
-func TestAutoCommitSessionIsolationMutuallyExclusive(t *testing.T) {
+// TestSessionIsolationFlagDisabled: --session-isolation is disabled (the
+// backend and wire plumbing remain), so the server must reject the flag as
+// undefined rather than silently accept it.
+func TestSessionIsolationFlagDisabled(t *testing.T) {
 	binary := filepath.Join(t.TempDir(), "dumbodb")
 	build := exec.Command("go", "build", "-o", binary, "./cmd/dumbodb/")
 	build.Dir = repoRoot()
@@ -160,11 +161,11 @@ func TestAutoCommitSessionIsolationMutuallyExclusive(t *testing.T) {
 		t.Fatalf("building binary: %v\n%s", err, out)
 	}
 
-	cmd := exec.Command(binary, "--auto-commit", "--session-isolation", "--data-dir", t.TempDir())
+	cmd := exec.Command(binary, "--session-isolation", "--data-dir", t.TempDir())
 	out, err := cmd.CombinedOutput()
-	require.Error(t, err, "server must exit non-zero when both flags are set")
-	assert.Contains(t, string(out), "mutually exclusive",
-		"error must explain the flags are mutually exclusive; got: %s", out)
+	require.Error(t, err, "server must exit non-zero when --session-isolation is passed")
+	assert.Contains(t, string(out), "flag provided but not defined",
+		"the disabled flag must be rejected as undefined; got: %s", out)
 }
 
 func TestTLSFlags(t *testing.T) {
