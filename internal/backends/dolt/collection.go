@@ -2093,21 +2093,26 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 			}
 		}
 
-		// The new doc decodes from newBytes (what was actually stored;
-		// the partial-mutation path may differ from params.Docs).
-		oldDoc, err := readDocFromValue(ctx, state.ns, existingTup)
-		if err != nil {
-			return nil, fmt.Errorf("decoding pre-update document: %w", err)
-		}
-		newDoc, err := bsonToDoc(newBytes)
-		if err != nil {
-			return nil, fmt.Errorf("decoding post-update document: %w", err)
-		}
-
-		if hasUnique {
-			if err := c.validateUniqueOnUpdate(ctx, state, m, idxInfos, idxMaps, newDoc, h); err != nil {
-				return nil, err
+		if len(idxInfos) > 0 {
+			// The new doc decodes from newBytes (what was actually stored;
+			// the partial-mutation path may differ from params.Docs).
+			oldDoc, err := readDocFromValue(ctx, state.ns, existingTup)
+			if err != nil {
+				return nil, fmt.Errorf("decoding pre-update document: %w", err)
 			}
+			newDoc, err := bsonToDoc(newBytes)
+			if err != nil {
+				return nil, fmt.Errorf("decoding post-update document: %w", err)
+			}
+
+			if hasUnique {
+				if err := c.validateUniqueOnUpdate(ctx, state, m, idxInfos, idxMaps, newDoc, h); err != nil {
+					return nil, err
+				}
+			}
+
+			idxOldDocs = append(idxOldDocs, oldDoc)
+			idxNewDocs = append(idxNewDocs, newDoc)
 		}
 
 		v, err := buildValue(ctx, state.ns, newBytes)
@@ -2118,9 +2123,6 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 		if err := mut.Put(ctx, key, v); err != nil {
 			return nil, err
 		}
-
-		idxOldDocs = append(idxOldDocs, oldDoc)
-		idxNewDocs = append(idxNewDocs, newDoc)
 
 		updated++
 	}
