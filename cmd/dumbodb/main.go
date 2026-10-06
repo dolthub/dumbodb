@@ -100,7 +100,10 @@ func run(logger *slog.Logger) error {
 	registerUnsupportedTLSFlags(fs)
 	logLevel := fs.String("log-level", "info", "log level (debug, info, warn, error)")
 	autoCommit := fs.Bool("auto-commit", false, "automatically commit each write (insert/update/delete) to Dolt history")
-	sessionIsolation := fs.Bool("session-isolation", false, "run in version-control-native isolation mode: per-connection working-set overlay, doltCommit merges, startTransaction rejected")
+	// Session isolation (per-connection working-set overlay, doltCommit merges)
+	// is disabled, not removed: the backend and wire paths still accept the
+	// switch, so re-enabling is a flag away once there is demand for it.
+	const sessionIsolation = false
 	sessionTimeout := fs.Duration("session-timeout", 0, "idle timeout for lsid-keyed sessions; default is 30m (matches MongoDB logicalSessionTimeoutMinutes)")
 	sessionSweepPeriod := fs.Duration("session-sweep-period", 0, "how often to walk the session registry looking for idle entries; default 1m")
 	pprofAddr := fs.String("pprof-addr", "", "if non-empty, expose net/http/pprof on this address (e.g. 127.0.0.1:6060)")
@@ -116,9 +119,6 @@ func run(logger *slog.Logger) error {
 	disabledProtocols, parseErr := parseTLSDisabledProtocols(*tlsDisabledProtocols, tlsDisabledProtocolsSet)
 	if parseErr != nil {
 		return parseErr
-	}
-	if *autoCommit && *sessionIsolation {
-		return fmt.Errorf("--auto-commit and --session-isolation are mutually exclusive: auto-commit commits every write at the command boundary, while session-isolation defers commits to an explicit doltCommit merge")
 	}
 	if err := validateTLSFlags(*tlsMode, *tlsCertificateKeyFile, *tlsCertificateKeyFilePassword, *tlsCAFile, *tlsCRLFile, tlsDisabledProtocolsSet, *tlsAllowConnectionsWithoutCertificates); err != nil {
 		return err
@@ -167,7 +167,7 @@ func run(logger *slog.Logger) error {
 	var handlerBackend backends.Backend
 	var err error
 	if replicationEnabled {
-		handlerBackend, err = dolt.NewBackend(*dataDir, logger, *autoCommit, *sessionIsolation, *sessionTimeout, *sessionSweepPeriod)
+		handlerBackend, err = dolt.NewBackend(*dataDir, logger, *autoCommit, sessionIsolation, *sessionTimeout, *sessionSweepPeriod)
 		if err != nil {
 			return err
 		}
@@ -193,7 +193,7 @@ func run(logger *slog.Logger) error {
 		ReplicationTopology: replicationTopology,
 		DoltDataDir:         *dataDir,
 		AutoCommit:          *autoCommit,
-		SessionIsolation:    *sessionIsolation,
+		SessionIsolation:    sessionIsolation,
 		SessionTimeout:      *sessionTimeout,
 		SessionSweepPeriod:  *sessionSweepPeriod,
 		TestOpts: registry.TestOpts{

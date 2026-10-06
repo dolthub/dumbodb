@@ -654,14 +654,17 @@ The same configuration-first lifecycle applies to `dumboCherryPick`,
 `dumboRebase`, and `dumboRevert`: their operation-specific `continue` command
 runs phase 2 before it creates or advances any replay commit. Abort restores the
 pre-operation state, and persisted history operations survive restart at either
-pause. Under `--session-isolation`, the losing `doltCommit` keeps its deferred
-roots in that session; other clients continue to see only the committed branch.
-Resolving the metadata conflict and committing again runs phase 2. Session
-conflicts are in-memory and therefore do not survive a server restart.
+pause. Under `--session-isolation` -- currently disabled: the flag is removed
+but the plumbing remains, see `cmd/dumbodb/main.go` -- the losing `doltCommit`
+keeps its deferred roots in that session; other clients continue to see only the
+committed branch. Resolving the metadata conflict and committing again runs
+phase 2. Session conflicts are in-memory and therefore do not survive a server
+restart.
 
-Focused command tests in `cherry_pick_test.go`, `rebase_test.go`,
-`revert_test.go`, and `session_isolation_test.go` exercise the corresponding
-continuation and visibility paths. This guide's full automated counterpart
+Focused command tests in `cherry_pick_test.go`, `rebase_test.go`, and
+`revert_test.go` exercise the corresponding continuation and visibility paths;
+`session_isolation_test.go` covers the session-isolation paths and is skipped
+while the mode is disabled. This guide's full automated counterpart
 remains the single `validator_test.go` suite named above.
 
 ---

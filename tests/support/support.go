@@ -102,6 +102,15 @@ func RepoRoot() string {
 func StartDumboDB(tb testing.TB, extraArgs ...string) *Env {
 	tb.Helper()
 
+	// --session-isolation is disabled in cmd/dumbodb (the backend and wire
+	// plumbing remain). Skip rather than delete the tests that exercise it so
+	// they resume unchanged if the flag is re-enabled.
+	for _, arg := range extraArgs {
+		if arg == "--session-isolation" {
+			tb.Skip("--session-isolation is disabled; see cmd/dumbodb/main.go")
+		}
+	}
+
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(tb, err)
 	port := listener.Addr().(*net.TCPAddr).Port
