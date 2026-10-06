@@ -170,11 +170,25 @@ func (h *Handler) MsgCollMod(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 		return nil, lazyerrors.Error(err)
 	}
 
-	// Only a changed viewOn can alter the view-resolution chain; a pipeline-only
-	// redefinition leaves it intact.
+	// Only a changed viewOn can alter the view-resolution chain; either change
+	// can add a dependency cycle through $lookup, $graphLookup, or $unionWith.
 	if params.SetViewOn {
 		if verr := validateViewChainAcyclic(connCtx, db, collectionName, params.ViewOn); verr != nil {
 			return nil, verr
+		}
+	}
+	if params.SetViewOn || params.SetViewPipeline {
+		if existing, lerr := lookupCollectionInfo(connCtx, db, collectionName); lerr == nil && existing != nil && existing.IsView {
+			viewOn, pipeline := existing.ViewOn, existing.ViewPipeline
+			if params.SetViewOn {
+				viewOn = params.ViewOn
+			}
+			if params.SetViewPipeline {
+				pipeline = params.ViewPipeline
+			}
+			if verr := validateViewDependenciesAcyclic(connCtx, db, collectionName, viewOn, pipeline, "collMod"); verr != nil {
+				return nil, verr
+			}
 		}
 	}
 

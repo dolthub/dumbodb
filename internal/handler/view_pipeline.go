@@ -20,6 +20,8 @@ import (
 	"strings"
 
 	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/collation"
+	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/stages"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
@@ -36,8 +38,9 @@ const maxViewDepth = 20
 // buildViewPipelineStages compiles a view's pipeline into executable stages
 // ($lookup/$graphLookup get a collection fetcher; the rest go through
 // stages.NewStage) and also returns the raw stage documents, which the pushdown
-// analysis needs in their original form.
-func buildViewPipelineStages(db backends.Database, viewPipeline *types.Array) ([]aggregations.Stage, []any, error) {
+// analysis needs in their original form. A non-nil cmp is the view's collation;
+// $match and $sort compare strings under it.
+func buildViewPipelineStages(db backends.Database, viewPipeline *types.Array, cmp *collation.Comparator) ([]aggregations.Stage, []any, error) {
 	if viewPipeline == nil || viewPipeline.Len() == 0 {
 		return nil, nil, nil
 	}
@@ -45,7 +48,7 @@ func buildViewPipelineStages(db backends.Database, viewPipeline *types.Array) ([
 	stageDocs := must.NotFail(iterator.ConsumeValues(viewPipeline.Iterator()))
 	result := make([]aggregations.Stage, 0, len(stageDocs))
 
-	for _, v := range stageDocs {
+	for i, v := range stageDocs {
 		vd, ok := v.(*types.Document)
 		if !ok {
 			return nil, nil, lazyerrors.Errorf("view pipeline stage is not a document: %T", v)
@@ -56,27 +59,17 @@ func buildViewPipelineStages(db backends.Database, viewPipeline *types.Array) ([
 
 		switch vd.Command() {
 		case "$lookup", "$graphLookup":
-			fetcher := func(ctx context.Context, collName string) ([]*types.Document, error) {
-				fromColl, collErr := db.Collection(collName)
-				if collErr != nil {
-					return nil, collErr
-				}
-
-				qRes, qErr := fromColl.Query(ctx, new(backends.QueryParams))
-				if qErr != nil {
-					return nil, qErr
-				}
-
-				defer qRes.Iter.Close()
-
-				return iterator.ConsumeValues(qRes.Iter)
-			}
+			fetcher := foreignCollectionFetcher(db)
 
 			if vd.Command() == "$graphLookup" {
 				vs, err = stages.NewGraphLookupStage(vd, fetcher)
 			} else {
 				vs, err = stages.NewLookupStage(vd, fetcher)
 			}
+		case "$match":
+			vs, err = stages.NewMatchStage(vd, cmp)
+		case "$sort":
+			vs, err = stages.NewSortStage(vd, sortLimitBound(stageDocs, i), cmp)
 		default:
 			vs, err = stages.NewStage(vd)
 		}
@@ -89,6 +82,111 @@ func buildViewPipelineStages(db backends.Database, viewPipeline *types.Array) ([
 	}
 
 	return result, stageDocs, nil
+}
+
+type foreignViewDepthKey struct{}
+
+// foreignCollectionFetcher reads the "from" namespace of $lookup/$graphLookup
+// from db.
+func foreignCollectionFetcher(db backends.Database) stages.CollectionFetcher {
+	return &foreignFetcher{db: db}
+}
+
+type foreignFetcher struct {
+	db backends.Database
+}
+
+// Fetch returns the documents of collName that match filter, letting the
+// backend use an index for it. A view is resolved to its output under its own
+// collation. Nesting through foreign views is bounded by the view depth limit,
+// so a view that looks up from itself fails instead of recursing forever.
+func (f *foreignFetcher) Fetch(ctx context.Context, collName string, filter *types.Document) ([]*types.Document, error) {
+	db := f.db
+	info, err := lookupCollectionInfo(ctx, db, collName)
+	if err != nil {
+		return nil, err
+	}
+
+	if info != nil && info.IsView {
+		depth, _ := ctx.Value(foreignViewDepthKey{}).(int)
+		if depth >= maxViewDepth {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrViewDepthLimitExceeded,
+				fmt.Sprintf("View depth limit exceeded; maximum depth is %d", maxViewDepth),
+				"pipeline",
+			)
+		}
+		ctx = context.WithValue(ctx, foreignViewDepthKey{}, depth+1)
+
+		closer := iterator.NewMultiCloser()
+		defer closer.Close()
+
+		cmp := collation.Parse(info.Collation).Comparator()
+		iter, err := viewSourceIterator(ctx, db, info.Name, info.ViewOn, info.ViewPipeline, cmp, closer, false, false)
+		if err != nil {
+			return nil, err
+		}
+		defer iter.Close()
+		if filter != nil {
+			iter = common.FilterIterator(iter, closer, filter)
+		}
+
+		return iterator.ConsumeValues(iter)
+	}
+
+	fromColl, err := db.Collection(collName)
+	if err != nil {
+		return nil, err
+	}
+
+	qRes, err := fromColl.Query(ctx, &backends.QueryParams{Filter: filter})
+	if err != nil {
+		return nil, err
+	}
+	defer qRes.Iter.Close()
+	if filter == nil {
+		return iterator.ConsumeValues(qRes.Iter)
+	}
+
+	closer := iterator.NewMultiCloser()
+	defer closer.Close()
+	return iterator.ConsumeValues(common.FilterIterator(qRes.Iter, closer, filter))
+}
+
+// IndexedField reports whether collName has a single-field index on field that
+// the backend can use for an equality or $in filter without a collation.
+func (f *foreignFetcher) IndexedField(ctx context.Context, collName, field string) bool {
+	info, err := lookupCollectionInfo(ctx, f.db, collName)
+	if err != nil || info == nil || info.IsView {
+		return false
+	}
+	coll, err := f.db.Collection(collName)
+	if err != nil {
+		return false
+	}
+	res, err := coll.ListIndexes(ctx, new(backends.ListIndexesParams))
+	if err != nil {
+		return false
+	}
+	for _, idx := range res.Indexes {
+		if len(idx.Key) == 1 && idx.Key[0].Field == field && !idx.Lossy &&
+			idx.PartialFilterExpression == nil && collation.Parse(idx.Collation).IsSimple() {
+			return true
+		}
+	}
+	return false
+}
+
+// viewReadCollation returns the collation a read on a view runs under: the
+// view's own. MongoDB rejects an operation collation that differs from it.
+func viewReadCollation(opCollation, viewCollation *types.Document) (*types.Document, error) {
+	if opCollation != nil && !sameCollation(opCollation, viewCollation) {
+		return nil, handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrOptionNotSupportedOnView,
+			"Cannot override a view's default collation",
+		)
+	}
+	return viewCollation, nil
 }
 
 // lookupCollectionInfo returns the CollectionInfo for name, or nil if no such
@@ -109,8 +207,8 @@ func lookupCollectionInfo(ctx context.Context, db backends.Database, name string
 // stages and raw stage documents in resolved order (inner views prepended).
 // viewName seeds cycle detection; enforces GraphContainsCycle and the maximum
 // nesting depth (ViewDepthLimitExceeded), matching MongoDB.
-func resolveViewChain(ctx context.Context, db backends.Database, viewName, viewOn string, viewPipeline *types.Array) (string, []aggregations.Stage, []any, error) {
-	viewStages, rawStages, err := buildViewPipelineStages(db, viewPipeline)
+func resolveViewChain(ctx context.Context, db backends.Database, viewName, viewOn string, viewPipeline *types.Array, cmp *collation.Comparator) (string, []aggregations.Stage, []any, error) {
+	viewStages, rawStages, err := buildViewPipelineStages(db, viewPipeline, cmp)
 	if err != nil {
 		return "", nil, nil, err
 	}
@@ -145,7 +243,7 @@ func resolveViewChain(ctx context.Context, db backends.Database, viewName, viewO
 		}
 		seen[source] = struct{}{}
 
-		innerStages, innerRaw, err := buildViewPipelineStages(db, srcInfo.ViewPipeline)
+		innerStages, innerRaw, err := buildViewPipelineStages(db, srcInfo.ViewPipeline, cmp)
 		if err != nil {
 			return "", nil, nil, err
 		}
@@ -195,13 +293,108 @@ func validateViewChainAcyclic(ctx context.Context, db backends.Database, viewNam
 	}
 }
 
+// validateViewDependenciesAcyclic rejects a view definition that depends on
+// itself through viewOn or any $lookup, $graphLookup, or $unionWith reference,
+// including references inside nested pipelines and $facet, matching MongoDB's
+// GraphContainsCycle check at create and collMod time.
+func validateViewDependenciesAcyclic(ctx context.Context, db backends.Database, viewName, viewOn string, pipeline *types.Array, command string) error {
+	visited := map[string]struct{}{}
+	pending := append([]string{viewOn}, pipelineForeignNamespaces(pipeline)...)
+
+	for len(pending) > 0 {
+		name := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+
+		if name == viewName {
+			return handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrGraphContainsCycle,
+				fmt.Sprintf("View cycle detected: %s", viewName),
+				command,
+			)
+		}
+		if _, seen := visited[name]; seen {
+			continue
+		}
+		visited[name] = struct{}{}
+
+		info, err := lookupCollectionInfo(ctx, db, name)
+		if err != nil {
+			return err
+		}
+		if info != nil && info.IsView {
+			pending = append(pending, info.ViewOn)
+			pending = append(pending, pipelineForeignNamespaces(info.ViewPipeline)...)
+		}
+	}
+	return nil
+}
+
+// pipelineForeignNamespaces returns the collection or view names a pipeline
+// reads besides its source.
+func pipelineForeignNamespaces(pipeline *types.Array) []string {
+	if pipeline == nil {
+		return nil
+	}
+
+	var names []string
+	for i := 0; i < pipeline.Len(); i++ {
+		stage, _ := must.NotFail(pipeline.Get(i)).(*types.Document)
+		if stage == nil || stage.Len() == 0 {
+			continue
+		}
+		spec := must.NotFail(stage.Get(stage.Command()))
+
+		switch stage.Command() {
+		case "$lookup", "$graphLookup":
+			specDoc, _ := spec.(*types.Document)
+			if specDoc == nil {
+				continue
+			}
+			if from, _ := specDoc.Get("from"); from != nil {
+				if fromName, ok := from.(string); ok {
+					names = append(names, fromName)
+				}
+			}
+			if nested, _ := specDoc.Get("pipeline"); nested != nil {
+				nestedArr, _ := nested.(*types.Array)
+				names = append(names, pipelineForeignNamespaces(nestedArr)...)
+			}
+		case "$unionWith":
+			switch u := spec.(type) {
+			case string:
+				names = append(names, u)
+			case *types.Document:
+				if coll, _ := u.Get("coll"); coll != nil {
+					if collName, ok := coll.(string); ok {
+						names = append(names, collName)
+					}
+				}
+				if nested, _ := u.Get("pipeline"); nested != nil {
+					nestedArr, _ := nested.(*types.Array)
+					names = append(names, pipelineForeignNamespaces(nestedArr)...)
+				}
+			}
+		case "$facet":
+			facets, _ := spec.(*types.Document)
+			if facets == nil {
+				continue
+			}
+			for _, key := range facets.Keys() {
+				sub, _ := must.NotFail(facets.Get(key)).(*types.Array)
+				names = append(names, pipelineForeignNamespaces(sub)...)
+			}
+		}
+	}
+	return names
+}
+
 // viewSourceIterator returns an iterator over the view's base collection with
 // the view's (fully resolved, possibly nested) defining pipeline applied.
 // Callers layer their own filter, sort, projection, skip and limit on top of
 // the returned iterator, matching how MongoDB resolves a read against a view to
 // an aggregation over its source.
-func viewSourceIterator(ctx context.Context, db backends.Database, viewName, viewOn string, viewPipeline *types.Array, closer *iterator.MultiCloser, disablePushdown, enableNestedPushdown bool) (types.DocumentsIterator, error) { //nolint:lll // for readability
-	baseCollection, viewStages, rawStages, err := resolveViewChain(ctx, db, viewName, viewOn, viewPipeline)
+func viewSourceIterator(ctx context.Context, db backends.Database, viewName, viewOn string, viewPipeline *types.Array, cmp *collation.Comparator, closer *iterator.MultiCloser, disablePushdown, enableNestedPushdown bool) (types.DocumentsIterator, error) { //nolint:lll // for readability
+	baseCollection, viewStages, rawStages, err := resolveViewChain(ctx, db, viewName, viewOn, viewPipeline, cmp)
 	if err != nil {
 		return nil, err
 	}
@@ -218,7 +411,7 @@ func viewSourceIterator(ctx context.Context, db backends.Database, viewName, vie
 	// direct-aggregate path exactly. The user's own find filter is layered on the
 	// returned iterator by the caller and is NOT pushed here (view stages may
 	// rename or compute fields, making that unsound).
-	qp := new(backends.QueryParams)
+	qp := &backends.QueryParams{Collated: cmp != nil}
 	filter, _ := aggregations.GetPushdownQuery(rawStages)
 
 	if !disablePushdown {

@@ -48,7 +48,7 @@ type kvOp struct {
 //
 // In case of updating multiple documents, UpdateDocument returns an error immediately after one of the
 // operation fails. The rest of the documents are not processed.
-func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter types.DocumentsIterator, param *Update, skipDurableSync bool) (*UpdateResult, error) { //nolint:lll // for readability
+func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter types.DocumentsIterator, param *Update) (*UpdateResult, error) { //nolint:lll // for readability
 	result := new(UpdateResult)
 
 	isFindAndModify := (strings.ToLower(cmd) == "findandmodify")
@@ -72,7 +72,7 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 		if len(pending) == 0 {
 			return nil
 		}
-		params := &backends.UpdateAllParams{Docs: pending, SkipDurableSync: skipDurableSync}
+		params := &backends.UpdateAllParams{Docs: pending}
 		if hasAnyMutations(pendingMutations) {
 			params.FieldMutations = pendingMutations
 		}
@@ -183,7 +183,7 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 			if err := flushPending(); err != nil {
 				return nil, err
 			}
-			_, err = c.InsertAll(ctx, &backends.InsertAllParams{Docs: []*types.Document{doc}, SkipDurableSync: skipDurableSync})
+			_, err = c.InsertAll(ctx, &backends.InsertAllParams{Docs: []*types.Document{doc}})
 			if err != nil {
 				return nil, lazyerrors.Error(err)
 			}

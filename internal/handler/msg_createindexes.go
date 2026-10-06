@@ -134,11 +134,26 @@ func (h *Handler) MsgCreateIndexes(connCtx context.Context, msg *wire.OpMsg) (*w
 
 	// An index created without an explicit collation inherits the collection's
 	// default collation.
+	var collectionCollation *types.Document
 	if cInfo, cerr := lookupCollectionInfo(connCtx, db, collection); cerr == nil && cInfo != nil && cInfo.Collation != nil {
+		collectionCollation = cInfo.Collation
 		for i := range toCreate {
 			if toCreate[i].Collation == nil {
 				toCreate[i].Collation = cInfo.Collation
 			}
+		}
+	}
+
+	for _, idx := range toCreate {
+		if formatIndexKey(idx.Key) == "_id: 1" && !sameCollation(idx.Collation, collectionCollation) {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrBadValue,
+				fmt.Sprintf(
+					"The _id index must have the same collation as the collection. Index collation: %s, collection collation: %s",
+					resolvedCollationString(idx.Collation), resolvedCollationString(collectionCollation),
+				),
+				command,
+			)
 		}
 	}
 
@@ -575,6 +590,14 @@ func formatIndexKey(key []backends.IndexKeyPair) string {
 // sameCollation reports whether two index collation specs denote the same
 // collation, comparing normalized specs (nil and {locale:"simple"} both mean
 // the binary default).
+func resolvedCollationString(spec *types.Document) string {
+	resolved := collation.Parse(spec).Resolve()
+	if resolved == nil {
+		return `{ locale: "simple" }`
+	}
+	return mongoCommandString(resolved)
+}
+
 func sameCollation(a, b *types.Document) bool {
 	return collation.Parse(a).Identity() == collation.Parse(b).Identity()
 }

@@ -80,7 +80,7 @@ func seedBenchCollection(b *testing.B, n int) (backends.Collection, context.Cont
 				"tag", "row",
 			)))
 		}
-		if _, err = coll.InsertAll(ctx, &backends.InsertAllParams{Docs: docs, SkipDurableSync: true}); err != nil {
+		if _, err = coll.InsertAll(ctx, &backends.InsertAllParams{Docs: docs}); err != nil {
 			b.Fatalf("InsertAll: %v", err)
 		}
 	}
@@ -500,8 +500,7 @@ func BenchmarkInsertWithUniqueIndex(b *testing.B) {
 				id := int32(1_000_000 + i)
 				doc := must.NotFail(types.NewDocument("_id", id, "i", id))
 				if _, err := coll.InsertAll(ctx, &backends.InsertAllParams{
-					Docs:            []*types.Document{doc},
-					SkipDurableSync: true,
+					Docs: []*types.Document{doc},
 				}); err != nil {
 					b.Fatalf("InsertAll: %v", err)
 				}

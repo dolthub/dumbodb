@@ -844,10 +844,9 @@ func headRootAMForBranch(ctx context.Context, state *dbState, branch string) (pr
 }
 
 // updateWorkingRoot applies fn to the current working RootValue for branch,
-// stores the updated WorkingSet in state, and persists it via doltDB unless
-// skipSync is true (in which case the branch is marked dirty for later flush).
+// stores the updated WorkingSet in state, and persists it via doltDB.
 // The caller must hold state.mu (write lock).
-func (state *dbState) updateWorkingRoot(ctx context.Context, branch, commitMsg string, fn func(doltdb.RootValue) (doltdb.RootValue, error), skipSync bool) error {
+func (state *dbState) updateWorkingRoot(ctx context.Context, branch, commitMsg string, fn func(doltdb.RootValue) (doltdb.RootValue, error)) error {
 	ws, err := state.getOrInitBranchWS(ctx, branch)
 	if err != nil {
 		return err
@@ -894,13 +893,7 @@ func (state *dbState) updateWorkingRoot(ctx context.Context, branch, commitMsg s
 		return nil
 	}
 
-	// Non-txn: full update (cache + disk + hash refresh). skipSync is
-	// ignored: there is no deferred flusher to drain a cache-only write,
-	// so honoring skipSync here would lose data on server restart. The
-	// wire-level writeConcern.j=false is now a no-op for autoCommit /
-	// non-txn writes; session-isolation may grow a commit-time fsync
-	// skip as a future refinement (see docs/design/branch-ws-singletons.md).
-	_ = skipSync
+	// Non-txn: full update (cache + disk + hash refresh).
 	if err := state.updateBranchWS(ctx, branch, func(_ *doltdb.WorkingSet) (*doltdb.WorkingSet, error) {
 		return newWS, nil
 	}); err != nil {
@@ -915,10 +908,6 @@ func (state *dbState) updateWorkingRoot(ctx context.Context, branch, commitMsg s
 // RootValue whose AM is modified and returns the updated RootValue.
 // The caller must hold state.mu (write lock).
 func (state *dbState) updateAddressMap(ctx context.Context, branch, commitMsg string, fn func(prolly.AddressMapEditor) error) error {
-	return state.updateAddressMapWithSync(ctx, branch, commitMsg, fn, false)
-}
-
-func (state *dbState) updateAddressMapWithSync(ctx context.Context, branch, commitMsg string, fn func(prolly.AddressMapEditor) error, skipSync bool) error {
 	return state.updateWorkingRoot(ctx, branch, commitMsg, func(rv doltdb.RootValue) (doltdb.RootValue, error) {
 		am, err := amFromWorkingRoot(ctx, rv, state.ns)
 		if err != nil {
@@ -934,7 +923,7 @@ func (state *dbState) updateAddressMapWithSync(ctx context.Context, branch, comm
 		}
 		rtvlMsg := buildRootValueFlatbuffer(newAM)
 		return doltdb.NewRootValue(ctx, state.doltDB.ValueReadWriter(), state.doltDB.NodeStore(), dolttypes.SerialMessage(rtvlMsg))
-	}, skipSync)
+	})
 }
 
 // headRootAM returns the collections AddressMap from HEAD's rootValue.

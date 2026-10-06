@@ -166,9 +166,11 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 		pf = buildScanPrefilter(params.Filter)
 	}
 
-	return &backends.QueryResult{
-		Iter: newMapIter(ctx, state.ns, m, reverse, limit, onlyRecordIDs, pf),
-	}, nil
+	iter := newMapIter(ctx, state.ns, m, reverse, limit, onlyRecordIDs, pf)
+	if mi, ok := iter.(*mapIter); ok && state.backend != nil && state.backend.backgroundRP != nil {
+		mi.release = state.backend.backgroundRP.pinRoot(state.name, m.HashOf())
+	}
+	return &backends.QueryResult{Iter: iter}, nil
 }
 
 // buildScanPrefilter returns a byte-level predicate over a document's raw
@@ -413,6 +415,9 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 		startKey     []byte
 		stopKey      []byte
 		usable       bool
+		// pointRanges, when set, replaces [startKey, stopKey) with one range
+		// per $in value.
+		pointRanges [][2][]byte
 	)
 
 	for _, k := range filter.Keys() {
@@ -432,6 +437,14 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 		v, err := filter.Get(k)
 		if err != nil {
 			continue
+		}
+		if queryCmp == nil && !entry.compound {
+			if ranges, ok := indexPointRangesForIn(v); ok {
+				chosenMapIdx = entry.mapIdx
+				pointRanges = ranges
+				usable = true
+				break
+			}
 		}
 		if queryCmp != nil {
 			v = collateFilterValue(v, queryCmp)
@@ -473,9 +486,29 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 	if primaryCount > 0 {
 		maxResults = int(primaryCount) / 2
 	}
-	primaryIDBytesList, exceeded, err := idxpkg.RangeLookupCapped(ctx, idxMap, startKey, stopKey, maxResults)
-	if err != nil {
-		return nil, false, err
+	var primaryIDBytesList [][]byte
+	exceeded := false
+	if pointRanges != nil {
+		for _, r := range pointRanges {
+			remaining := -1
+			if maxResults >= 0 {
+				remaining = maxResults - len(primaryIDBytesList)
+			}
+			ids, rangeExceeded, err := idxpkg.RangeLookupCapped(ctx, idxMap, r[0], r[1], remaining)
+			if err != nil {
+				return nil, false, err
+			}
+			primaryIDBytesList = append(primaryIDBytesList, ids...)
+			if rangeExceeded {
+				exceeded = true
+				break
+			}
+		}
+	} else {
+		primaryIDBytesList, exceeded, err = idxpkg.RangeLookupCapped(ctx, idxMap, startKey, stopKey, maxResults)
+		if err != nil {
+			return nil, false, err
+		}
 	}
 	if exceeded {
 		// Caller will fall through to the sequential primary scan, which is
@@ -513,6 +546,32 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 	}
 
 	return docs, true, nil
+}
+
+// indexPointRangesForIn returns one point range per value of a
+// {field: {$in: [...]}} clause. Like a bare equality, it declines values the
+// byte-level index cannot match faithfully (null, arrays, documents, regexes,
+// Decimal128), so those fall back to a scan.
+func indexPointRangesForIn(v any) ([][2][]byte, bool) {
+	opDoc, isOp := v.(*types.Document)
+	if !isOp || opDoc.Len() != 1 || opDoc.Keys()[0] != "$in" {
+		return nil, false
+	}
+	values, isArr := must.NotFail(opDoc.Get("$in")).(*types.Array)
+	if !isArr {
+		return nil, false
+	}
+
+	ranges := make([][2][]byte, 0, values.Len())
+	for i := 0; i < values.Len(); i++ {
+		value := must.NotFail(values.Get(i))
+		switch value.(type) {
+		case nil, types.NullType, *types.Array, *types.Document, types.Regex, types.Decimal128:
+			return nil, false
+		}
+		ranges = append(ranges, [2][]byte{idxpkg.LowerBoundInclusive(value), idxpkg.UpperBoundInclusive(value)})
+	}
+	return ranges, true
 }
 
 // indexBoundsForFilterValue translates the value side of a single
@@ -1775,11 +1834,6 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 		return nil, err
 	}
 
-	// autoCommit=true creates a dolt commit on every write, which already
-	// triggers its own NBS journal fsync  -- deferring the working-set update but
-	// still committing synchronously would leave history and working set
-	// inconsistent, so we only honor SkipDurableSync when autoCommit is off.
-	//
 	// The resolver reads per-branch index state from disk, so the resulting AM
 	// reflects only this branch's writes -- no cross-branch leakage.
 	infos, idxMaps, err := resolveBranchIndexState(ctx, c, state)
@@ -1795,14 +1849,13 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 		return nil, fmt.Errorf("building index AM: %w", err)
 	}
 
-	skipSync := params.SkipDurableSync && !c.db.backend.autoCommit
 	dtblHash, err := state.dtblHashForCollection(ctx, c.name, newMap, newIdxAM, hash.Hash{})
 	if err != nil {
 		return nil, err
 	}
-	if err := state.updateAddressMapWithSync(ctx, c.db.rootish, fmt.Sprintf("auto: insert %d docs into %s", len(params.Docs), c.name), func(ed prolly.AddressMapEditor) error {
+	if err := state.updateAddressMap(ctx, c.db.rootish, fmt.Sprintf("auto: insert %d docs into %s", len(params.Docs), c.name), func(ed prolly.AddressMapEditor) error {
 		return ed.Update(ctx, c.name, dtblHash)
-	}, skipSync); err != nil {
+	}); err != nil {
 		return nil, err
 	}
 
@@ -1904,9 +1957,9 @@ func (c *collection) BulkLoadInitialSync(ctx context.Context, documents []*types
 	if err != nil {
 		return err
 	}
-	return state.updateAddressMapWithSync(ctx, c.db.rootish, fmt.Sprintf("initial sync: load %d docs into %s", len(documents), c.name), func(editor prolly.AddressMapEditor) error {
+	return state.updateAddressMap(ctx, c.db.rootish, fmt.Sprintf("initial sync: load %d docs into %s", len(documents), c.name), func(editor prolly.AddressMapEditor) error {
 		return editor.Update(ctx, c.name, dtblHash)
-	}, true)
+	})
 }
 
 func existsID(ctx context.Context, m prolly.Map, h [20]byte) (bool, error) {
@@ -2090,14 +2143,13 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 		return nil, fmt.Errorf("building index AM: %w", err)
 	}
 
-	skipSync := params.SkipDurableSync && !c.db.backend.autoCommit
 	dtblHash, err := state.dtblHashForCollection(ctx, c.name, newMap, curIdxAM, hash.Hash{})
 	if err != nil {
 		return nil, err
 	}
-	if err := state.updateAddressMapWithSync(ctx, c.db.rootish, fmt.Sprintf("auto: update %s", c.name), func(ed prolly.AddressMapEditor) error {
+	if err := state.updateAddressMap(ctx, c.db.rootish, fmt.Sprintf("auto: update %s", c.name), func(ed prolly.AddressMapEditor) error {
 		return ed.Update(ctx, c.name, dtblHash)
-	}, skipSync); err != nil {
+	}); err != nil {
 		return nil, err
 	}
 
@@ -2251,14 +2303,13 @@ func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllPa
 		return nil, fmt.Errorf("building index AM: %w", err)
 	}
 
-	skipSync := params.SkipDurableSync && !c.db.backend.autoCommit
 	dtblHash, err := state.dtblHashForCollection(ctx, c.name, newMap, curIdxAM, hash.Hash{})
 	if err != nil {
 		return nil, err
 	}
-	if err := state.updateAddressMapWithSync(ctx, c.db.rootish, fmt.Sprintf("auto: delete from %s", c.name), func(ed prolly.AddressMapEditor) error {
+	if err := state.updateAddressMap(ctx, c.db.rootish, fmt.Sprintf("auto: delete from %s", c.name), func(ed prolly.AddressMapEditor) error {
 		return ed.Update(ctx, c.name, dtblHash)
-	}, skipSync); err != nil {
+	}); err != nil {
 		return nil, err
 	}
 
@@ -3392,6 +3443,8 @@ type mapIter struct {
 	// true means "may match  -- run the full filter downstream." A nil
 	// prefilter keeps the unconditional full-scan behavior.
 	prefilter func([]byte) bool
+	// release, if set, unpins the iterated map's root from GC on Close.
+	release func()
 }
 
 func newMapIter(ctx context.Context, ns tree.NodeStore, m prolly.Map, reverse bool, limit int64, onlyRecordID bool, prefilter func([]byte) bool) types.DocumentsIterator {
@@ -3479,7 +3532,11 @@ func (it *mapIter) Next() (struct{}, *types.Document, error) {
 	}
 }
 
-func (it *mapIter) Close() {}
+func (it *mapIter) Close() {
+	if it.release != nil {
+		it.release()
+	}
+}
 
 type emptyIter struct{}
 

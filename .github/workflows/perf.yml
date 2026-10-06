@@ -1,0 +1,141 @@
+name: Performance
+
+# Compares the benchmark suite in dumbodb-parity-testing between two DumboDB
+# builds on the same runner and fails when head is slower than base. See
+# benchmarks/cmd/perfgate in that repository for the method.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      base:
+        description: "Base commit or ref (default: main)"
+        required: false
+        default: main
+      head:
+        description: "Head commit or ref (default: the ref this run is dispatched on); set both to main to measure noise"
+        required: false
+        default: ""
+
+concurrency:
+  group: perf-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  DUMBODB_NO_METRICS: "1"
+
+jobs:
+  perf:
+    name: perf (shard ${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Resolve base and head
+        id: refs
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          INPUT_BASE: ${{ github.event.inputs.base }}
+          INPUT_HEAD: ${{ github.event.inputs.head }}
+        run: |
+          head=$(git rev-parse HEAD)
+          case "$EVENT" in
+            pull_request) base="$PR_BASE" ;;
+            push) base="$PUSH_BEFORE" ;;
+            workflow_dispatch)
+              base=$(git rev-parse "origin/${INPUT_BASE}" 2>/dev/null || git rev-parse "${INPUT_BASE}")
+              if [ -n "$INPUT_HEAD" ]; then
+                head=$(git rev-parse "origin/${INPUT_HEAD}" 2>/dev/null || git rev-parse "${INPUT_HEAD}")
+              fi
+              ;;
+          esac
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ] || \
+             ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            echo "No usable base commit (${base}); falling back to the head's first parent"
+            base=$(git rev-parse "${head}^")
+          fi
+          echo "base=${base}" >> "$GITHUB_OUTPUT"
+          echo "head=${head}" >> "$GITHUB_OUTPUT"
+          echo "Base: $(git log -1 --format='%h %s' "$base")"
+          echo "Head: $(git log -1 --format='%h %s' "$head")"
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build base and head
+        env:
+          BASE: ${{ steps.refs.outputs.base }}
+          HEAD_SHA: ${{ steps.refs.outputs.head }}
+        run: |
+          git worktree add --detach /tmp/src-head "$HEAD_SHA"
+          git worktree add --detach /tmp/src-base "$BASE"
+          (cd /tmp/src-head && go build -o /tmp/dumbodb-head ./cmd/dumbodb)
+          (cd /tmp/src-base && go build -o /tmp/dumbodb-base ./cmd/dumbodb)
+
+      - name: Mount memory filesystem for server data
+        run: |
+          sudo mkdir -p /mnt/perf
+          sudo mount -t tmpfs -o size=8g tmpfs /mnt/perf
+          sudo chown "$(id -u):$(id -g)" /mnt/perf
+
+      # Same branch matching as the parity workflow.
+      - name: Resolve parity-testing branch
+        id: parity_ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE: ${{ github.head_ref || github.ref_name }}
+        run: |
+          ref=main
+          if [ -n "$CANDIDATE" ] && [ "$CANDIDATE" != "main" ] && \
+             git ls-remote --exit-code --heads \
+               "https://x-access-token:${GH_TOKEN}@github.com/dolthub/dumbodb-parity-testing.git" \
+               "refs/heads/${CANDIDATE}" >/dev/null 2>&1; then
+            ref="$CANDIDATE"
+            echo "Matching parity-testing branch found: ${CANDIDATE}"
+          else
+            echo "No matching parity-testing branch; using main"
+          fi
+          echo "ref=${ref}" >> "$GITHUB_OUTPUT"
+
+      - name: Check out parity tests
+        uses: actions/checkout@v6
+        with:
+          repository: dolthub/dumbodb-parity-testing
+          ref: ${{ steps.parity_ref.outputs.ref }}
+          path: parity-testing
+
+      - name: Compare base and head
+        working-directory: parity-testing
+        run: |
+          go run ./benchmarks/cmd/perfgate \
+            -base-bin /tmp/dumbodb-base \
+            -head-bin /tmp/dumbodb-head \
+            -data-root /mnt/perf \
+            -shard ${{ matrix.shard }} -shards 4 \
+            -summary "$GITHUB_STEP_SUMMARY" \
+            -json /mnt/perf/perf-shard${{ matrix.shard }}.json
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: perf-shard${{ matrix.shard }}
+          path: |
+            /mnt/perf/*.json
+            /mnt/perf/*.log
+          if-no-files-found: ignore

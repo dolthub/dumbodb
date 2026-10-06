@@ -35,9 +35,9 @@ import (
 
 // makeFetcher builds a CollectionFetcher that returns docs for a named collection.
 func makeFetcher(collections map[string][]*types.Document) stages.CollectionFetcher {
-	return func(_ context.Context, name string) ([]*types.Document, error) {
+	return stages.FetcherFunc(func(_ context.Context, name string, _ *types.Document) ([]*types.Document, error) {
 		return collections[name], nil
-	}
+	})
 }
 
 // collectResults drains an iterator into a slice.
@@ -125,6 +125,50 @@ func TestLookup_SimpleEqualityJoin(t *testing.T) {
 
 	if bobArr.Len() != 1 {
 		t.Errorf("Bob: expected 1 order, got %d", bobArr.Len())
+	}
+}
+
+// TestLookup_ConciseForm verifies that localField/foreignField together with a
+// pipeline joins only the equality matches and runs the pipeline on them.
+func TestLookup_ConciseForm(t *testing.T) {
+	t.Parallel()
+
+	foreign := []*types.Document{
+		must.NotFail(types.NewDocument("_id", int32(1), "k", "a", "grp", int32(1))),
+		must.NotFail(types.NewDocument("_id", int32(2), "k", "b", "grp", int32(1))),
+		must.NotFail(types.NewDocument("_id", int32(3), "k", "b", "grp", int32(2))),
+	}
+	fetcher := makeFetcher(map[string][]*types.Document{"f": foreign})
+
+	for name, tc := range map[string]struct {
+		pipeline *types.Array
+		want     int
+	}{
+		"empty pipeline":     {must.NotFail(types.NewArray()), 2},
+		"filtering pipeline": {must.NotFail(types.NewArray(must.NotFail(types.NewDocument("$match", must.NotFail(types.NewDocument("grp", int32(2))))))), 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, err := stages.NewLookupStage(must.NotFail(types.NewDocument("$lookup", must.NotFail(types.NewDocument(
+				"from", "f", "localField", "ref", "foreignField", "k", "pipeline", tc.pipeline, "as", "j",
+			)))), fetcher)
+			if err != nil {
+				t.Fatalf("NewLookupStage: %v", err)
+			}
+
+			closer := iterator.NewMultiCloser()
+			defer closer.Close()
+			input := iterator.Values(iterator.ForSlice([]*types.Document{must.NotFail(types.NewDocument("_id", int32(10), "ref", "b"))}))
+			out, err := s.Process(context.Background(), input, closer)
+			if err != nil {
+				t.Fatalf("Process: %v", err)
+			}
+
+			results := collectResults(t, out, closer)
+			joined := must.NotFail(results[0].Get("j")).(*types.Array)
+			if joined.Len() != tc.want {
+				t.Fatalf("joined %d documents, want %d", joined.Len(), tc.want)
+			}
+		})
 	}
 }
 

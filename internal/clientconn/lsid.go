@@ -23,7 +23,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// Per the session-isolation design: startTransaction is unavailable in
+// startTransaction is unavailable in
 // --session-isolation mode; the user is expected to issue writes directly
 // and call doltCommit to merge them back to HEAD.
 var errSessionIsolationRejectStartTransaction = errors.New(

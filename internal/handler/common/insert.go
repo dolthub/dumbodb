@@ -47,11 +47,6 @@ type InsertParams struct {
 	ApiVersion           string `dumbo:"apiVersion,ignored"`
 	ApiStrict            bool   `dumbo:"apiStrict,ignored"`
 	ApiDeprecationErrors bool   `dumbo:"apiDeprecationErrors,ignored"`
-
-	// SkipDurableSync is derived from WriteConcern in GetInsertParams and
-	// propagated into backend params so the storage layer can skip the
-	// synchronous NBS journal fsync. Not populated from the wire.
-	SkipDurableSync bool `dumbo:"-"`
 }
 
 func GetInsertParams(document *types.Document, l *slog.Logger) (*InsertParams, error) {
@@ -63,8 +58,6 @@ func GetInsertParams(document *types.Document, l *slog.Logger) (*InsertParams, e
 	if err != nil {
 		return nil, err
 	}
-
-	params.SkipDurableSync = DecideWriteConcern(params.WriteConcern).SkipDurableSync
 
 	for i := 0; i < params.Docs.Len(); i++ {
 		doc := must.NotFail(params.Docs.Get(i))

@@ -14,9 +14,6 @@
 
 package dolt
 
-// Behaviors W2-W5, M1/M2 (stored-content halves), and P2 of
-// docs/design/secondary-index-structural-sharing.md.
-
 import (
 	"context"
 	"reflect"

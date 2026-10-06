@@ -137,6 +137,6 @@ storage-native one.
 - `internal/backends/dolt/profile_bench_test.go`  -- three
   `BenchmarkProfile_*` functions wired through the same handler iterators
   that the wire path uses, suitable for `-cpuprofile`.
-- `docs/design/profile-uap4-unindexed-reads.md`  -- this report.
+- `docs/profiling/profile-uap4-unindexed-reads.md`  -- this report.
 
 No production code touched.

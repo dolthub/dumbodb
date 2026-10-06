@@ -32,8 +32,7 @@ import (
 // computed from a snapshot taken before any lock, and a concurrent writer's
 // acknowledged change is overwritten.
 //
-// These tests run the same workload down both paths. See
-// docs/design/write-path-audit.md.
+// These tests run the same workload down both paths.
 
 type disjointWriteRound struct {
 	matchedA, matchedB int64

@@ -17,8 +17,7 @@
 // underlying ValueStore.WriteBytes. This is the load-bearing
 // property of the workspace-r11 storage win: documents pack into
 // the row tuple instead of each becoming its own chunk in the
-// content-addressed store. See
-// docs/design/document-storage-parity-with-dolt.md.
+// content-addressed store.
 
 package dolt
 

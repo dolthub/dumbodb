@@ -62,11 +62,6 @@ type FindAndModifyParams struct {
 	ApiVersion           string `dumbo:"apiVersion,ignored"`
 	ApiStrict            bool   `dumbo:"apiStrict,ignored"`
 	ApiDeprecationErrors bool   `dumbo:"apiDeprecationErrors,ignored"`
-
-	// SkipDurableSync is derived from WriteConcern in GetFindAndModifyParams and
-	// propagated into backend params so the storage layer can skip the
-	// synchronous NBS journal fsync. Not populated from the wire.
-	SkipDurableSync bool `dumbo:"-"`
 }
 
 func GetFindAndModifyParams(doc *types.Document, l *slog.Logger) (*FindAndModifyParams, error) {
@@ -76,8 +71,6 @@ func GetFindAndModifyParams(doc *types.Document, l *slog.Logger) (*FindAndModify
 	if err != nil {
 		return nil, err
 	}
-
-	params.SkipDurableSync = DecideWriteConcern(params.WriteConcern).SkipDurableSync
 
 	if params.Collection == "" {
 		return nil, handlererrors.NewCommandErrorMsg(

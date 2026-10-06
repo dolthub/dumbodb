@@ -12,7 +12,7 @@ scenario top to bottom. Each section builds on the previous setup.
 
 > **Authentication note.** Under `--auth`, `doltRebase` **rejects** a client-supplied
 > `author`/`committer` with `IDLUnknownField` (40415); identity comes from the authenticated
-> user (see `docs/design/commit-identity.md`). This guide assumes `--auth` is off.
+> user. This guide assumes `--auth` is off.
 
 ## Prerequisites
 

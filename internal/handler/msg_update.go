@@ -174,7 +174,7 @@ func (h *Handler) updateDocument(ctx context.Context, params *common.UpdateParam
 			iter = common.LimitIterator(iter, closer, 1)
 		}
 
-		result, err := common.UpdateDocument(ctx, c, "update", iter, &u, params.SkipDurableSync)
+		result, err := common.UpdateDocument(ctx, c, "update", iter, &u)
 		if err != nil {
 			if backends.ErrorCodeIs(err, backends.ErrorCodeReadOnlyDatabase, backends.ErrorCodeReadOnlyCollection) {
 				return 0, 0, nil, common.TranslateBackendWriteError(ctx, err)

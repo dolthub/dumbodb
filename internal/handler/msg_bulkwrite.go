@@ -82,14 +82,6 @@ func (h *Handler) MsgBulkWrite(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		}
 	}
 
-	var wc *types.Document
-	if v, err := document.Get("writeConcern"); err == nil {
-		if d, ok := v.(*types.Document); ok {
-			wc = d
-		}
-	}
-	skipDurableSync := common.DecideWriteConcern(wc).SkipDurableSync
-
 	nsInfo, err := getArrayField(document, "nsInfo")
 	if err != nil {
 		return nil, err
@@ -154,7 +146,7 @@ func (h *Handler) MsgBulkWrite(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			)
 		}
 
-		res, opErr := h.execBulkWriteOp(connCtx, opDoc, namespaces, skipDurableSync, bypass)
+		res, opErr := h.execBulkWriteOp(connCtx, opDoc, namespaces, bypass)
 		entry := must.NotFail(types.NewDocument("idx", int32(i)))
 
 		if opErr != nil {
@@ -239,7 +231,7 @@ type bulkWriteOpResult struct {
 // execBulkWriteOp dispatches a single op document to the matching backend
 // call. It returns either a populated result or a command error that the
 // caller wraps into the per-op firstBatch entry.
-func (h *Handler) execBulkWriteOp(ctx context.Context, op *types.Document, namespaces []bulkWriteNS, skipDurableSync, bypass bool) (bulkWriteOpResult, error) {
+func (h *Handler) execBulkWriteOp(ctx context.Context, op *types.Document, namespaces []bulkWriteNS, bypass bool) (bulkWriteOpResult, error) {
 	// Identify the op kind by looking for the first of insert / update /
 	// delete. The value is the index into the namespaces array.
 	var (
@@ -313,11 +305,11 @@ func (h *Handler) execBulkWriteOp(ctx context.Context, op *types.Document, names
 	var res bulkWriteOpResult
 	switch kind {
 	case "insert":
-		res, err = execBulkWriteInsert(ctx, db, c, ns, op, skipDurableSync, bypass)
+		res, err = execBulkWriteInsert(ctx, db, c, ns, op, bypass)
 	case "update":
-		res, err = execBulkWriteUpdate(ctx, db, c, ns, op, skipDurableSync, bypass, h.DisablePushdown)
+		res, err = execBulkWriteUpdate(ctx, db, c, ns, op, bypass, h.DisablePushdown)
 	case "delete":
-		res, err = execBulkWriteDelete(ctx, c, op, skipDurableSync, h.DisablePushdown)
+		res, err = execBulkWriteDelete(ctx, c, op, h.DisablePushdown)
 	default:
 		// Unreachable  -- kind is known to be one of the three.
 		return bulkWriteOpResult{}, handlererrors.NewCommandErrorMsgWithArgument(
@@ -334,7 +326,7 @@ func (h *Handler) execBulkWriteOp(ctx context.Context, op *types.Document, names
 	return res, err
 }
 
-func execBulkWriteInsert(ctx context.Context, db backends.Database, c backends.Collection, ns bulkWriteNS, op *types.Document, skipDurableSync, bypass bool) (bulkWriteOpResult, error) {
+func execBulkWriteInsert(ctx context.Context, db backends.Database, c backends.Collection, ns bulkWriteNS, op *types.Document, bypass bool) (bulkWriteOpResult, error) {
 	docVal, err := op.Get("document")
 	if err != nil {
 		return bulkWriteOpResult{}, handlererrors.NewCommandErrorMsgWithArgument(
@@ -380,8 +372,7 @@ func execBulkWriteInsert(ctx context.Context, db backends.Database, c backends.C
 	}
 
 	if _, err := c.InsertAll(ctx, &backends.InsertAllParams{
-		Docs:            []*types.Document{doc},
-		SkipDurableSync: skipDurableSync,
+		Docs: []*types.Document{doc},
 	}); err != nil {
 		if backends.ErrorCodeIs(err, backends.ErrorCodeInsertDuplicateID) {
 			return bulkWriteOpResult{kind: "insert"}, handlererrors.NewCommandErrorMsgWithArgument(
@@ -396,7 +387,7 @@ func execBulkWriteInsert(ctx context.Context, db backends.Database, c backends.C
 	return bulkWriteOpResult{kind: "insert", inserted: 1, warnAllowed: warnAllowed}, nil
 }
 
-func execBulkWriteUpdate(ctx context.Context, db backends.Database, c backends.Collection, ns bulkWriteNS, op *types.Document, skipDurableSync, bypass, disablePushdown bool) (bulkWriteOpResult, error) {
+func execBulkWriteUpdate(ctx context.Context, db backends.Database, c backends.Collection, ns bulkWriteNS, op *types.Document, bypass, disablePushdown bool) (bulkWriteOpResult, error) {
 	filter, _ := getDocumentField(op, "filter")
 	if filter == nil {
 		filter = must.NotFail(types.NewDocument())
@@ -509,7 +500,7 @@ func execBulkWriteUpdate(ctx context.Context, db backends.Database, c backends.C
 		iter = common.LimitIterator(iter, closer, 1)
 	}
 
-	updRes, err := common.UpdateDocument(ctx, c, "bulkWrite", iter, update, skipDurableSync)
+	updRes, err := common.UpdateDocument(ctx, c, "bulkWrite", iter, update)
 	if err != nil {
 		return bulkWriteOpResult{kind: "update"}, handleUpdateError(ns.db, ns.coll, "bulkWrite", err)
 	}
@@ -533,7 +524,7 @@ func execBulkWriteUpdate(ctx context.Context, db backends.Database, c backends.C
 	return out, nil
 }
 
-func execBulkWriteDelete(ctx context.Context, c backends.Collection, op *types.Document, skipDurableSync, disablePushdown bool) (bulkWriteOpResult, error) {
+func execBulkWriteDelete(ctx context.Context, c backends.Collection, op *types.Document, disablePushdown bool) (bulkWriteOpResult, error) {
 	filter, _ := getDocumentField(op, "filter")
 	if filter == nil {
 		filter = must.NotFail(types.NewDocument())
@@ -589,8 +580,7 @@ func execBulkWriteDelete(ctx context.Context, c backends.Collection, op *types.D
 	}
 
 	res, err := c.DeleteAll(ctx, &backends.DeleteAllParams{
-		IDs:             ids,
-		SkipDurableSync: skipDurableSync,
+		IDs: ids,
 	})
 	if err != nil {
 		return bulkWriteOpResult{}, lazyerrors.Error(err)

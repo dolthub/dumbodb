@@ -19,10 +19,13 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
+	"weak"
 
 	"golang.org/x/text/transform"
 	"golang.org/x/text/unicode/norm"
@@ -315,7 +318,7 @@ func filterOperator(doc *types.Document, operator string, filterValue any, cmp *
 		return true, nil
 
 	case "$expr":
-		return filterExprOperator(doc, must.NotFail(types.NewDocument(operator, filterValue)))
+		return filterExprOperator(doc, filterValue)
 
 	case "$jsonSchema":
 		// {$jsonSchema: <JSON Schema object>}
@@ -347,8 +350,8 @@ func filterOperator(doc *types.Document, operator string, filterValue any, cmp *
 // $expr is primary used by operators such as $gt and $cond which return boolean result.
 // However, if non-boolean result is returned from processing aggregation expression,
 // it returns false for null or zero value and true for all other values.
-func filterExprOperator(doc, filter *types.Document) (bool, error) {
-	op, err := operators.NewExpr(filter, "$expr")
+func filterExprOperator(doc *types.Document, exprValue any) (bool, error) {
+	op, err := validatedExpr(exprValue)
 	if err != nil {
 		return false, err
 	}
@@ -370,6 +373,35 @@ func filterExprOperator(doc, filter *types.Document) (bool, error) {
 	default:
 		panic(fmt.Sprintf("common.filterExprOperator: unexpected type %[1]T (%#[1]v)", v))
 	}
+}
+
+// validatedExprs caches validated $expr operators by expression document, so a
+// filter applied to many documents is validated once. Keys are weak pointers,
+// and an entry is removed when its expression document is collected.
+var validatedExprs sync.Map // weak.Pointer[types.Document] -> operators.Operator
+
+// validatedExpr returns the validated operator for the value of a $expr
+// filter. Only document expressions are cached; other values are cheap to
+// validate.
+func validatedExpr(exprValue any) (operators.Operator, error) {
+	exprDoc, isDoc := exprValue.(*types.Document)
+	if !isDoc {
+		return operators.NewExpr(must.NotFail(types.NewDocument("$expr", exprValue)), "$expr")
+	}
+
+	key := weak.Make(exprDoc)
+	if op, ok := validatedExprs.Load(key); ok {
+		return op.(operators.Operator), nil
+	}
+
+	op, err := operators.NewExpr(must.NotFail(types.NewDocument("$expr", exprDoc)), "$expr")
+	if err != nil {
+		return nil, err
+	}
+	if _, loaded := validatedExprs.LoadOrStore(key, op); !loaded {
+		runtime.AddCleanup(exprDoc, func(k weak.Pointer[types.Document]) { validatedExprs.Delete(k) }, key)
+	}
+	return op, nil
 }
 
 // filterFieldExpr handles {field: {expr}} or {field: {document}} filter.

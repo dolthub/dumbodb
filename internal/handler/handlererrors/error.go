@@ -128,6 +128,10 @@ const (
 	// ErrCommandNotSupportedOnView indicates that the command does not support views.
 	ErrCommandNotSupportedOnView = ErrorCode(166) // CommandNotSupportedOnView
 
+	// ErrOptionNotSupportedOnView indicates that an option, such as a
+	// collation that differs from the view's, is not supported on a view.
+	ErrOptionNotSupportedOnView = ErrorCode(167) // OptionNotSupportedOnView
+
 	// ErrInvalidPipelineOperator indicates that provided aggregation operator is invalid.
 	ErrInvalidPipelineOperator = ErrorCode(168) // InvalidPipelineOperator
 

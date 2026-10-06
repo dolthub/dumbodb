@@ -205,6 +205,7 @@ func (db *database) ListCollections(ctx context.Context, params *backends.ListCo
 				IsView:       true,
 				ViewOn:       vm.ViewOn,
 				ViewPipeline: vm.Pipeline,
+				Collation:    vm.Collation,
 			})
 			return nil
 		}
@@ -278,8 +279,9 @@ func (db *database) CreateCollection(ctx context.Context, params *backends.Creat
 
 	if params.ViewOn != "" {
 		viewHash, err := writeViewChunk(ctx, state.ns, &viewMeta{
-			ViewOn:   params.ViewOn,
-			Pipeline: params.ViewPipeline,
+			ViewOn:    params.ViewOn,
+			Pipeline:  params.ViewPipeline,
+			Collation: params.Collation,
 		})
 		if err != nil {
 			return err

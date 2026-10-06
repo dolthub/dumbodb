@@ -64,6 +64,7 @@ const (
 	ActionViewUser                     Action = "viewUser"
 	ActionViewRole                     Action = "viewRole"
 	ActionSetAuthenticationRestriction Action = "setAuthenticationRestriction"
+	ActionListSessions                 Action = "listSessions"
 
 	AnyAction Action = "anyAction"
 )
@@ -112,6 +113,12 @@ type Privilege struct {
 }
 
 type PrivilegeSet []Privilege
+
+// AuthorizedOnAnyNormalResource reports whether action is granted on every
+// non-system collection of every database (MongoDB's anyNormalResource).
+func (ps PrivilegeSet) AuthorizedOnAnyNormalResource(action Action) bool {
+	return ps.Authorized(action, Resource{})
+}
 
 func (ps PrivilegeSet) Authorized(action Action, target Resource) bool {
 	for _, p := range ps {

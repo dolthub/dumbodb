@@ -118,10 +118,12 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 	var inserted int32
 	var writeErrors []*mongo.WriteError
 
+	batchCap := min(h.BatchSize, params.Docs.Len())
+
 	var done bool
 	for !done {
-		docs := make([]*types.Document, 0, h.BatchSize)
-		docsIndexes := make([]int, 0, h.BatchSize)
+		docs := make([]*types.Document, 0, batchCap)
+		docsIndexes := make([]int, 0, batchCap)
 
 		for j := 0; j < h.BatchSize; j++ {
 			var i int
@@ -234,7 +236,7 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 			docsIndexes = append(docsIndexes, i)
 		}
 
-		if _, err = c.InsertAll(connCtx, &backends.InsertAllParams{Docs: docs, SkipDurableSync: params.SkipDurableSync}); err == nil {
+		if _, err = c.InsertAll(connCtx, &backends.InsertAllParams{Docs: docs}); err == nil {
 			inserted += int32(len(docs))
 
 			if params.Ordered && len(writeErrors) > 0 {
@@ -247,8 +249,7 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		// insert doc one by one upon failing on batch insertion
 		for j, doc := range docs {
 			if _, err = c.InsertAll(connCtx, &backends.InsertAllParams{
-				Docs:            []*types.Document{doc},
-				SkipDurableSync: params.SkipDurableSync,
+				Docs: []*types.Document{doc},
 			}); err == nil {
 				inserted++
 

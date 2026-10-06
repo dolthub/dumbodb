@@ -31,8 +31,6 @@ import (
 // MergeMode names what makes two branches' changes to one document a conflict.
 // Touched means a side wrote it at all; Divergent means the two sides wrote it
 // differently. The unit is the whole document or an individual field.
-//
-// See docs/design/merge-strictness.md.
 type MergeMode string
 
 // The names are the wire values, so there is one source of truth for what a

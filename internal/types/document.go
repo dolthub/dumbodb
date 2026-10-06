@@ -243,7 +243,7 @@ func (d *Document) Has(key string) bool {
 // The error value will be removed in the future.
 func (d *Document) Get(key string) (any, error) {
 	if d == nil {
-		return nil, fmt.Errorf("types.Document.Get: key not found: %q (nil document)", key)
+		return nil, &keyNotFoundError{key: key, nilDocument: true}
 	}
 
 	if d.isKeyDuplicate(key) {
@@ -256,7 +256,21 @@ func (d *Document) Get(key string) (any, error) {
 		}
 	}
 
-	return nil, fmt.Errorf("types.Document.Get: key not found: %q", key)
+	return nil, &keyNotFoundError{key: key}
+}
+
+// keyNotFoundError formats its message only when asked: missing keys are
+// routine in query evaluation, and most callers only test for an error.
+type keyNotFoundError struct {
+	key         string
+	nilDocument bool
+}
+
+func (e *keyNotFoundError) Error() string {
+	if e.nilDocument {
+		return fmt.Sprintf("types.Document.Get: key not found: %q (nil document)", e.key)
+	}
+	return fmt.Sprintf("types.Document.Get: key not found: %q", e.key)
 }
 
 // Set sets the value for the given key, replacing any existing value.
