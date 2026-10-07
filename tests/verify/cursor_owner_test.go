@@ -80,3 +80,39 @@ func TestCursorOwnershipIsPerPrincipal(t *testing.T) {
 	diff := next - victimCursor
 	require.False(t, diff >= -2 && diff <= 2, "cursor ids must not be sequential: %d then %d", victimCursor, next)
 }
+
+// Before the fix the owner was user + "@" + db unescaped, so alice@tenant in
+// auth database 123 and alice in auth database tenant@123 owned each
+// other's cursors.
+func TestCursorOwnershipWithDelimiterInIdentity(t *testing.T) {
+	env := startDumboDB(t, "--auth")
+	ctx := context.Background()
+	port := env.Port
+
+	require.NoError(t, env.Client.Database("admin").RunCommand(ctx, bson.D{
+		{Key: "createUser", Value: "admin"}, {Key: "pwd", Value: "admin-pw"},
+		{Key: "roles", Value: bson.A{bson.D{{Key: "role", Value: "root"}, {Key: "db", Value: "admin"}}}},
+	}).Err())
+	admin := authClient(t, port, "admin", "admin-pw", "admin")
+	readAppdb := bson.A{bson.D{{Key: "role", Value: "read"}, {Key: "db", Value: "appdb"}}}
+	adminRun(t, admin, "123", bson.D{{Key: "createUser", Value: "alice@tenant"}, {Key: "pwd", Value: "pw"}, {Key: "roles", Value: readAppdb}})
+	adminRun(t, admin, "tenant@123", bson.D{{Key: "createUser", Value: "alice"}, {Key: "pwd", Value: "pw"}, {Key: "roles", Value: readAppdb}})
+	for i := range 5 {
+		require.NoError(t, insert(admin, "appdb", "secrets", bson.D{{Key: "_id", Value: i}}))
+	}
+
+	owner := authClient(t, port, "alice@tenant", "pw", "123")
+	other := authClient(t, port, "alice", "pw", "tenant@123")
+	id := openCursor(t, owner, "appdb", "secrets")
+
+	err := other.Database("appdb").RunCommand(ctx, bson.D{{Key: "getMore", Value: id}, {Key: "collection", Value: "secrets"}}).Err()
+	requireCode(t, err, codeCursorNotFound)
+
+	var killed bson.M
+	require.NoError(t, other.Database("appdb").RunCommand(ctx, bson.D{
+		{Key: "killCursors", Value: "secrets"}, {Key: "cursors", Value: bson.A{id}},
+	}).Decode(&killed))
+	require.Empty(t, killed["cursorsKilled"])
+
+	require.NoError(t, owner.Database("appdb").RunCommand(ctx, bson.D{{Key: "getMore", Value: id}, {Key: "collection", Value: "secrets"}}).Err())
+}

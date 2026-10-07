@@ -58,12 +58,12 @@ func TestOwnerIsScopedToUserAndAuthDB(t *testing.T) {
 	onApp.SetLSID("same-lsid")
 	onAdmin.SetLSID("same-lsid")
 
-	assert.Equal(t, "alice@app\x00same-lsid", onApp.Owner())
+	assert.Equal(t, Principal("alice", "app")+"\x00same-lsid", onApp.Owner())
 	assert.NotEqual(t, onApp.Owner(), onAdmin.Owner())
 
 	principal, id, ok := SplitSessionKey(onApp.Owner())
 	require.True(t, ok)
-	assert.Equal(t, "alice@app", principal)
+	assert.Equal(t, Principal("alice", "app"), principal)
 	assert.Equal(t, "same-lsid", id)
 }
 
@@ -171,4 +171,41 @@ func TestEnsureLSID_StableAcrossCalls(t *testing.T) {
 	first := c.EnsureLSID()
 	second := c.EnsureLSID()
 	assert.Equal(t, first, second)
+}
+
+// Before the fix the principal was user + "@" + db with no escaping, so
+// alice@tenant in auth database 123 and alice in auth database tenant@123
+// shared one owner string and could use each other's cursors and sessions.
+func TestSessionPrincipalIsUnambiguous(t *testing.T) {
+	a, b := New(), New()
+	a.SetAuth("alice@tenant", "", nil, "123")
+	b.SetAuth("alice", "", nil, "tenant@123")
+	assert.NotEqual(t, a.SessionPrincipal(), b.SessionPrincipal())
+
+	a.SetLSID("same-lsid")
+	b.SetLSID("same-lsid")
+	assert.NotEqual(t, a.Owner(), b.Owner())
+}
+
+// A NUL in a username must not shift where a session key splits.
+func TestSessionKeySplitsWithNULInUsername(t *testing.T) {
+	c := New()
+	c.SetAuth("ev\x00il", "", nil, "db")
+	c.SetLSID("lsid")
+
+	principal, id, ok := SplitSessionKey(c.Owner())
+	require.True(t, ok)
+	assert.Equal(t, "lsid", id)
+	assert.Equal(t, c.SessionPrincipal(), principal)
+}
+
+func TestSplitPrincipalRoundTrip(t *testing.T) {
+	for _, c := range [][2]string{{"alice", "app"}, {"alice@tenant", "123"}, {"alice", "tenant@123"}, {"ev\x00il", "d\"b"}, {"", ""}} {
+		user, db, ok := SplitPrincipal(Principal(c[0], c[1]))
+		require.True(t, ok, "%q", c)
+		assert.Equal(t, c[0], user)
+		assert.Equal(t, c[1], db)
+	}
+	_, _, ok := SplitPrincipal("")
+	assert.False(t, ok)
 }

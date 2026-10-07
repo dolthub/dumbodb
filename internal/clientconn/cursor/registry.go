@@ -59,7 +59,7 @@ type NewParams struct {
 	// Only Owner may use or kill the cursor; DB and Collection must also match.
 	DB         string
 	Collection string
-	Owner      string // authenticated principal (user@db), empty when unauthenticated
+	Owner      string // conninfo.SessionPrincipal of the creator, empty when unauthenticated
 
 	Type         Type
 	ShowRecordID bool

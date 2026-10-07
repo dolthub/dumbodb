@@ -22,6 +22,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/netip"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -393,15 +394,41 @@ func (connInfo *ConnInfo) SessionKeyFor(id string) string {
 	return sessionKey(connInfo.SessionPrincipal(), id)
 }
 
-// SessionPrincipal is the authenticated user as "user@db", or "" when
-// unauthenticated. Sessions are owned by a principal, so the same lsid from a
-// different principal is a different session.
+// SessionPrincipal identifies the authenticated user (see Principal), or is
+// "" when unauthenticated. Sessions and cursors are owned by a principal, so
+// the same lsid from a different principal is a different session.
 func (connInfo *ConnInfo) SessionPrincipal() string {
 	user, _, _, db := connInfo.Auth()
 	if user == "" {
 		return ""
 	}
-	return user + "@" + db
+	return Principal(user, db)
+}
+
+// Principal encodes a user and authentication database unambiguously: both
+// are quoted, so names containing "@" cannot collide and the result never
+// contains NUL, which separates the principal in session keys.
+func Principal(user, db string) string {
+	return strconv.Quote(user) + "@" + strconv.Quote(db)
+}
+
+// SplitPrincipal returns the user and database a Principal was built from.
+func SplitPrincipal(principal string) (user, db string, ok bool) {
+	quotedUser, err := strconv.QuotedPrefix(principal)
+	if err != nil {
+		return "", "", false
+	}
+	rest, found := strings.CutPrefix(principal[len(quotedUser):], "@")
+	if !found {
+		return "", "", false
+	}
+	if user, err = strconv.Unquote(quotedUser); err != nil {
+		return "", "", false
+	}
+	if db, err = strconv.Unquote(rest); err != nil {
+		return "", "", false
+	}
+	return user, db, true
 }
 
 // SplitSessionKey returns the principal and lsid of a session registry key.
