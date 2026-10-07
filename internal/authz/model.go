@@ -66,6 +66,8 @@ const (
 	ActionViewRole                     Action = "viewRole"
 	ActionSetAuthenticationRestriction Action = "setAuthenticationRestriction"
 	ActionListSessions                 Action = "listSessions"
+	ActionInprog                       Action = "inprog"
+	ActionGetCmdLineOpts               Action = "getCmdLineOpts"
 
 	AnyAction Action = "anyAction"
 )

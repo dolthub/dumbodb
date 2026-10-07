@@ -88,6 +88,12 @@ var commandPrivileges = map[string][]commandPrivilege{
 	"validate":         {{authz.ActionValidate, scopeCollection}},
 	"convertToCapped":  {{authz.ActionConvertToCapped, scopeCollection}},
 	"renameCollection": {{authz.ActionRenameCollectionSameDB, scopeCollection}},
+	"compact":          {{authz.ActionCompact, scopeCollection}},
+
+	"createSearchIndexes": {{authz.ActionCreateSearchIndexes, scopeCollection}},
+	"dropSearchIndex":     {{authz.ActionDropSearchIndex, scopeCollection}},
+	"updateSearchIndex":   {{authz.ActionUpdateSearchIndex, scopeCollection}},
+	"listSearchIndexes":   {{authz.ActionListSearchIndexes, scopeCollection}},
 
 	"dbStats":                  {{authz.ActionDBStats, scopeDatabase}},
 	"listCollections":          {{authz.ActionListCollections, scopeDatabase}},
@@ -107,6 +113,9 @@ var commandPrivileges = map[string][]commandPrivilege{
 	"top":                {{authz.ActionTop, scopeCluster}},
 	"getLog":             {{authz.ActionGetLog, scopeCluster}},
 	"rotateCertificates": {{authz.ActionRotateCertificates, scopeCluster}},
+	"autoCompact":        {{authz.ActionCompact, scopeCluster}},
+	"currentOp":          {{authz.ActionInprog, scopeCluster}},
+	"getCmdLineOpts":     {{authz.ActionGetCmdLineOpts, scopeCluster}},
 }
 
 func (h *Handler) authorize(ctx context.Context, msg *wire.OpMsg) error {
@@ -126,6 +135,9 @@ func (h *Handler) authorize(ctx context.Context, msg *wire.OpMsg) error {
 	}
 	if command == "dataSize" {
 		return h.authorizeNamespaceAction(ctx, msg, db, collection, authz.ActionFind)
+	}
+	if command == "explain" {
+		return h.authorizeExplain(ctx, msg, db)
 	}
 	if checks, ok := grantCommandChecks[command]; ok {
 		return h.authorizeGrantCommand(ctx, msg, command, db, checks)
@@ -600,6 +612,35 @@ func targetResource(scope resourceScope, db, collection string) authz.Resource {
 	default:
 		return authz.CollectionResource(db, collection)
 	}
+}
+
+// authorizeExplain authorizes the wrapped command as if it were run directly:
+// executionStats executes it, so explain must not reach anything the command
+// itself could not. A malformed wrapper is left for the handler to reject.
+func (h *Handler) authorizeExplain(ctx context.Context, msg *wire.OpMsg, db string) error {
+	document, err := opMsgDocument(msg)
+	if err != nil {
+		return err
+	}
+
+	inner, ok := must.NotFail(document.Get("explain")).(*types.Document)
+	if !ok || inner.Len() == 0 {
+		return nil
+	}
+
+	if inner.Command() == "explain" {
+		return unauthorizedCommandError(msg, "explain", db)
+	}
+
+	wrapped := inner.DeepCopy()
+	wrapped.Set("$db", db)
+
+	wrappedMsg, err := documentOpMsg(wrapped)
+	if err != nil {
+		return err
+	}
+
+	return h.authorize(ctx, wrappedMsg)
 }
 
 // authorizeRenameCollection authorizes the source and target namespaces named
