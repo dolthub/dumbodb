@@ -827,8 +827,8 @@ func (h *Handler) authorizeExplain(ctx context.Context, msg *wire.OpMsg, db stri
 		return nil
 	}
 
-	if inner.Command() == "explain" {
-		return unauthorizedCommandError(msg, "explain", db)
+	if err = h.checkExplainable(inner.Command()); err != nil {
+		return err
 	}
 
 	wrapped := inner.DeepCopy()
