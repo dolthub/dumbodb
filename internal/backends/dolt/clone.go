@@ -49,7 +49,7 @@ func (b *Backend) DumboDBClone(ctx context.Context, params *backends.CloneParams
 		return nil, fmt.Errorf("dumboClone: database %q already exists", params.As)
 	}
 
-	ru, err := parseRemoteURL(params.From)
+	ru, err := b.parseRemoteURL(params.From)
 	if err != nil {
 		return nil, fmt.Errorf("dumboClone: %w", err)
 	}

@@ -69,6 +69,11 @@ const (
 	ActionInprog                       Action = "inprog"
 	ActionGetCmdLineOpts               Action = "getCmdLineOpts"
 
+	// ActionDumboRemote covers DumboDB remote operations (remote, push, fetch,
+	// pull, clone), which open URLs with the server's filesystem access and
+	// credentials.
+	ActionDumboRemote Action = "dumboRemote"
+
 	AnyAction Action = "anyAction"
 )
 

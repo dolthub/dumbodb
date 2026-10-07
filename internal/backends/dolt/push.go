@@ -289,7 +289,7 @@ func (b *Backend) resolveRemoteURL(ctx context.Context, dbName, remote string) (
 	}
 	urlVal, _ := doc.Get("url")
 	urlStr, _ := urlVal.(string)
-	ru, err := parseRemoteURL(urlStr)
+	ru, err := b.parseRemoteURL(urlStr)
 	if err != nil {
 		return nil, fmt.Errorf("stored url for remote %q is invalid: %w", remote, err)
 	}

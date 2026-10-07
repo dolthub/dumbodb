@@ -116,6 +116,17 @@ var commandPrivileges = map[string][]commandPrivilege{
 	"autoCompact":        {{authz.ActionCompact, scopeCluster}},
 	"currentOp":          {{authz.ActionInprog, scopeCluster}},
 	"getCmdLineOpts":     {{authz.ActionGetCmdLineOpts, scopeCluster}},
+
+	"dumboRemote": {{authz.ActionDumboRemote, scopeCluster}},
+	"doltRemote":  {{authz.ActionDumboRemote, scopeCluster}},
+	"dumboPush":   {{authz.ActionDumboRemote, scopeCluster}},
+	"doltPush":    {{authz.ActionDumboRemote, scopeCluster}},
+	"dumboFetch":  {{authz.ActionDumboRemote, scopeCluster}},
+	"doltFetch":   {{authz.ActionDumboRemote, scopeCluster}},
+	"dumboPull":   {{authz.ActionDumboRemote, scopeCluster}},
+	"doltPull":    {{authz.ActionDumboRemote, scopeCluster}},
+	"dumboClone":  {{authz.ActionDumboRemote, scopeCluster}},
+	"doltClone":   {{authz.ActionDumboRemote, scopeCluster}},
 }
 
 func (h *Handler) authorize(ctx context.Context, msg *wire.OpMsg) error {

@@ -15,7 +15,9 @@
 package dolt
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"net/url"
 	"path"
 	"path/filepath"
@@ -113,6 +115,82 @@ func parseRemoteURL(raw string) (*remoteURL, error) {
 	}
 
 	return &remoteURL{Raw: trimmed, Parsed: u, Scheme: scheme}, nil
+}
+
+// parseRemoteURL is the package-level parseRemoteURL plus a check that a
+// filesystem-backed remote does not resolve into the server's data directory.
+// Each database there is laid out like a Dolt file remote, so such a URL
+// would let a client read any other database, admin included, or write into
+// a live store behind the server's back.
+func (b *Backend) parseRemoteURL(raw string) (*remoteURL, error) {
+	ru, err := parseRemoteURL(raw)
+	if err != nil {
+		return nil, err
+	}
+
+	switch ru.Scheme {
+	case dbfactory.FileScheme, dbfactory.GitFileScheme, dbfactory.LocalBSScheme:
+	default:
+		return ru, nil
+	}
+
+	inside, err := pathWithin(b.dataDir, ru.Parsed.Host+ru.Parsed.Path)
+	if err != nil {
+		return nil, fmt.Errorf("resolving remote url %q: %w", ru.Raw, err)
+	}
+	if inside {
+		return nil, fmt.Errorf("remote url %q points inside the server data directory", ru.Raw)
+	}
+
+	return ru, nil
+}
+
+// pathWithin reports whether p, with symlinks resolved, is dir or lies under
+// it. p need not exist yet; its longest existing prefix is resolved.
+func pathWithin(dir, p string) (bool, error) {
+	resolvedDir, err := resolveSymlinks(dir)
+	if err != nil {
+		return false, err
+	}
+
+	resolved, err := resolveSymlinks(p)
+	if err != nil {
+		return false, err
+	}
+
+	rel, err := filepath.Rel(resolvedDir, resolved)
+	if err != nil {
+		return false, nil
+	}
+
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))), nil
+}
+
+// resolveSymlinks returns the absolute form of p with symlinks resolved in
+// its longest existing prefix.
+func resolveSymlinks(p string) (string, error) {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return "", err
+	}
+
+	existing, rest := abs, ""
+	for {
+		resolved, err := filepath.EvalSymlinks(existing)
+		if err == nil {
+			return filepath.Join(resolved, rest), nil
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return "", err
+		}
+
+		parent := filepath.Dir(existing)
+		if parent == existing {
+			return abs, nil
+		}
+		rest = filepath.Join(filepath.Base(existing), rest)
+		existing = parent
+	}
 }
 
 // expandSchemelessRemote applies dolt's shorthand for a remote given without a
