@@ -136,7 +136,7 @@ func (e *expr) processExpr(exprValue any, doc *types.Document) (any, error) {
 	switch exprValue := exprValue.(type) {
 	case *types.Document:
 		if IsOperator(exprValue) {
-			op, err := NewOperator(exprValue)
+			op, err := cachedOperator(exprValue)
 			if err != nil {
 				// $expr was validated in NewExpr
 				return nil, lazyerrors.Error(err)
@@ -201,7 +201,7 @@ func (e *expr) processExpr(exprValue any, doc *types.Document) (any, error) {
 
 		return res, nil
 	case string:
-		expression, err := aggregations.NewExpression(exprValue, nil)
+		expression, err := fieldExpression(exprValue)
 
 		var exprErr *aggregations.ExpressionError
 		if errors.As(err, &exprErr) && exprErr.Code() == aggregations.ErrNotExpression {

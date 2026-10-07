@@ -16,7 +16,6 @@ package common
 
 import (
 	"testing"
-	"weak"
 
 	"github.com/stretchr/testify/require"
 
@@ -62,7 +61,7 @@ func TestFilterOperatorExpr_ValidatesOncePerFilter(t *testing.T) {
 		_, err := filterOperator(must.NotFail(types.NewDocument("a", i)), "$expr", exprValue, nil)
 		require.NoError(t, err)
 	}
-	op, ok := validatedExprs.Load(weak.Make(exprValue))
+	op, ok := validatedExprs.Get(exprValue)
 	require.True(t, ok, "the expression was not cached")
 	again, err := validatedExpr(exprValue)
 	require.NoError(t, err)

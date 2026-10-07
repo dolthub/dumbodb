@@ -19,13 +19,10 @@ import (
 	"fmt"
 	"math"
 	"math/big"
-	"runtime"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 	"unicode"
-	"weak"
 
 	"golang.org/x/text/transform"
 	"golang.org/x/text/unicode/norm"
@@ -38,6 +35,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/identitycache"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 	"github.com/dolthub/dumbodb/internal/util/must"
@@ -376,9 +374,8 @@ func filterExprOperator(doc *types.Document, exprValue any) (bool, error) {
 }
 
 // validatedExprs caches validated $expr operators by expression document, so a
-// filter applied to many documents is validated once. Keys are weak pointers,
-// and an entry is removed when its expression document is collected.
-var validatedExprs sync.Map // weak.Pointer[types.Document] -> operators.Operator
+// filter applied to many documents is validated once.
+var validatedExprs identitycache.Cache[types.Document, operators.Operator]
 
 // validatedExpr returns the validated operator for the value of a $expr
 // filter. Only document expressions are cached; other values are cheap to
@@ -389,18 +386,15 @@ func validatedExpr(exprValue any) (operators.Operator, error) {
 		return operators.NewExpr(must.NotFail(types.NewDocument("$expr", exprValue)), "$expr")
 	}
 
-	key := weak.Make(exprDoc)
-	if op, ok := validatedExprs.Load(key); ok {
-		return op.(operators.Operator), nil
+	if op, ok := validatedExprs.Get(exprDoc); ok {
+		return op, nil
 	}
 
 	op, err := operators.NewExpr(must.NotFail(types.NewDocument("$expr", exprDoc)), "$expr")
 	if err != nil {
 		return nil, err
 	}
-	if _, loaded := validatedExprs.LoadOrStore(key, op); !loaded {
-		runtime.AddCleanup(exprDoc, func(k weak.Pointer[types.Document]) { validatedExprs.Delete(k) }, key)
-	}
+	validatedExprs.Put(exprDoc, op)
 	return op, nil
 }
 
