@@ -127,6 +127,8 @@ const (
 
 	ErrInvalidIndexSpecificationOption = ErrorCode(197) // InvalidIndexSpecificationOption
 
+	ErrExceededMemoryLimit = ErrorCode(146) // ExceededMemoryLimit
+
 	// ErrViewDepthLimitExceeded indicates a view resolves through more than the
 	// maximum nesting depth (20).
 	ErrViewDepthLimitExceeded = ErrorCode(165) // ViewDepthLimitExceeded
@@ -214,6 +216,10 @@ const (
 	// ErrOperatorWrongLenOfArgs indicates that aggregation operator contains
 	// wrong amount of arguments.
 	ErrOperatorWrongLenOfArgs = ErrorCode(16020) // Location16020
+
+	ErrRangeStartNotInt32 = ErrorCode(34444) // Location34444
+	ErrRangeEndNotInt32   = ErrorCode(34446) // Location34446
+	ErrRangeStepNotInt32  = ErrorCode(34448) // Location34448
 
 	// ErrFieldPathInvalidName indicates that FieldPath is invalid.
 	ErrFieldPathInvalidName = ErrorCode(16410) // Location16410
