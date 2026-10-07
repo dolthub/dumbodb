@@ -17,8 +17,11 @@ package handlererrors
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/FerretDB/wire/wirebson"
+
+	"github.com/dolthub/dumbodb/internal/bson"
 )
 
 //go:generate ../../../bin/stringer -linecomment -type ErrorCode
@@ -49,6 +52,9 @@ const (
 
 	// ErrTypeMismatch for $sort indicates that the expression in the $sort is not an object.
 	ErrTypeMismatch = ErrorCode(14) // TypeMismatch
+
+	// ErrOverflow indicates input nested deeper than the BSON depth limit.
+	ErrOverflow = ErrorCode(15) // Overflow
 
 	// ErrProtocolError indicates SASL handshake failed.
 	ErrProtocolError = ErrorCode(17) // ProtocolError
@@ -491,6 +497,11 @@ func ProtocolError(err error) ProtoErr {
 	var writeErr *WriteErrors
 	if errors.As(err, &writeErr) {
 		return writeErr
+	}
+
+	if errors.Is(err, bson.ErrNestingTooDeep) {
+		msg := fmt.Sprintf("BSONObj exceeded maximum nested object depth: %d", bson.MaxNestingDepth)
+		return NewCommandErrorMsg(ErrOverflow, msg).(*CommandError)
 	}
 
 	//nolint:errorlint // only *CommandError could be returned

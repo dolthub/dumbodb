@@ -27,6 +27,13 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 )
 
+// MaxNestingDepth is the deepest document and array nesting accepted when
+// converting BSON input, matching MongoDB's default maxBSONDepth.
+const MaxNestingDepth = 200
+
+// ErrNestingTooDeep is returned for input nested deeper than [MaxNestingDepth].
+var ErrNestingTooDeep = errors.New("BSON nesting depth exceeds the maximum allowed depth")
+
 // convertFromTypes converts types package value to wirebson package value.
 //
 // Invalid types cause panics.
@@ -167,10 +174,10 @@ func FromDocument(doc *types.Document) (*wirebson.Document, error) {
 // convertToTypes converts wirebson package value to types package value.
 //
 // Invalid types cause panics.
-func convertToTypes(v any) (any, error) {
+func convertToTypes(v any, depth int) (any, error) {
 	switch v := v.(type) {
 	case *wirebson.Document:
-		doc, err := ToDocument(v)
+		doc, err := toDocument(v, depth+1)
 		if err != nil {
 			return nil, lazyerrors.Error(err)
 		}
@@ -178,7 +185,7 @@ func convertToTypes(v any) (any, error) {
 		return doc, nil
 
 	case wirebson.RawDocument:
-		doc, err := ToDocument(v)
+		doc, err := toDocument(v, depth+1)
 		if err != nil {
 			return nil, lazyerrors.Error(err)
 		}
@@ -186,7 +193,7 @@ func convertToTypes(v any) (any, error) {
 		return doc, nil
 
 	case *wirebson.Array:
-		arr, err := ToArray(v)
+		arr, err := toArray(v, depth+1)
 		if err != nil {
 			return nil, lazyerrors.Error(err)
 		}
@@ -194,7 +201,7 @@ func convertToTypes(v any) (any, error) {
 		return arr, nil
 
 	case wirebson.RawArray:
-		arr, err := ToArray(v)
+		arr, err := toArray(v, depth+1)
 		if err != nil {
 			return nil, lazyerrors.Error(err)
 		}
@@ -244,6 +251,14 @@ func convertToTypes(v any) (any, error) {
 
 // ToArray converts wirebson array to [*types.Array].
 func ToArray(a wirebson.AnyArray) (*types.Array, error) {
+	return toArray(a, 1)
+}
+
+func toArray(a wirebson.AnyArray, depth int) (*types.Array, error) {
+	if depth > MaxNestingDepth {
+		return nil, ErrNestingTooDeep
+	}
+
 	arr, err := a.Decode()
 	if err != nil {
 		return nil, lazyerrors.Error(err)
@@ -254,7 +269,7 @@ func ToArray(a wirebson.AnyArray) (*types.Array, error) {
 	for i := range arr.Len() {
 		var v any
 
-		if v, err = convertToTypes(arr.Get(i)); err != nil {
+		if v, err = convertToTypes(arr.Get(i), depth); err != nil {
 			return nil, lazyerrors.Error(err)
 		}
 
@@ -270,9 +285,19 @@ func ToArray(a wirebson.AnyArray) (*types.Array, error) {
 }
 
 // ToDocument converts wirebson document to [*types.Document].
+//
+// Input nested deeper than [MaxNestingDepth] returns [ErrNestingTooDeep].
 func ToDocument(d wirebson.AnyDocument) (*types.Document, error) {
+	return toDocument(d, 1)
+}
+
+func toDocument(d wirebson.AnyDocument, depth int) (*types.Document, error) {
+	if depth > MaxNestingDepth {
+		return nil, ErrNestingTooDeep
+	}
+
 	// Check for MinKey/MaxKey which wirebson cannot decode.
-	if result, err := ToDocumentHandlingMinMaxKey(d); result != nil || err != nil {
+	if result, err := toDocumentHandlingMinMaxKey(d, depth); result != nil || err != nil {
 		return result, err
 	}
 
@@ -287,7 +312,7 @@ func ToDocument(d wirebson.AnyDocument) (*types.Document, error) {
 	for i := range fields {
 		f, v := doc.GetByIndex(i)
 
-		if v, err = convertToTypes(v); err != nil {
+		if v, err = convertToTypes(v, depth); err != nil {
 			return nil, lazyerrors.Error(err)
 		}
 

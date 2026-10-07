@@ -185,6 +185,10 @@ func rawBSONValueSize(data []byte, t byte) (int, error) {
 // handling MinKey and MaxKey which the wirebson library doesn't support.
 // Falls back to the normal ToDocument path when no MinKey/MaxKey are present.
 func ToDocumentHandlingMinMaxKey(d wirebson.AnyDocument) (*types.Document, error) {
+	return toDocumentHandlingMinMaxKey(d, 1)
+}
+
+func toDocumentHandlingMinMaxKey(d wirebson.AnyDocument, depth int) (*types.Document, error) {
 	raw, err := d.Encode()
 	if err != nil {
 		return nil, lazyerrors.Error(err)
@@ -200,7 +204,7 @@ func ToDocumentHandlingMinMaxKey(d wirebson.AnyDocument) (*types.Document, error
 	}
 
 	// Decode the patched document (MinKey/MaxKey replaced with Null) using normal path.
-	result, err := ToDocument(wirebson.RawDocument(patched))
+	result, err := toDocument(wirebson.RawDocument(patched), depth)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
 	}
