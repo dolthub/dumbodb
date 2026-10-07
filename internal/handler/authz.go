@@ -199,6 +199,9 @@ func (h *Handler) authorize(ctx context.Context, msg *wire.OpMsg) error {
 	if command == "bulkWrite" {
 		return h.authorizeBulkWrite(ctx, msg, db)
 	}
+	if command == "insert" || command == "update" || command == "findAndModify" {
+		return h.authorizeActions(ctx, msg, command, db, authz.CollectionResource(db, collection), writePayloadActions(msg, command))
+	}
 	if localVersioningCommands[command] {
 		base, _ := backends.SplitEncodedDBName(db)
 		if err := h.authorizeAdminHistoryRead(ctx, msg, command, db); err != nil {
@@ -238,6 +241,49 @@ func (h *Handler) authorizeAdminHistoryRead(ctx context.Context, msg *wire.OpMsg
 		return nil
 	}
 	return h.authorizeActions(ctx, msg, command, db, authz.CollectionResource("admin", "system.users"), []authz.Action{authz.ActionFind})
+}
+
+// writePayloadActions returns the actions an insert, update or findAndModify
+// needs given its payload, as MongoDB requires: findAndModify needs find and
+// remove (with remove:true) or update; any upsert also needs insert; and
+// bypassDocumentValidation needs that action.
+func writePayloadActions(msg *wire.OpMsg, command string) []authz.Action {
+	document, err := opMsgDocument(msg)
+	if err != nil {
+		return []authz.Action{authz.ActionFind, authz.ActionInsert, authz.ActionUpdate, authz.ActionRemove}
+	}
+
+	var actions []authz.Action
+	switch command {
+	case "insert":
+		actions = []authz.Action{authz.ActionInsert}
+	case "update":
+		actions = []authz.Action{authz.ActionUpdate}
+		statements, _ := document.Get("updates")
+		if array, ok := statements.(*types.Array); ok {
+			for i := range array.Len() {
+				if stmt, ok := must.NotFail(array.Get(i)).(*types.Document); ok && flagRequested(stmt, "upsert") {
+					actions = append(actions, authz.ActionInsert)
+					break
+				}
+			}
+		}
+	case "findAndModify":
+		actions = []authz.Action{authz.ActionFind}
+		if flagRequested(document, "remove") {
+			actions = append(actions, authz.ActionRemove)
+		} else {
+			actions = append(actions, authz.ActionUpdate)
+		}
+		if flagRequested(document, "upsert") {
+			actions = append(actions, authz.ActionInsert)
+		}
+	}
+
+	if flagRequested(document, "bypassDocumentValidation") {
+		actions = append(actions, authz.ActionBypassDocumentValidation)
+	}
+	return actions
 }
 
 // flagRequested reports whether a boolean option that widens what a command
