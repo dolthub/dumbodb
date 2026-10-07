@@ -55,7 +55,7 @@ func TestWithLogicalTime(t *testing.T) {
 }
 
 func TestInternalLogicalTimeRequiresMembershipAuthentication(t *testing.T) {
-	h := &Handler{NewOpts: &NewOpts{}}
+	h := &Handler{NewOpts: &NewOpts{MembershipCredentials: must.NotFail(membership.New("abcdef"))}}
 	logicalTime := types.NewTimestamp(time.Now().UTC(), 7)
 	request := must.NotFail(documentOpMsg(must.NotFail(types.NewDocument(
 		"ping", int32(1),
@@ -87,6 +87,22 @@ func TestInternalLogicalTimeRequiresMembershipAuthentication(t *testing.T) {
 	clusterTime := must.NotFail(document.Get("$clusterTime")).(*types.Document)
 	if clusterTime.Has("signature") {
 		t.Fatal("internal $clusterTime response contains a signature")
+	}
+}
+
+func TestUnsignedLogicalTimeWithoutMembershipAuthentication(t *testing.T) {
+	h := &Handler{NewOpts: &NewOpts{}}
+	logicalTime := types.NewTimestamp(time.Now().UTC(), 7)
+	request := must.NotFail(documentOpMsg(must.NotFail(types.NewDocument(
+		"ping", int32(1),
+		"$clusterTime", must.NotFail(types.NewDocument("clusterTime", logicalTime)),
+		"$db", "admin",
+	))))
+	if err := h.observeLogicalTime(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if h.logicalTime.Load() != uint64(logicalTime) {
+		t.Fatalf("logical time = %d, want %d", h.logicalTime.Load(), logicalTime)
 	}
 }
 

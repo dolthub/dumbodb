@@ -203,7 +203,7 @@ func (h *Handler) observeLogicalTime(ctx context.Context, msg *wire.OpMsg) error
 	if !ok {
 		return handlererrors.NewCommandErrorMsg(handlererrors.ErrTypeMismatch, "$clusterTime must be an object")
 	}
-	if !clusterTime.Has("signature") && !h.internalMemberAuthenticated(ctx) {
+	if !clusterTime.Has("signature") && h.membershipAuthenticationEnabled() && !h.internalMemberAuthenticated(ctx) {
 		return handlererrors.NewCommandErrorMsg(handlererrors.ErrUnauthorized, "unsigned $clusterTime requires internal membership authentication")
 	}
 	timestamp, err := clusterTime.Get("clusterTime")
@@ -224,6 +224,10 @@ func (h *Handler) observeLogicalTime(ctx context.Context, msg *wire.OpMsg) error
 			return nil
 		}
 	}
+}
+
+func (h *Handler) membershipAuthenticationEnabled() bool {
+	return h.NewOpts != nil && h.MembershipCredentials != nil
 }
 
 func (h *Handler) nextLogicalTime() types.Timestamp {
