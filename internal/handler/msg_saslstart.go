@@ -15,7 +15,6 @@
 package handler
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -68,7 +67,8 @@ func (h *Handler) MsgSASLStart(connCtx context.Context, msg *wire.OpMsg) (*wire.
 }
 
 // saslStart starts authentication and returns a document used for the response.
-// SCRAM-SHA-1, SCRAM-SHA-256, and PLAIN mechanisms are supported.
+// SCRAM-SHA-1 and SCRAM-SHA-256 mechanisms are supported. As in MongoDB Community,
+// PLAIN is not: it would accept an identity without verifying it against stored credentials.
 func (h *Handler) saslStart(ctx context.Context, dbName string, document *types.Document) (*types.Document, error) {
 	mechanism, err := common.GetRequiredParam[string](document, "mechanism")
 	if err != nil {
@@ -108,71 +108,10 @@ func (h *Handler) saslStart(ctx context.Context, dbName string, document *types.
 			"done", false,
 			"payload", types.Binary{B: []byte(response)},
 		)), nil
-	case "PLAIN":
-		if err = saslStartPlain(ctx, dbName, document); err != nil {
-			return nil, err
-		}
-
-		var emptyPayload types.Binary
-
-		return must.NotFail(types.NewDocument(
-			"conversationId", int32(1),
-			"done", true,
-			"payload", emptyPayload,
-		)), nil
 	default:
 		msg := fmt.Sprintf("Received authentication for mechanism %s which is not enabled", mechanism)
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrMechanismUnavailable, msg, "mechanism")
 	}
-}
-
-// saslStartPlain extracts username and password from PLAIN `saslStart` payload.
-func saslStartPlain(ctx context.Context, dbName string, doc *types.Document) error {
-	var payload []byte
-
-	// some drivers send payload as a string
-	stringPayload, err := common.GetRequiredParam[string](doc, "payload")
-	if err == nil {
-		if payload, err = base64.StdEncoding.DecodeString(stringPayload); err != nil {
-			return handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrBadValue,
-				fmt.Sprintf("Invalid payload: %v", err),
-				"payload",
-			)
-		}
-	}
-
-	// most drivers follow spec and send payload as a binary
-	binaryPayload, err := common.GetRequiredParam[types.Binary](doc, "payload")
-	if err == nil {
-		payload = binaryPayload.B
-	}
-
-	// as spec's payload should be binary, we return an error mentioned binary as expected type
-	if payload == nil {
-		return err
-	}
-
-	fields := bytes.Split(payload, []byte{0})
-	if l := len(fields); l != 3 {
-		return handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrTypeMismatch,
-			fmt.Sprintf("Invalid payload: expected 3 fields, got %d", l),
-			"payload",
-		)
-	}
-
-	authzid, authcid, passwd := fields[0], fields[1], fields[2]
-
-	// Some drivers (Go) send empty authorization identity (authzid),
-	// while others (Java) set it to the same value as authentication identity (authcid)
-	// (see https://www.rfc-editor.org/rfc/rfc4616.html).
-	// Ignore authzid for now.
-	_ = authzid
-
-	conninfo.Get(ctx).SetAuth(string(authcid), string(passwd), nil, dbName)
-
-	return nil
 }
 
 // scramCredentialLookup looks up an user's credentials in the database.
