@@ -153,7 +153,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		collCmp = collation.Parse(viewCollation).Comparator()
 	}
 
-	username := conninfo.Get(connCtx).Username()
+	owner := conninfo.Get(connCtx).SessionPrincipal()
 
 	v, _ := document.Get("maxTimeMS")
 	if v == nil {
@@ -551,7 +551,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 	cursor := h.cursors.NewCursor(ctx, iterator.WithClose(iter, closer.Close), &cursor.NewParams{
 		DB:         dbName,
 		Collection: cName,
-		Username:   username,
+		Owner:      owner,
 		Type:       cursor.Normal,
 	})
 
@@ -878,7 +878,7 @@ func (h *Handler) aggregateDocuments(connCtx context.Context, document, firstSta
 	cur := h.cursors.NewCursor(connCtx, iterator.WithClose(iter, closer.Close), &cursor.NewParams{
 		DB:         dbName,
 		Collection: "$cmd.aggregate",
-		Username:   conninfo.Get(connCtx).Username(),
+		Owner:      conninfo.Get(connCtx).SessionPrincipal(),
 		Type:       cursor.Normal,
 	})
 
