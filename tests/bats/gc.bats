@@ -138,7 +138,7 @@ quit(0)"
     local journal_before
     journal_before="$(stat -c %s "$journal")"
     local oldgen_files_before
-    oldgen_files_before="$(find "${db_dir}/oldgen" -maxdepth 1 -type f | wc -l)"
+    oldgen_files_before="$(find "${db_dir}/oldgen" -maxdepth 1 -type f ! -name LOCK | wc -l)"
 
     # Run full-mode GC over the wire.
     run mongosh_eval "$db_name" 'print(JSON.stringify(db.runCommand({dumboGC: 1, mode: "full"})));'
@@ -168,7 +168,7 @@ quit(0)"
     # oldgen now has at least one table file (it was empty before
     # any GC ran).
     local oldgen_files_after
-    oldgen_files_after="$(find "${db_dir}/oldgen" -maxdepth 1 -type f | wc -l)"
+    oldgen_files_after="$(find "${db_dir}/oldgen" -maxdepth 1 -type f ! -name LOCK | wc -l)"
     [ "$oldgen_files_before" -eq 0 ]
     [ "$oldgen_files_after" -gt 0 ]
 
