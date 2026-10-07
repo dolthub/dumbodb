@@ -26,7 +26,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/FerretDB/wire/wirebson"
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/prolly"
 	"github.com/dolthub/dolt/go/store/prolly/tree"
@@ -3407,7 +3406,7 @@ func decodeDocFromJSON(storedBytes []byte) (*types.Document, error) {
 }
 
 func decodeDocument(data []byte) (*types.Document, error) {
-	doc, err := bson.ToDocument(wirebson.RawDocument(data))
+	doc, err := bson.DecodeRawDocument(data)
 	if err != nil {
 		return nil, fmt.Errorf("decoding document: %w", err)
 	}
