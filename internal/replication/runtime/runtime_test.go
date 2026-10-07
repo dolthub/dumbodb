@@ -352,3 +352,17 @@ func recoveryCount(t *testing.T, ctx context.Context, collection backends.Collec
 	}
 	return result.Count
 }
+
+// Rollback recovery can rewind admin.system.users and system.roles, so
+// cached privileges must be invalidated afterwards; before the fix only the
+// oplog and special-namespace appliers bumped the auth generation.
+func TestRollbackRecoveryInvalidatesCachedPrivileges(t *testing.T) {
+	runtime, _, _ := newRecoveryRuntime(t)
+	bumps := 0
+	runtime.bumpAuth = func() { bumps++ }
+
+	_ = runtime.runRecovery(context.Background())
+	if bumps != 1 {
+		t.Fatalf("auth generation bumps after recovery = %d, want 1", bumps)
+	}
+}

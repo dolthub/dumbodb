@@ -126,7 +126,6 @@ var commandPrivileges = map[string][]commandPrivilege{
 var authenticatedOnlyCommands = map[string]bool{
 	"abortTransaction":        true,
 	"commitTransaction":       true,
-	"getMore":                 true,
 	"killCursors":             true,
 	"listCommands":            true,
 	"getFreeMonitoringStatus": true,
@@ -199,6 +198,9 @@ func (h *Handler) authorize(ctx context.Context, msg *wire.OpMsg) error {
 	if command == "bulkWrite" {
 		return h.authorizeBulkWrite(ctx, msg, db)
 	}
+	if command == "getMore" {
+		return h.authorizeGetMore(ctx, msg, db)
+	}
 	if command == "insert" || command == "update" || command == "findAndModify" {
 		return h.authorizeActions(ctx, msg, command, db, authz.CollectionResource(db, collection), writePayloadActions(msg, command))
 	}
@@ -241,6 +243,27 @@ func (h *Handler) authorizeAdminHistoryRead(ctx context.Context, msg *wire.OpMsg
 		return nil
 	}
 	return h.authorizeActions(ctx, msg, command, db, authz.CollectionResource("admin", "system.users"), []authz.Action{authz.ActionFind})
+}
+
+// authorizeGetMore re-checks find on the cursor's collection at every call,
+// so a user whose access was revoked, or who was dropped, cannot keep
+// reading a cursor opened earlier. The handler only serves a cursor whose
+// namespace matches the requested one and whose owner is the caller.
+// Database-level aggregate cursors ($documents, $listLocalSessions) need no
+// collection privilege to create and keep only the owner check.
+func (h *Handler) authorizeGetMore(ctx context.Context, msg *wire.OpMsg, db string) error {
+	document, err := opMsgDocument(msg)
+	if err != nil {
+		return err
+	}
+
+	value, _ := document.Get("collection")
+	collection, _ := value.(string)
+	if collection == "" || collection == "$cmd.aggregate" {
+		return nil
+	}
+
+	return h.authorizeActions(ctx, msg, "getMore", db, authz.CollectionResource(db, collection), []authz.Action{authz.ActionFind})
 }
 
 // writePayloadActions returns the actions an insert, update or findAndModify

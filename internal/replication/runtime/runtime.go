@@ -109,7 +109,7 @@ func (r *Runtime) Run(ctx context.Context) {
 			continue
 		}
 		if _, ok := r.store.PendingRollback(); ok {
-			if err := r.recovery.Run(ctx); err != nil {
+			if err := r.runRecovery(ctx); err != nil {
 				r.retry(ctx, "resuming rollback recovery", err)
 				continue
 			}
@@ -144,7 +144,7 @@ func (r *Runtime) Run(ctx context.Context) {
 			}
 			if errors.Is(err, oplog.ErrTooStale) || errors.Is(err, oplog.ErrContinuityLost) ||
 				errors.Is(err, topology.ErrSourceRollbackIDChanged) {
-				recoveryErr := r.recovery.Run(ctx)
+				recoveryErr := r.runRecovery(ctx)
 				if recoveryErr != nil && !errors.Is(recoveryErr, recovery.ErrInitialSyncRequired) {
 					r.retry(ctx, "rollback recovery failed", recoveryErr)
 					continue
@@ -156,6 +156,17 @@ func (r *Runtime) Run(ctx context.Context) {
 			r.retry(ctx, "steady replication stopped", err)
 		}
 	}
+}
+
+// runRecovery runs rollback recovery and then invalidates cached privileges:
+// a rollback, even a partial one, can rewind admin.system.users and
+// system.roles.
+func (r *Runtime) runRecovery(ctx context.Context) error {
+	err := r.recovery.Run(ctx)
+	if r.bumpAuth != nil {
+		r.bumpAuth()
+	}
+	return err
 }
 
 func terminalInitialSyncFailure(err error) (control.InitialSyncFailure, bool) {
