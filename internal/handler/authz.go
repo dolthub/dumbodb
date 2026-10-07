@@ -150,6 +150,9 @@ func (h *Handler) authorize(ctx context.Context, msg *wire.OpMsg) error {
 	if command == "explain" {
 		return h.authorizeExplain(ctx, msg, db)
 	}
+	if command == "bulkWrite" {
+		return h.authorizeBulkWrite(ctx, msg, db)
+	}
 	if checks, ok := grantCommandChecks[command]; ok {
 		return h.authorizeGrantCommand(ctx, msg, command, db, checks)
 	}
@@ -623,6 +626,87 @@ func targetResource(scope resourceScope, db, collection string) authz.Resource {
 	default:
 		return authz.CollectionResource(db, collection)
 	}
+}
+
+// authorizeBulkWrite requires, on each op's own namespace, insert, update
+// (plus insert when upserting) or remove, and bypassDocumentValidation when
+// requested. bulkWrite runs against admin but writes wherever nsInfo points,
+// so $db says nothing about what it touches. Malformed ops and namespaces are
+// left for the handler to reject.
+func (h *Handler) authorizeBulkWrite(ctx context.Context, msg *wire.OpMsg, db string) error {
+	document, err := opMsgDocument(msg)
+	if err != nil {
+		return err
+	}
+
+	nsInfoValue, _ := document.Get("nsInfo")
+	opsValue, _ := document.Get("ops")
+	nsInfo, nsOK := nsInfoValue.(*types.Array)
+	ops, opsOK := opsValue.(*types.Array)
+	if !nsOK || !opsOK {
+		return nil
+	}
+
+	namespaces := make([]authz.Resource, nsInfo.Len())
+	for i := range nsInfo.Len() {
+		nsDoc, ok := must.NotFail(nsInfo.Get(i)).(*types.Document)
+		if !ok {
+			return nil
+		}
+		nsValue, _ := nsDoc.Get("ns")
+		ns, _ := nsValue.(string)
+		nsDB, nsColl, ok := strings.Cut(ns, ".")
+		if !ok {
+			return nil
+		}
+		namespaces[i] = authz.CollectionResource(nsDB, nsColl)
+	}
+
+	privs, err := h.effectivePrivileges(ctx)
+	if err != nil {
+		return err
+	}
+
+	bypass, _ := common.GetOptionalParam(document, "bypassDocumentValidation", false)
+
+	for i := range ops.Len() {
+		op, ok := must.NotFail(ops.Get(i)).(*types.Document)
+		if !ok {
+			return nil
+		}
+
+		var actions []authz.Action
+		var index any
+		switch {
+		case op.Has("insert"):
+			index, actions = must.NotFail(op.Get("insert")), []authz.Action{authz.ActionInsert}
+		case op.Has("update"):
+			index, actions = must.NotFail(op.Get("update")), []authz.Action{authz.ActionUpdate}
+			if upsert, _ := common.GetOptionalParam(op, "upsert", false); upsert {
+				actions = append(actions, authz.ActionInsert)
+			}
+		case op.Has("delete"):
+			index, actions = must.NotFail(op.Get("delete")), []authz.Action{authz.ActionRemove}
+		default:
+			return nil
+		}
+		if bypass {
+			actions = append(actions, authz.ActionBypassDocumentValidation)
+		}
+
+		n, err := getInt64Value(index)
+		if err != nil || n < 0 || n >= int64(len(namespaces)) {
+			return nil
+		}
+
+		for _, action := range actions {
+			if !privs.Authorized(action, namespaces[n]) {
+				return unauthorizedCommandError(msg, "bulkWrite", db)
+			}
+		}
+	}
+
+	return nil
 }
 
 // authorizeExplain authorizes the wrapped command as if it were run directly:
