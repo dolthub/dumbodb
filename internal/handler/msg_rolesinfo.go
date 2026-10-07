@@ -94,7 +94,7 @@ func (h *Handler) MsgRolesInfo(connCtx context.Context, msg *wire.OpMsg) (*wire.
 				continue
 			}
 
-			if authz.IsBuiltinRole(r.Role) {
+			if authz.IsBuiltinRoleOnDB(r.Role, r.DB) {
 				res.Append(builtinRoleInfo(r.Role, r.DB, showPrivileges))
 				continue
 			}

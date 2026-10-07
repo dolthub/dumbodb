@@ -84,7 +84,14 @@ func BuiltinRoleNames(db string) []string {
 	return names
 }
 
+// BuiltinRole returns the privileges of role@db when it is a built-in role on
+// db. Admin-only roles such as root exist only on admin; the same name on any
+// other database is an ordinary custom role.
 func BuiltinRole(role, db string) (PrivilegeSet, bool) {
+	if !IsBuiltinRoleOnDB(role, db) {
+		return nil, false
+	}
+
 	dbRes := DatabaseResource(db)
 	allDB := Resource{}
 
