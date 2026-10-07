@@ -127,6 +127,7 @@ func (h *Handler) initCommands() {
 		"replSetGetStatus":         {Handler: h.MsgReplSetGetStatus, anonymous: true},
 		"replSetHeartbeat":         {Handler: h.MsgReplSetHeartbeat, anonymous: true, membershipOnly: true},
 		"replSetUpdatePosition":    {Handler: h.MsgReplSetUpdatePositionUnsupported, anonymous: true, membershipOnly: true},
+		"rotateCertificates":       {Handler: h.MsgRotateCertificates},
 		"saslStart":                {Handler: h.MsgSASLStart, anonymous: true},
 		"saslContinue":             {Handler: h.MsgSASLContinue, anonymous: true},
 		"serverStatus":             {Handler: h.MsgServerStatus, Help: "Returns an overview of the databases state."},
@@ -203,7 +204,7 @@ func (h *Handler) initCommands() {
 		seen[cmd] = true
 
 		inner := cmd.Handler
-		if cmd.membershipOnly && h.MembershipCredentials != nil {
+		if cmd.membershipOnly && h.membershipAuthenticationEnabled() {
 			memberHandler := inner
 			inner = func(ctx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 				if !h.internalMemberAuthenticated(ctx) {

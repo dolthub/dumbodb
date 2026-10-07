@@ -99,6 +99,7 @@ func TestAuthorize_EnforcesBuiltinRoles(t *testing.T) {
 	require.True(t, isUnauthorized(t, h.authorize(reader, authzCmd(t, "insert", "mydb", "c"))))
 	require.True(t, isUnauthorized(t, h.authorize(reader, authzCmd(t, "dropDatabase", "mydb", "c"))))
 	require.True(t, isUnauthorized(t, h.authorize(reader, authzCmd(t, "find", "other", "c"))))
+	require.True(t, isUnauthorized(t, h.authorize(reader, authzCmd(t, "rotateCertificates", "admin", ""))))
 
 	writer := authAs("writer", "mydb")
 	require.NoError(t, h.authorize(writer, authzCmd(t, "insert", "mydb", "c")))
@@ -111,6 +112,7 @@ func TestAuthorize_EnforcesBuiltinRoles(t *testing.T) {
 	require.NoError(t, h.authorize(boss, authzCmd(t, "createUser", "anydb", "c")))
 	require.NoError(t, h.authorize(boss, authzCmd(t, "dropDatabase", "anydb", "c")))
 	require.NoError(t, h.authorize(boss, authzCmd(t, "serverStatus", "admin", "c")))
+	require.NoError(t, h.authorize(boss, authzCmd(t, "rotateCertificates", "admin", "")))
 }
 
 func TestAuthorize_UpdateUserRequiresPrivilegePerField(t *testing.T) {

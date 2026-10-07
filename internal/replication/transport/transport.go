@@ -309,6 +309,19 @@ func (c *Connection) AuthenticateMember(ctx context.Context, credentials *member
 	}
 }
 
+func (c *Connection) AuthenticateMemberX509(ctx context.Context) error {
+	response, err := c.Request(ctx, wire.MustOpMsg(
+		"authenticate", int32(1),
+		"mechanism", "MONGODB-X509",
+		"$db", "$external",
+	))
+	if err != nil {
+		return err
+	}
+	_, err = decodeSuccessfulResponse(response, "authenticate")
+	return err
+}
+
 func decodeSuccessfulResponse(response *wire.OpMsg, command string) (*wirebson.Document, error) {
 	raw, err := response.RawDocument()
 	if err != nil {

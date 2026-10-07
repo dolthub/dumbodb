@@ -28,6 +28,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/replication/membership"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 	"github.com/dolthub/dumbodb/internal/util/must"
@@ -79,6 +80,12 @@ func (h *Handler) MsgAuthenticate(connCtx context.Context, msg *wire.OpMsg) (*wi
 	subject, err := x509Subject(certificate)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
+	}
+	if h.MembershipAuthMode.AllowsX509() && h.MembershipX509Policy.Matches(certificate) {
+		ci.SetAuth(membership.Username, "", nil, membership.Database)
+		ci.SetBypassBackendAuth()
+		ci.SetAuthenticated()
+		return documentOpMsg(must.NotFail(types.NewDocument("ok", float64(1))))
 	}
 
 	claimedUser, err := common.GetOptionalParam(document, "user", "")

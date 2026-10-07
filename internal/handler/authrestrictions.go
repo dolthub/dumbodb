@@ -26,7 +26,7 @@ import (
 )
 
 func (h *Handler) checkAuthRestrictions(ctx context.Context, db, user string) error {
-	if h.MembershipCredentials != nil && db == membership.Database && user == membership.Username {
+	if h.membershipAuthenticationEnabled() && db == membership.Database && user == membership.Username {
 		return nil
 	}
 	doc, err := h.loadUserDoc(ctx, db, user)

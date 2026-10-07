@@ -19,6 +19,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+
+	"github.com/xdg-go/scram"
 )
 
 func TestLoadKeyFileRemovesAllWhitespace(t *testing.T) {
@@ -93,4 +95,101 @@ func TestLoadKeyFileRejectsOpenPermissions(t *testing.T) {
 	if _, err := LoadKeyFile(path); err == nil {
 		t.Fatal("LoadKeyFile accepted group-readable permissions")
 	}
+}
+
+func TestLoadKeyFileYAMLSequence(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "keyfile")
+	if err := os.WriteFile(path, []byte("- abcdefgh\n- ijklmnop\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	credentials, err := LoadKeyFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"abcdefgh", "ijklmnop"} {
+		if err := authenticate(credentials, secret); err != nil {
+			t.Fatalf("key %q did not authenticate: %v", secret, err)
+		}
+	}
+	if err := authenticateOutbound(credentials, "abcdefgh"); err != nil {
+		t.Fatalf("first key was not used outbound: %v", err)
+	}
+	if err := authenticateOutbound(credentials, "ijklmnop"); err == nil {
+		t.Fatal("second key was used outbound")
+	}
+}
+
+func TestLoadKeyFileRejectsMoreThanTwoKeys(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "keyfile")
+	if err := os.WriteFile(path, []byte("[abcdef, ghijkl, mnopqr]\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadKeyFile(path); err == nil {
+		t.Fatal("LoadKeyFile accepted three keys")
+	}
+}
+
+func authenticate(credentials *Credentials, secret string) error {
+	client, err := newClient(Mechanism, secret)
+	if err != nil {
+		return err
+	}
+	server, err := credentials.NewServerConversation(Mechanism)
+	if err != nil {
+		return err
+	}
+	clientConversation := client.NewConversation()
+	clientFirst, err := clientConversation.Step("")
+	if err != nil {
+		return err
+	}
+	serverFirst, err := server.Step(clientFirst)
+	if err != nil {
+		return err
+	}
+	clientFinal, err := clientConversation.Step(serverFirst)
+	if err != nil {
+		return err
+	}
+	serverFinal, err := server.Step(clientFinal)
+	if err != nil {
+		return err
+	}
+	_, err = clientConversation.Step(serverFinal)
+	return err
+}
+
+func authenticateOutbound(credentials *Credentials, secret string) error {
+	target, err := newClient(Mechanism, secret)
+	if err != nil {
+		return err
+	}
+	stored, err := target.GetStoredCredentialsWithError(scram.KeyFactors{Salt: "0123456789012345678901234567", Iters: sha256Iterations})
+	if err != nil {
+		return err
+	}
+	server, err := scram.SHA256.NewServer(func(string) (scram.StoredCredentials, error) { return stored, nil })
+	if err != nil {
+		return err
+	}
+	clientConversation := credentials.NewConversation()
+	serverConversation := server.NewConversation()
+	clientFirst, err := clientConversation.Step("")
+	if err != nil {
+		return err
+	}
+	serverFirst, err := serverConversation.Step(clientFirst)
+	if err != nil {
+		return err
+	}
+	clientFinal, err := clientConversation.Step(serverFirst)
+	if err != nil {
+		return err
+	}
+	serverFinal, err := serverConversation.Step(clientFinal)
+	if err != nil {
+		return err
+	}
+	_, err = clientConversation.Step(serverFinal)
+	return err
 }

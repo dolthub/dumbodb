@@ -295,29 +295,42 @@ func (h *Handler) saslStartSCRAM(ctx context.Context, dbName, mechanism string, 
 
 	var lookupCmdErr *handlererrors.CommandError
 	var authenticatedUsername string
+	var conv conninfo.SCRAMConversation
 
-	scramServer, err := f.NewServer(func(username string) (scram.StoredCredentials, error) {
-		username = decodeSCRAMUsername(username)
-		cred, lookupErr := h.scramCredentialLookup(ctx, dbName, username, mechanism)
-		if lookupErr != nil {
-			var cmdErr *handlererrors.CommandError
-			if errors.As(lookupErr, &cmdErr) {
-				lookupCmdErr = cmdErr
+	if h.MembershipCredentials != nil && dbName == membership.Database {
+		membershipConversation, conversationErr := h.MembershipCredentials.NewServerConversation(mechanism)
+		if conversationErr != nil {
+			return "", scramMechanismUnavailable(mechanism)
+		}
+		conv = membershipConversation
+		authenticatedUsername = membership.Username
+	} else {
+		scramServer, serverErr := f.NewServer(func(username string) (scram.StoredCredentials, error) {
+			username = decodeSCRAMUsername(username)
+			cred, lookupErr := h.scramCredentialLookup(ctx, dbName, username, mechanism)
+			if lookupErr != nil {
+				var cmdErr *handlererrors.CommandError
+				if errors.As(lookupErr, &cmdErr) {
+					lookupCmdErr = cmdErr
+				}
+
+				return scram.StoredCredentials{}, lookupErr
 			}
 
-			return scram.StoredCredentials{}, lookupErr
+			authenticatedUsername = username
+			return *cred, nil
+		})
+		if serverErr != nil {
+			return "", serverErr
 		}
-
-		authenticatedUsername = username
-		return *cred, nil
-	})
-	if err != nil {
-		return "", err
+		conv = scramServer.NewConversation()
 	}
 
-	conv := scramServer.NewConversation()
-
 	response, err := conv.Step(string(payload))
+	if err == nil && h.MembershipCredentials != nil && dbName == membership.Database &&
+		decodeSCRAMUsername(conv.Username()) != membership.Username {
+		err = errors.New("internal SCRAM username does not match")
+	}
 
 	attrs := []any{
 		slog.String("username", conv.Username()),

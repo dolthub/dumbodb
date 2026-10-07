@@ -76,7 +76,7 @@ func (h *Handler) withLogicalTime(ctx context.Context, msg *wire.OpMsg) (*wire.O
 
 func (h *Handler) externalClientNeedsSignedLogicalTime(ctx context.Context) bool {
 	info := conninfo.GetIfPresent(ctx)
-	return info != nil && info.Authenticated() && h.MembershipCredentials != nil && h.b != nil
+	return info != nil && info.Authenticated() && h.membershipAuthenticationEnabled() && h.b != nil
 }
 
 func (h *Handler) currentLogicalTimeSigningKey(
@@ -227,7 +227,7 @@ func (h *Handler) observeLogicalTime(ctx context.Context, msg *wire.OpMsg) error
 }
 
 func (h *Handler) membershipAuthenticationEnabled() bool {
-	return h.NewOpts != nil && h.MembershipCredentials != nil
+	return h.NewOpts != nil && (h.MembershipCredentials != nil || h.MembershipAuthMode.AllowsX509())
 }
 
 func (h *Handler) nextLogicalTime() types.Timestamp {

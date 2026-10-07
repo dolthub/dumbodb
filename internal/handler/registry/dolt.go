@@ -47,6 +47,9 @@ func newDoltHandler(opts *NewHandlerOpts) (*handler.Handler, CloseBackendFunc, e
 		ReplSetName:           opts.ReplSetName,
 		ReplicationTopology:   opts.ReplicationTopology,
 		MembershipCredentials: opts.MembershipCredentials,
+		MembershipAuthMode:    opts.MembershipAuthMode,
+		MembershipX509Policy:  opts.MembershipX509Policy,
+		RotateCertificates:    opts.RotateCertificates,
 
 		SetupDatabase: opts.SetupDatabase,
 		SetupUsername: opts.SetupUsername,

@@ -388,6 +388,56 @@ func TestAuthenticateMember(t *testing.T) {
 	}
 }
 
+func TestAuthenticateMemberX509(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	serverErr := make(chan error, 1)
+	go func() {
+		reader := bufio.NewReader(server)
+		header, err := readHeader(reader)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		body := make([]byte, int(header.MessageLength)-wire.MsgHeaderLen)
+		if _, err := io.ReadFull(reader, body); err != nil {
+			serverErr <- err
+			return
+		}
+		var request wire.OpMsg
+		if err := request.UnmarshalBinaryNocopy(body); err != nil {
+			serverErr <- err
+			return
+		}
+		raw, err := request.RawDocument()
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		document, err := raw.Decode()
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		if document.Get("mechanism") != "MONGODB-X509" || document.Get("$db") != "$external" || document.Get("user") != nil {
+			serverErr <- errors.New("unexpected X.509 authentication command")
+			return
+		}
+		writeTestMessage(t, server, header.RequestID+1, header.RequestID, wire.MustOpMsg("ok", float64(1)))
+		serverErr <- nil
+	}()
+
+	connection := New(client)
+	if err := connection.AuthenticateMemberX509(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRequestWritesChecksum(t *testing.T) {
 	client, server := net.Pipe()
 	defer client.Close()

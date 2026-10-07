@@ -35,12 +35,15 @@ type Connector struct {
 	dial        dialFunc
 	connection  *Connection
 	credentials *membership.Credentials
+	authMode    membership.AuthMode
 	closed      bool
 }
 
 type MemberOptions struct {
-	Credentials *membership.Credentials
-	TLSConfig   *tls.Config
+	Credentials       *membership.Credentials
+	TLSConfig         *tls.Config
+	TLSConfigProvider func() *tls.Config
+	AuthMode          membership.AuthMode
 }
 
 func NewConnector(address string, compressors []string) *Connector {
@@ -53,9 +56,13 @@ func NewMemberConnector(address, hostInfo string, compressors []string, options 
 		configured = options[0]
 	}
 	var dialer dialFunc
-	if configured.TLSConfig != nil {
-		tlsDialer := &tls.Dialer{NetDialer: &net.Dialer{}, Config: configured.TLSConfig.Clone()}
+	if configured.TLSConfig != nil || configured.TLSConfigProvider != nil {
 		dialer = func(ctx context.Context, address string) (net.Conn, error) {
+			config := configured.TLSConfig
+			if configured.TLSConfigProvider != nil {
+				config = configured.TLSConfigProvider()
+			}
+			tlsDialer := &tls.Dialer{NetDialer: &net.Dialer{}, Config: config.Clone()}
 			return tlsDialer.DialContext(ctx, "tcp", address)
 		}
 	} else {
@@ -69,6 +76,7 @@ func NewMemberConnector(address, hostInfo string, compressors []string, options 
 	})
 	connector.hostInfo = hostInfo
 	connector.credentials = configured.Credentials
+	connector.authMode = configured.AuthMode
 	return connector
 }
 
@@ -133,7 +141,12 @@ func (c *Connector) connectLocked(ctx context.Context) (*Connection, error) {
 		_ = connection.Close()
 		return nil, fmt.Errorf("handshake with MongoDB member %q: %w", c.address, err)
 	}
-	if c.credentials != nil {
+	if c.authMode.SendsX509() {
+		if err := connection.AuthenticateMemberX509(ctx); err != nil {
+			_ = connection.Close()
+			return nil, fmt.Errorf("authenticate with MongoDB member %q: %w", c.address, err)
+		}
+	} else if c.credentials != nil {
 		if err := connection.AuthenticateMember(ctx, c.credentials); err != nil {
 			_ = connection.Close()
 			return nil, fmt.Errorf("authenticate with MongoDB member %q: %w", c.address, err)

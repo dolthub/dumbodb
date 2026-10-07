@@ -48,6 +48,9 @@ type NewHandlerOpts struct {
 	ReplSetName           string
 	ReplicationTopology   *topology.Manager
 	MembershipCredentials *membership.Credentials
+	MembershipAuthMode    membership.AuthMode
+	MembershipX509Policy  *membership.X509Policy
+	RotateCertificates    func() error
 	SetupDatabase         string
 	SetupUsername         string
 	SetupPassword         password.Password

@@ -17,13 +17,15 @@ package membership
 import (
 	"crypto/md5"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"runtime"
-	"unicode"
 
 	"github.com/xdg-go/scram"
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -40,7 +42,7 @@ const (
 
 type Credentials struct {
 	clients map[string]*scram.Client
-	stored  map[string]scram.StoredCredentials
+	stored  map[string][]scram.StoredCredentials
 }
 
 func LoadKeyFile(path string) (*Credentials, error) {
@@ -58,33 +60,38 @@ func LoadKeyFile(path string) (*Credentials, error) {
 	if err != nil {
 		return nil, fmt.Errorf("key file: %w", err)
 	}
-	return New(stripWhitespace(string(contents)))
+	var document yaml.Node
+	if err := yaml.Unmarshal(contents, &document); err != nil {
+		return nil, fmt.Errorf("key file %q is not valid YAML: %w", path, err)
+	}
+	var secrets []string
+	if len(document.Content) != 1 {
+		return nil, fmt.Errorf("key file %q contains no keys", path)
+	}
+	if err := appendKeyFileSecrets(document.Content[0], &secrets); err != nil {
+		return nil, fmt.Errorf("key file %q: %w", path, err)
+	}
+	return NewKeys(secrets)
 }
 
 func New(secret string) (*Credentials, error) {
-	if len(secret) < minimumKeyLength || len(secret) > maximumKeyLength {
-		return nil, fmt.Errorf("key file content must be between %d and %d characters after removing whitespace", minimumKeyLength, maximumKeyLength)
+	return NewKeys([]string{secret})
+}
+
+func NewKeys(secrets []string) (*Credentials, error) {
+	if len(secrets) == 0 || len(secrets) > 2 {
+		return nil, fmt.Errorf("key file must contain one or two keys")
 	}
-	for _, value := range secret {
-		if !isBase64Character(value) {
-			return nil, fmt.Errorf("key file content contains a character outside the base64 character set")
+	normalizedSecrets := make([]string, len(secrets))
+	for index, secret := range secrets {
+		normalizedSecrets[index] = stripWhitespace(secret)
+		if err := validateSecret(normalizedSecrets[index]); err != nil {
+			return nil, err
 		}
 	}
-	sha256Client, err := scram.SHA256.NewClient(Username, secret, "")
-	if err != nil {
-		return nil, fmt.Errorf("creating internal SCRAM credentials: %w", err)
-	}
-	digest := md5.Sum([]byte(Username + ":mongo:" + secret))
-	sha1Client, err := scram.SHA1.NewClient(Username, hex.EncodeToString(digest[:]), "")
-	if err != nil {
-		return nil, fmt.Errorf("creating internal SCRAM credentials: %w", err)
-	}
-	clients := map[string]*scram.Client{
-		Mechanism:     sha256Client,
-		MechanismSHA1: sha1Client,
-	}
-	stored := make(map[string]scram.StoredCredentials, len(clients))
-	for mechanism, client := range clients {
+	clients := make(map[string]*scram.Client, 2)
+	stored := make(map[string][]scram.StoredCredentials, 2)
+	for _, mechanism := range []string{Mechanism, MechanismSHA1} {
 		iterations := sha256Iterations
 		saltLength := 28
 		if mechanism == MechanismSHA1 {
@@ -95,13 +102,51 @@ func New(secret string) (*Credentials, error) {
 		if _, err := rand.Read(salt); err != nil {
 			return nil, fmt.Errorf("creating internal SCRAM salt: %w", err)
 		}
-		verifier, err := client.GetStoredCredentialsWithError(scram.KeyFactors{Salt: string(salt), Iters: iterations})
-		if err != nil {
-			return nil, fmt.Errorf("creating internal SCRAM verifier: %w", err)
+		for index, secret := range normalizedSecrets {
+			client, err := newClient(mechanism, secret)
+			if err != nil {
+				return nil, err
+			}
+			if index == 0 {
+				clients[mechanism] = client
+			}
+			verifier, err := client.GetStoredCredentialsWithError(scram.KeyFactors{Salt: string(salt), Iters: iterations})
+			if err != nil {
+				return nil, fmt.Errorf("creating internal SCRAM verifier: %w", err)
+			}
+			stored[mechanism] = append(stored[mechanism], verifier)
 		}
-		stored[mechanism] = verifier
 	}
 	return &Credentials{clients: clients, stored: stored}, nil
+}
+
+func validateSecret(secret string) error {
+	if len(secret) < minimumKeyLength || len(secret) > maximumKeyLength {
+		return fmt.Errorf("key file content must be between %d and %d characters after removing whitespace", minimumKeyLength, maximumKeyLength)
+	}
+	for _, value := range secret {
+		if !isBase64Character(value) {
+			return fmt.Errorf("key file content contains a character outside the base64 character set")
+		}
+	}
+	return nil
+}
+
+func newClient(mechanism, secret string) (*scram.Client, error) {
+	var generator scram.HashGeneratorFcn
+	password := secret
+	if mechanism == MechanismSHA1 {
+		generator = scram.SHA1
+		digest := md5.Sum([]byte(Username + ":mongo:" + secret))
+		password = hex.EncodeToString(digest[:])
+	} else {
+		generator = scram.SHA256
+	}
+	client, err := generator.NewClient(Username, password, "")
+	if err != nil {
+		return nil, fmt.Errorf("creating internal SCRAM credentials: %w", err)
+	}
+	return client, nil
 }
 
 func (c *Credentials) NewConversation() *scram.ClientConversation {
@@ -109,18 +154,112 @@ func (c *Credentials) NewConversation() *scram.ClientConversation {
 }
 
 func (c *Credentials) StoredCredentials(mechanism string) (scram.StoredCredentials, bool) {
-	stored, ok := c.stored[mechanism]
-	return stored, ok
+	stored := c.stored[mechanism]
+	if len(stored) == 0 {
+		return scram.StoredCredentials{}, false
+	}
+	return stored[0], true
 }
 
 func stripWhitespace(value string) string {
-	result := make([]rune, 0, len(value))
-	for _, character := range value {
-		if !unicode.IsSpace(character) {
+	result := make([]byte, 0, len(value))
+	for index := range len(value) {
+		character := value[index]
+		if character != ' ' && (character < '\t' || character > '\r') {
 			result = append(result, character)
 		}
 	}
 	return string(result)
+}
+
+func appendKeyFileSecrets(node *yaml.Node, secrets *[]string) error {
+	switch node.Kind {
+	case yaml.ScalarNode:
+		*secrets = append(*secrets, node.Value)
+	case yaml.SequenceNode:
+		for _, child := range node.Content {
+			if err := appendKeyFileSecrets(child, secrets); err != nil {
+				return err
+			}
+		}
+	default:
+		return errors.New("must contain only scalar keys or sequences of scalar keys")
+	}
+	return nil
+}
+
+type ServerConversation struct {
+	conversations []*scram.ServerConversation
+	response      string
+	valid         bool
+}
+
+func (c *Credentials) NewServerConversation(mechanism string) (*ServerConversation, error) {
+	credentials := c.stored[mechanism]
+	if len(credentials) == 0 {
+		return nil, fmt.Errorf("unsupported internal SCRAM mechanism %q", mechanism)
+	}
+	nonceBytes := make([]byte, 24)
+	if _, err := rand.Read(nonceBytes); err != nil {
+		return nil, fmt.Errorf("creating internal SCRAM nonce: %w", err)
+	}
+	nonce := base64.StdEncoding.EncodeToString(nonceBytes)
+	var generator scram.HashGeneratorFcn
+	if mechanism == MechanismSHA1 {
+		generator = scram.SHA1
+	} else {
+		generator = scram.SHA256
+	}
+	conversation := &ServerConversation{}
+	for _, credential := range credentials {
+		credential := credential
+		server, err := generator.NewServer(func(string) (scram.StoredCredentials, error) {
+			return credential, nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		server.WithNonceGenerator(func() string { return nonce })
+		conversation.conversations = append(conversation.conversations, server.NewConversation())
+	}
+	return conversation, nil
+}
+
+func (c *ServerConversation) Step(challenge string) (string, error) {
+	var firstError error
+	for _, conversation := range c.conversations {
+		response, err := conversation.Step(challenge)
+		if err == nil {
+			if c.response == "" {
+				c.response = response
+			}
+			if conversation.Valid() {
+				c.valid = true
+				c.response = response
+			}
+		} else if firstError == nil {
+			firstError = err
+		}
+	}
+	if c.response == "" || c.Done() && !c.valid {
+		return "", firstError
+	}
+	response := c.response
+	c.response = ""
+	return response, nil
+}
+
+func (c *ServerConversation) Done() bool {
+	return len(c.conversations) != 0 && c.conversations[0].Done()
+}
+
+func (c *ServerConversation) Valid() bool { return c.valid }
+
+func (c *ServerConversation) Username() string {
+	if len(c.conversations) == 0 {
+		return ""
+	}
+	return c.conversations[0].Username()
 }
 
 func isBase64Character(value rune) bool {
