@@ -31,7 +31,7 @@ import (
 
 func TestHeartbeatMeshBootstrapsConfigurationFromInboundContact(t *testing.T) {
 	manager := New(openControlStore(t, t.TempDir()))
-	if err := manager.ObserveMemberContact("primary.example:27017", 1, 0, 1); err != nil {
+	if err := manager.ObserveMemberContact("primary.example:27017", 1); err != nil {
 		t.Fatal(err)
 	}
 	response := testHeartbeatResponse(t, true)

@@ -16,6 +16,7 @@ package handler
 
 import (
 	"context"
+	"math"
 	"io"
 	"log/slog"
 	"testing"
@@ -209,9 +210,52 @@ func TestReplicationHeartbeatReturnsNewerConfigAndTracksPrimary(t *testing.T) {
 	if responseValue(document, "appliedOpTime") != nil || responseValue(document, "appliedWallTime") != nil {
 		t.Fatal("heartbeat used non-protocol applied optime field names")
 	}
+	// Term and primary are learned by polling configured members, never from
+	// an inbound heartbeat whose sender is not verified.
 	state := handler.ReplicationTopology.Snapshot()
-	if state.Term != 9 || state.PrimaryID != 1 || state.PrimaryHost != "primary.example:27017" {
+	if state.Term != 3 || state.PrimaryID != -1 || state.SyncSource != "" {
 		t.Fatalf("heartbeat topology = %+v", state)
+	}
+}
+
+// Before the fix any client could send replSetHeartbeat with an arbitrary
+// term and primaryId. The term was persisted and forwarded to the real sync
+// source, and the claimed member became the primary and sync source.
+func TestReplicationHeartbeatCannotInflateTermOrRedirectSource(t *testing.T) {
+	handler := configuredReplicationHandler(t)
+	if err := handler.ReplicationTopology.ObserveHeartbeat("primary.example:27017", topology.Heartbeat{
+		SetName: "rs0", MemberID: 1, State: topology.StatePrimary, Term: 3, PrimaryID: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, request := range []*wire.OpMsg{
+		wire.MustOpMsg(
+			"replSetHeartbeat", "rs0", "configVersion", int64(4), "from", "attacker.example:27017",
+			"fromId", int32(99), "term", int64(math.MaxInt64), "primaryId", int32(99), "$db", "admin",
+		),
+		wire.MustOpMsg(
+			"replSetHeartbeat", "rs0", "configVersion", int64(4), "from", "attacker.example:27017",
+			"fromId", int32(1), "term", int64(1_000_000), "primaryId", int32(1), "$db", "admin",
+		),
+	} {
+		if _, err := handler.MsgReplSetHeartbeat(context.Background(), request); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	state := handler.ReplicationTopology.Snapshot()
+	if state.Term != 3 || state.PrimaryHost != "primary.example:27017" || state.SyncSource != "primary.example:27017" {
+		t.Fatalf("topology after forged heartbeats = %+v", state)
+	}
+	if _, ok := state.Members[99]; ok {
+		t.Fatalf("forged member was recorded: %+v", state.Members)
+	}
+	if member := state.Members[1]; member.Host != "primary.example:27017" {
+		t.Fatalf("configured member host was replaced: %+v", member)
+	}
+	if persisted := handler.ReplicationTopology.ControlSnapshot(); persisted.Identity.Term != 3 {
+		t.Fatalf("persisted term = %d, want 3", persisted.Identity.Term)
 	}
 }
 

@@ -117,21 +117,37 @@ func TestManagerTracksPrimaryAndReplacesSource(t *testing.T) {
 	}
 }
 
-func TestManagerTracksInboundMemberContact(t *testing.T) {
+// An inbound heartbeat's sender is not verified, so once a configuration is
+// installed it changes nothing; before that it only names a host to poll.
+func TestManagerInboundContactDoesNotChangeTopology(t *testing.T) {
 	store := openControlStore(t, t.TempDir())
 	manager := New(store)
 	if err := manager.InstallConfiguration(testReplicaConfiguration(), 8); err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.ObserveMemberContact("secondary.example:27017", 2, 9, 1); err != nil {
+	before := manager.Snapshot()
+	if err := manager.ObserveMemberContact("attacker.example:27017", 2); err != nil {
 		t.Fatal(err)
 	}
 	state := manager.Snapshot()
-	member := state.Members[2]
-	if !member.Healthy || member.State != StateUnknown || member.Host != "secondary.example:27017" {
-		t.Fatalf("member contact = %+v", member)
+	if state.Term != 8 || state.PrimaryID != before.PrimaryID || state.SyncSource != before.SyncSource {
+		t.Fatalf("topology after contact = %+v", state)
 	}
-	if state.Term != 9 || state.PrimaryID != 1 || state.PrimaryHost != "primary.example:27017" {
+	if member := state.Members[2]; member.Host != before.Members[2].Host || member.Healthy {
+		t.Fatalf("configured member after contact = %+v", member)
+	}
+}
+
+func TestManagerInboundContactBeforeConfigurationOnlyAddsPollTarget(t *testing.T) {
+	manager := New(openControlStore(t, t.TempDir()))
+	if err := manager.ObserveMemberContact("primary.example:27017", 1); err != nil {
+		t.Fatal(err)
+	}
+	state := manager.Snapshot()
+	if member := state.Members[1]; member.Host != "primary.example:27017" || member.Healthy {
+		t.Fatalf("contact member = %+v", member)
+	}
+	if state.Term != 0 || state.PrimaryID != -1 || state.SyncSource != "" {
 		t.Fatalf("topology after contact = %+v", state)
 	}
 }

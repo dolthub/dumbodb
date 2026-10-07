@@ -100,7 +100,7 @@ func TestLiveMongoHeartbeatConfiguration(t *testing.T) {
 
 	_, store := testutil.NewControlStore(t, control.Configuration{SetName: "rs0", MemberHost: dumboAddress})
 	manager := New(store)
-	if err := manager.ObserveMemberContact(mongoAddress, 0, 0, 0); err != nil {
+	if err := manager.ObserveMemberContact(mongoAddress, 0); err != nil {
 		t.Fatal(err)
 	}
 	mesh := NewHeartbeatMesh(manager, nil)

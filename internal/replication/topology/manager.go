@@ -341,43 +341,26 @@ func (m *Manager) ObserveHeartbeat(host string, heartbeat Heartbeat) error {
 	return nil
 }
 
-func (m *Manager) ObserveMemberContact(host string, memberID int, term int64, primaryID int) error {
-	m.mu.RLock()
-	hasConfiguration := m.state.Configuration != nil
-	m.mu.RUnlock()
-	if hasConfiguration {
-		if err := m.store.ObserveTerm(term); err != nil {
-			return err
-		}
-	}
+// ObserveMemberContact records an inbound heartbeat from memberID at host.
+// The sender is not verified, so the contact never changes the term, primary
+// or sync source; those are learned only by polling members. Before a
+// configuration is installed the contact names a host to poll for one; after
+// that the configured members are the only poll targets and the contact is
+// ignored.
+func (m *Manager) ObserveMemberContact(host string, memberID int) error {
 	m.mu.Lock()
+	if m.state.Configuration != nil {
+		m.mu.Unlock()
+		return nil
+	}
 	previous := cloneSnapshot(m.state)
-	m.state.Term = max(m.state.Term, term)
 	status, exists := m.state.Members[memberID]
 	status.MemberID = memberID
 	status.Host = host
-	status.Healthy = true
-	status.LastHeartbeat = time.Now()
 	if !exists {
 		status.State = StateUnknown
 	}
 	m.state.Members[memberID] = status
-	if primaryID >= 0 {
-		m.state.PrimaryID = primaryID
-		m.state.PrimaryHost = m.memberHostLocked(primaryID)
-	}
-	m.state.SyncSource = m.selectSourceLocked()
-	m.recordSourceSelectionLocked(previous.SyncSource, m.state.SyncSource)
-	if m.state.SyncSource != previous.SyncSource {
-		m.state.RBID = 0
-		m.state.LastCommitted = control.OpTime{}
-		m.state.Runtime.SourceOplogNewest = control.OpTime{}
-		if err := m.store.SetSource(m.state.SyncSource, 0); err != nil {
-			m.state = previous
-			m.mu.Unlock()
-			return err
-		}
-	}
 	listener := m.changeListenerLocked(previous)
 	m.mu.Unlock()
 	if listener != nil {

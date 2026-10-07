@@ -180,16 +180,14 @@ func (h *Handler) MsgReplSetHeartbeat(_ context.Context, msg *wire.OpMsg) (*wire
 	if err != nil {
 		return nil, err
 	}
-	term, err := requiredIntegerValue(request, "term")
-	if err != nil {
+	if _, err = requiredIntegerValue(request, "term"); err != nil {
 		return nil, err
 	}
 	fromIDValue, err := optionalIntegerValue(request, "fromId", -1)
 	if err != nil {
 		return nil, err
 	}
-	primaryIDValue, err := optionalIntegerValue(request, "primaryId", -1)
-	if err != nil {
+	if _, err = optionalIntegerValue(request, "primaryId", -1); err != nil {
 		return nil, err
 	}
 	heartbeatVersion, err := optionalIntegerValue(request, "hbv", 1)
@@ -200,9 +198,8 @@ func (h *Handler) MsgReplSetHeartbeat(_ context.Context, msg *wire.OpMsg) (*wire
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrReplicaSetHeartbeatVersion, fmt.Sprintf("Found invalid value for field hbv: %d", heartbeatVersion))
 	}
 	fromID := int(fromIDValue)
-	primaryID := int(primaryIDValue)
 	if fromID >= 0 && fromHost != "" {
-		if err := h.ReplicationTopology.ObserveMemberContact(fromHost, fromID, term, primaryID); err != nil {
+		if err := h.ReplicationTopology.ObserveMemberContact(fromHost, fromID); err != nil {
 			return nil, err
 		}
 		state = h.ReplicationTopology.Snapshot()
