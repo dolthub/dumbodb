@@ -408,27 +408,16 @@ func checkAuthentication(ctx context.Context, command string, l *slog.Logger) er
 		return nil
 	}
 
-	_, _, conv, _ := ci.Auth()
-
-	switch {
-	case conv == nil:
-		l.WarnContext(ctx, "checkAuthentication: no conversation")
-
-	case !conv.Valid():
+	// A conversation whose proof verified is not enough: authentication is
+	// granted only once authenticationRestrictions have also been checked.
+	if _, _, conv, _ := ci.Auth(); conv != nil {
 		l.WarnContext(
 			ctx,
-			"checkAuthentication: invalid conversation",
+			"checkAuthentication: conversation not authenticated",
 			slog.String("username", conv.Username()), slog.Bool("valid", conv.Valid()), slog.Bool("done", conv.Done()),
 		)
-
-	default:
-		l.DebugContext(
-			ctx,
-			"checkAuthentication: passed",
-			slog.String("username", conv.Username()), slog.Bool("valid", conv.Valid()), slog.Bool("done", conv.Done()),
-		)
-
-		return nil
+	} else {
+		l.WarnContext(ctx, "checkAuthentication: no conversation")
 	}
 
 	return handlererrors.NewCommandErrorMsgWithArgument(

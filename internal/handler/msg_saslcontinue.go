@@ -96,13 +96,9 @@ func (h *Handler) saslContinue(connCtx context.Context, doc *types.Document) (*t
 	if valid {
 		h.L.DebugContext(connCtx, "saslContinue: conversation success", attrs...)
 
-		if err = h.checkAuthRestrictions(connCtx, authDB, username); err != nil {
-			conninfo.Get(connCtx).SetAuth("", "", nil, "")
+		if err = h.completeAuthentication(connCtx, authDB, username); err != nil {
 			return nil, err
 		}
-
-		conninfo.Get(connCtx).SetBypassBackendAuth()
-		conninfo.Get(connCtx).SetAuthenticated()
 
 		return must.NotFail(types.NewDocument(
 			"conversationId", int32(1),
@@ -134,10 +130,35 @@ func (h *Handler) saslContinue(connCtx context.Context, doc *types.Document) (*t
 
 	h.L.DebugContext(connCtx, "saslContinue: step succeed", attrs...)
 
+	// The proof was verified by this step. Authenticate now rather than on the
+	// client's optional empty final step, so restrictions cannot be skipped
+	// by never sending it.
+	if conv.Valid() {
+		if err = h.completeAuthentication(connCtx, authDB, username); err != nil {
+			return nil, err
+		}
+	}
+
 	return must.NotFail(types.NewDocument(
 		"conversationId", int32(1),
 		"done", valid, // for compatibility, assign the validity of the conversation before [Step] was called
 		"payload", types.Binary{B: []byte(response)},
 		"ok", float64(1),
 	)), nil
+}
+
+// completeAuthentication enforces the user's authenticationRestrictions and
+// marks the connection authenticated, or clears the identity on failure.
+func (h *Handler) completeAuthentication(connCtx context.Context, authDB, username string) error {
+	ci := conninfo.Get(connCtx)
+
+	if err := h.checkAuthRestrictions(connCtx, authDB, username); err != nil {
+		ci.SetAuth("", "", nil, "")
+		return err
+	}
+
+	ci.SetBypassBackendAuth()
+	ci.SetAuthenticated()
+
+	return nil
 }
