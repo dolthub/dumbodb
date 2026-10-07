@@ -33,7 +33,7 @@ func evalArgValue(arg any, doc *types.Document) (any, error) {
 	switch v := arg.(type) {
 	case *types.Document:
 		if IsOperator(v) {
-			op, err := NewOperator(v)
+			op, err := cachedOperator(v)
 			if err != nil {
 				return nil, err
 			}
@@ -107,7 +107,7 @@ func evalArgValue(arg any, doc *types.Document) (any, error) {
 		}
 
 		if strings.HasPrefix(v, "$") {
-			expr, err := aggregations.NewExpression(v, nil)
+			expr, err := fieldExpression(v)
 			if err != nil {
 				var exErr *aggregations.ExpressionError
 				if errors.As(err, &exErr) && exErr.Code() == aggregations.ErrNotExpression {
