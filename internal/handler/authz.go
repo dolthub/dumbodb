@@ -117,6 +117,9 @@ func (h *Handler) authorize(ctx context.Context, msg *wire.OpMsg) error {
 	if command == "updateUser" {
 		return h.authorizeUpdateUser(ctx, msg, db, collection)
 	}
+	if command == "usersInfo" {
+		return h.authorizeUsersInfo(ctx, msg, db)
+	}
 	if checks, ok := grantCommandChecks[command]; ok {
 		return h.authorizeGrantCommand(ctx, msg, command, db, checks)
 	}
@@ -590,6 +593,76 @@ func targetResource(scope resourceScope, db, collection string) authz.Resource {
 	default:
 		return authz.CollectionResource(db, collection)
 	}
+}
+
+// authorizeUsersInfo requires viewUser on the database of every user the
+// command reads, not just on $db: forAllDBs needs it on every database, and
+// a {user, db} reference names a database of its own. Viewing oneself is
+// always allowed. Malformed arguments are left for the handler to reject.
+func (h *Handler) authorizeUsersInfo(ctx context.Context, msg *wire.OpMsg, db string) error {
+	document, err := opMsgDocument(msg)
+	if err != nil {
+		return err
+	}
+
+	privs, err := h.effectivePrivileges(ctx)
+	if err != nil {
+		return err
+	}
+
+	canView := func(target authz.Resource) bool {
+		return privs.Authorized(authz.ActionViewUser, target)
+	}
+
+	var targets []usersInfoPair
+
+	switch arg := must.NotFail(document.Get("usersInfo")).(type) {
+	case *types.Document:
+		if arg.Has("forAllDBs") {
+			if canView(authz.Resource{}) {
+				return nil
+			}
+			return unauthorizedCommandError(msg, "usersInfo", db)
+		}
+
+		var p usersInfoPair
+		if p.extract(arg, db) != nil {
+			return nil
+		}
+		targets = append(targets, p)
+	case *types.Array:
+		for i := range arg.Len() {
+			v := must.NotFail(arg.Get(i))
+			if v == nil {
+				continue
+			}
+
+			var p usersInfoPair
+			if p.extract(v, db) != nil {
+				return nil
+			}
+			targets = append(targets, p)
+		}
+	case string:
+		targets = append(targets, usersInfoPair{username: arg, db: db})
+	default:
+		if canView(authz.DatabaseResource(db)) {
+			return nil
+		}
+		return unauthorizedCommandError(msg, "usersInfo", db)
+	}
+
+	user, _, _, userDB := conninfo.Get(ctx).Auth()
+	for _, p := range targets {
+		if p.username == user && p.db == userDB {
+			continue
+		}
+		if !canView(authz.DatabaseResource(p.db)) {
+			return unauthorizedCommandError(msg, "usersInfo", db)
+		}
+	}
+
+	return nil
 }
 
 func (h *Handler) selfServiceAllowed(ctx context.Context, command, db, targetUser string) bool {
