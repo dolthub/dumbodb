@@ -35,6 +35,10 @@ type Command struct {
 	anonymous      bool
 	membershipOnly bool
 
+	// name is the canonical name shared by all aliases of the command; it is
+	// what authorization looks up.
+	name string
+
 	// Handler processes this command.
 	//
 	// The passed context is canceled when the client disconnects.
@@ -67,6 +71,9 @@ type Command struct {
 // *Command can answer to multiple names (aliases) without duplicating its
 // definition.
 func (h *Handler) register(c *Command, names ...string) {
+	if c.name == "" {
+		c.name = names[0]
+	}
 	for _, n := range names {
 		h.commands[n] = c
 	}
@@ -192,6 +199,12 @@ func (h *Handler) initCommands() {
 	h.register(&Command{Handler: h.MsgCreateIndexes, BlockedInTxn: true, MutatesState: alwaysMutatesState, Help: "Creates indexes on a collection."}, "createIndexes")
 	h.register(&Command{Handler: h.MsgRenameCollection, BlockedInTxn: true, MutatesState: alwaysMutatesState, Help: "Changes the name of an existing collection."}, "renameCollection")
 	h.register(&Command{Handler: h.MsgCollMod, BlockedInTxn: true, MutatesState: alwaysMutatesState, Help: "Adds options to a collection or modify view definitions."}, "collMod")
+
+	for name, cmd := range h.commands {
+		if cmd.name == "" {
+			cmd.name = name
+		}
+	}
 
 	// Wrap each *Command's Handler with auth and logging exactly once,
 	// even when multiple aliases point to the same *Command. Iterating

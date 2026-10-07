@@ -135,6 +135,11 @@ func (h *Handler) authorize(ctx context.Context, msg *wire.OpMsg) error {
 	}
 	command, db, collection := wireCommandTarget(msg)
 
+	// Aliases such as findandmodify are authorized as their canonical command.
+	if cmd := h.commands[command]; cmd != nil {
+		command = cmd.name
+	}
+
 	if command == "updateUser" {
 		return h.authorizeUpdateUser(ctx, msg, db, collection)
 	}
