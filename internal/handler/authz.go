@@ -22,6 +22,7 @@ import (
 	"github.com/FerretDB/wire"
 
 	"github.com/dolthub/dumbodb/internal/authz"
+	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
@@ -129,6 +130,55 @@ var commandPrivileges = map[string][]commandPrivilege{
 	"doltClone":   {{authz.ActionDumboRemote, scopeCluster}},
 }
 
+// authenticatedOnlyCommands need no privilege beyond being logged in: the
+// handlers confine them to the caller's own cursors and transactions, or they
+// return no data.
+var authenticatedOnlyCommands = map[string]bool{
+	"abortTransaction":        true,
+	"commitTransaction":       true,
+	"getMore":                 true,
+	"killCursors":             true,
+	"listCommands":            true,
+	"getFreeMonitoringStatus": true,
+	"setFreeMonitoring":       true,
+}
+
+func readHistory(*wire.OpMsg) []authz.Action { return []authz.Action{authz.ActionFind} }
+
+func writeHistory(*wire.OpMsg) []authz.Action {
+	return []authz.Action{authz.ActionInsert, authz.ActionUpdate, authz.ActionRemove}
+}
+
+func readOrWriteHistory(mutates func(*wire.OpMsg) bool) func(*wire.OpMsg) []authz.Action {
+	return func(msg *wire.OpMsg) []authz.Action {
+		if mutates(msg) {
+			return writeHistory(msg)
+		}
+		return readHistory(msg)
+	}
+}
+
+// versioningActions lists, for each version-control command (by canonical
+// name), the actions it needs on the database it runs against. Reading
+// history needs find; changing it needs the write actions.
+var versioningActions = map[string]func(*wire.OpMsg) []authz.Action{
+	"doltBranchStatus":    readHistory,
+	"doltConflicts":       readHistory,
+	"doltDiff":            readHistory,
+	"doltLog":             readHistory,
+	"doltStatus":          readHistory,
+	"doltBranch":          readOrWriteHistory(branchMutatesState),
+	"doltTag":             readOrWriteHistory(tagMutatesState),
+	"doltCherryPick":      writeHistory,
+	"doltCommit":          writeHistory,
+	"doltMerge":           writeHistory,
+	"doltRebase":          writeHistory,
+	"doltReset":           writeHistory,
+	"doltResolveConflict": writeHistory,
+	"doltRevert":          writeHistory,
+	"doltGC":              func(*wire.OpMsg) []authz.Action { return []authz.Action{authz.ActionCompact} },
+}
+
 func (h *Handler) authorize(ctx context.Context, msg *wire.OpMsg) error {
 	if h.internalMemberAuthenticated(ctx) {
 		return nil
@@ -158,6 +208,18 @@ func (h *Handler) authorize(ctx context.Context, msg *wire.OpMsg) error {
 	if command == "bulkWrite" {
 		return h.authorizeBulkWrite(ctx, msg, db)
 	}
+	if actions, ok := versioningActions[command]; ok {
+		base, _ := backends.SplitEncodedDBName(db)
+		return h.authorizeActions(ctx, msg, command, db, authz.DatabaseResource(base), actions(msg))
+	}
+	if command == "doltUndrop" {
+		// Restoring or purging dropped databases reaches every database;
+		// listing them reveals database names.
+		if undropMutatesState(msg) {
+			return h.authorizeActions(ctx, msg, command, db, authz.Resource{}, []authz.Action{authz.ActionDropDatabase})
+		}
+		return h.authorizeActions(ctx, msg, command, db, authz.ClusterResource, []authz.Action{authz.ActionListDatabases})
+	}
 	if checks, ok := grantCommandChecks[command]; ok {
 		return h.authorizeGrantCommand(ctx, msg, command, db, checks)
 	}
@@ -174,10 +236,30 @@ func (h *Handler) authorize(ctx context.Context, msg *wire.OpMsg) error {
 	return h.authorizeByCommandPrivileges(ctx, msg, command, db, collection)
 }
 
+// authorizeActions requires every action on target.
+func (h *Handler) authorizeActions(ctx context.Context, msg *wire.OpMsg, command, db string, target authz.Resource, actions []authz.Action) error {
+	privs, err := h.effectivePrivileges(ctx)
+	if err != nil {
+		return err
+	}
+	for _, action := range actions {
+		if !privs.Authorized(action, target) {
+			return unauthorizedCommandError(msg, command, db)
+		}
+	}
+	return nil
+}
+
+// authorizeByCommandPrivileges denies any command that has no entry and is
+// not authenticated-only, so a newly added command is unusable under --auth
+// until it is given a privilege rule.
 func (h *Handler) authorizeByCommandPrivileges(ctx context.Context, msg *wire.OpMsg, command, db, collection string) error {
 	reqs, ok := commandPrivileges[command]
 	if !ok {
-		return nil
+		if authenticatedOnlyCommands[command] {
+			return nil
+		}
+		return unauthorizedCommandError(msg, command, db)
 	}
 
 	privs, err := h.effectivePrivileges(ctx)
