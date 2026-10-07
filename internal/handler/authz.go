@@ -26,6 +26,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
@@ -237,6 +238,19 @@ func (h *Handler) authorizeAdminHistoryRead(ctx context.Context, msg *wire.OpMsg
 		return nil
 	}
 	return h.authorizeActions(ctx, msg, command, db, authz.CollectionResource("admin", "system.users"), []authz.Action{authz.ActionFind})
+}
+
+// flagRequested reports whether a boolean option that widens what a command
+// may do is set. It accepts every form a handler reads as true (nonzero
+// numbers included), and treats a malformed value as set, so authorization
+// never asks for less than the command could do.
+func flagRequested(document *types.Document, key string) bool {
+	v, _ := document.Get(key)
+	if v == nil {
+		return false
+	}
+	set, err := handlerparams.GetBoolOptionalParam(key, v)
+	return err != nil || set
 }
 
 // authorizeActions requires every action on target.
@@ -757,7 +771,7 @@ func (h *Handler) authorizeBulkWrite(ctx context.Context, msg *wire.OpMsg, db st
 		return err
 	}
 
-	bypass, _ := common.GetOptionalParam(document, "bypassDocumentValidation", false)
+	bypass := flagRequested(document, "bypassDocumentValidation")
 
 	for i := range ops.Len() {
 		op, ok := must.NotFail(ops.Get(i)).(*types.Document)
@@ -772,7 +786,7 @@ func (h *Handler) authorizeBulkWrite(ctx context.Context, msg *wire.OpMsg, db st
 			index, actions = must.NotFail(op.Get("insert")), []authz.Action{authz.ActionInsert}
 		case op.Has("update"):
 			index, actions = must.NotFail(op.Get("update")), []authz.Action{authz.ActionUpdate}
-			if upsert, _ := common.GetOptionalParam(op, "upsert", false); upsert {
+			if flagRequested(op, "upsert") {
 				actions = append(actions, authz.ActionInsert)
 			}
 		case op.Has("delete"):
@@ -856,7 +870,7 @@ func (h *Handler) authorizeRenameCollection(ctx context.Context, msg *wire.OpMsg
 		{authz.ActionRenameCollectionSameDB, authz.CollectionResource(fromDB, fromColl)},
 		{authz.ActionRenameCollectionSameDB, authz.CollectionResource(toDB, toColl)},
 	}
-	if dropTarget, _ := common.GetOptionalParam(document, "dropTarget", false); dropTarget {
+	if flagRequested(document, "dropTarget") {
 		required = append(required, struct {
 			action authz.Action
 			target authz.Resource
