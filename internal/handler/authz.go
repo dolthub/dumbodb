@@ -117,17 +117,6 @@ var commandPrivileges = map[string][]commandPrivilege{
 	"autoCompact":        {{authz.ActionCompact, scopeCluster}},
 	"currentOp":          {{authz.ActionInprog, scopeCluster}},
 	"getCmdLineOpts":     {{authz.ActionGetCmdLineOpts, scopeCluster}},
-
-	"dumboRemote": {{authz.ActionDumboRemote, scopeCluster}},
-	"doltRemote":  {{authz.ActionDumboRemote, scopeCluster}},
-	"dumboPush":   {{authz.ActionDumboRemote, scopeCluster}},
-	"doltPush":    {{authz.ActionDumboRemote, scopeCluster}},
-	"dumboFetch":  {{authz.ActionDumboRemote, scopeCluster}},
-	"doltFetch":   {{authz.ActionDumboRemote, scopeCluster}},
-	"dumboPull":   {{authz.ActionDumboRemote, scopeCluster}},
-	"doltPull":    {{authz.ActionDumboRemote, scopeCluster}},
-	"dumboClone":  {{authz.ActionDumboRemote, scopeCluster}},
-	"doltClone":   {{authz.ActionDumboRemote, scopeCluster}},
 }
 
 // authenticatedOnlyCommands need no privilege beyond being logged in: the
@@ -143,40 +132,41 @@ var authenticatedOnlyCommands = map[string]bool{
 	"setFreeMonitoring":       true,
 }
 
-func readHistory(*wire.OpMsg) []authz.Action { return []authz.Action{authz.ActionFind} }
-
-func writeHistory(*wire.OpMsg) []authz.Action {
-	return []authz.Action{authz.ActionInsert, authz.ActionUpdate, authz.ActionRemove}
+// localVersioningCommands are the version-control commands (by canonical
+// name) that act only on this server's data. Until per-branch permissions
+// exist, each needs readWrite-level privileges (find, insert, update and
+// remove) on the database it runs against, whether it reads or changes
+// history.
+var localVersioningCommands = map[string]bool{
+	"doltBranch":          true,
+	"doltBranchStatus":    true,
+	"doltCherryPick":      true,
+	"doltCommit":          true,
+	"doltConflicts":       true,
+	"doltDiff":            true,
+	"doltGC":              true,
+	"doltLog":             true,
+	"doltMerge":           true,
+	"doltRebase":          true,
+	"doltRemote":          true,
+	"doltReset":           true,
+	"doltResolveConflict": true,
+	"doltRevert":          true,
+	"doltStatus":          true,
+	"doltTag":             true,
+	"doltUndrop":          true,
 }
 
-func readOrWriteHistory(mutates func(*wire.OpMsg) bool) func(*wire.OpMsg) []authz.Action {
-	return func(msg *wire.OpMsg) []authz.Action {
-		if mutates(msg) {
-			return writeHistory(msg)
-		}
-		return readHistory(msg)
-	}
-}
+var readWriteActions = []authz.Action{authz.ActionFind, authz.ActionInsert, authz.ActionUpdate, authz.ActionRemove}
 
-// versioningActions lists, for each version-control command (by canonical
-// name), the actions it needs on the database it runs against. Reading
-// history needs find; changing it needs the write actions.
-var versioningActions = map[string]func(*wire.OpMsg) []authz.Action{
-	"doltBranchStatus":    readHistory,
-	"doltConflicts":       readHistory,
-	"doltDiff":            readHistory,
-	"doltLog":             readHistory,
-	"doltStatus":          readHistory,
-	"doltBranch":          readOrWriteHistory(branchMutatesState),
-	"doltTag":             readOrWriteHistory(tagMutatesState),
-	"doltCherryPick":      writeHistory,
-	"doltCommit":          writeHistory,
-	"doltMerge":           writeHistory,
-	"doltRebase":          writeHistory,
-	"doltReset":           writeHistory,
-	"doltResolveConflict": writeHistory,
-	"doltRevert":          writeHistory,
-	"doltGC":              func(*wire.OpMsg) []authz.Action { return []authz.Action{authz.ActionCompact} },
+// remoteVersioningCommands reach other systems with the server's own
+// filesystem access and credentials, so they are disabled under access
+// control.
+var remoteVersioningCommands = map[string]bool{
+	"doltClone": true,
+	"doltFetch": true,
+	"doltPull":  true,
+	"doltPush":  true,
 }
 
 func (h *Handler) authorize(ctx context.Context, msg *wire.OpMsg) error {
@@ -208,25 +198,19 @@ func (h *Handler) authorize(ctx context.Context, msg *wire.OpMsg) error {
 	if command == "bulkWrite" {
 		return h.authorizeBulkWrite(ctx, msg, db)
 	}
-	if actions, ok := versioningActions[command]; ok {
+	if localVersioningCommands[command] {
 		base, _ := backends.SplitEncodedDBName(db)
 		if err := h.authorizeAdminHistoryRead(ctx, msg, command, db); err != nil {
 			return err
 		}
-		return h.authorizeActions(ctx, msg, command, db, authz.DatabaseResource(base), actions(msg))
+		return h.authorizeActions(ctx, msg, command, db, authz.DatabaseResource(base), readWriteActions)
 	}
-	if command == "doltPush" {
-		if err := h.authorizeAdminHistoryRead(ctx, msg, command, db); err != nil {
-			return err
-		}
-	}
-	if command == "doltUndrop" {
-		// Restoring or purging dropped databases reaches every database;
-		// listing them reveals database names.
-		if undropMutatesState(msg) {
-			return h.authorizeActions(ctx, msg, command, db, authz.Resource{}, []authz.Action{authz.ActionDropDatabase})
-		}
-		return h.authorizeActions(ctx, msg, command, db, authz.ClusterResource, []authz.Action{authz.ActionListDatabases})
+	if remoteVersioningCommands[command] {
+		return handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrUnauthorized,
+			fmt.Sprintf("%s is disabled when access control is enabled: push, pull, fetch and clone use the server's own credentials", command),
+			command,
+		)
 	}
 	if checks, ok := grantCommandChecks[command]; ok {
 		return h.authorizeGrantCommand(ctx, msg, command, db, checks)

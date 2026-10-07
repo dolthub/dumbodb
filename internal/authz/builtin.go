@@ -41,7 +41,7 @@ var (
 		ActionListDatabases, ActionTop, ActionGetLog, ActionListSessions,
 		ActionInprog, ActionGetCmdLineOpts,
 	}
-	clusterManagerActions   = []Action{ActionCompact, ActionSetParameter, ActionRotateCertificates, ActionDumboRemote}
+	clusterManagerActions   = []Action{ActionCompact, ActionSetParameter, ActionRotateCertificates}
 	clusterMonitorDBActions = []Action{
 		ActionDBStats, ActionCollStats, ActionListCollections, ActionListIndexes,
 	}

@@ -64,31 +64,56 @@ func TestVersioningCommandsAreAuthorized(t *testing.T) {
 		requireCode(t, runIn(nobody, "admin", bson.D{{Key: "dumboUndrop", Value: 1}, {Key: "purgeMatching", Value: bson.D{{Key: "name", Value: "x"}}}}), codeUnauthorized)
 	})
 
-	t.Run("ReadRoleCanReadHistoryOfItsDatabaseOnly", func(t *testing.T) {
-		require.NoError(t, runIn(reader, "appdb", bson.D{{Key: "dumboLog", Value: 1}}))
-		require.NoError(t, runIn(reader, "appdb", bson.D{{Key: "dumboStatus", Value: 1}}))
-		require.NoError(t, runIn(reader, "appdb", bson.D{{Key: "dumboBranch", Value: 1}, {Key: "action", Value: "list"}}))
-		requireCode(t, runIn(reader, "victim", bson.D{{Key: "dumboLog", Value: 1}}), codeUnauthorized)
-		requireCode(t, runIn(reader, "admin", bson.D{{Key: "dumboDiff", Value: 1}}), codeUnauthorized)
-		requireCode(t, runIn(reader, "appdb", bson.D{{Key: "dumboCommit", Value: 1}, {Key: "message", Value: "x"}}), codeUnauthorized)
-		requireCode(t, runIn(reader, "appdb", bson.D{{Key: "dumboBranch", Value: 1}, {Key: "action", Value: "add"}, {Key: "branch", Value: "f"}}), codeUnauthorized)
-		requireCode(t, runIn(reader, "appdb", bson.D{{Key: "dumboReset", Value: 1}, {Key: "hard", Value: true}}), codeUnauthorized)
+	t.Run("ReadRoleGetsNoVersionControl", func(t *testing.T) {
+		for _, cmd := range []bson.D{
+			{{Key: "dumboLog", Value: 1}},
+			{{Key: "dumboStatus", Value: 1}},
+			{{Key: "dumboDiff", Value: 1}},
+			{{Key: "dumboBranch", Value: 1}, {Key: "action", Value: "list"}},
+			{{Key: "dumboCommit", Value: 1}, {Key: "message", Value: "x"}},
+			{{Key: "dumboBranch", Value: 1}, {Key: "action", Value: "add"}, {Key: "branch", Value: "f"}},
+			{{Key: "dumboReset", Value: 1}, {Key: "hard", Value: true}},
+			{{Key: "dumboRemote", Value: 1}, {Key: "action", Value: "list"}},
+		} {
+			requireCode(t, runIn(reader, "appdb", cmd), codeUnauthorized)
+		}
 	})
 
-	t.Run("WriteRoleCanChangeHistoryOfItsDatabaseOnly", func(t *testing.T) {
+	t.Run("ReadWriteRoleGetsLocalVersionControlOnItsDatabaseOnly", func(t *testing.T) {
+		require.NoError(t, runIn(writer, "appdb", bson.D{{Key: "dumboLog", Value: 1}}))
+		require.NoError(t, runIn(writer, "appdb", bson.D{{Key: "dumboStatus", Value: 1}}))
 		require.NoError(t, runIn(writer, "appdb", bson.D{{Key: "dumboCommit", Value: 1}, {Key: "message", Value: "w"}}))
 		require.NoError(t, runIn(writer, "appdb", bson.D{{Key: "dumboBranch", Value: 1}, {Key: "action", Value: "add"}, {Key: "branch", Value: "feature"}}))
 		require.NoError(t, runIn(writer, "appdb@feature", bson.D{{Key: "dumboLog", Value: 1}}))
+		require.NoError(t, runIn(writer, "appdb", bson.D{{Key: "dumboGC", Value: 1}}))
+		require.NoError(t, runIn(writer, "appdb", bson.D{{Key: "dumboRemote", Value: 1}, {Key: "action", Value: "list"}}))
+		requireCode(t, runIn(writer, "victim", bson.D{{Key: "dumboLog", Value: 1}}), codeUnauthorized)
 		requireCode(t, runIn(writer, "victim", bson.D{{Key: "dumboReset", Value: 1}, {Key: "hard", Value: true}}), codeUnauthorized)
 		requireCode(t, runIn(writer, "victim", bson.D{{Key: "dumboBranch", Value: 1}, {Key: "action", Value: "add"}, {Key: "branch", Value: "x"}}), codeUnauthorized)
-		requireCode(t, runIn(writer, "appdb", bson.D{{Key: "dumboGC", Value: 1}}), codeUnauthorized)
 		requireCode(t, runIn(writer, "admin", bson.D{{Key: "dumboUndrop", Value: 1}, {Key: "purgeMatching", Value: bson.D{{Key: "name", Value: "x"}}}}), codeUnauthorized)
 	})
 
-	t.Run("RootKeepsAccess", func(t *testing.T) {
+	t.Run("RootKeepsLocalVersionControl", func(t *testing.T) {
 		require.NoError(t, runIn(admin, "victim", bson.D{{Key: "dumboLog", Value: 1}}))
 		require.NoError(t, runIn(admin, "appdb", bson.D{{Key: "dumboGC", Value: 1}}))
 		require.NoError(t, runIn(admin, "admin", bson.D{{Key: "dumboUndrop", Value: 1}}))
+	})
+
+	// Remote operations reach other systems with the server's own filesystem
+	// access and credentials, so they are disabled under access control.
+	t.Run("RemoteOperationsDisabledUnderAuth", func(t *testing.T) {
+		for _, c := range []struct {
+			db  string
+			cmd bson.D
+		}{
+			{"appdb", bson.D{{Key: "dumboPush", Value: 1}, {Key: "remote", Value: "origin"}}},
+			{"appdb", bson.D{{Key: "dumboPull", Value: 1}, {Key: "from", Value: "origin"}}},
+			{"appdb", bson.D{{Key: "dumboFetch", Value: 1}, {Key: "from", Value: "origin"}}},
+			{"admin", bson.D{{Key: "dumboClone", Value: 1}, {Key: "from", Value: "file:///tmp/x"}, {Key: "as", Value: "x"}}},
+		} {
+			requireCode(t, runIn(admin, c.db, c.cmd), codeUnauthorized)
+			requireCode(t, runIn(writer, c.db, c.cmd), codeUnauthorized)
+		}
 	})
 
 	t.Run("UnlistedCommandsAreDenied", func(t *testing.T) {

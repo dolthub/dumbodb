@@ -80,7 +80,7 @@ func TestAdminHistoryIsProtected(t *testing.T) {
 		requireCode(t, runIn(anyread, "admin", bson.D{{Key: "dumboDiff", Value: 1}, {Key: "from", Value: "main~1"}}), codeUnauthorized)
 		requireCode(t, runIn(anyread, "admin", bson.D{{Key: "dumboLog", Value: 1}}), codeUnauthorized)
 		requireCode(t, runIn(anyrw, "admin", bson.D{{Key: "dumboLog", Value: 1}}), codeUnauthorized)
-		require.NoError(t, runIn(anyread, "appdb", bson.D{{Key: "dumboLog", Value: 1}}), "other databases are unaffected")
+		require.NoError(t, runIn(anyrw, "appdb", bson.D{{Key: "dumboLog", Value: 1}}), "other databases are unaffected")
 	})
 }
 

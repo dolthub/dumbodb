@@ -23,23 +23,25 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// Remote operations open URLs with the server's own filesystem access and
-// credentials, so before the fix any authenticated user could use them to
-// read host files, reach internal services, or spend the operator's cloud
-// and DoltHub credentials. They now need a cluster-level privilege.
-func TestAuthorize_RemoteCommandsRequireClusterPrivilege(t *testing.T) {
+// Push, pull, fetch and clone reach other systems with the server's own
+// filesystem access and credentials, so under --auth they are refused for
+// every user. Remote configuration (add/list/remove) is a local operation
+// that needs readWrite on the database.
+func TestAuthorize_RemoteOperationsDisabledUnderAuth(t *testing.T) {
 	h := authGateHandler(t, true)
-	createUserWithRole(t, h, "mydb", "owner", "dbOwner")
-	createUserWithRole(t, h, "admin", "anyRW", "readWriteAnyDatabase")
+	createUserWithRole(t, h, "mydb", "reader", "read")
+	createUserWithRole(t, h, "mydb", "writer", "readWrite")
 	createUserWithRole(t, h, "admin", "boss", "root")
 
-	for _, name := range []string{
-		"dumboRemote", "doltRemote", "dumboPush", "doltPush", "dumboFetch", "doltFetch",
-		"dumboPull", "doltPull", "dumboClone", "doltClone",
-	} {
+	for _, name := range []string{"dumboPush", "doltPush", "dumboFetch", "doltFetch", "dumboPull", "doltPull", "dumboClone", "doltClone"} {
 		msg := must.NotFail(documentOpMsg(must.NotFail(types.NewDocument(name, int32(1), "$db", "mydb"))))
-		require.True(t, isUnauthorized(t, h.authorize(authCtx("owner", "mydb"), msg)), "%s as dbOwner", name)
-		require.True(t, isUnauthorized(t, h.authorize(authCtx("anyRW", "admin"), msg)), "%s as readWriteAnyDatabase", name)
-		require.NoError(t, h.authorize(authCtx("boss", "admin"), msg), "%s as root", name)
+		require.True(t, isUnauthorized(t, h.authorize(authCtx("boss", "admin"), msg)), "%s as root", name)
+		require.True(t, isUnauthorized(t, h.authorize(authCtx("writer", "mydb"), msg)), "%s as readWrite", name)
+	}
+
+	for _, name := range []string{"dumboRemote", "doltRemote"} {
+		msg := must.NotFail(documentOpMsg(must.NotFail(types.NewDocument(name, int32(1), "action", "list", "$db", "mydb"))))
+		require.NoError(t, h.authorize(authCtx("writer", "mydb"), msg), "%s as readWrite", name)
+		require.True(t, isUnauthorized(t, h.authorize(authCtx("reader", "mydb"), msg)), "%s as read", name)
 	}
 }
