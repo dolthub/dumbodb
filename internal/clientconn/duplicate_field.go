@@ -60,15 +60,18 @@ func findDuplicateField(doc *types.Document, prefix, skip string) (string, bool)
 		return join(prefix, key), true
 	}
 
-	for _, key := range doc.Keys() {
+	// Keys and Values are read together rather than calling Get per key:
+	// Get scans the fields, which made this walk quadratic in a document's
+	// width, and it runs on every command before authentication.
+	values := doc.Values()
+	for i, key := range doc.Keys() {
 		if skip != "" && key == skip {
 			continue
 		}
-		value, err := doc.Get(key)
-		if err != nil {
+		if !isComposite(values[i]) {
 			continue
 		}
-		if path, ok := findDuplicateInValue(value, join(prefix, key)); ok {
+		if path, ok := findDuplicateInValue(values[i], join(prefix, key)); ok {
 			return path, true
 		}
 	}
@@ -83,7 +86,7 @@ func findDuplicateInValue(value any, path string) (string, bool) {
 	case *types.Array:
 		for i := 0; i < v.Len(); i++ {
 			element, err := v.Get(i)
-			if err != nil {
+			if err != nil || !isComposite(element) {
 				continue
 			}
 			indexed := path + "." + strconv.Itoa(i)
@@ -94,6 +97,15 @@ func findDuplicateInValue(value any, path string) (string, bool) {
 	}
 
 	return "", false
+}
+
+func isComposite(value any) bool {
+	switch value.(type) {
+	case *types.Document, *types.Array:
+		return true
+	default:
+		return false
+	}
 }
 
 func join(prefix, key string) string {
