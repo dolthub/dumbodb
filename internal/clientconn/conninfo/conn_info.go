@@ -145,6 +145,7 @@ func (connInfo *ConnInfo) Auth() (username, password string, sc SCRAMConversatio
 }
 
 // SetAuth stores username, password (for PLAIN mechanism), SCRAM server conversation (if any) and user's authentication db.
+// It discards the cached privileges and commit identity, which belong to the previous identity.
 func (connInfo *ConnInfo) SetAuth(username, password string, sc SCRAMConversation, db string) {
 	connInfo.rw.Lock()
 	defer connInfo.rw.Unlock()
@@ -153,6 +154,7 @@ func (connInfo *ConnInfo) SetAuth(username, password string, sc SCRAMConversatio
 	connInfo.password = password
 	connInfo.sc = sc
 	connInfo.db = db
+	connInfo.clearIdentityCachesLocked()
 }
 
 func (connInfo *ConnInfo) MetadataRecv() bool {
@@ -176,11 +178,21 @@ func (connInfo *ConnInfo) SetAuthenticated() {
 	connInfo.authenticated = true
 }
 
+// ClearAuthenticated also discards the cached privileges and commit identity.
 func (connInfo *ConnInfo) ClearAuthenticated() {
 	connInfo.rw.Lock()
 	defer connInfo.rw.Unlock()
 
 	connInfo.authenticated = false
+	connInfo.clearIdentityCachesLocked()
+}
+
+func (connInfo *ConnInfo) clearIdentityCachesLocked() {
+	connInfo.cachedPrivs = nil
+	connInfo.cachedPrivsOK = false
+	connInfo.cachedCommitName = ""
+	connInfo.cachedCommitEmail = ""
+	connInfo.cachedCommitOK = false
 }
 
 func (connInfo *ConnInfo) Authenticated() bool {
