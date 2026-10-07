@@ -17,6 +17,7 @@ package handler
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/FerretDB/wire"
 
@@ -119,6 +120,12 @@ func (h *Handler) authorize(ctx context.Context, msg *wire.OpMsg) error {
 	}
 	if command == "usersInfo" {
 		return h.authorizeUsersInfo(ctx, msg, db)
+	}
+	if command == "renameCollection" {
+		return h.authorizeRenameCollection(ctx, msg, db, collection)
+	}
+	if command == "dataSize" {
+		return h.authorizeNamespaceAction(ctx, msg, db, collection, authz.ActionFind)
 	}
 	if checks, ok := grantCommandChecks[command]; ok {
 		return h.authorizeGrantCommand(ctx, msg, command, db, checks)
@@ -593,6 +600,70 @@ func targetResource(scope resourceScope, db, collection string) authz.Resource {
 	default:
 		return authz.CollectionResource(db, collection)
 	}
+}
+
+// authorizeRenameCollection authorizes the source and target namespaces named
+// in the command rather than $db. Malformed namespaces are left for the
+// handler to reject.
+func (h *Handler) authorizeRenameCollection(ctx context.Context, msg *wire.OpMsg, db, from string) error {
+	document, err := opMsgDocument(msg)
+	if err != nil {
+		return err
+	}
+
+	to, _ := common.GetRequiredParam[string](document, "to")
+	fromDB, fromColl, fromOK := strings.Cut(from, ".")
+	toDB, toColl, toOK := strings.Cut(to, ".")
+	if !fromOK || !toOK {
+		return nil
+	}
+
+	privs, err := h.effectivePrivileges(ctx)
+	if err != nil {
+		return err
+	}
+
+	required := []struct {
+		action authz.Action
+		target authz.Resource
+	}{
+		{authz.ActionRenameCollectionSameDB, authz.CollectionResource(fromDB, fromColl)},
+		{authz.ActionRenameCollectionSameDB, authz.CollectionResource(toDB, toColl)},
+	}
+	if dropTarget, _ := common.GetOptionalParam(document, "dropTarget", false); dropTarget {
+		required = append(required, struct {
+			action authz.Action
+			target authz.Resource
+		}{authz.ActionDropCollection, authz.CollectionResource(toDB, toColl)})
+	}
+
+	for _, r := range required {
+		if !privs.Authorized(r.action, r.target) {
+			return unauthorizedCommandError(msg, "renameCollection", db)
+		}
+	}
+
+	return nil
+}
+
+// authorizeNamespaceAction authorizes action on the "db.collection"
+// namespace given as the command's value rather than on $db.
+func (h *Handler) authorizeNamespaceAction(ctx context.Context, msg *wire.OpMsg, db, ns string, action authz.Action) error {
+	nsDB, nsColl, ok := strings.Cut(ns, ".")
+	if !ok {
+		return nil
+	}
+
+	privs, err := h.effectivePrivileges(ctx)
+	if err != nil {
+		return err
+	}
+
+	if !privs.Authorized(action, authz.CollectionResource(nsDB, nsColl)) {
+		return unauthorizedCommandError(msg, wireCommandName(msg), db)
+	}
+
+	return nil
 }
 
 // authorizeUsersInfo requires viewUser on the database of every user the
