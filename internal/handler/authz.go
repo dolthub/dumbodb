@@ -210,7 +210,15 @@ func (h *Handler) authorize(ctx context.Context, msg *wire.OpMsg) error {
 	}
 	if actions, ok := versioningActions[command]; ok {
 		base, _ := backends.SplitEncodedDBName(db)
+		if err := h.authorizeAdminHistoryRead(ctx, msg, command, db); err != nil {
+			return err
+		}
 		return h.authorizeActions(ctx, msg, command, db, authz.DatabaseResource(base), actions(msg))
+	}
+	if command == "doltPush" {
+		if err := h.authorizeAdminHistoryRead(ctx, msg, command, db); err != nil {
+			return err
+		}
 	}
 	if command == "doltUndrop" {
 		// Restoring or purging dropped databases reaches every database;
@@ -234,6 +242,17 @@ func (h *Handler) authorize(ctx context.Context, msg *wire.OpMsg) error {
 	}
 
 	return h.authorizeByCommandPrivileges(ctx, msg, command, db, collection)
+}
+
+// authorizeAdminHistoryRead requires, for history commands on the admin
+// database, the right to read admin.system.users: admin's history holds every
+// user's credentials, which database-wide grants such as readAnyDatabase may
+// not see.
+func (h *Handler) authorizeAdminHistoryRead(ctx context.Context, msg *wire.OpMsg, command, db string) error {
+	if !isAdminDatabase(db) {
+		return nil
+	}
+	return h.authorizeActions(ctx, msg, command, db, authz.CollectionResource("admin", "system.users"), []authz.Action{authz.ActionFind})
 }
 
 // authorizeActions requires every action on target.

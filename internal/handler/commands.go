@@ -216,6 +216,7 @@ func (h *Handler) initCommands() {
 		}
 		seen[cmd] = true
 
+		canonicalName := cmd.name
 		inner := cmd.Handler
 		if cmd.membershipOnly && h.membershipAuthenticationEnabled() {
 			memberHandler := inner
@@ -260,6 +261,9 @@ func (h *Handler) initCommands() {
 					}
 				}
 				if guardErr := guardAdminMutation(wireCommandTarget(msg)); guardErr != nil {
+					return nil, guardErr
+				}
+				if guardErr := guardAdminHistory(canonicalName, msg); guardErr != nil {
 					return nil, guardErr
 				}
 				if authenticated {
@@ -513,6 +517,42 @@ func wireCommandTarget(msg *wire.OpMsg) (command, db, collection string) {
 		}
 	}
 	return command, db, collection
+}
+
+// adminHistoryWriters are the version-control commands (by canonical name)
+// that change a database's history. On admin they would restore dropped
+// users, revoked roles and old passwords, or import foreign users, so they
+// are refused there; branch and tag are refused only when they modify.
+var adminHistoryWriters = map[string]func(*wire.OpMsg) bool{
+	"doltCherryPick":      alwaysMutatesState,
+	"doltCommit":          alwaysMutatesState,
+	"doltFetch":           alwaysMutatesState,
+	"doltMerge":           alwaysMutatesState,
+	"doltPull":            alwaysMutatesState,
+	"doltRebase":          alwaysMutatesState,
+	"doltReset":           alwaysMutatesState,
+	"doltResolveConflict": alwaysMutatesState,
+	"doltRevert":          alwaysMutatesState,
+	"doltBranch":          branchMutatesState,
+	"doltTag":             tagMutatesState,
+}
+
+// guardAdminHistory refuses history-changing version-control commands on the
+// admin database, whose contents are managed through the user management
+// commands. Like guardAdminMutation it applies with or without access control.
+func guardAdminHistory(command string, msg *wire.OpMsg) error {
+	mutates, ok := adminHistoryWriters[command]
+	if !ok || !mutates(msg) {
+		return nil
+	}
+	if _, db, _ := wireCommandTarget(msg); !isAdminDatabase(db) {
+		return nil
+	}
+	return handlererrors.NewCommandErrorMsgWithArgument(
+		handlererrors.ErrUnauthorized,
+		fmt.Sprintf("cannot run %s on the admin database: its history is managed through the user management commands", command),
+		command,
+	)
 }
 
 func guardAdminMutation(command, db, collection string) error {
