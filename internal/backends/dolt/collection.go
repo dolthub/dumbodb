@@ -3295,17 +3295,6 @@ func (c *collection) loadOrCreateMap(ctx context.Context, state *dbState) (proll
 	return emptyMap, nil
 }
 
-func docHasMinMaxKey(doc *types.Document) bool {
-	for _, key := range doc.Keys() {
-		v := must.NotFail(doc.Get(key))
-		switch v.(type) {
-		case types.MinKeyType, types.MaxKeyType:
-			return true
-		}
-	}
-	return false
-}
-
 func readDocFromValue(ctx context.Context, ns tree.NodeStore, v val.Tuple) (*types.Document, error) {
 	return readBSONDocFromValue(ctx, ns, v)
 }

@@ -35,22 +35,9 @@ const bsonFormatVersion byte = 0x01
 // form for diff and merge), prepended with bsonFormatVersion.
 func docToBSON(doc *types.Document) ([]byte, error) {
 	sorted := sortDocumentKeys(doc)
-	if docHasMinMaxKey(sorted) {
-		raw, err := bson.FromDocumentRaw(sorted)
-		if err != nil {
-			return nil, fmt.Errorf("encoding document with MinKey/MaxKey to BSON: %w", err)
-		}
-		return prependVersion(raw), nil
-	}
-	wdoc, err := bson.FromDocument(sorted)
-	if err != nil {
-		return nil, fmt.Errorf("encoding document to wirebson: %w", err)
-	}
-	raw, err := wdoc.Encode()
-	if err != nil {
-		return nil, fmt.Errorf("encoding wirebson document: %w", err)
-	}
-	return prependVersion(raw), nil
+	stored := make([]byte, 1, 1+sorted.BSONSize())
+	stored[0] = bsonFormatVersion
+	return sorted.AppendBSON(stored), nil
 }
 
 func bsonToDoc(stored []byte) (*types.Document, error) {

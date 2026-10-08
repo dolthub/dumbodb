@@ -16,11 +16,11 @@ package handler
 
 import (
 	"github.com/FerretDB/wire"
+	"github.com/FerretDB/wire/wirebson"
 
 	"github.com/dolthub/dumbodb/internal/bson"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
-	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // init leaves wire.CheckNaNs at its default (false) so that incoming messages
@@ -63,5 +63,5 @@ func opMsgDocument(msg *wire.OpMsg) (*types.Document, error) {
 }
 
 func documentOpMsg(doc *types.Document) (*wire.OpMsg, error) {
-	return wire.NewOpMsg(must.NotFail(bson.FromDocument(doc)))
+	return wire.NewOpMsg(wirebson.RawDocument(doc.AppendBSON(make([]byte, 0, doc.BSONSize()))))
 }
