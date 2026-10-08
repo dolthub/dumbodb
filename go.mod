@@ -17,6 +17,7 @@ require (
 	github.com/dolthub/go-mysql-server v0.20.1-0.20261008085126-6276e4e40e23
 	github.com/golang/snappy v0.0.4
 	github.com/google/uuid v1.6.0
+	github.com/hashicorp/golang-lru/v2 v2.0.2
 	github.com/klauspost/compress v1.18.0
 	github.com/mohae/uvarint v0.0.0-20160208145430-c3f9e62bf2b0
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2
@@ -106,7 +107,6 @@ require (
 	github.com/googleapis/enterprise-certificate-proxy v0.3.11 // indirect
 	github.com/googleapis/gax-go/v2 v2.17.0 // indirect
 	github.com/hashicorp/golang-lru v0.5.4 // indirect
-	github.com/hashicorp/golang-lru/v2 v2.0.2 // indirect
 	github.com/juju/gnuflag v0.0.0-20171113085948-2ce1bb71843d // indirect
 	github.com/kch42/buzhash v0.0.0-20160816060738-9bdec3dec7c6 // indirect
 	github.com/klauspost/cpuid/v2 v2.0.12 // indirect

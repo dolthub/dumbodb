@@ -78,17 +78,17 @@ func newEmptyMap(ctx context.Context, ns tree.NodeStore) (prolly.Map, error) {
 
 // openCollection opens a prolly.Map for a collection from a hash stored in the ADRM.
 func openCollection(ctx context.Context, cs *nbs.GenerationalNBS, ns tree.NodeStore, collHash hash.Hash) (prolly.Map, error) {
-	chunk, err := cs.Get(ctx, collHash)
+	data, err := readTableChunk(ctx, cs, collHash)
 	if err != nil {
 		return prolly.Map{}, fmt.Errorf("reading collection chunk: %w", err)
 	}
 
-	fileID := serial.GetFileID(chunk.Data())
+	fileID := serial.GetFileID(data)
 	if fileID != serial.TableFileID {
 		return prolly.Map{}, fmt.Errorf("unexpected file ID %q for collection (want DTBL)", fileID)
 	}
 
-	tbl, err := serial.TryGetRootAsTable(chunk.Data(), serial.MessagePrefixSz)
+	tbl, err := serial.TryGetRootAsTable(data, serial.MessagePrefixSz)
 	if err != nil {
 		return prolly.Map{}, fmt.Errorf("parsing DTBL: %w", err)
 	}

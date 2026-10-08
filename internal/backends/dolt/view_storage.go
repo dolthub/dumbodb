@@ -179,9 +179,9 @@ func isViewEntry(ctx context.Context, cs *nbs.GenerationalNBS, h hash.Hash) (boo
 	if h.IsEmpty() {
 		return false, nil
 	}
-	chunk, err := cs.Get(ctx, h)
+	data, err := readTableChunk(ctx, cs, h)
 	if err != nil {
 		return false, fmt.Errorf("reading namespace chunk: %w", err)
 	}
-	return serial.GetFileID(chunk.Data()) == serial.BlobFileID, nil
+	return serial.GetFileID(data) == serial.BlobFileID, nil
 }
