@@ -284,7 +284,7 @@ func (h *Handler) initCommands() {
 			}
 
 			var db, ns, cmdName string
-			if doc, err := opMsgDocument(msg); err == nil {
+			if doc, err := opMsgCommandDocument(msg); err == nil {
 				if v, err := doc.Get("$db"); err == nil {
 					if s, ok := v.(string); ok {
 						db = s
@@ -408,7 +408,7 @@ func messageHasAnyField(msg *wire.OpMsg, fields ...string) bool {
 // wireCommandName returns the command name from msg's first BSON field,
 // or empty string on parse failure.
 func wireCommandName(msg *wire.OpMsg) string {
-	doc, err := opMsgDocument(msg)
+	doc, err := opMsgCommandDocument(msg)
 	if err != nil {
 		return ""
 	}
@@ -497,7 +497,7 @@ var adminMutationDenyCode = map[string]handlererrors.ErrorCode{
 }
 
 func wireCommandTarget(msg *wire.OpMsg) (command, db, collection string) {
-	doc, err := opMsgDocument(msg)
+	doc, err := opMsgCommandDocument(msg)
 	if err != nil {
 		return "", "", ""
 	}

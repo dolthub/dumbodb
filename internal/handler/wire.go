@@ -33,9 +33,9 @@ import (
 // Then it iterates raw documents from sections 1 if any, appends them
 // to the response using the section identifier as the key.
 func opMsgDocument(msg *wire.OpMsg) (*types.Document, error) {
-	res, err := bson.ToDocument(msg.RawSection0())
+	res, err := opMsgCommandDocument(msg)
 	if err != nil {
-		return nil, lazyerrors.Error(err)
+		return nil, err
 	}
 
 	for _, section := range msg.Sections() {
@@ -49,7 +49,7 @@ func opMsgDocument(msg *wire.OpMsg) (*types.Document, error) {
 		for _, d := range docs {
 			var doc *types.Document
 
-			if doc, err = bson.ToDocument(d); err != nil {
+			if doc, err = bson.DecodeRawDocument(d); err != nil {
 				return nil, lazyerrors.Error(err)
 			}
 
@@ -59,6 +59,15 @@ func opMsgDocument(msg *wire.OpMsg) (*types.Document, error) {
 		res.Set(section.Identifier, a)
 	}
 
+	return res, nil
+}
+
+// opMsgCommandDocument decodes section 0 only, which holds every command-level field.
+func opMsgCommandDocument(msg *wire.OpMsg) (*types.Document, error) {
+	res, err := bson.DecodeRawDocument(msg.RawSection0())
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
 	return res, nil
 }
 
