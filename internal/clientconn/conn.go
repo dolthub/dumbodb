@@ -273,7 +273,7 @@ func (c *conn) run(ctx context.Context) (err error) {
 
 		if c.l.Enabled(ctx, slog.LevelDebug) {
 			c.l.DebugContext(ctx, "Request header: "+reqHeader.String())
-			c.l.DebugContext(ctx, "Request message:\n"+reqBody.String()+"\n")
+			c.l.DebugContext(ctx, "Request message:\n"+redactedBody(reqBody)+"\n")
 		}
 
 		// diffLogLevel provides the level of logging for the diff between the "normal" and "proxy" responses.
@@ -327,11 +327,11 @@ func (c *conn) run(ctx context.Context) (err error) {
 			var resBodyString, proxyBodyString string
 
 			if resBody != nil {
-				resBodyString = resBody.StringBlock()
+				resBodyString = redactedBody(resBody)
 			}
 
 			if proxyBody != nil {
-				proxyBodyString = proxyBody.StringBlock()
+				proxyBodyString = redactedBody(proxyBody)
 			}
 
 			var diffBody string
@@ -916,7 +916,7 @@ func (c *conn) logResponse(ctx context.Context, who string, resHeader *wire.MsgH
 
 	if c.l.Enabled(ctx, dumpLevel) {
 		c.l.Log(ctx, dumpLevel, who+" header: "+resHeader.String())
-		c.l.Log(ctx, dumpLevel, who+" message:\n"+resBody.String()+"\n")
+		c.l.Log(ctx, dumpLevel, who+" message:\n"+redactedBody(resBody)+"\n")
 	}
 
 	diffLevel := dumpLevel
