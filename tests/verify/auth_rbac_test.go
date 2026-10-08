@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -36,7 +37,7 @@ const (
 )
 
 func authURI(port int, user, pwd, authSource string) string {
-	return fmt.Sprintf("mongodb://%s:%s@127.0.0.1:%d/?authSource=%s", user, pwd, port, authSource)
+	return fmt.Sprintf("mongodb://%s@127.0.0.1:%d/?authSource=%s", url.UserPassword(user, pwd), port, url.QueryEscape(authSource))
 }
 
 // dialAs connects as the given user, forcing the SCRAM handshake and returning

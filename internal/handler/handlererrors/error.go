@@ -17,8 +17,11 @@ package handlererrors
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/FerretDB/wire/wirebson"
+
+	"github.com/dolthub/dumbodb/internal/bson"
 )
 
 //go:generate ../../../bin/stringer -linecomment -type ErrorCode
@@ -49,6 +52,9 @@ const (
 
 	// ErrTypeMismatch for $sort indicates that the expression in the $sort is not an object.
 	ErrTypeMismatch = ErrorCode(14) // TypeMismatch
+
+	// ErrOverflow indicates input nested deeper than the BSON depth limit.
+	ErrOverflow = ErrorCode(15) // Overflow
 
 	// ErrProtocolError indicates SASL handshake failed.
 	ErrProtocolError = ErrorCode(17) // ProtocolError
@@ -120,6 +126,18 @@ const (
 	ErrDocumentValidationFailure = ErrorCode(121) // DocumentValidationFailure
 
 	ErrInvalidIndexSpecificationOption = ErrorCode(197) // InvalidIndexSpecificationOption
+
+	// ErrTimeProofMismatch indicates a $clusterTime signature does not match its key.
+	ErrTimeProofMismatch = ErrorCode(204) // TimeProofMismatch
+
+	// ErrKeysNotFound indicates no signing key matches a $clusterTime signature.
+	ErrKeysNotFound = ErrorCode(211) // KeysNotFound
+
+	ErrExceededMemoryLimit = ErrorCode(146) // ExceededMemoryLimit
+
+	// ErrQueryExceededMemoryLimitNoDiskUseAllowed indicates a blocking
+	// aggregation stage passed its memory limit and could not spill to disk.
+	ErrQueryExceededMemoryLimitNoDiskUseAllowed = ErrorCode(292) // QueryExceededMemoryLimitNoDiskUseAllowed
 
 	// ErrViewDepthLimitExceeded indicates a view resolves through more than the
 	// maximum nesting depth (20).
@@ -208,6 +226,17 @@ const (
 	// ErrOperatorWrongLenOfArgs indicates that aggregation operator contains
 	// wrong amount of arguments.
 	ErrOperatorWrongLenOfArgs = ErrorCode(16020) // Location16020
+
+	// ErrBSONObjectTooLarge indicates a reply would exceed the 16MB BSON limit.
+	ErrBSONObjectTooLarge = ErrorCode(10334) // BSONObjectTooLarge
+
+	ErrRangeStartNotNumeric = ErrorCode(34443) // Location34443
+	ErrRangeStartNotInt32   = ErrorCode(34444) // Location34444
+	ErrRangeEndNotNumeric   = ErrorCode(34445) // Location34445
+	ErrRangeEndNotInt32     = ErrorCode(34446) // Location34446
+	ErrRangeStepNotNumeric  = ErrorCode(34447) // Location34447
+	ErrRangeStepNotInt32    = ErrorCode(34448) // Location34448
+	ErrRangeStepZero        = ErrorCode(34449) // Location34449
 
 	// ErrFieldPathInvalidName indicates that FieldPath is invalid.
 	ErrFieldPathInvalidName = ErrorCode(16410) // Location16410
@@ -491,6 +520,11 @@ func ProtocolError(err error) ProtoErr {
 	var writeErr *WriteErrors
 	if errors.As(err, &writeErr) {
 		return writeErr
+	}
+
+	if errors.Is(err, bson.ErrNestingTooDeep) {
+		msg := fmt.Sprintf("BSONObj exceeded maximum nested object depth: %d", bson.MaxNestingDepth)
+		return NewCommandErrorMsg(ErrOverflow, msg).(*CommandError)
 	}
 
 	//nolint:errorlint // only *CommandError could be returned

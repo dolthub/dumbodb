@@ -156,10 +156,10 @@ func (h *Handler) MsgGetMore(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 		)
 	}
 
-	username := conninfo.Get(connCtx).Username()
+	owner := conninfo.Get(connCtx).SessionPrincipal()
 
 	c := h.cursors.Get(cursorID)
-	if c == nil || c.Username != username {
+	if c == nil || c.Owner != owner {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrCursorNotFound,
 			fmt.Sprintf("cursor id %d not found", cursorID),

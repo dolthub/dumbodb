@@ -23,6 +23,7 @@ import (
 	"math/rand"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/FerretDB/wire"
@@ -48,6 +49,8 @@ type Listener struct {
 	tcpListenerReady  chan struct{}
 	unixListenerReady chan struct{}
 	listenersClosed   chan struct{}
+
+	activeConns atomic.Int64
 }
 
 type NewListenerOpts struct {
@@ -70,6 +73,10 @@ type NewListenerOpts struct {
 	ProxyTLSKeyFile  string
 	ProxyTLSCAFile   string
 
+	// MaxConns caps concurrent client connections; extra connections are
+	// closed on accept. Zero means DefaultMaxConns().
+	MaxConns int
+
 	Mode           Mode
 	Handler        *handler.Handler
 	Logger         *slog.Logger
@@ -79,6 +86,9 @@ type NewListenerOpts struct {
 // Listen creates a new listener and starts listening on configured interfaces.
 func Listen(opts *NewListenerOpts) (*Listener, error) {
 	ll := logging.WithName(opts.Logger, "listener")
+	if opts.MaxConns <= 0 {
+		opts.MaxConns = DefaultMaxConns()
+	}
 	l := &Listener{
 		NewListenerOpts:   opts,
 		ll:                ll,
@@ -218,6 +228,14 @@ func acceptLoop(ctx context.Context, listener net.Listener, wg *sync.WaitGroup, 
 			continue
 		}
 
+		if l.activeConns.Add(1) > int64(l.MaxConns) {
+			l.activeConns.Add(-1)
+			l.ll.WarnContext(ctx, "Connection refused because too many connections are open",
+				slog.String("remote", netConn.RemoteAddr().String()), slog.Int("maxConns", l.MaxConns))
+			_ = netConn.Close()
+			continue
+		}
+
 		wg.Add(1)
 
 		go func() {
@@ -225,6 +243,7 @@ func acceptLoop(ctx context.Context, listener net.Listener, wg *sync.WaitGroup, 
 
 			defer func() {
 				netConn.Close()
+				l.activeConns.Add(-1)
 				wg.Done()
 			}()
 

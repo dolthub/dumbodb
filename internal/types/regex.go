@@ -19,6 +19,7 @@ import (
 	"log/slog"
 	"regexp"
 	"regexp/syntax"
+	"time"
 
 	"github.com/dlclark/regexp2"
 
@@ -44,6 +45,11 @@ type Matcher interface {
 	MatchString(s string) bool
 	String() string
 }
+
+// fallbackMatchTimeout bounds one match by the backtracking regexp2 engine,
+// which unlike Go's regexp can take exponential time. A match that runs out
+// of time counts as no match.
+const fallbackMatchTimeout = 100 * time.Millisecond
 
 type regexp2Matcher struct {
 	re *regexp2.Regexp
@@ -129,6 +135,7 @@ func (r Regex) Compile() (Matcher, error) {
 		if err2 != nil {
 			return nil, ErrUnsupportedPerlOp
 		}
+		re2.MatchTimeout = fallbackMatchTimeout
 		return &regexp2Matcher{re: re2}, nil
 
 	default:

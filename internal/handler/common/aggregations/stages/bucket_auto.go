@@ -20,6 +20,7 @@ import (
 	"fmt"
 	stdsort "sort"
 
+	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators/accumulators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
@@ -155,7 +156,7 @@ func newBucketAuto(stage *types.Document) (aggregations.Stage, error) {
 }
 
 func (ba *bucketAuto) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
-	docs, err := iterator.ConsumeValues(iter)
+	docs, err := common.ConsumeDocuments(iter, "$bucketAuto")
 	if err != nil {
 		return nil, lazyerrors.Error(err)
 	}

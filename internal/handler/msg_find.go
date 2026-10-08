@@ -57,7 +57,7 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 		return nil, err
 	}
 
-	username := conninfo.Get(connCtx).Username()
+	owner := conninfo.Get(connCtx).SessionPrincipal()
 
 	db, err := h.b.Database(params.DB)
 	if err != nil {
@@ -232,7 +232,7 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 		},
 		DB:           params.DB,
 		Collection:   params.Collection,
-		Username:     username,
+		Owner:        owner,
 		Type:         t,
 		ShowRecordID: params.ShowRecordId,
 	})

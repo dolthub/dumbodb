@@ -17,13 +17,16 @@ package handler
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/FerretDB/wire"
 
 	"github.com/dolthub/dumbodb/internal/authz"
+	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
@@ -87,6 +90,12 @@ var commandPrivileges = map[string][]commandPrivilege{
 	"validate":         {{authz.ActionValidate, scopeCollection}},
 	"convertToCapped":  {{authz.ActionConvertToCapped, scopeCollection}},
 	"renameCollection": {{authz.ActionRenameCollectionSameDB, scopeCollection}},
+	"compact":          {{authz.ActionCompact, scopeCollection}},
+
+	"createSearchIndexes": {{authz.ActionCreateSearchIndexes, scopeCollection}},
+	"dropSearchIndex":     {{authz.ActionDropSearchIndex, scopeCollection}},
+	"updateSearchIndex":   {{authz.ActionUpdateSearchIndex, scopeCollection}},
+	"listSearchIndexes":   {{authz.ActionListSearchIndexes, scopeCollection}},
 
 	"dbStats":                  {{authz.ActionDBStats, scopeDatabase}},
 	"listCollections":          {{authz.ActionListCollections, scopeDatabase}},
@@ -106,6 +115,58 @@ var commandPrivileges = map[string][]commandPrivilege{
 	"top":                {{authz.ActionTop, scopeCluster}},
 	"getLog":             {{authz.ActionGetLog, scopeCluster}},
 	"rotateCertificates": {{authz.ActionRotateCertificates, scopeCluster}},
+	"autoCompact":        {{authz.ActionCompact, scopeCluster}},
+	"currentOp":          {{authz.ActionInprog, scopeCluster}},
+	"getCmdLineOpts":     {{authz.ActionGetCmdLineOpts, scopeCluster}},
+}
+
+// authenticatedOnlyCommands need no privilege beyond being logged in: the
+// handlers confine them to the caller's own cursors and transactions, or they
+// return no data.
+var authenticatedOnlyCommands = map[string]bool{
+	"abortTransaction":        true,
+	"commitTransaction":       true,
+	"killCursors":             true,
+	"listCommands":            true,
+	"getFreeMonitoringStatus": true,
+	"setFreeMonitoring":       true,
+}
+
+// localVersioningCommands are the version-control commands (by canonical
+// name) that act only on this server's data. Until per-branch permissions
+// exist, each needs readWrite-level privileges (find, insert, update and
+// remove) on the database it runs against, whether it reads or changes
+// history.
+var localVersioningCommands = map[string]bool{
+	"doltBranch":          true,
+	"doltBranchStatus":    true,
+	"doltCherryPick":      true,
+	"doltCommit":          true,
+	"doltConflicts":       true,
+	"doltDiff":            true,
+	"doltGC":              true,
+	"doltLog":             true,
+	"doltMerge":           true,
+	"doltRebase":          true,
+	"doltRemote":          true,
+	"doltReset":           true,
+	"doltResolveConflict": true,
+	"doltRevert":          true,
+	"doltStatus":          true,
+	"doltTag":             true,
+	"doltUndrop":          true,
+}
+
+var readWriteActions = []authz.Action{authz.ActionFind, authz.ActionInsert, authz.ActionUpdate, authz.ActionRemove}
+
+// remoteVersioningCommands reach other systems with the server's own
+// filesystem access and credentials, so they are disabled under access
+// control.
+var remoteVersioningCommands = map[string]bool{
+	"doltClone": true,
+	"doltFetch": true,
+	"doltPull":  true,
+	"doltPush":  true,
 }
 
 func (h *Handler) authorize(ctx context.Context, msg *wire.OpMsg) error {
@@ -114,8 +175,53 @@ func (h *Handler) authorize(ctx context.Context, msg *wire.OpMsg) error {
 	}
 	command, db, collection := wireCommandTarget(msg)
 
+	// Aliases such as findandmodify are authorized as their canonical command.
+	if cmd := h.commands[command]; cmd != nil {
+		command = cmd.name
+	}
+
 	if command == "updateUser" {
 		return h.authorizeUpdateUser(ctx, msg, db, collection)
+	}
+	if command == "usersInfo" {
+		return h.authorizeUsersInfo(ctx, msg, db)
+	}
+	if command == "renameCollection" {
+		return h.authorizeRenameCollection(ctx, msg, db, collection)
+	}
+	if command == "dataSize" {
+		return h.authorizeNamespaceAction(ctx, msg, db, collection, authz.ActionFind)
+	}
+	if command == "explain" {
+		return h.authorizeExplain(ctx, msg, db)
+	}
+	if command == "bulkWrite" {
+		return h.authorizeBulkWrite(ctx, msg, db)
+	}
+	if command == "getMore" {
+		return h.authorizeGetMore(ctx, msg, db)
+	}
+	if command == "create" || command == "collMod" {
+		if err := h.authorizeViewSource(ctx, msg, command, db); err != nil {
+			return err
+		}
+	}
+	if command == "insert" || command == "update" || command == "findAndModify" {
+		return h.authorizeActions(ctx, msg, command, db, authz.CollectionResource(db, collection), writePayloadActions(msg, command))
+	}
+	if localVersioningCommands[command] {
+		base, _ := backends.SplitEncodedDBName(db)
+		if err := h.authorizeAdminHistoryRead(ctx, msg, command, db); err != nil {
+			return err
+		}
+		return h.authorizeActions(ctx, msg, command, db, authz.DatabaseResource(base), readWriteActions)
+	}
+	if remoteVersioningCommands[command] {
+		return handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrUnauthorized,
+			fmt.Sprintf("%s is disabled when access control is enabled: push, pull, fetch and clone use the server's own credentials", command),
+			command,
+		)
 	}
 	if checks, ok := grantCommandChecks[command]; ok {
 		return h.authorizeGrantCommand(ctx, msg, command, db, checks)
@@ -133,10 +239,142 @@ func (h *Handler) authorize(ctx context.Context, msg *wire.OpMsg) error {
 	return h.authorizeByCommandPrivileges(ctx, msg, command, db, collection)
 }
 
+// authorizeAdminHistoryRead requires, for history commands on the admin
+// database, the right to read admin.system.users: admin's history holds every
+// user's credentials, which database-wide grants such as readAnyDatabase may
+// not see.
+func (h *Handler) authorizeAdminHistoryRead(ctx context.Context, msg *wire.OpMsg, command, db string) error {
+	if !isAdminDatabase(db) {
+		return nil
+	}
+	return h.authorizeActions(ctx, msg, command, db, authz.CollectionResource("admin", "system.users"), []authz.Action{authz.ActionFind})
+}
+
+// authorizeViewSource requires, for a create or collMod that defines a view,
+// find on the collection the view reads and the privileges of its pipeline
+// stages, as MongoDB does; without it a view would read a collection its
+// creator cannot. The command's own privilege is checked separately.
+func (h *Handler) authorizeViewSource(ctx context.Context, msg *wire.OpMsg, command, db string) error {
+	document, err := opMsgDocument(msg)
+	if err != nil {
+		return err
+	}
+
+	viewOnValue, _ := document.Get("viewOn")
+	if viewOnValue == nil && !document.Has("pipeline") {
+		return nil
+	}
+
+	if viewOn, ok := viewOnValue.(string); ok {
+		if err = h.authorizeActions(ctx, msg, command, db, authz.CollectionResource(db, viewOn), []authz.Action{authz.ActionFind}); err != nil {
+			return err
+		}
+	}
+
+	return h.authorizeAggregationStages(ctx, msg, db)
+}
+
+// authorizeGetMore re-checks find on the cursor's collection at every call,
+// so a user whose access was revoked, or who was dropped, cannot keep
+// reading a cursor opened earlier. The handler only serves a cursor whose
+// namespace matches the requested one and whose owner is the caller.
+// Database-level aggregate cursors ($documents, $listLocalSessions) need no
+// collection privilege to create and keep only the owner check.
+func (h *Handler) authorizeGetMore(ctx context.Context, msg *wire.OpMsg, db string) error {
+	document, err := opMsgDocument(msg)
+	if err != nil {
+		return err
+	}
+
+	value, _ := document.Get("collection")
+	collection, _ := value.(string)
+	if collection == "" || collection == "$cmd.aggregate" {
+		return nil
+	}
+
+	return h.authorizeActions(ctx, msg, "getMore", db, authz.CollectionResource(db, collection), []authz.Action{authz.ActionFind})
+}
+
+// writePayloadActions returns the actions an insert, update or findAndModify
+// needs given its payload, as MongoDB requires: findAndModify needs find and
+// remove (with remove:true) or update; any upsert also needs insert; and
+// bypassDocumentValidation needs that action.
+func writePayloadActions(msg *wire.OpMsg, command string) []authz.Action {
+	document, err := opMsgDocument(msg)
+	if err != nil {
+		return []authz.Action{authz.ActionFind, authz.ActionInsert, authz.ActionUpdate, authz.ActionRemove}
+	}
+
+	var actions []authz.Action
+	switch command {
+	case "insert":
+		actions = []authz.Action{authz.ActionInsert}
+	case "update":
+		actions = []authz.Action{authz.ActionUpdate}
+		statements, _ := document.Get("updates")
+		if array, ok := statements.(*types.Array); ok {
+			for i := range array.Len() {
+				if stmt, ok := must.NotFail(array.Get(i)).(*types.Document); ok && flagRequested(stmt, "upsert") {
+					actions = append(actions, authz.ActionInsert)
+					break
+				}
+			}
+		}
+	case "findAndModify":
+		actions = []authz.Action{authz.ActionFind}
+		if flagRequested(document, "remove") {
+			actions = append(actions, authz.ActionRemove)
+		} else {
+			actions = append(actions, authz.ActionUpdate)
+		}
+		if flagRequested(document, "upsert") {
+			actions = append(actions, authz.ActionInsert)
+		}
+	}
+
+	if flagRequested(document, "bypassDocumentValidation") {
+		actions = append(actions, authz.ActionBypassDocumentValidation)
+	}
+	return actions
+}
+
+// flagRequested reports whether a boolean option that widens what a command
+// may do is set. It accepts every form a handler reads as true (nonzero
+// numbers included), and treats a malformed value as set, so authorization
+// never asks for less than the command could do.
+func flagRequested(document *types.Document, key string) bool {
+	v, _ := document.Get(key)
+	if v == nil {
+		return false
+	}
+	set, err := handlerparams.GetBoolOptionalParam(key, v)
+	return err != nil || set
+}
+
+// authorizeActions requires every action on target.
+func (h *Handler) authorizeActions(ctx context.Context, msg *wire.OpMsg, command, db string, target authz.Resource, actions []authz.Action) error {
+	privs, err := h.effectivePrivileges(ctx)
+	if err != nil {
+		return err
+	}
+	for _, action := range actions {
+		if !privs.Authorized(action, target) {
+			return unauthorizedCommandError(msg, command, db)
+		}
+	}
+	return nil
+}
+
+// authorizeByCommandPrivileges denies any command that has no entry and is
+// not authenticated-only, so a newly added command is unusable under --auth
+// until it is given a privilege rule.
 func (h *Handler) authorizeByCommandPrivileges(ctx context.Context, msg *wire.OpMsg, command, db, collection string) error {
 	reqs, ok := commandPrivileges[command]
 	if !ok {
-		return nil
+		if authenticatedOnlyCommands[command] {
+			return nil
+		}
+		return unauthorizedCommandError(msg, command, db)
 	}
 
 	privs, err := h.effectivePrivileges(ctx)
@@ -590,6 +828,250 @@ func targetResource(scope resourceScope, db, collection string) authz.Resource {
 	default:
 		return authz.CollectionResource(db, collection)
 	}
+}
+
+// authorizeBulkWrite requires, on each op's own namespace, insert, update
+// (plus insert when upserting) or remove, and bypassDocumentValidation when
+// requested. bulkWrite runs against admin but writes wherever nsInfo points,
+// so $db says nothing about what it touches. Malformed ops and namespaces are
+// left for the handler to reject.
+func (h *Handler) authorizeBulkWrite(ctx context.Context, msg *wire.OpMsg, db string) error {
+	document, err := opMsgDocument(msg)
+	if err != nil {
+		return err
+	}
+
+	nsInfoValue, _ := document.Get("nsInfo")
+	opsValue, _ := document.Get("ops")
+	nsInfo, nsOK := nsInfoValue.(*types.Array)
+	ops, opsOK := opsValue.(*types.Array)
+	if !nsOK || !opsOK {
+		return nil
+	}
+
+	namespaces := make([]authz.Resource, nsInfo.Len())
+	for i := range nsInfo.Len() {
+		nsDoc, ok := must.NotFail(nsInfo.Get(i)).(*types.Document)
+		if !ok {
+			return nil
+		}
+		nsValue, _ := nsDoc.Get("ns")
+		ns, _ := nsValue.(string)
+		nsDB, nsColl, ok := strings.Cut(ns, ".")
+		if !ok {
+			return nil
+		}
+		namespaces[i] = authz.CollectionResource(nsDB, nsColl)
+	}
+
+	privs, err := h.effectivePrivileges(ctx)
+	if err != nil {
+		return err
+	}
+
+	bypass := flagRequested(document, "bypassDocumentValidation")
+
+	for i := range ops.Len() {
+		op, ok := must.NotFail(ops.Get(i)).(*types.Document)
+		if !ok {
+			return nil
+		}
+
+		var actions []authz.Action
+		var index any
+		switch {
+		case op.Has("insert"):
+			index, actions = must.NotFail(op.Get("insert")), []authz.Action{authz.ActionInsert}
+		case op.Has("update"):
+			index, actions = must.NotFail(op.Get("update")), []authz.Action{authz.ActionUpdate}
+			if flagRequested(op, "upsert") {
+				actions = append(actions, authz.ActionInsert)
+			}
+		case op.Has("delete"):
+			index, actions = must.NotFail(op.Get("delete")), []authz.Action{authz.ActionRemove}
+		default:
+			return nil
+		}
+		if bypass {
+			actions = append(actions, authz.ActionBypassDocumentValidation)
+		}
+
+		n, err := getInt64Value(index)
+		if err != nil || n < 0 || n >= int64(len(namespaces)) {
+			return nil
+		}
+
+		for _, action := range actions {
+			if !privs.Authorized(action, namespaces[n]) {
+				return unauthorizedCommandError(msg, "bulkWrite", db)
+			}
+		}
+	}
+
+	return nil
+}
+
+// authorizeExplain authorizes the wrapped command as if it were run directly:
+// executionStats executes it, so explain must not reach anything the command
+// itself could not. A malformed wrapper is left for the handler to reject.
+func (h *Handler) authorizeExplain(ctx context.Context, msg *wire.OpMsg, db string) error {
+	document, err := opMsgDocument(msg)
+	if err != nil {
+		return err
+	}
+
+	inner, ok := must.NotFail(document.Get("explain")).(*types.Document)
+	if !ok || inner.Len() == 0 {
+		return nil
+	}
+
+	if err = h.checkExplainable(inner.Command()); err != nil {
+		return err
+	}
+
+	wrapped := inner.DeepCopy()
+	wrapped.Set("$db", db)
+
+	wrappedMsg, err := documentOpMsg(wrapped)
+	if err != nil {
+		return err
+	}
+
+	return h.authorize(ctx, wrappedMsg)
+}
+
+// authorizeRenameCollection authorizes the source and target namespaces named
+// in the command rather than $db. Malformed namespaces are left for the
+// handler to reject.
+func (h *Handler) authorizeRenameCollection(ctx context.Context, msg *wire.OpMsg, db, from string) error {
+	document, err := opMsgDocument(msg)
+	if err != nil {
+		return err
+	}
+
+	to, _ := common.GetRequiredParam[string](document, "to")
+	fromDB, fromColl, fromOK := strings.Cut(from, ".")
+	toDB, toColl, toOK := strings.Cut(to, ".")
+	if !fromOK || !toOK {
+		return nil
+	}
+
+	privs, err := h.effectivePrivileges(ctx)
+	if err != nil {
+		return err
+	}
+
+	required := []struct {
+		action authz.Action
+		target authz.Resource
+	}{
+		{authz.ActionRenameCollectionSameDB, authz.CollectionResource(fromDB, fromColl)},
+		{authz.ActionRenameCollectionSameDB, authz.CollectionResource(toDB, toColl)},
+	}
+	if flagRequested(document, "dropTarget") {
+		required = append(required, struct {
+			action authz.Action
+			target authz.Resource
+		}{authz.ActionDropCollection, authz.CollectionResource(toDB, toColl)})
+	}
+
+	for _, r := range required {
+		if !privs.Authorized(r.action, r.target) {
+			return unauthorizedCommandError(msg, "renameCollection", db)
+		}
+	}
+
+	return nil
+}
+
+// authorizeNamespaceAction authorizes action on the "db.collection"
+// namespace given as the command's value rather than on $db.
+func (h *Handler) authorizeNamespaceAction(ctx context.Context, msg *wire.OpMsg, db, ns string, action authz.Action) error {
+	nsDB, nsColl, ok := strings.Cut(ns, ".")
+	if !ok {
+		return nil
+	}
+
+	privs, err := h.effectivePrivileges(ctx)
+	if err != nil {
+		return err
+	}
+
+	if !privs.Authorized(action, authz.CollectionResource(nsDB, nsColl)) {
+		return unauthorizedCommandError(msg, wireCommandName(msg), db)
+	}
+
+	return nil
+}
+
+// authorizeUsersInfo requires viewUser on the database of every user the
+// command reads, not just on $db: forAllDBs needs it on every database, and
+// a {user, db} reference names a database of its own. Viewing oneself is
+// always allowed. Malformed arguments are left for the handler to reject.
+func (h *Handler) authorizeUsersInfo(ctx context.Context, msg *wire.OpMsg, db string) error {
+	document, err := opMsgDocument(msg)
+	if err != nil {
+		return err
+	}
+
+	privs, err := h.effectivePrivileges(ctx)
+	if err != nil {
+		return err
+	}
+
+	canView := func(target authz.Resource) bool {
+		return privs.Authorized(authz.ActionViewUser, target)
+	}
+
+	var targets []usersInfoPair
+
+	switch arg := must.NotFail(document.Get("usersInfo")).(type) {
+	case *types.Document:
+		if arg.Has("forAllDBs") {
+			if canView(authz.Resource{}) {
+				return nil
+			}
+			return unauthorizedCommandError(msg, "usersInfo", db)
+		}
+
+		var p usersInfoPair
+		if p.extract(arg, db) != nil {
+			return nil
+		}
+		targets = append(targets, p)
+	case *types.Array:
+		for i := range arg.Len() {
+			v := must.NotFail(arg.Get(i))
+			if v == nil {
+				continue
+			}
+
+			var p usersInfoPair
+			if p.extract(v, db) != nil {
+				return nil
+			}
+			targets = append(targets, p)
+		}
+	case string:
+		targets = append(targets, usersInfoPair{username: arg, db: db})
+	default:
+		if canView(authz.DatabaseResource(db)) {
+			return nil
+		}
+		return unauthorizedCommandError(msg, "usersInfo", db)
+	}
+
+	user, _, _, userDB := conninfo.Get(ctx).Auth()
+	for _, p := range targets {
+		if p.username == user && p.db == userDB {
+			continue
+		}
+		if !canView(authz.DatabaseResource(p.db)) {
+			return unauthorizedCommandError(msg, "usersInfo", db)
+		}
+	}
+
+	return nil
 }
 
 func (h *Handler) selfServiceAllowed(ctx context.Context, command, db, targetUser string) bool {

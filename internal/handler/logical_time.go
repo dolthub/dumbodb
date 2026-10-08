@@ -218,10 +218,99 @@ func (h *Handler) observeLogicalTime(ctx context.Context, msg *wire.OpMsg) error
 	if seconds > time.Now().Add(365*24*time.Hour).Unix() {
 		return handlererrors.NewCommandErrorMsg(handlererrors.ErrBadValue, fmt.Sprintf("$clusterTime is too far in the future: %d", seconds))
 	}
+	if uint64(logicalTime) <= h.logicalTime.Load() {
+		return nil
+	}
+	if h.membershipAuthenticationEnabled() && !h.internalMemberAuthenticated(ctx) {
+		if err = h.verifyLogicalTimeSignature(ctx, logicalTime, clusterTime); err != nil {
+			return err
+		}
+	}
 	for {
 		previous := h.logicalTime.Load()
 		if uint64(logicalTime) <= previous || h.logicalTime.CompareAndSwap(previous, uint64(logicalTime)) {
 			return nil
+		}
+	}
+}
+
+// verifyLogicalTimeSignature checks the signature an external client sent with
+// a $clusterTime ahead of this node's clock, as MongoDB does for callers
+// without the advanceClusterTime privilege.
+func (h *Handler) verifyLogicalTimeSignature(ctx context.Context, logicalTime types.Timestamp, clusterTime *types.Document) error {
+	value, _ := clusterTime.Get("signature")
+	signature, ok := value.(*types.Document)
+	if !ok {
+		return handlererrors.NewCommandErrorMsg(handlererrors.ErrTypeMismatch, "$clusterTime.signature must be an object")
+	}
+	hashValue, _ := signature.Get("hash")
+	hash, ok := hashValue.(types.Binary)
+	if !ok {
+		return handlererrors.NewCommandErrorMsg(handlererrors.ErrTypeMismatch, "$clusterTime.signature.hash must be binary data")
+	}
+	keyIDValue, _ := signature.Get("keyId")
+	keyID, ok := keyIDValue.(int64)
+	if !ok {
+		return handlererrors.NewCommandErrorMsg(handlererrors.ErrTypeMismatch, "$clusterTime.signature.keyId must be a long")
+	}
+
+	key, found, err := h.logicalTimeValidationKey(ctx, keyID)
+	if err != nil {
+		return err
+	}
+	if !found || uint64(key.expiresAt) < uint64(logicalTime) {
+		return handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrKeysNotFound,
+			fmt.Sprintf("No keys found for HMAC that is valid for time: %d with id: %d", uint64(logicalTime), keyID),
+		)
+	}
+	if !hmac.Equal(hash.B, signLogicalTime(logicalTime, key.key)) {
+		return handlererrors.NewCommandErrorMsg(handlererrors.ErrTimeProofMismatch, "Time proof mismatch")
+	}
+	return nil
+}
+
+func (h *Handler) logicalTimeValidationKey(ctx context.Context, keyID int64) (logicalTimeSigningKey, bool, error) {
+	h.logicalTimeKeyMu.Lock()
+	cached := h.logicalTimeKey
+	h.logicalTimeKeyMu.Unlock()
+	if len(cached.key) != 0 && cached.id == keyID {
+		return cached, true, nil
+	}
+	if h.b == nil {
+		return logicalTimeSigningKey{}, false, nil
+	}
+
+	database, err := h.b.Database("admin")
+	if err != nil {
+		return logicalTimeSigningKey{}, false, err
+	}
+	collection, err := database.Collection("system.keys")
+	if err != nil {
+		return logicalTimeSigningKey{}, false, err
+	}
+	result, err := collection.Query(ctx, &backends.QueryParams{
+		Filter: must.NotFail(types.NewDocument("_id", keyID)),
+	})
+	if err != nil {
+		return logicalTimeSigningKey{}, false, err
+	}
+	defer result.Iter.Close()
+
+	for {
+		_, document, nextErr := result.Iter.Next()
+		if errors.Is(nextErr, iterator.ErrIteratorDone) {
+			return logicalTimeSigningKey{}, false, nil
+		}
+		if nextErr != nil {
+			return logicalTimeSigningKey{}, false, nextErr
+		}
+		key, matches, parseErr := parseLogicalTimeSigningKey(document)
+		if parseErr != nil {
+			return logicalTimeSigningKey{}, false, parseErr
+		}
+		if matches && key.id == keyID {
+			return key, true, nil
 		}
 	}
 }

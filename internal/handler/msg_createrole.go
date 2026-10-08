@@ -20,6 +20,7 @@ import (
 
 	"github.com/FerretDB/wire"
 
+	"github.com/dolthub/dumbodb/internal/authz"
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
@@ -50,6 +51,13 @@ func (h *Handler) MsgCreateRole(connCtx context.Context, msg *wire.OpMsg) (*wire
 
 	if roleName == "" {
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrBadValue, "Role name must be non-empty")
+	}
+
+	if authz.IsBuiltinRoleOnDB(roleName, dbName) {
+		return nil, handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrBadValue,
+			"Cannot create roles with the same name as a built-in role",
+		)
 	}
 
 	privileges, err := requiredArray(document, "createRole", "privileges")

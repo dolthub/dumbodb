@@ -44,6 +44,16 @@ func (h *Handler) MsgRenameCollection(connCtx context.Context, msg *wire.OpMsg) 
 		return nil, err
 	}
 
+	// The namespaces carry their own database, so authorization is checked
+	// against them; running against any other database would only blur that.
+	if dbName, _ := common.GetRequiredParam[string](document, "$db"); !isAdminDatabase(dbName) {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrUnauthorized,
+			"renameCollection may only be run against the admin database.",
+			"renameCollection",
+		)
+	}
+
 	var dropTarget bool
 	if dt, dtErr := document.Get("dropTarget"); dtErr == nil && dt != nil {
 		if dropTarget, err = handlerparams.GetBoolOptionalParam("dropTarget", dt); err != nil {
@@ -184,4 +194,9 @@ func (h *Handler) MsgRenameCollection(connCtx context.Context, msg *wire.OpMsg) 
 			"ok", float64(1),
 		)),
 	)
+}
+
+func isAdminDatabase(encoded string) bool {
+	base, _ := backends.SplitEncodedDBName(encoded)
+	return base == "admin"
 }

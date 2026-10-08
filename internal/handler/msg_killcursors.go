@@ -56,7 +56,7 @@ func (h *Handler) MsgKillCursors(connCtx context.Context, msg *wire.OpMsg) (*wir
 		return nil, err
 	}
 
-	username := conninfo.Get(connCtx).Username()
+	owner := conninfo.Get(connCtx).SessionPrincipal()
 
 	cursors, err := common.GetRequiredParam[*types.Array](document, "cursors")
 	if err != nil {
@@ -100,7 +100,7 @@ func (h *Handler) MsgKillCursors(connCtx context.Context, msg *wire.OpMsg) (*wir
 
 	for _, id := range ids {
 		cursor := h.cursors.Get(id)
-		if cursor == nil || cursor.DB != db || cursor.Collection != collection || cursor.Username != username {
+		if cursor == nil || cursor.DB != db || cursor.Collection != collection || cursor.Owner != owner {
 			cursorsNotFound.Append(id)
 			continue
 		}

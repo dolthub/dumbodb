@@ -452,7 +452,7 @@ func parseWindowBound(v any) (windowBound, error) {
 
 func (s *setWindowFields) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
 	// Collect all documents.
-	docs, err := iterator.ConsumeValues(iter)
+	docs, err := common.ConsumeDocuments(iter, "$setWindowFields")
 	if err != nil {
 		return nil, lazyerrors.Error(err)
 	}

@@ -35,6 +35,10 @@ type Command struct {
 	anonymous      bool
 	membershipOnly bool
 
+	// name is the canonical name shared by all aliases of the command; it is
+	// what authorization looks up.
+	name string
+
 	// Handler processes this command.
 	//
 	// The passed context is canceled when the client disconnects.
@@ -67,6 +71,9 @@ type Command struct {
 // *Command can answer to multiple names (aliases) without duplicating its
 // definition.
 func (h *Handler) register(c *Command, names ...string) {
+	if c.name == "" {
+		c.name = names[0]
+	}
 	for _, n := range names {
 		h.commands[n] = c
 	}
@@ -193,6 +200,12 @@ func (h *Handler) initCommands() {
 	h.register(&Command{Handler: h.MsgRenameCollection, BlockedInTxn: true, MutatesState: alwaysMutatesState, Help: "Changes the name of an existing collection."}, "renameCollection")
 	h.register(&Command{Handler: h.MsgCollMod, BlockedInTxn: true, MutatesState: alwaysMutatesState, Help: "Adds options to a collection or modify view definitions."}, "collMod")
 
+	for name, cmd := range h.commands {
+		if cmd.name == "" {
+			cmd.name = name
+		}
+	}
+
 	// Wrap each *Command's Handler with auth and logging exactly once,
 	// even when multiple aliases point to the same *Command. Iterating
 	// h.commands by name would double-wrap aliased entries.
@@ -203,6 +216,7 @@ func (h *Handler) initCommands() {
 		}
 		seen[cmd] = true
 
+		canonicalName := cmd.name
 		inner := cmd.Handler
 		if cmd.membershipOnly && h.membershipAuthenticationEnabled() {
 			memberHandler := inner
@@ -247,6 +261,9 @@ func (h *Handler) initCommands() {
 					}
 				}
 				if guardErr := guardAdminMutation(wireCommandTarget(msg)); guardErr != nil {
+					return nil, guardErr
+				}
+				if guardErr := guardAdminHistory(canonicalName, msg); guardErr != nil {
 					return nil, guardErr
 				}
 				if authenticated {
@@ -408,27 +425,16 @@ func checkAuthentication(ctx context.Context, command string, l *slog.Logger) er
 		return nil
 	}
 
-	_, _, conv, _ := ci.Auth()
-
-	switch {
-	case conv == nil:
-		l.WarnContext(ctx, "checkAuthentication: no conversation")
-
-	case !conv.Valid():
+	// A conversation whose proof verified is not enough: authentication is
+	// granted only once authenticationRestrictions have also been checked.
+	if _, _, conv, _ := ci.Auth(); conv != nil {
 		l.WarnContext(
 			ctx,
-			"checkAuthentication: invalid conversation",
+			"checkAuthentication: conversation not authenticated",
 			slog.String("username", conv.Username()), slog.Bool("valid", conv.Valid()), slog.Bool("done", conv.Done()),
 		)
-
-	default:
-		l.DebugContext(
-			ctx,
-			"checkAuthentication: passed",
-			slog.String("username", conv.Username()), slog.Bool("valid", conv.Valid()), slog.Bool("done", conv.Done()),
-		)
-
-		return nil
+	} else {
+		l.WarnContext(ctx, "checkAuthentication: no conversation")
 	}
 
 	return handlererrors.NewCommandErrorMsgWithArgument(
@@ -513,8 +519,45 @@ func wireCommandTarget(msg *wire.OpMsg) (command, db, collection string) {
 	return command, db, collection
 }
 
+// adminHistoryWriters are the version-control commands (by canonical name)
+// that change a database's history. On admin they would restore dropped
+// users, revoked roles and old passwords, or import foreign users, so they
+// are refused there; branch and tag are refused only when they modify.
+var adminHistoryWriters = map[string]func(*wire.OpMsg) bool{
+	"doltCherryPick":      alwaysMutatesState,
+	"doltCommit":          alwaysMutatesState,
+	"doltFetch":           alwaysMutatesState,
+	"doltMerge":           alwaysMutatesState,
+	"doltPull":            alwaysMutatesState,
+	"doltRebase":          alwaysMutatesState,
+	"doltReset":           alwaysMutatesState,
+	"doltResolveConflict": alwaysMutatesState,
+	"doltRevert":          alwaysMutatesState,
+	"doltBranch":          branchMutatesState,
+	"doltTag":             tagMutatesState,
+}
+
+// guardAdminHistory refuses history-changing version-control commands on the
+// admin database, whose contents are managed through the user management
+// commands. Like guardAdminMutation it applies with or without access control.
+func guardAdminHistory(command string, msg *wire.OpMsg) error {
+	mutates, ok := adminHistoryWriters[command]
+	if !ok || !mutates(msg) {
+		return nil
+	}
+	if _, db, _ := wireCommandTarget(msg); !isAdminDatabase(db) {
+		return nil
+	}
+	return handlererrors.NewCommandErrorMsgWithArgument(
+		handlererrors.ErrUnauthorized,
+		fmt.Sprintf("cannot run %s on the admin database: its history is managed through the user management commands", command),
+		command,
+	)
+}
+
 func guardAdminMutation(command, db, collection string) error {
-	if db != "admin" {
+	// The base name, so "admin@main" (admin's main branch) is guarded too.
+	if !isAdminDatabase(db) {
 		return nil
 	}
 

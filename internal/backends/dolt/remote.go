@@ -61,7 +61,7 @@ func (b *Backend) remoteAdd(ctx context.Context, coll backends.Collection, param
 		return nil, err
 	}
 
-	ru, err := parseRemoteURL(params.URL)
+	ru, err := b.parseRemoteURL(params.URL)
 	if err != nil {
 		return nil, fmt.Errorf("dumboRemote add: %w", err)
 	}

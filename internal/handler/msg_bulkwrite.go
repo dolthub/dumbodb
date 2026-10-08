@@ -127,6 +127,13 @@ func (h *Handler) MsgBulkWrite(connCtx context.Context, msg *wire.OpMsg) (*wire.
 				"bulkWrite",
 			)
 		}
+		if base, _ := backends.SplitEncodedDBName(nsStr[:dot]); base == "admin" {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrUnauthorized,
+				fmt.Sprintf("cannot bulkWrite %q: the admin database is reserved; manage its contents through the user management commands", nsStr),
+				"bulkWrite",
+			)
+		}
 		namespaces[i] = bulkWriteNS{db: nsStr[:dot], coll: nsStr[dot+1:]}
 	}
 

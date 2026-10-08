@@ -51,7 +51,7 @@ func (h *Handler) MsgDropRole(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 		return nil, err
 	}
 
-	if authz.IsBuiltinRole(roleName) {
+	if authz.IsBuiltinRoleOnDB(roleName, dbName) {
 		return nil, handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrBadValue,
 			fmt.Sprintf("%s@%s is a built-in role and cannot be modified", roleName, dbName),

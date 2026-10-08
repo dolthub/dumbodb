@@ -154,6 +154,36 @@ func planContainsIndexScan(plan *types.Document) bool {
 	return false
 }
 
+// explainableCommands are the commands, by canonical name, that MongoDB 8.0
+// can explain.
+var explainableCommands = map[string]bool{
+	"aggregate":     true,
+	"count":         true,
+	"delete":        true,
+	"distinct":      true,
+	"find":          true,
+	"findAndModify": true,
+	"update":        true,
+}
+
+// checkExplainable returns MongoDB's error for explaining the named command:
+// CommandNotFound for an unknown command, IllegalOperation for one that cannot
+// be explained. Authorization and execution both check it, so explain can
+// only open a collection for a command whose privileges were checked.
+func (h *Handler) checkExplainable(name string) error {
+	cmd := h.commands[name]
+	if cmd == nil {
+		return handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrCommandNotFound,
+			"Explain failed due to unknown command: "+name,
+		)
+	}
+	if !explainableCommands[cmd.name] {
+		return handlererrors.NewCommandErrorMsg(handlererrors.ErrIllegalOperation, "Cannot explain cmd: "+name)
+	}
+	return nil
+}
+
 func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
@@ -162,6 +192,12 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 
 	if err = common.RejectUnknownFields(document, "verbosity"); err != nil {
 		return nil, err
+	}
+
+	if inner, ok := must.NotFail(document.Get(document.Command())).(*types.Document); ok && inner.Len() > 0 {
+		if err = h.checkExplainable(inner.Command()); err != nil {
+			return nil, err
+		}
 	}
 
 	params, err := common.GetExplainParams(document, h.L)

@@ -190,7 +190,7 @@ func requireStringField(doc *types.Document, field, stageName string) (string, e
 }
 
 func (gl *graphLookup) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
-	docs, err := iterator.ConsumeValues(iter)
+	docs, err := common.ConsumeDocuments(iter, "$graphLookup")
 	if err != nil {
 		return nil, lazyerrors.Error(err)
 	}

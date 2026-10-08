@@ -153,7 +153,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		collCmp = collation.Parse(viewCollation).Comparator()
 	}
 
-	username := conninfo.Get(connCtx).Username()
+	owner := conninfo.Get(connCtx).SessionPrincipal()
 
 	v, _ := document.Get("maxTimeMS")
 	if v == nil {
@@ -551,7 +551,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 	cursor := h.cursors.NewCursor(ctx, iterator.WithClose(iter, closer.Close), &cursor.NewParams{
 		DB:         dbName,
 		Collection: cName,
-		Username:   username,
+		Owner:      owner,
 		Type:       cursor.Normal,
 	})
 
@@ -709,7 +709,7 @@ func (h *Handler) aggregateListLocalSessions(connCtx context.Context, dbName str
 			if err != nil || len(idBytes) != 16 {
 				continue
 			}
-			uidSum := sha256.Sum256([]byte(principal))
+			uidSum := sha256.Sum256([]byte(sessionUserDigestName(principal)))
 			firstBatch.Append(must.NotFail(types.NewDocument(
 				"_id", must.NotFail(types.NewDocument(
 					"id", types.Binary{Subtype: types.BinaryUUID, B: idBytes},
@@ -732,9 +732,19 @@ func (h *Handler) aggregateListLocalSessions(connCtx context.Context, dbName str
 	)
 }
 
+// sessionUserDigestName is the "user@db" name MongoDB hashes into a session
+// uid; "" for an unauthenticated principal.
+func sessionUserDigestName(principal string) string {
+	user, db, ok := conninfo.SplitPrincipal(principal)
+	if !ok {
+		return ""
+	}
+	return user + "@" + db
+}
+
 // listSessionsSpec is the parsed argument of $listLocalSessions or
-// $listSessions. Without allUsers it selects sessions owned by principals
-// ("user@db"); an empty spec selects the caller's own.
+// $listSessions. Without allUsers it selects sessions owned by the listed
+// principals (see conninfo.Principal); an empty spec selects the caller's own.
 type listSessionsSpec struct {
 	allUsers   bool
 	principals []string
@@ -795,7 +805,7 @@ func parseListSessionsSpec(stage *types.Document, callerPrincipal string) (listS
 					stageName+" users entries must be objects with string user and db fields",
 				)
 			}
-			spec.principals = append(spec.principals, name+"@"+db)
+			spec.principals = append(spec.principals, conninfo.Principal(name, db))
 		}
 	}
 
@@ -878,7 +888,7 @@ func (h *Handler) aggregateDocuments(connCtx context.Context, document, firstSta
 	cur := h.cursors.NewCursor(connCtx, iterator.WithClose(iter, closer.Close), &cursor.NewParams{
 		DB:         dbName,
 		Collection: "$cmd.aggregate",
-		Username:   conninfo.Get(connCtx).Username(),
+		Owner:      conninfo.Get(connCtx).SessionPrincipal(),
 		Type:       cursor.Normal,
 	})
 

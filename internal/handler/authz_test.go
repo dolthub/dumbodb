@@ -283,14 +283,16 @@ func TestAuthorize_AggregationStagesNeedTheirOwnPrivileges(t *testing.T) {
 	require.NoError(t, h.authorize(authAs("reader"), aggregate(must.NotFail(types.NewDocument("$match", must.NotFail(types.NewDocument()))))))
 }
 
-func TestAuthorize_UnmappedCommandNeedsNoPrivilege(t *testing.T) {
+// A command without a privilege rule is denied rather than allowed, so a
+// newly added command cannot silently bypass authorization.
+func TestAuthorize_UnmappedCommandIsDenied(t *testing.T) {
 	h := authGateHandler(t, true)
 	createUserWithRole(t, h, "mydb", "reader", "read")
-	ci := conninfo.New()
-	ci.SetAuth("reader", "", nil, "mydb")
-	ctx := conninfo.Ctx(context.Background(), ci)
+	createUserWithRole(t, h, "admin", "boss", "root")
 
-	require.NoError(t, h.authorize(ctx, authzCmd(t, "someUnmappedCommand", "mydb", "c")))
+	require.True(t, isUnauthorized(t, h.authorize(authCtx("reader", "mydb"), authzCmd(t, "someUnmappedCommand", "mydb", "c"))))
+	require.True(t, isUnauthorized(t, h.authorize(authCtx("boss", "admin"), authzCmd(t, "someUnmappedCommand", "mydb", "c"))))
+	require.NoError(t, h.authorize(authCtx("reader", "mydb"), authzCmd(t, "listCommands", "mydb", "")))
 }
 
 func TestEffectivePrivileges_CacheInvalidatesOnBump(t *testing.T) {

@@ -16,23 +16,16 @@ package cursor
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"log/slog"
-	"math/rand"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"golang.org/x/exp/maps"
 
 	"github.com/dolthub/dumbodb/internal/types"
 )
-
-// Global last cursor ID.
-var lastCursorID atomic.Uint32
-
-func init() {
-	lastCursorID.Store(rand.Uint32())
-}
 
 // Registry stores cursors.
 //
@@ -63,11 +56,10 @@ type NewParams struct {
 	// Stored as any to avoid dependency cycle.
 	Data any
 
-	// those fields are used for limited authorization checks
-	// before we implement proper authz and/or sessions
+	// Only Owner may use or kill the cursor; DB and Collection must also match.
 	DB         string
 	Collection string
-	Username   string
+	Owner      string // conninfo.SessionPrincipal of the creator, empty when unauthenticated
 
 	Type         Type
 	ShowRecordID bool
@@ -83,10 +75,10 @@ func (r *Registry) NewCursor(ctx context.Context, iter types.DocumentsIterator, 
 	r.rw.Lock()
 	defer r.rw.Unlock()
 
-	// use global, sequential, positive, short cursor IDs to make debugging easier
+	// IDs are random so one client cannot guess another's cursors.
 	var id int64
 	for id == 0 || r.m[id] != nil {
-		id = int64(lastCursorID.Add(1))
+		id = randomCursorID()
 	}
 
 	r.l.DebugContext(
@@ -96,7 +88,7 @@ func (r *Registry) NewCursor(ctx context.Context, iter types.DocumentsIterator, 
 		slog.String("type", params.Type.String()),
 		slog.String("db", params.DB),
 		slog.String("collection", params.Collection),
-		slog.String("username", params.Username),
+		slog.String("owner", params.Owner),
 	)
 
 	c := newCursor(id, iter, params, r)
@@ -155,4 +147,11 @@ func (r *Registry) CloseAndRemove(c *Cursor) {
 
 	delete(r.m, c.ID)
 	close(c.removed)
+}
+
+// randomCursorID returns a random positive 63-bit cursor ID.
+func randomCursorID() int64 {
+	var b [8]byte
+	_, _ = rand.Read(b[:])
+	return int64(binary.LittleEndian.Uint64(b[:]) &^ (1 << 63))
 }

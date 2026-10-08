@@ -20,6 +20,7 @@ import (
 	stdsort "sort"
 	"time"
 
+	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
@@ -61,7 +62,7 @@ func newSortByCount(stage *types.Document) (aggregations.Stage, error) {
 
 func (s *sortByCount) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
 	// Collect all documents.
-	docs, err := iterator.ConsumeValues(iter)
+	docs, err := common.ConsumeDocuments(iter, "$sortByCount")
 	if err != nil {
 		return nil, lazyerrors.Error(err)
 	}

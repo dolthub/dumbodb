@@ -32,7 +32,7 @@ func SortIterator(iter types.DocumentsIterator, closer *iterator.MultiCloser, so
 		return iter, nil
 	}
 
-	docs, err := iterator.ConsumeValues(iter)
+	docs, err := ConsumeDocuments(iter, "$sort")
 	if err != nil {
 		return nil, lazyerrors.Error(err)
 	}
@@ -59,7 +59,7 @@ func SortIteratorWithCollation(iter types.DocumentsIterator, closer *iterator.Mu
 		return iter, nil
 	}
 
-	docs, err := iterator.ConsumeValues(iter)
+	docs, err := ConsumeDocuments(iter, "$sort")
 	if err != nil {
 		return nil, lazyerrors.Error(err)
 	}

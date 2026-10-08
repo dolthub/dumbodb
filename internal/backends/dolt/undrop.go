@@ -161,6 +161,9 @@ func (b *Backend) UndropDatabase(_ context.Context, params *backends.UndropParam
 		target = params.ToDatabase
 	}
 
+	if !backends.ValidDatabaseDirName(target) {
+		return nil, backends.NewError(backends.ErrorCodeDatabaseNameIsInvalid, fmt.Errorf("undrop: invalid database name %q", target))
+	}
 	liveDir := filepath.Join(b.dataDir, target)
 	if _, ok := b.dbs[target]; ok {
 		return nil, fmt.Errorf("undrop: a live database named %q already exists", target)

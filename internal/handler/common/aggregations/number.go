@@ -47,6 +47,20 @@ func decimalToAPD(d types.Decimal128) (*apd.Decimal, bool) {
 	return out, true
 }
 
+// Decimal128ToInt64 returns d as an int64 when it is a finite integral value
+// that fits; ok is false otherwise.
+func Decimal128ToInt64(d types.Decimal128) (n int64, ok bool) {
+	a, ok := decimalToAPD(d)
+	if !ok {
+		return 0, false
+	}
+	n, err := a.Int64()
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
+
 // SumNumbers accumulate numbers and returns the result of summation.
 // The result has the same type as the input, except when the result
 // cannot be presented accurately. Then int32 is converted to int64,

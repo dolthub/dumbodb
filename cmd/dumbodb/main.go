@@ -121,6 +121,7 @@ func run(logger *slog.Logger) error {
 	replSetName := fs.String("replSet", "", "replica set name for inbound MongoDB replication")
 	keyFile := fs.String("keyFile", "", "shared key file for replica-set membership authentication")
 	clusterAuthModeValue := fs.String("clusterAuthMode", string(membership.AuthModeKeyFile), "replica-set authentication mode")
+	maxConns := fs.Int("maxConns", 0, "maximum concurrent client connections (default: 1000000 or 80% of the open-file limit, whichever is lower)")
 	fs.Parse(os.Args[1:])
 
 	if err := rejectUnsupportedTLSFlags(fs); err != nil {
@@ -353,6 +354,7 @@ func run(logger *slog.Logger) error {
 		TLSDisabledProtocols:                   disabledProtocols,
 		TLSAcceptPlaintext:                     *tlsMode == "allowTLS" || *tlsMode == "preferTLS",
 		TLSConfig:                              listenerTLSConfig,
+		MaxConns:                               *maxConns,
 		Mode:                                   clientconn.NormalMode,
 		Handler:                                h,
 		Logger:                                 logger,

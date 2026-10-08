@@ -22,6 +22,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/netip"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -145,6 +146,7 @@ func (connInfo *ConnInfo) Auth() (username, password string, sc SCRAMConversatio
 }
 
 // SetAuth stores username, password (for PLAIN mechanism), SCRAM server conversation (if any) and user's authentication db.
+// It discards the cached privileges and commit identity, which belong to the previous identity.
 func (connInfo *ConnInfo) SetAuth(username, password string, sc SCRAMConversation, db string) {
 	connInfo.rw.Lock()
 	defer connInfo.rw.Unlock()
@@ -153,6 +155,7 @@ func (connInfo *ConnInfo) SetAuth(username, password string, sc SCRAMConversatio
 	connInfo.password = password
 	connInfo.sc = sc
 	connInfo.db = db
+	connInfo.clearIdentityCachesLocked()
 }
 
 func (connInfo *ConnInfo) MetadataRecv() bool {
@@ -176,11 +179,21 @@ func (connInfo *ConnInfo) SetAuthenticated() {
 	connInfo.authenticated = true
 }
 
+// ClearAuthenticated also discards the cached privileges and commit identity.
 func (connInfo *ConnInfo) ClearAuthenticated() {
 	connInfo.rw.Lock()
 	defer connInfo.rw.Unlock()
 
 	connInfo.authenticated = false
+	connInfo.clearIdentityCachesLocked()
+}
+
+func (connInfo *ConnInfo) clearIdentityCachesLocked() {
+	connInfo.cachedPrivs = nil
+	connInfo.cachedPrivsOK = false
+	connInfo.cachedCommitName = ""
+	connInfo.cachedCommitEmail = ""
+	connInfo.cachedCommitOK = false
 }
 
 func (connInfo *ConnInfo) Authenticated() bool {
@@ -381,15 +394,41 @@ func (connInfo *ConnInfo) SessionKeyFor(id string) string {
 	return sessionKey(connInfo.SessionPrincipal(), id)
 }
 
-// SessionPrincipal is the authenticated user as "user@db", or "" when
-// unauthenticated. Sessions are owned by a principal, so the same lsid from a
-// different principal is a different session.
+// SessionPrincipal identifies the authenticated user (see Principal), or is
+// "" when unauthenticated. Sessions and cursors are owned by a principal, so
+// the same lsid from a different principal is a different session.
 func (connInfo *ConnInfo) SessionPrincipal() string {
 	user, _, _, db := connInfo.Auth()
 	if user == "" {
 		return ""
 	}
-	return user + "@" + db
+	return Principal(user, db)
+}
+
+// Principal encodes a user and authentication database unambiguously: both
+// are quoted, so names containing "@" cannot collide and the result never
+// contains NUL, which separates the principal in session keys.
+func Principal(user, db string) string {
+	return strconv.Quote(user) + "@" + strconv.Quote(db)
+}
+
+// SplitPrincipal returns the user and database a Principal was built from.
+func SplitPrincipal(principal string) (user, db string, ok bool) {
+	quotedUser, err := strconv.QuotedPrefix(principal)
+	if err != nil {
+		return "", "", false
+	}
+	rest, found := strings.CutPrefix(principal[len(quotedUser):], "@")
+	if !found {
+		return "", "", false
+	}
+	if user, err = strconv.Unquote(quotedUser); err != nil {
+		return "", "", false
+	}
+	if db, err = strconv.Unquote(rest); err != nil {
+		return "", "", false
+	}
+	return user, db, true
 }
 
 // SplitSessionKey returns the principal and lsid of a session registry key.

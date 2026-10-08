@@ -153,7 +153,12 @@ func (c *conn) run(ctx context.Context) (err error) {
 	defer close(done)
 
 	connInfo := conninfo.New()
+
+	// A client that never completes TLS negotiation (or, for optional TLS,
+	// never sends the first bytes) must not hold the connection forever.
+	_ = c.netConn.SetDeadline(time.Now().Add(handshakeTimeout))
 	peerCertificate, usesTLS, err := tlsutil.PeerCertificate(ctx, c.netConn)
+	_ = c.netConn.SetDeadline(time.Time{})
 	if err != nil {
 		return err
 	}
@@ -266,14 +271,14 @@ func (c *conn) run(ctx context.Context) (err error) {
 		var resHeader *wire.MsgHeader
 		var resBody wire.MsgBody
 
-		reqHeader, reqBody, err = wire.ReadMessage(bufr)
+		reqHeader, reqBody, err = readMessage(bufr)
 		if err != nil {
 			return
 		}
 
 		if c.l.Enabled(ctx, slog.LevelDebug) {
 			c.l.DebugContext(ctx, "Request header: "+reqHeader.String())
-			c.l.DebugContext(ctx, "Request message:\n"+reqBody.String()+"\n")
+			c.l.DebugContext(ctx, "Request message:\n"+redactedBody(reqBody)+"\n")
 		}
 
 		// diffLogLevel provides the level of logging for the diff between the "normal" and "proxy" responses.
@@ -327,11 +332,11 @@ func (c *conn) run(ctx context.Context) (err error) {
 			var resBodyString, proxyBodyString string
 
 			if resBody != nil {
-				resBodyString = resBody.StringBlock()
+				resBodyString = redactedBody(resBody)
 			}
 
 			if proxyBody != nil {
-				proxyBodyString = proxyBody.StringBlock()
+				proxyBodyString = redactedBody(proxyBody)
 			}
 
 			var diffBody string
@@ -916,7 +921,7 @@ func (c *conn) logResponse(ctx context.Context, who string, resHeader *wire.MsgH
 
 	if c.l.Enabled(ctx, dumpLevel) {
 		c.l.Log(ctx, dumpLevel, who+" header: "+resHeader.String())
-		c.l.Log(ctx, dumpLevel, who+" message:\n"+resBody.String()+"\n")
+		c.l.Log(ctx, dumpLevel, who+" message:\n"+redactedBody(resBody)+"\n")
 	}
 
 	diffLevel := dumpLevel

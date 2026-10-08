@@ -58,6 +58,14 @@ func validateDatabaseName(name string) error {
 	return nil
 }
 
+// ValidDatabaseDirName reports whether name may be used as a database's
+// directory under the data directory: a base name (no rootish) with none of
+// the characters databaseNameRe forbids, so it cannot contain a path
+// separator, ".", "..", or NUL.
+func ValidDatabaseDirName(name string) bool {
+	return databaseNameRe.MatchString(name) && len(name) <= MaxDatabaseNameBytes
+}
+
 // validateCollectionName checks that collection name is valid for DumboDB.
 //
 // It follows MongoDB restrictions plus:

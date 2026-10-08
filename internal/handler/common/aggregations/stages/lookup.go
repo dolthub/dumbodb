@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -403,7 +404,7 @@ func (l *lookup) equalityMatches(doc *types.Document, idx *equalityIndex) []*typ
 }
 
 func (l *lookup) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
-	docs, err := iterator.ConsumeValues(iter)
+	docs, err := common.ConsumeDocuments(iter, "$lookup")
 	if err != nil {
 		return nil, lazyerrors.Error(err)
 	}
@@ -615,7 +616,7 @@ func (l *lookup) runPipeline(ctx context.Context, fetcher CollectionFetcher, fro
 			return nil, sErr
 		}
 
-		current, err = iterator.ConsumeValues(stageOutput)
+		current, err = common.ConsumeDocuments(stageOutput, "$lookup")
 		stageCloser.Close()
 
 		if err != nil {

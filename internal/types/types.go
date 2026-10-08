@@ -50,6 +50,7 @@
 package types
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -58,6 +59,10 @@ import (
 
 // MaxDocumentLen is the maximum BSON object size.
 const MaxDocumentLen = 16 * 1024 * 1024 // 16 MiB = 16777216 bytes
+
+// ErrReplyTooLarge is returned when a reply being assembled would exceed
+// MaxDocumentLen.
+var ErrReplyTooLarge = errors.New("reply would exceed the maximum BSON object size")
 
 // MaxSafeDouble is the maximum double value that can be represented precisely.
 const MaxSafeDouble = float64(1<<53 - 1) // 52bit mantissa max value = 9007199254740991

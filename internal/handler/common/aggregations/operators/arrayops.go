@@ -17,7 +17,11 @@ package operators
 import (
 	"errors"
 	"fmt"
+	"math"
 
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/must"
@@ -450,9 +454,17 @@ func (op *rangeOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	start := int(toFloat64(sv))
-	end := int(toFloat64(ev))
-	step := 1
+	start, err := rangeStartArg.int32Value(sv)
+	if err != nil {
+		return nil, err
+	}
+
+	end, err := rangeEndArg.int32Value(ev)
+	if err != nil {
+		return nil, err
+	}
+
+	step := int64(1)
 
 	if op.stepArg != nil {
 		stv, err := evalArgValue(op.stepArg, doc)
@@ -460,28 +472,112 @@ func (op *rangeOp) Process(doc *types.Document) (any, error) {
 			return nil, err
 		}
 
-		if stv != types.Null {
-			step = int(toFloat64(stv))
+		if step, err = rangeStepArg.int32Value(stv); err != nil {
+			return nil, err
 		}
 	}
 
 	if step == 0 {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$range", "$range requires a non-zero step value")
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrRangeStepZero, "$range requires a non-zero step value", "$range",
+		)
 	}
 
-	var items []any
+	var count int64
+	if span := end - start; span != 0 && (span > 0) == (step > 0) {
+		count = (span + step - sign(step)) / step
+	}
 
-	if step > 0 {
-		for i := start; i < end; i += step {
-			items = append(items, int32(i))
-		}
-	} else {
-		for i := start; i > end; i += step {
-			items = append(items, int32(i))
-		}
+	if bytes := count * rangeElementBytes; bytes > maxRangeBytes {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrExceededMemoryLimit,
+			fmt.Sprintf("$range would use too much memory (%d bytes) and cannot spill to disk. Memory limit: %d bytes",
+				bytes, maxRangeBytes),
+			"$range",
+		)
+	}
+
+	items := make([]any, count)
+	for i := range items {
+		items[i] = int32(start + int64(i)*step)
 	}
 
 	return sliceToArray(items), nil
+}
+
+// maxRangeBytes matches MongoDB's internalQueryMaxRangeBytes default.
+const maxRangeBytes = 100 * 1024 * 1024
+
+// rangeElementBytes is the approximate in-memory size of one $range element.
+const rangeElementBytes = 16
+
+// rangeArg describes one $range argument for MongoDB's validation errors.
+type rangeArg struct {
+	notNumeric handlererrors.ErrorCode
+	notInt32   handlererrors.ErrorCode
+	numericMsg string // "$range requires a numeric ... value, found value of type:" + sep
+	int32What  string
+}
+
+var (
+	rangeStartArg = rangeArg{
+		handlererrors.ErrRangeStartNotNumeric, handlererrors.ErrRangeStartNotInt32,
+		"$range requires a numeric starting value, found value of type: ", "a starting value",
+	}
+	rangeEndArg = rangeArg{
+		handlererrors.ErrRangeEndNotNumeric, handlererrors.ErrRangeEndNotInt32,
+		"$range requires a numeric ending value, found value of type: ", "an ending value",
+	}
+	// MongoDB's step message has no space after the colon.
+	rangeStepArg = rangeArg{
+		handlererrors.ErrRangeStepNotNumeric, handlererrors.ErrRangeStepNotInt32,
+		"$range requires a numeric step value, found value of type:", "a step value",
+	}
+)
+
+// int32Value returns v as an int64 holding an int32 value. As in MongoDB,
+// v must be numeric (null included is not) and represent a 32-bit integer
+// exactly; Decimal128 is accepted on the same terms.
+func (a rangeArg) int32Value(v any) (int64, error) {
+	switch v := v.(type) {
+	case int32:
+		return int64(v), nil
+	case int64:
+		if v < math.MinInt32 || v > math.MaxInt32 {
+			return 0, a.notInt32Error(v)
+		}
+		return v, nil
+	case float64:
+		if v != math.Trunc(v) || v < math.MinInt32 || v > math.MaxInt32 {
+			return 0, a.notInt32Error(v)
+		}
+		return int64(v), nil
+	case types.Decimal128:
+		n, ok := aggregations.Decimal128ToInt64(v)
+		if !ok || n < math.MinInt32 || n > math.MaxInt32 {
+			return 0, a.notInt32Error(types.FormatAnyValue(v))
+		}
+		return n, nil
+	default:
+		return 0, handlererrors.NewCommandErrorMsgWithArgument(
+			a.notNumeric, a.numericMsg+handlerparams.AliasFromType(v), "$range",
+		)
+	}
+}
+
+func (a rangeArg) notInt32Error(v any) error {
+	return handlererrors.NewCommandErrorMsgWithArgument(
+		a.notInt32,
+		fmt.Sprintf("$range requires %s that can be represented as a 32-bit integer, found value: %v", a.int32What, v),
+		"$range",
+	)
+}
+
+func sign(n int64) int64 {
+	if n < 0 {
+		return -1
+	}
+	return 1
 }
 
 var _ Operator = (*rangeOp)(nil)
@@ -765,9 +861,9 @@ var _ Operator = (*reduceOp)(nil)
 
 // zipOp represents { $zip: { inputs: [ <arr1>, <arr2>, ... ], useLongestLength: bool, defaults: <arr> } }.
 type zipOp struct {
-	inputsArg          any
-	useLongestLength   bool
-	defaultsArg        any
+	inputsArg        any
+	useLongestLength bool
+	defaultsArg      any
 }
 
 func newZip(args ...any) (Operator, error) {
