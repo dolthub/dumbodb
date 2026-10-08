@@ -320,6 +320,17 @@ func (d *Document) Set(key string, value any) {
 	}
 }
 
+// AppendDecoded appends a field without Set's type and duplicate-key checks,
+// keeping duplicates as NewDocument does. For decoders of valid BSON.
+func (d *Document) AppendDecoded(key string, value any) {
+	d.fields = append(d.fields, field{key: key, value: value})
+	if d.keys != nil {
+		d.keys[key]++
+	} else if len(d.fields) >= keyIndexMinFields {
+		d.buildKeyIndex()
+	}
+}
+
 // Remove the given key and return its value, or nil if the key does not exist.
 // If the key is duplicated, it panics.
 func (d *Document) Remove(key string) any {

@@ -38,67 +38,75 @@ func decodeRawDocument(raw []byte, depth int) (*types.Document, error) {
 	if depth > MaxNestingDepth {
 		return nil, ErrNestingTooDeep
 	}
-	pairs, err := decodeRawFields(raw, false, depth)
-	if err != nil {
+	doc := types.MakeDocument(8)
+	if err := decodeRawFields(raw, false, depth, doc.AppendDecoded); err != nil {
 		return nil, err
 	}
-	return types.NewDocument(pairs...)
+	if doc.Len() == 0 {
+		return new(types.Document), nil
+	}
+	return doc, nil
 }
 
 func decodeRawArray(raw []byte, depth int) (*types.Array, error) {
 	if depth > MaxNestingDepth {
 		return nil, ErrNestingTooDeep
 	}
-	pairs, err := decodeRawFields(raw, true, depth)
-	if err != nil {
+	values := make([]any, 0, 8)
+	if err := decodeRawFields(raw, true, depth, func(_ string, v any) { values = append(values, v) }); err != nil {
 		return nil, err
-	}
-	values := make([]any, len(pairs)/2)
-	for i := range values {
-		values[i] = pairs[2*i+1]
 	}
 	return types.NewArray(values...)
 }
 
-// decodeRawFields returns alternating names and values. For arrays, names
-// must be the element indexes in order.
-func decodeRawFields(raw []byte, isArray bool, depth int) ([]any, error) {
+// decodeRawFields calls add for each field in order. For arrays, names must be
+// the element indexes in order.
+func decodeRawFields(raw []byte, isArray bool, depth int, add func(name string, v any)) error {
 	if err := checkRawLength(raw); err != nil {
-		return nil, err
+		return err
 	}
 
-	var pairs []any
+	count := 0
 	offset := 4
 	for {
 		if offset >= len(raw) {
-			return nil, fmt.Errorf("bson: unexpected end of document at offset %d", offset)
+			return fmt.Errorf("bson: unexpected end of document at offset %d", offset)
 		}
 		t := raw[offset]
 		if t == 0 {
 			if offset != len(raw)-1 {
-				return nil, fmt.Errorf("bson: document terminator at offset %d of %d bytes", offset, len(raw))
+				return fmt.Errorf("bson: document terminator at offset %d of %d bytes", offset, len(raw))
 			}
-			return pairs, nil
+			return nil
 		}
 		offset++
 
 		end := bytes.IndexByte(raw[offset:], 0)
 		if end < 0 {
-			return nil, fmt.Errorf("bson: unterminated field name at offset %d", offset)
+			return fmt.Errorf("bson: unterminated field name at offset %d", offset)
 		}
-		name := string(raw[offset : offset+end])
+		nameBytes := raw[offset : offset+end]
 		offset += end + 1
 
-		if isArray && name != strconv.Itoa(len(pairs)/2) {
-			return nil, fmt.Errorf("bson: invalid array index %q", name)
+		var name string
+		if isArray {
+			if string(nameBytes) != strconv.Itoa(count) {
+				return fmt.Errorf("bson: invalid array index %q", nameBytes)
+			}
+		} else {
+			name = string(nameBytes)
 		}
 
 		v, n, err := decodeRawValue(raw[offset:], t, depth)
 		if err != nil {
-			return nil, fmt.Errorf("bson: field %q: %w", name, err)
+			if isArray {
+				name = string(nameBytes)
+			}
+			return fmt.Errorf("bson: field %q: %w", name, err)
 		}
 		offset += n
-		pairs = append(pairs, name, v)
+		add(name, v)
+		count++
 	}
 }
 
