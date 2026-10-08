@@ -108,6 +108,7 @@ var unknownFieldPolicies = map[string]unknownFieldPolicy{
 
 	// --- aggregation / write ---
 	"aggregate": strictRejects, "explain": strictRejects, "bulkWrite": strictRejects,
+	"rotateCertificates": strictRejects,
 
 	// --- auth handshake ---
 	"authenticate": strictRejects, "saslStart": strictRejects, "saslContinue": strictRejects,

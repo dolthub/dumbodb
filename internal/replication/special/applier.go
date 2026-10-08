@@ -34,6 +34,7 @@ import (
 const (
 	UsersNamespace                 = "admin.system.users"
 	RolesNamespace                 = "admin.system.roles"
+	KeysNamespace                  = "admin.system.keys"
 	TransactionsNamespace          = "config.transactions"
 	RetryImagesNamespace           = "config.image_collection"
 	ChangeStreamPreimagesNamespace = "config.system.preimages"
@@ -77,12 +78,12 @@ func MetadataKind(namespace string) (control.MetadataKind, bool) {
 
 func IsSpecialNamespace(namespace string) bool {
 	_, metadata := MetadataKind(namespace)
-	return IsAuthNamespace(namespace) || metadata || namespace == ChangeStreamPreimagesNamespace
+	return IsAuthNamespace(namespace) || namespace == KeysNamespace || metadata || namespace == ChangeStreamPreimagesNamespace
 }
 
 func IsIgnoredNamespace(namespace string) bool {
 	switch namespace {
-	case "admin.system.version", "admin.system.keys",
+	case "admin.system.version",
 		"config.system.sessions", IndexBuildsNamespace,
 		"config.analyzeShardKeySplitPoints", "config.sampledQueries", "config.sampledQueriesDiff":
 		return true
@@ -95,6 +96,8 @@ func (a *Applier) ApplyInitialDocument(ctx context.Context, namespace string, do
 	switch {
 	case IsAuthNamespace(namespace):
 		return a.InsertAuthDocument(ctx, namespace, document, opTime)
+	case namespace == KeysNamespace:
+		return a.InsertKeyDocument(ctx, document)
 	case namespace == ChangeStreamPreimagesNamespace:
 		return fmt.Errorf("%w %q: change-stream pre-images are not supported", ErrUnsupportedSpecialNamespace, namespace)
 	default:
@@ -103,6 +106,100 @@ func (a *Applier) ApplyInitialDocument(ctx context.Context, namespace string, do
 		}
 		return a.PutMetadataDocument(namespace, document, opTime)
 	}
+}
+
+func (a *Applier) InsertKeyDocument(ctx context.Context, document *types.Document) error {
+	id, err := validateKeyDocument(document)
+	if err != nil {
+		return err
+	}
+	collection, err := a.keyCollection()
+	if err != nil {
+		return err
+	}
+	existing, found, err := findDocumentByID(ctx, collection, id)
+	if err != nil {
+		return err
+	}
+	if found {
+		if authValuesEqual(existing, document) {
+			return nil
+		}
+		return fmt.Errorf("replicated cluster key %d conflicts with its stored document", id)
+	}
+	_, err = collection.InsertAll(ctx, &backends.InsertAllParams{Docs: []*types.Document{document.DeepCopy()}})
+	return err
+}
+
+func (a *Applier) ReplaceKeyDocument(ctx context.Context, document *types.Document) error {
+	id, err := validateKeyDocument(document)
+	if err != nil {
+		return err
+	}
+	collection, err := a.keyCollection()
+	if err != nil {
+		return err
+	}
+	existing, found, err := findDocumentByID(ctx, collection, id)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("replicated cluster key %d does not exist", id)
+	}
+	if authValuesEqual(existing, document) {
+		return nil
+	}
+	result, err := collection.UpdateAll(ctx, &backends.UpdateAllParams{Docs: []*types.Document{document.DeepCopy()}})
+	if err != nil {
+		return err
+	}
+	if result.Updated != 1 {
+		return fmt.Errorf("replicated cluster key %d matched %d documents", id, result.Updated)
+	}
+	return nil
+}
+
+func (a *Applier) DeleteKeyDocument(ctx context.Context, documentKey *types.Document) error {
+	id, err := int64ID(documentKey)
+	if err != nil {
+		return err
+	}
+	collection, err := a.keyCollection()
+	if err != nil {
+		return err
+	}
+	_, found, err := findDocumentByID(ctx, collection, id)
+	if err != nil || !found {
+		return err
+	}
+	result, err := collection.DeleteAll(ctx, &backends.DeleteAllParams{IDs: []any{id}})
+	if err != nil {
+		return err
+	}
+	if result.Deleted != 1 {
+		return fmt.Errorf("replicated cluster key %d matched %d documents", id, result.Deleted)
+	}
+	return nil
+}
+
+func (a *Applier) KeyDocument(ctx context.Context, documentKey *types.Document) (*types.Document, error) {
+	id, err := int64ID(documentKey)
+	if err != nil {
+		return nil, err
+	}
+	collection, err := a.keyCollection()
+	if err != nil {
+		return nil, err
+	}
+	document, found, err := findDocumentByID(ctx, collection, id)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, fmt.Errorf("replicated cluster key %d does not exist", id)
+	}
+	return document, nil
 }
 
 func (a *Applier) InsertAuthDocument(ctx context.Context, namespace string, document *types.Document, opTime control.OpTime) error {
@@ -329,6 +426,14 @@ func (a *Applier) authCollection(namespace string) (backends.Collection, error) 
 	return database.Collection(collectionName)
 }
 
+func (a *Applier) keyCollection() (backends.Collection, error) {
+	database, err := a.backend.Database("admin")
+	if err != nil {
+		return nil, err
+	}
+	return database.Collection("system.keys")
+}
+
 func (a *Applier) bumpAuth() {
 	if a.bumpAuthGeneration != nil {
 		a.bumpAuthGeneration()
@@ -346,6 +451,45 @@ func stringID(document *types.Document) (string, error) {
 	id, ok := value.(string)
 	if !ok || id == "" {
 		return "", fmt.Errorf("replicated identity _id has type %T, want non-empty string", value)
+	}
+	return id, nil
+}
+
+func int64ID(document *types.Document) (int64, error) {
+	if document == nil {
+		return 0, errors.New("replicated document key is required")
+	}
+	value, err := document.Get("_id")
+	if err != nil {
+		return 0, errors.New("replicated document has no _id")
+	}
+	id, ok := value.(int64)
+	if !ok {
+		return 0, fmt.Errorf("replicated cluster key _id has type %T, want int64", value)
+	}
+	return id, nil
+}
+
+func validateKeyDocument(document *types.Document) (int64, error) {
+	id, err := int64ID(document)
+	if err != nil {
+		return 0, err
+	}
+	purpose, err := document.Get("purpose")
+	if err != nil || purpose != "HMAC" {
+		return 0, fmt.Errorf("replicated cluster key purpose is %v, want HMAC", purpose)
+	}
+	value, err := document.Get("key")
+	key, ok := value.(types.Binary)
+	if err != nil || !ok || key.Subtype != types.BinaryGeneric || len(key.B) != 20 {
+		return 0, errors.New("replicated cluster key must be a 20-byte generic binary value")
+	}
+	value, err = document.Get("expiresAt")
+	if err != nil {
+		return 0, errors.New("replicated cluster key expiresAt is required")
+	}
+	if _, ok := value.(types.Timestamp); !ok {
+		return 0, fmt.Errorf("replicated cluster key expiresAt has type %T, want timestamp", value)
 	}
 	return id, nil
 }

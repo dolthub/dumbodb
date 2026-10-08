@@ -21,6 +21,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/dolthub/dumbodb/internal/replication/membership"
 )
 
 func TestRejectUnsupportedTLSFlags(t *testing.T) {
@@ -34,11 +36,6 @@ func TestRejectUnsupportedTLSFlags(t *testing.T) {
 		{name: "invalid hostnames", args: []string{"--tlsAllowInvalidHostnames"}, message: "--tlsAllowInvalidHostnames is a MongoDB replica-set TLS option"},
 		{name: "log versions", args: []string{"--tlsLogVersions", "TLS1_2"}, message: "--tlsLogVersions is a MongoDB TLS option"},
 		{name: "normal ports", args: []string{"--tlsOnNormalPorts"}, message: "--tlsOnNormalPorts is a MongoDB TLS option"},
-		{name: "cluster file", args: []string{"--tlsClusterFile", "cluster.pem"}, message: "--tlsClusterFile is a MongoDB replica-set TLS option"},
-		{name: "cluster password", args: []string{"--tlsClusterPassword", "secret"}, message: "--tlsClusterPassword is a MongoDB replica-set TLS option"},
-		{name: "cluster CA", args: []string{"--tlsClusterCAFile", "ca.pem"}, message: "--tlsClusterCAFile is a MongoDB replica-set TLS option"},
-		{name: "cluster extension", args: []string{"--tlsClusterAuthX509ExtensionValue", "value"}, message: "--tlsClusterAuthX509ExtensionValue is a MongoDB replica-set TLS option"},
-		{name: "cluster attributes", args: []string{"--tlsClusterAuthX509Attributes", "O=example"}, message: "--tlsClusterAuthX509Attributes is a MongoDB replica-set TLS option"},
 	}
 
 	for _, test := range tests {
@@ -55,6 +52,74 @@ func TestRejectUnsupportedTLSFlags(t *testing.T) {
 			assert.ErrorContains(t, err, test.message)
 		})
 	}
+}
+
+func TestValidateClusterTLSFlags(t *testing.T) {
+	tests := []struct {
+		name            string
+		mode            string
+		replSet         string
+		clusterFile     string
+		clusterPassword string
+		clusterCA       string
+		wantError       string
+	}{
+		{name: "not configured", mode: "disabled"},
+		{name: "cluster file", mode: "requireTLS", replSet: "rs0", clusterFile: "cluster.pem"},
+		{name: "no replica set", mode: "requireTLS", clusterFile: "cluster.pem", wantError: "require --replSet"},
+		{name: "TLS disabled", mode: "disabled", replSet: "rs0", clusterFile: "cluster.pem", wantError: "require TLS"},
+		{name: "password without file", mode: "requireTLS", replSet: "rs0", clusterPassword: "secret", wantError: "requires --tlsClusterFile"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateClusterTLSFlags(test.mode, test.replSet, test.clusterFile, test.clusterPassword, test.clusterCA)
+			if test.wantError == "" {
+				assert.NoError(t, err)
+				return
+			}
+			assert.ErrorContains(t, err, test.wantError)
+		})
+	}
+}
+
+func TestValidateMembershipFlags(t *testing.T) {
+	tests := []struct {
+		name      string
+		auth      bool
+		replSet   string
+		keyFile   string
+		mode      membership.AuthMode
+		modeSet   bool
+		tlsMode   string
+		wantError string
+	}{
+		{name: "standalone auth", auth: true, mode: membership.AuthModeKeyFile},
+		{name: "unauthenticated replica set", replSet: "rs0", mode: membership.AuthModeKeyFile},
+		{name: "authenticated replica set", auth: true, replSet: "rs0", keyFile: "keyfile", mode: membership.AuthModeKeyFile},
+		{name: "key file implies auth", replSet: "rs0", keyFile: "keyfile", mode: membership.AuthModeKeyFile},
+		{name: "missing key file", auth: true, replSet: "rs0", mode: membership.AuthModeKeyFile, wantError: "--keyFile is required"},
+		{name: "key file without replica set", keyFile: "keyfile", mode: membership.AuthModeKeyFile, wantError: "--keyFile requires --replSet"},
+		{name: "x509", replSet: "rs0", mode: membership.AuthModeX509, modeSet: true, tlsMode: "requireTLS"},
+		{name: "send x509 needs key", replSet: "rs0", mode: membership.AuthModeSendX509, modeSet: true, tlsMode: "requireTLS", wantError: "requires --keyFile"},
+		{name: "x509 needs TLS", replSet: "rs0", mode: membership.AuthModeX509, modeSet: true, wantError: "requires --tlsMode"},
+		{name: "send key file needs key", replSet: "rs0", mode: membership.AuthModeSendKeyFile, modeSet: true, tlsMode: "requireTLS", wantError: "--keyFile is required"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateMembershipFlags(test.auth, test.replSet, test.keyFile, test.mode, test.modeSet, test.tlsMode)
+			if test.wantError == "" {
+				assert.NoError(t, err)
+				return
+			}
+			assert.ErrorContains(t, err, test.wantError)
+		})
+	}
+}
+
+func TestValidateClusterX509Flags(t *testing.T) {
+	assert.NoError(t, validateClusterX509Flags(membership.AuthModeX509, true, "O=Example", ""))
+	assert.ErrorContains(t, validateClusterX509Flags(membership.AuthModeX509, true, "O=Example", "cluster"), "mutually exclusive")
+	assert.ErrorContains(t, validateClusterX509Flags(membership.AuthModeKeyFile, false, "O=Example", ""), "X.509-capable")
 }
 
 func TestValidateTLSFlags(t *testing.T) {

@@ -98,16 +98,20 @@ var commandPrivileges = map[string][]commandPrivilege{
 	"dropAllRolesFromDatabase": {{authz.ActionDropRole, scopeDatabase}},
 	"rolesInfo":                {{authz.ActionViewRole, scopeDatabase}},
 
-	"serverStatus":  {{authz.ActionServerStatus, scopeCluster}},
-	"listDatabases": {{authz.ActionListDatabases, scopeCluster}},
-	"getParameter":  {{authz.ActionGetParameter, scopeCluster}},
-	"setParameter":  {{authz.ActionSetParameter, scopeCluster}},
-	"hostInfo":      {{authz.ActionHostInfo, scopeCluster}},
-	"top":           {{authz.ActionTop, scopeCluster}},
-	"getLog":        {{authz.ActionGetLog, scopeCluster}},
+	"serverStatus":       {{authz.ActionServerStatus, scopeCluster}},
+	"listDatabases":      {{authz.ActionListDatabases, scopeCluster}},
+	"getParameter":       {{authz.ActionGetParameter, scopeCluster}},
+	"setParameter":       {{authz.ActionSetParameter, scopeCluster}},
+	"hostInfo":           {{authz.ActionHostInfo, scopeCluster}},
+	"top":                {{authz.ActionTop, scopeCluster}},
+	"getLog":             {{authz.ActionGetLog, scopeCluster}},
+	"rotateCertificates": {{authz.ActionRotateCertificates, scopeCluster}},
 }
 
 func (h *Handler) authorize(ctx context.Context, msg *wire.OpMsg) error {
+	if h.internalMemberAuthenticated(ctx) {
+		return nil
+	}
 	command, db, collection := wireCommandTarget(msg)
 
 	if command == "updateUser" {

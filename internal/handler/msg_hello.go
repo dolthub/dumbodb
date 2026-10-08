@@ -25,6 +25,7 @@ import (
 
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/replication/membership"
 	"github.com/dolthub/dumbodb/internal/replication/topology"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
@@ -190,6 +191,9 @@ func appendReplicaSetHello(response *types.Document, state topology.Snapshot) {
 // getUserSupportedMechs returns supported mechanisms for the given user.
 // If the user was not found, it returns nil.
 func (h *Handler) getUserSupportedMechs(ctx context.Context, db, username string) (*types.Array, error) {
+	if h.MembershipCredentials != nil && db == membership.Database && username == membership.Username {
+		return must.NotFail(types.NewArray(membership.Mechanism, membership.MechanismSHA1)), nil
+	}
 	adminDB, err := h.b.Database("admin")
 	if err != nil {
 		return nil, lazyerrors.Error(err)

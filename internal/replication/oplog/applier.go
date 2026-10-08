@@ -251,12 +251,17 @@ func (a *Applier) applySpecialOperation(ctx context.Context, operation operation
 		if special.IsAuthNamespace(operation.Namespace) {
 			return a.special.InsertAuthDocument(ctx, operation.Namespace, operation.Object, opTime)
 		}
+		if operation.Namespace == special.KeysNamespace {
+			return a.special.InsertKeyDocument(ctx, operation.Object)
+		}
 		return a.special.PutMetadataDocument(operation.Namespace, operation.Object, opTime)
 	case "u":
 		var existing *types.Document
 		var err error
 		if special.IsAuthNamespace(operation.Namespace) {
 			existing, err = a.special.AuthDocument(ctx, operation.Namespace, operation.Object2)
+		} else if operation.Namespace == special.KeysNamespace {
+			existing, err = a.special.KeyDocument(ctx, operation.Object2)
 		} else {
 			existing, err = a.special.MetadataDocument(operation.Namespace, operation.Object2)
 		}
@@ -270,10 +275,16 @@ func (a *Applier) applySpecialOperation(ctx context.Context, operation operation
 		if special.IsAuthNamespace(operation.Namespace) {
 			return a.special.ReplaceAuthDocument(ctx, operation.Namespace, postImage, opTime)
 		}
+		if operation.Namespace == special.KeysNamespace {
+			return a.special.ReplaceKeyDocument(ctx, postImage)
+		}
 		return a.special.PutMetadataDocument(operation.Namespace, postImage, opTime)
 	case "d":
 		if special.IsAuthNamespace(operation.Namespace) {
 			return a.special.DeleteAuthDocument(ctx, operation.Namespace, operation.Object, opTime)
+		}
+		if operation.Namespace == special.KeysNamespace {
+			return a.special.DeleteKeyDocument(ctx, operation.Object)
 		}
 		return a.special.DeleteMetadataDocument(operation.Namespace, operation.Object, opTime)
 	default:

@@ -187,13 +187,17 @@ func TestApplyEntryCommitsOnlyAffectedDatabase(t *testing.T) {
 	}
 }
 
-func TestApplyIgnoredEntryAdvancesWithoutDatabaseCommit(t *testing.T) {
+func TestApplyClusterKeyPublishesAdminCommit(t *testing.T) {
 	ctx := context.Background()
 	replicationRuntime, _, store := newRecoveryRuntime(t)
 	document := must.NotFail(types.NewDocument(
 		"ts", types.Timestamp(uint64(100)<<32|1), "t", int64(2),
 		"op", "i", "ns", "admin.system.keys",
-		"o", must.NotFail(types.NewDocument("_id", int64(7))),
+		"o", must.NotFail(types.NewDocument(
+			"_id", int64(7), "purpose", "HMAC",
+			"key", types.Binary{Subtype: types.BinaryGeneric, B: make([]byte, 20)},
+			"expiresAt", types.Timestamp(uint64(200)<<32|1),
+		)),
 	))
 	entry, err := oplog.ParseEntry(document)
 	if err != nil {
@@ -210,12 +214,12 @@ func TestApplyIgnoredEntryAdvancesWithoutDatabaseCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 	interval, ok := store.CommitFor(entry.OpTime)
-	if !ok || len(interval.Commits) != 0 {
-		t.Fatalf("ignored entry interval = %+v, %v, want no database commits", interval, ok)
+	if !ok || len(interval.Commits) != 1 || interval.Commits[0].Database != "admin" {
+		t.Fatalf("cluster key interval = %+v, %v", interval, ok)
 	}
 	status := replicationRuntime.manager.Snapshot().Runtime
-	if status.AppliedOperations != 1 || status.PublishedCommits != 0 {
-		t.Fatalf("ignored entry runtime counters = %+v", status)
+	if status.AppliedOperations != 1 || status.PublishedCommits != 1 {
+		t.Fatalf("cluster key runtime counters = %+v", status)
 	}
 }
 

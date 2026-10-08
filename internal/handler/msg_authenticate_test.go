@@ -28,6 +28,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/replication/membership"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
@@ -47,7 +48,14 @@ func testX509Certificate(t *testing.T) (*x509.Certificate, string) {
 		{{Type: commonNameOID, Value: "dumbo-client"}},
 	}))
 
-	return &x509.Certificate{RawSubject: raw}, "CN=dumbo-client,OU=engineering,O=Example"
+	return &x509.Certificate{
+		RawSubject: raw,
+		Subject: pkix.Name{Names: []pkix.AttributeTypeAndValue{
+			{Type: organizationOID, Value: "Example"},
+			{Type: organizationalUnitOID, Value: "engineering"},
+			{Type: commonNameOID, Value: "dumbo-client"},
+		}},
+	}, "CN=dumbo-client,OU=engineering,O=Example"
 }
 
 func insertX509User(t *testing.T, h *Handler, subject string) {
@@ -139,6 +147,23 @@ func TestAuthenticateX509(t *testing.T) {
 		_, err = h.commands["listDatabases"].Handler(ctx, gateCmd(t, "listDatabases"))
 		require.False(t, isForcedLoginError(err), "X.509 identity must pass the auth gate: %v", err)
 	}
+}
+
+func TestAuthenticateX509ClusterMember(t *testing.T) {
+	h := authGateHandler(t, true)
+	certificate, _ := testX509Certificate(t)
+	policy, err := membership.NewX509Policy(certificate, "O=Example,OU=engineering", "")
+	require.NoError(t, err)
+	h.MembershipAuthMode = membership.AuthModeX509
+	h.MembershipX509Policy = policy
+	ctx, ci := x509Context(certificate)
+
+	_, err = h.commands["authenticate"].Handler(ctx, authenticateMsg(t, nil))
+	require.NoError(t, err)
+	require.True(t, ci.Authenticated())
+	username, _, _, db := ci.Auth()
+	require.Equal(t, membership.Username, username)
+	require.Equal(t, membership.Database, db)
 }
 
 func TestAuthenticateX509RejectsClaimedIdentity(t *testing.T) {

@@ -30,6 +30,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -37,6 +38,21 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/youmark/pkcs8"
 )
+
+func TestDynamicServerConfigUsesLatestConfiguration(t *testing.T) {
+	var current atomic.Pointer[tls.Config]
+	current.Store(&tls.Config{MinVersion: tls.VersionTLS12, MaxVersion: tls.VersionTLS12})
+	dynamic := DynamicServerConfig(current.Load)
+
+	selected, err := dynamic.GetConfigForClient(&tls.ClientHelloInfo{})
+	require.NoError(t, err)
+	require.Equal(t, uint16(tls.VersionTLS12), selected.MaxVersion)
+
+	current.Store(&tls.Config{MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13})
+	selected, err = dynamic.GetConfigForClient(&tls.ClientHelloInfo{})
+	require.NoError(t, err)
+	require.Equal(t, uint16(tls.VersionTLS13), selected.MaxVersion)
+}
 
 func TestServerConfigRejectsExpiredCertificate(t *testing.T) {
 	certificateKeyFile := writeCertificateKeyFile(t, time.Now().Add(-2*time.Hour), time.Now().Add(-time.Hour))

@@ -43,9 +43,10 @@ func TestAffectedDatabasesReturnsOnlyMutatedRoots(t *testing.T) {
 			want: []string{"orders"},
 		},
 		{
-			name: "source-local metadata is ignored",
+			name: "cluster keys live in admin",
 			entry: makeOplogEntry(t, 3, "i", "admin.system.keys", "",
-				must.NotFail(types.NewDocument("_id", int32(1))), nil),
+				replicatedClusterKey(), nil),
+			want: []string{"admin"},
 		},
 		{
 			name: "translated special state lives in admin",

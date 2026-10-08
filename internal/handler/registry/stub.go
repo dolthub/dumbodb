@@ -30,10 +30,14 @@ func newStubHandler(opts *NewHandlerOpts) (*handler.Handler, CloseBackendFunc, e
 	}
 
 	h, err := handler.New(&handler.NewOpts{
-		Backend:             b,
-		TCPHost:             opts.TCPHost,
-		ReplSetName:         opts.ReplSetName,
-		ReplicationTopology: opts.ReplicationTopology,
+		Backend:               b,
+		TCPHost:               opts.TCPHost,
+		ReplSetName:           opts.ReplSetName,
+		ReplicationTopology:   opts.ReplicationTopology,
+		MembershipCredentials: opts.MembershipCredentials,
+		MembershipAuthMode:    opts.MembershipAuthMode,
+		MembershipX509Policy:  opts.MembershipX509Policy,
+		RotateCertificates:    opts.RotateCertificates,
 
 		SetupDatabase: opts.SetupDatabase,
 		SetupUsername: opts.SetupUsername,

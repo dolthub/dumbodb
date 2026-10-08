@@ -51,6 +51,7 @@ const (
 	ActionHostInfo                     Action = "hostInfo"
 	ActionTop                          Action = "top"
 	ActionGetLog                       Action = "getLog"
+	ActionRotateCertificates           Action = "rotateCertificates"
 	ActionCreateUser                   Action = "createUser"
 	ActionDropUser                     Action = "dropUser"
 	ActionChangePassword               Action = "changePassword"

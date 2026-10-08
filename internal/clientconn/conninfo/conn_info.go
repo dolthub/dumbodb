@@ -25,8 +25,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/xdg-go/scram"
-
 	"github.com/dolthub/dumbodb/internal/authz"
 	"github.com/dolthub/dumbodb/internal/sqlctx"
 )
@@ -34,14 +32,21 @@ import (
 // contextKey is a named unexported type for the safe use of context.WithValue.
 type contextKey struct{}
 
+type SCRAMConversation interface {
+	Step(string) (string, error)
+	Done() bool
+	Valid() bool
+	Username() string
+}
+
 // Context key for WithConnInfo/Get.
 var connInfoKey = contextKey{}
 
 type ConnInfo struct {
 	// the order of fields is weird to make the struct smaller due to alignment
 
-	sc *scram.ServerConversation // protected by rw
-	db string                    // protected by rw
+	sc SCRAMConversation // protected by rw
+	db string            // protected by rw
 
 	Peer  netip.AddrPort
 	Local netip.AddrPort
@@ -132,7 +137,7 @@ func (connInfo *ConnInfo) SetUsesTLS(usesTLS bool) {
 }
 
 // Auth returns stored username, password (for PLAIN mechanism), SCRAM server conversation (if any) and user's authentication db.
-func (connInfo *ConnInfo) Auth() (username, password string, sc *scram.ServerConversation, db string) {
+func (connInfo *ConnInfo) Auth() (username, password string, sc SCRAMConversation, db string) {
 	connInfo.rw.RLock()
 	defer connInfo.rw.RUnlock()
 
@@ -140,7 +145,7 @@ func (connInfo *ConnInfo) Auth() (username, password string, sc *scram.ServerCon
 }
 
 // SetAuth stores username, password (for PLAIN mechanism), SCRAM server conversation (if any) and user's authentication db.
-func (connInfo *ConnInfo) SetAuth(username, password string, sc *scram.ServerConversation, db string) {
+func (connInfo *ConnInfo) SetAuth(username, password string, sc SCRAMConversation, db string) {
 	connInfo.rw.Lock()
 	defer connInfo.rw.Unlock()
 

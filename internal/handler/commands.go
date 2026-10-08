@@ -32,7 +32,8 @@ import (
 
 type Command struct {
 	// anonymous indicates that the command does not require authentication.
-	anonymous bool
+	anonymous      bool
+	membershipOnly bool
 
 	// Handler processes this command.
 	//
@@ -124,8 +125,9 @@ func (h *Handler) initCommands() {
 		"replSetGetConfig":         {Handler: h.MsgReplSetGetConfig, anonymous: true},
 		"replSetGetRBID":           {Handler: h.MsgReplSetGetRBID, anonymous: true},
 		"replSetGetStatus":         {Handler: h.MsgReplSetGetStatus, anonymous: true},
-		"replSetHeartbeat":         {Handler: h.MsgReplSetHeartbeat, anonymous: true},
-		"replSetUpdatePosition":    {Handler: h.MsgReplSetUpdatePositionUnsupported, anonymous: true},
+		"replSetHeartbeat":         {Handler: h.MsgReplSetHeartbeat, anonymous: true, membershipOnly: true},
+		"replSetUpdatePosition":    {Handler: h.MsgReplSetUpdatePositionUnsupported, anonymous: true, membershipOnly: true},
+		"rotateCertificates":       {Handler: h.MsgRotateCertificates},
 		"saslStart":                {Handler: h.MsgSASLStart, anonymous: true},
 		"saslContinue":             {Handler: h.MsgSASLContinue, anonymous: true},
 		"serverStatus":             {Handler: h.MsgServerStatus, Help: "Returns an overview of the databases state."},
@@ -202,6 +204,19 @@ func (h *Handler) initCommands() {
 		seen[cmd] = true
 
 		inner := cmd.Handler
+		if cmd.membershipOnly && h.membershipAuthenticationEnabled() {
+			memberHandler := inner
+			inner = func(ctx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+				if !h.internalMemberAuthenticated(ctx) {
+					return nil, handlererrors.NewCommandErrorMsgWithArgument(
+						handlererrors.ErrUnauthorized,
+						fmt.Sprintf("Command %s requires internal membership authentication", wireCommandName(msg)),
+						wireCommandName(msg),
+					)
+				}
+				return memberHandler(ctx, msg)
+			}
+		}
 		mutatesState := cmd.MutatesState
 		if mutatesState != nil {
 			unguarded := inner
@@ -247,6 +262,9 @@ func (h *Handler) initCommands() {
 		next := inner
 		cmd.Handler = func(ctx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 			start := time.Now()
+			if err := h.observeLogicalTime(ctx, msg); err != nil {
+				return nil, err
+			}
 
 			var db, ns, cmdName string
 			if doc, err := opMsgDocument(msg); err == nil {

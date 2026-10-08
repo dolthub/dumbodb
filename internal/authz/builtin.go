@@ -40,7 +40,7 @@ var (
 		ActionServerStatus, ActionGetParameter, ActionHostInfo,
 		ActionListDatabases, ActionTop, ActionGetLog, ActionListSessions,
 	}
-	clusterManagerActions   = []Action{ActionCompact, ActionSetParameter}
+	clusterManagerActions   = []Action{ActionCompact, ActionSetParameter, ActionRotateCertificates}
 	clusterMonitorDBActions = []Action{
 		ActionDBStats, ActionCollStats, ActionListCollections, ActionListIndexes,
 	}

@@ -63,6 +63,7 @@ type NewListenerOpts struct {
 	TLSAllowConnectionsWithoutCertificates bool
 	TLSDisabledProtocols                   []uint16
 	TLSAcceptPlaintext                     bool
+	TLSConfig                              *tls.Config
 
 	ProxyAddr        string
 	ProxyTLSCertFile string
@@ -100,16 +101,20 @@ func Listen(opts *NewListenerOpts) (*Listener, error) {
 		protocol := "TCP"
 		var config *tls.Config
 		if l.TLS {
-			if config, err = tlsutil.ServerConfig(tlsutil.ServerConfigOptions{
-				CertificateFile:                     l.TLSCertFile,
-				KeyFile:                             l.TLSKeyFile,
-				KeyPassword:                         l.TLSKeyPassword,
-				CAFile:                              l.TLSCAFile,
-				CRLFile:                             l.TLSCRLFile,
-				AllowConnectionsWithoutCertificates: l.TLSAllowConnectionsWithoutCertificates,
-				DisabledProtocols:                   l.TLSDisabledProtocols,
-			}); err != nil {
-				return nil, err
+			config = l.TLSConfig
+			if config == nil {
+				config, err = tlsutil.ServerConfig(tlsutil.ServerConfigOptions{
+					CertificateFile:                     l.TLSCertFile,
+					KeyFile:                             l.TLSKeyFile,
+					KeyPassword:                         l.TLSKeyPassword,
+					CAFile:                              l.TLSCAFile,
+					CRLFile:                             l.TLSCRLFile,
+					AllowConnectionsWithoutCertificates: l.TLSAllowConnectionsWithoutCertificates,
+					DisabledProtocols:                   l.TLSDisabledProtocols,
+				})
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
 		l.tcpListener, err = net.Listen("tcp", l.TCP)

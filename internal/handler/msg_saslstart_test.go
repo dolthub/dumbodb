@@ -15,12 +15,16 @@
 package handler
 
 import (
+	"context"
 	"testing"
 
+	"github.com/FerretDB/wire"
 	"github.com/stretchr/testify/require"
+	"github.com/xdg-go/scram"
 
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/replication/membership"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
@@ -72,4 +76,59 @@ func TestSASLStartCredentiallessUserReturnsMechanismUnavailable(t *testing.T) {
 		"O=3DExample=2COU=3Dresearch=2CCN=3Danalyst",
 	))))
 	requireCommandCode(t, err, handlererrors.ErrMechanismUnavailable)
+}
+
+func TestInternalMembershipSCRAM(t *testing.T) {
+	h := authGateHandler(t, true)
+	credentials, err := membership.New("abcdefghijklmnop")
+	require.NoError(t, err)
+	h.MembershipCredentials = credentials
+	h.initCommands()
+	ctx := conninfo.Ctx(context.Background(), conninfo.New())
+
+	_, err = h.commands["replSetHeartbeat"].Handler(ctx, gateCmd(t, "replSetHeartbeat"))
+	requireCommandCode(t, err, handlererrors.ErrUnauthorized)
+
+	conversation := credentials.NewConversation()
+	payload, err := conversation.Step("")
+	require.NoError(t, err)
+	response, err := h.commands["saslStart"].Handler(ctx, must.NotFail(documentOpMsg(must.NotFail(types.NewDocument(
+		"saslStart", int32(1),
+		"mechanism", membership.Mechanism,
+		"options", must.NotFail(types.NewDocument("skipEmptyExchange", true)),
+		"payload", types.Binary{B: []byte(payload)},
+		"$db", membership.Database,
+	)))))
+	require.NoError(t, err)
+	payload = stepInternalSCRAMClient(t, conversation, response)
+
+	response, err = h.commands["saslContinue"].Handler(ctx, must.NotFail(documentOpMsg(must.NotFail(types.NewDocument(
+		"saslContinue", int32(1),
+		"conversationId", int32(1),
+		"payload", types.Binary{B: []byte(payload)},
+		"$db", membership.Database,
+	)))))
+	require.NoError(t, err)
+	payload = stepInternalSCRAMClient(t, conversation, response)
+	require.True(t, conversation.Valid())
+
+	_, err = h.commands["saslContinue"].Handler(ctx, must.NotFail(documentOpMsg(must.NotFail(types.NewDocument(
+		"saslContinue", int32(1),
+		"conversationId", int32(1),
+		"payload", types.Binary{B: []byte(payload)},
+		"$db", membership.Database,
+	)))))
+	require.NoError(t, err)
+	require.True(t, conninfo.Get(ctx).Authenticated())
+	require.True(t, h.internalMemberAuthenticated(ctx))
+}
+
+func stepInternalSCRAMClient(t *testing.T, conversation *scram.ClientConversation, response *wire.OpMsg) string {
+	t.Helper()
+	document, err := opMsgDocument(response)
+	require.NoError(t, err)
+	payload := must.NotFail(document.Get("payload")).(types.Binary)
+	result, err := conversation.Step(string(payload.B))
+	require.NoError(t, err)
+	return result
 }

@@ -115,6 +115,19 @@ func ServerConfig(opts ServerConfigOptions) (*tls.Config, error) {
 	return config, nil
 }
 
+func DynamicServerConfig(provider func() *tls.Config) *tls.Config {
+	return &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		GetConfigForClient: func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
+			current := provider().Clone()
+			if current.GetConfigForClient != nil {
+				return current.GetConfigForClient(hello)
+			}
+			return current, nil
+		},
+	}
+}
+
 // OptionalListener accepts both TLS and plaintext connections.
 func OptionalListener(listener net.Listener, config *tls.Config) net.Listener {
 	return &optionalTLSListener{Listener: listener, config: config}
@@ -205,7 +218,11 @@ func (c *bufferedConn) Read(p []byte) (int, error) {
 }
 
 func ClientConfig(certFile, keyFile, caFile string) (*tls.Config, error) {
-	config, ca, err := config(certFile, keyFile, "", caFile)
+	return ClientConfigWithPassword(certFile, keyFile, "", caFile)
+}
+
+func ClientConfigWithPassword(certFile, keyFile, keyPassword, caFile string) (*tls.Config, error) {
+	config, ca, err := config(certFile, keyFile, keyPassword, caFile)
 	if err != nil {
 		return nil, err
 	}
@@ -249,6 +266,7 @@ func config(certFile, keyFile, keyPassword, caFile string) (*tls.Config, *x509.C
 	if now.After(leaf.NotAfter) {
 		return nil, nil, fmt.Errorf("TLS certificate file %q: certificate expired at %s", certFile, leaf.NotAfter.Format(time.RFC3339))
 	}
+	cert.Leaf = leaf
 
 	config := &tls.Config{
 		Certificates: []tls.Certificate{cert},
