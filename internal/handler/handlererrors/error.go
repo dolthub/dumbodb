@@ -220,9 +220,13 @@ const (
 	// ErrBSONObjectTooLarge indicates a reply would exceed the 16MB BSON limit.
 	ErrBSONObjectTooLarge = ErrorCode(10334) // BSONObjectTooLarge
 
-	ErrRangeStartNotInt32 = ErrorCode(34444) // Location34444
-	ErrRangeEndNotInt32   = ErrorCode(34446) // Location34446
-	ErrRangeStepNotInt32  = ErrorCode(34448) // Location34448
+	ErrRangeStartNotNumeric = ErrorCode(34443) // Location34443
+	ErrRangeStartNotInt32   = ErrorCode(34444) // Location34444
+	ErrRangeEndNotNumeric   = ErrorCode(34445) // Location34445
+	ErrRangeEndNotInt32     = ErrorCode(34446) // Location34446
+	ErrRangeStepNotNumeric  = ErrorCode(34447) // Location34447
+	ErrRangeStepNotInt32    = ErrorCode(34448) // Location34448
+	ErrRangeStepZero        = ErrorCode(34449) // Location34449
 
 	// ErrFieldPathInvalidName indicates that FieldPath is invalid.
 	ErrFieldPathInvalidName = ErrorCode(16410) // Location16410
