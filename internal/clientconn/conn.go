@@ -153,7 +153,12 @@ func (c *conn) run(ctx context.Context) (err error) {
 	defer close(done)
 
 	connInfo := conninfo.New()
+
+	// A client that never completes TLS negotiation (or, for optional TLS,
+	// never sends the first bytes) must not hold the connection forever.
+	_ = c.netConn.SetDeadline(time.Now().Add(handshakeTimeout))
 	peerCertificate, usesTLS, err := tlsutil.PeerCertificate(ctx, c.netConn)
+	_ = c.netConn.SetDeadline(time.Time{})
 	if err != nil {
 		return err
 	}
@@ -266,7 +271,7 @@ func (c *conn) run(ctx context.Context) (err error) {
 		var resHeader *wire.MsgHeader
 		var resBody wire.MsgBody
 
-		reqHeader, reqBody, err = wire.ReadMessage(bufr)
+		reqHeader, reqBody, err = readMessage(bufr)
 		if err != nil {
 			return
 		}
