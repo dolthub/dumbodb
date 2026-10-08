@@ -201,6 +201,11 @@ func (h *Handler) authorize(ctx context.Context, msg *wire.OpMsg) error {
 	if command == "getMore" {
 		return h.authorizeGetMore(ctx, msg, db)
 	}
+	if command == "create" || command == "collMod" {
+		if err := h.authorizeViewSource(ctx, msg, command, db); err != nil {
+			return err
+		}
+	}
 	if command == "insert" || command == "update" || command == "findAndModify" {
 		return h.authorizeActions(ctx, msg, command, db, authz.CollectionResource(db, collection), writePayloadActions(msg, command))
 	}
@@ -243,6 +248,30 @@ func (h *Handler) authorizeAdminHistoryRead(ctx context.Context, msg *wire.OpMsg
 		return nil
 	}
 	return h.authorizeActions(ctx, msg, command, db, authz.CollectionResource("admin", "system.users"), []authz.Action{authz.ActionFind})
+}
+
+// authorizeViewSource requires, for a create or collMod that defines a view,
+// find on the collection the view reads and the privileges of its pipeline
+// stages, as MongoDB does; without it a view would read a collection its
+// creator cannot. The command's own privilege is checked separately.
+func (h *Handler) authorizeViewSource(ctx context.Context, msg *wire.OpMsg, command, db string) error {
+	document, err := opMsgDocument(msg)
+	if err != nil {
+		return err
+	}
+
+	viewOnValue, _ := document.Get("viewOn")
+	if viewOnValue == nil && !document.Has("pipeline") {
+		return nil
+	}
+
+	if viewOn, ok := viewOnValue.(string); ok {
+		if err = h.authorizeActions(ctx, msg, command, db, authz.CollectionResource(db, viewOn), []authz.Action{authz.ActionFind}); err != nil {
+			return err
+		}
+	}
+
+	return h.authorizeAggregationStages(ctx, msg, db)
 }
 
 // authorizeGetMore re-checks find on the cursor's collection at every call,

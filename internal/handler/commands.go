@@ -556,7 +556,8 @@ func guardAdminHistory(command string, msg *wire.OpMsg) error {
 }
 
 func guardAdminMutation(command, db, collection string) error {
-	if db != "admin" {
+	// The base name, so "admin@main" (admin's main branch) is guarded too.
+	if !isAdminDatabase(db) {
 		return nil
 	}
 
