@@ -28,16 +28,28 @@ import (
 // DecodeRawDocument decodes a BSON document directly into [*types.Document],
 // following the same validation rules as [ToDocument] without building an
 // intermediate wirebson document. MinKey and MaxKey decode at any depth.
+//
+// Input nested deeper than [MaxNestingDepth] returns [ErrNestingTooDeep].
 func DecodeRawDocument(raw []byte) (*types.Document, error) {
-	pairs, err := decodeRawFields(raw, false)
+	return decodeRawDocument(raw, 1)
+}
+
+func decodeRawDocument(raw []byte, depth int) (*types.Document, error) {
+	if depth > MaxNestingDepth {
+		return nil, ErrNestingTooDeep
+	}
+	pairs, err := decodeRawFields(raw, false, depth)
 	if err != nil {
 		return nil, err
 	}
 	return types.NewDocument(pairs...)
 }
 
-func decodeRawArray(raw []byte) (*types.Array, error) {
-	pairs, err := decodeRawFields(raw, true)
+func decodeRawArray(raw []byte, depth int) (*types.Array, error) {
+	if depth > MaxNestingDepth {
+		return nil, ErrNestingTooDeep
+	}
+	pairs, err := decodeRawFields(raw, true, depth)
 	if err != nil {
 		return nil, err
 	}
@@ -50,7 +62,7 @@ func decodeRawArray(raw []byte) (*types.Array, error) {
 
 // decodeRawFields returns alternating names and values. For arrays, names
 // must be the element indexes in order.
-func decodeRawFields(raw []byte, isArray bool) ([]any, error) {
+func decodeRawFields(raw []byte, isArray bool, depth int) ([]any, error) {
 	if err := checkRawLength(raw); err != nil {
 		return nil, err
 	}
@@ -81,7 +93,7 @@ func decodeRawFields(raw []byte, isArray bool) ([]any, error) {
 			return nil, fmt.Errorf("bson: invalid array index %q", name)
 		}
 
-		v, n, err := decodeRawValue(raw[offset:], t)
+		v, n, err := decodeRawValue(raw[offset:], t, depth)
 		if err != nil {
 			return nil, fmt.Errorf("bson: field %q: %w", name, err)
 		}
@@ -116,7 +128,7 @@ func embeddedLength(b []byte) (int, error) {
 	return int(l), nil
 }
 
-func decodeRawValue(b []byte, t byte) (any, int, error) {
+func decodeRawValue(b []byte, t byte, depth int) (any, int, error) {
 	fixed := func(n int) error {
 		if len(b) < n {
 			return fmt.Errorf("value of tag 0x%02x needs %d bytes, got %d", t, n, len(b))
@@ -152,7 +164,7 @@ func decodeRawValue(b []byte, t byte) (any, int, error) {
 		if err != nil {
 			return nil, 0, err
 		}
-		doc, err := DecodeRawDocument(b[:l])
+		doc, err := decodeRawDocument(b[:l], depth+1)
 		return doc, l, err
 
 	case 0x04:
@@ -160,7 +172,7 @@ func decodeRawValue(b []byte, t byte) (any, int, error) {
 		if err != nil {
 			return nil, 0, err
 		}
-		arr, err := decodeRawArray(b[:l])
+		arr, err := decodeRawArray(b[:l], depth+1)
 		return arr, l, err
 
 	case 0x05:
