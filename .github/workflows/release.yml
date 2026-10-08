@@ -193,6 +193,13 @@ jobs:
             mingw-w64-x86_64-icu
           update: false
 
+      # Link fully static so the exe does not depend on MinGW runtime DLLs
+      # (libgcc_s_seh-1, libstdc++-6, libwinpthread-1) or ICU DLLs, which are
+      # not shipped with the release (dolthub/dumbodb#108). The icu_static
+      # build tag is not used because it links -lsicu*, while MSYS2 ships its
+      # static ICU archives as libicu*.a; -static makes ld pick those instead
+      # of the .dll.a import libraries. U_STATIC_IMPLEMENTATION stops the ICU
+      # headers from declaring symbols dllimport.
       - name: Build windows/amd64
         shell: msys2 {0}
         run: |
@@ -200,10 +207,22 @@ jobs:
           export GOOS=windows
           export GOARCH=amd64
           export CGO_ENABLED=1
+          export CGO_CPPFLAGS="-DU_STATIC_IMPLEMENTATION"
           go build \
-            -ldflags "-X github.com/dolthub/dumbodb/internal/version.GitVersion=${{ steps.version.outputs.version }}" \
+            -ldflags "-X github.com/dolthub/dumbodb/internal/version.GitVersion=${{ steps.version.outputs.version }} -linkmode=external -extldflags=-static" \
             -o dist/dumbodb-windows-amd64.exe \
             ./cmd/dumbodb/
+
+      # Windows system DLLs never use the lib*.dll naming that MinGW and ICU
+      # runtime DLLs do, so any such import means the static link regressed.
+      - name: Verify windows exe has no MinGW/ICU DLL dependencies
+        shell: msys2 {0}
+        run: |
+          objdump -p dist/dumbodb-windows-amd64.exe | grep 'DLL Name' | tee dist-imports.txt
+          if grep -i -E 'DLL Name: lib' dist-imports.txt; then
+            echo "::error::dumbodb-windows-amd64.exe depends on non-system DLLs listed above"
+            exit 1
+          fi
 
       - name: Upload windows artifacts
         uses: actions/upload-artifact@v7
