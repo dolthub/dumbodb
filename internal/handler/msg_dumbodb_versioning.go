@@ -51,6 +51,20 @@ const defaultBranch = "main"
 //	db.runCommand({dumboDBDiff: 1})                          // working set vs HEAD
 //	db.runCommand({dumboDBDiff: 1, from: "<hash>"})          // commit hash to working set
 //	db.runCommand({dumboDBDiff: 1, from: "<hash>", to: "<hash>"}) // between two commits
+//
+// versioningReplyError reports a reply that would pass the 16MB BSON limit as
+// BSONObjectTooLarge, as MongoDB does, and any other backend error as
+// OperationFailed.
+func versioningReplyError(err error) error {
+	if errors.Is(err, types.ErrReplyTooLarge) {
+		return handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrBSONObjectTooLarge,
+			fmt.Sprintf("reply would exceed the maximum BSON object size of %d bytes; narrow the request with from/to, filters or limit", types.MaxDocumentLen),
+		)
+	}
+	return handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
+}
+
 func (h *Handler) MsgDumboDBDiff(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
@@ -96,7 +110,7 @@ func (h *Handler) MsgDumboDBDiff(connCtx context.Context, msg *wire.OpMsg) (*wir
 		To:          to,
 	})
 	if err != nil {
-		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
+		return nil, versioningReplyError(err)
 	}
 
 	changes := changesArray(res.Collections, res.Views, nil, nil)
@@ -1908,7 +1922,7 @@ func (h *Handler) MsgDumboDBLog(connCtx context.Context, msg *wire.OpMsg) (*wire
 		Filters:    filters,
 	})
 	if err != nil {
-		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
+		return nil, versioningReplyError(err)
 	}
 
 	commits := types.MakeArray(len(res.Commits))

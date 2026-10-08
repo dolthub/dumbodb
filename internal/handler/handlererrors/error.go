@@ -217,6 +217,9 @@ const (
 	// wrong amount of arguments.
 	ErrOperatorWrongLenOfArgs = ErrorCode(16020) // Location16020
 
+	// ErrBSONObjectTooLarge indicates a reply would exceed the 16MB BSON limit.
+	ErrBSONObjectTooLarge = ErrorCode(10334) // BSONObjectTooLarge
+
 	ErrRangeStartNotInt32 = ErrorCode(34444) // Location34444
 	ErrRangeEndNotInt32   = ErrorCode(34446) // Location34446
 	ErrRangeStepNotInt32  = ErrorCode(34448) // Location34448

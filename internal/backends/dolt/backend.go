@@ -2414,6 +2414,9 @@ func (b *Backend) commitCherryPick(
 // two entries: "HEAD" and the bare branch name; all other branch heads get only
 // their bare branch name.
 func (b *Backend) DumboDBLog(ctx context.Context, params *backends.LogParams) (*backends.LogResult, error) {
+	// One budget spans every commit's patch in the reply.
+	patchBudget := newReplyBudget()
+
 	db, err := b.getOrOpenDB(ctx, params.DBName, false)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBLog: opening db %q: %w", params.DBName, err)
@@ -2648,6 +2651,12 @@ func (b *Backend) DumboDBLog(ctx context.Context, params *backends.LogParams) (*
 					if sErr != nil {
 						return nil, fmt.Errorf("DumboDBLog: scoped diff for %q in commit %q: %w", name, ci.Hash.String(), sErr)
 					}
+					if params.Patch {
+						if bErr := errors.Join(patchBudget.chargeDocuments(addedDocs), patchBudget.chargeDocuments(removedDocs),
+							patchBudget.chargeModified(modifiedDocs)); bErr != nil {
+							return nil, fmt.Errorf("DumboDBLog: %w", bErr)
+						}
+					}
 					if len(addedDocs)+len(removedDocs)+len(modifiedDocs) == 0 {
 						continue
 					}
@@ -2667,7 +2676,7 @@ func (b *Backend) DumboDBLog(ctx context.Context, params *backends.LogParams) (*
 				}
 			} else if cErr := eachCollectionChange(ctx, db, parentAM, commitAM, func(c collectionChange) error {
 				if params.Patch {
-					addedDocs, removedDocs, modifiedDocs, dErr := diffCollectionMaps(ctx, db.ns, c.AMap, c.BMap)
+					addedDocs, removedDocs, modifiedDocs, dErr := diffCollectionMaps(ctx, db.ns, c.AMap, c.BMap, patchBudget)
 					if dErr != nil {
 						return dErr
 					}
@@ -3156,8 +3165,9 @@ func (b *Backend) DumboDBDiff(ctx context.Context, params *backends.DiffParams) 
 
 	var diffs []backends.CollectionDiff
 
+	budget := newReplyBudget()
 	err = eachCollectionChange(ctx, state, aAM, bAM, func(c collectionChange) error {
-		added, removed, modified, diffErr := diffCollectionMaps(ctx, state.ns, c.AMap, c.BMap)
+		added, removed, modified, diffErr := diffCollectionMaps(ctx, state.ns, c.AMap, c.BMap, budget)
 		if diffErr != nil {
 			return fmt.Errorf("diffing collection %q: %w", c.Name, diffErr)
 		}

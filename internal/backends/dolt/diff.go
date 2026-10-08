@@ -34,6 +34,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // rootishIsReadOnly reports whether a rootish is syntactically read-only.
@@ -564,6 +565,7 @@ func diffCollectionMaps(
 	ctx context.Context,
 	ns tree.NodeStore,
 	aMap, bMap prolly.Map,
+	budget *replyBudget,
 ) (added []*types.Document, removed []*types.Document, modified []backends.ModifiedDoc, err error) {
 	// Walk only the changed documents via prolly's structural-sharing diff.
 	// Diffs arrive in key order, matching the previous merge-walk output order.
@@ -574,12 +576,18 @@ func diffCollectionMaps(
 			if readErr != nil {
 				return false, readErr
 			}
+			if err := budget.chargeDocument(doc); err != nil {
+				return false, err
+			}
 			added = append(added, doc)
 
 		case collRemoved:
 			doc, readErr := readDocFromEntry(ctx, ns, c.key, c.from)
 			if readErr != nil {
 				return false, readErr
+			}
+			if err := budget.chargeDocument(doc); err != nil {
+				return false, err
 			}
 			removed = append(removed, doc)
 
@@ -601,6 +609,9 @@ func diffCollectionMaps(
 				return false, diffErr
 			}
 			if len(fieldDiffs) > 0 {
+				if err := budget.chargeFieldDiffs(fieldDiffs); err != nil {
+					return false, err
+				}
 				modified = append(modified, backends.ModifiedDoc{ID: id, Diff: fieldDiffs})
 			}
 		}
@@ -610,6 +621,72 @@ func diffCollectionMaps(
 		return nil, nil, nil, err
 	}
 	return added, removed, modified, nil
+}
+
+// replyBudget bounds the documents and field diffs one version-control reply
+// may carry to the 16MB BSON limit. It is charged while a diff is built, so a
+// large change set fails as soon as it passes the limit instead of being held
+// in memory first. A nil budget is unbounded.
+type replyBudget struct {
+	remaining int
+}
+
+func newReplyBudget() *replyBudget {
+	return &replyBudget{remaining: types.MaxDocumentLen}
+}
+
+func (b *replyBudget) charge(n int) error {
+	if b == nil {
+		return nil
+	}
+	b.remaining -= n
+	if b.remaining < 0 {
+		return types.ErrReplyTooLarge
+	}
+	return nil
+}
+
+func (b *replyBudget) chargeDocument(doc *types.Document) error {
+	if b == nil {
+		return nil
+	}
+	return b.charge(doc.BSONSize())
+}
+
+func (b *replyBudget) chargeDocuments(docs []*types.Document) error {
+	for _, doc := range docs {
+		if err := b.chargeDocument(doc); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (b *replyBudget) chargeFieldDiffs(diffs []backends.FieldDiff) error {
+	if b == nil {
+		return nil
+	}
+	for _, d := range diffs {
+		n := len(d.Path) + len(d.Type)
+		for _, v := range []any{d.From, d.To} {
+			if v != nil {
+				n += must.NotFail(types.NewDocument("v", v)).BSONSize()
+			}
+		}
+		if err := b.charge(n); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (b *replyBudget) chargeModified(modified []backends.ModifiedDoc) error {
+	for _, m := range modified {
+		if err := b.chargeFieldDiffs(m.Diff); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // countCollectionMapDiffs counts the document-level differences between two
