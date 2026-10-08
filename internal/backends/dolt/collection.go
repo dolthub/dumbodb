@@ -2114,7 +2114,7 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 			idxNewDocs = append(idxNewDocs, newDoc)
 		}
 
-		v, err := buildValue(ctx, state.ns, newBytes)
+		v, err := buildValue(ctx, state.ns, newBytes, storedBlobAddr(ctx, state.ns, existingTup))
 		if err != nil {
 			return nil, err
 		}

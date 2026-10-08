@@ -458,9 +458,11 @@ func buildKey(idBytes []byte) (val.Tuple, error) {
 	return tup, nil
 }
 
-func buildValue(ctx context.Context, ns tree.NodeStore, docBytes []byte) (val.Tuple, error) {
+// buildValue stores docBytes as a value tuple. When docBytes replaces a value
+// stored out-of-band at |prior|, the unchanged parts of that blob are reused.
+func buildValue(ctx context.Context, ns tree.NodeStore, docBytes []byte, prior hash.Hash) (val.Tuple, error) {
 	tb := val.NewTupleBuilder(valDescFor(ns), ns)
-	if err := tb.PutAdaptiveBytesFromInline(ctx, 0, docBytes); err != nil {
+	if err := tb.ReplaceAdaptiveBytesFromInline(ctx, 0, prior, docBytes); err != nil {
 		return nil, fmt.Errorf("writing inline bytes to value tuple: %w", err)
 	}
 

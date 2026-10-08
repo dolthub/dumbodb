@@ -20,6 +20,7 @@ import (
 
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/prolly/tree"
+	"github.com/dolthub/dolt/go/store/val"
 )
 
 // seekCounter tallies prolly-tree node fetches for one operation, scoped to a
@@ -72,4 +73,13 @@ func (s instrumentedNodeStore) ReadMany(ctx context.Context, refs hash.HashSlice
 		c.calls.Add(1)
 	}
 	return s.NodeStore.ReadMany(ctx, refs)
+}
+
+var _ val.PriorBytesWriter = instrumentedNodeStore{}
+
+func (s instrumentedNodeStore) WriteBytesReusing(ctx context.Context, b []byte, prior hash.Hash) (hash.Hash, error) {
+	if pw, ok := s.NodeStore.(val.PriorBytesWriter); ok {
+		return pw.WriteBytesReusing(ctx, b, prior)
+	}
+	return s.NodeStore.WriteBytes(ctx, b)
 }

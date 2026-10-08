@@ -20,6 +20,7 @@ import (
 	"sort"
 
 	"github.com/FerretDB/wire/wirebson"
+	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/prolly/tree"
 	"github.com/dolthub/dolt/go/store/val"
 
@@ -107,7 +108,20 @@ func writeBSONDocToValue(ctx context.Context, ns tree.NodeStore, doc *types.Docu
 	if err != nil {
 		return nil, err
 	}
-	return buildValue(ctx, ns, stored)
+	return buildValue(ctx, ns, stored, hash.Hash{})
+}
+
+// storedBlobAddr returns the address of the stored document's out-of-band
+// blob, or the empty hash when it is stored inline.
+func storedBlobAddr(ctx context.Context, ns tree.NodeStore, v val.Tuple) hash.Hash {
+	result, ok, err := storedValueReadDesc.GetBytesAdaptiveValue(ctx, 0, ns, v)
+	if err != nil || !ok {
+		return hash.Hash{}
+	}
+	if ba, isOutOfBand := result.(*val.ByteArray); isOutOfBand {
+		return ba.Addr
+	}
+	return hash.Hash{}
 }
 
 func readBSONDocFromValue(ctx context.Context, ns tree.NodeStore, v val.Tuple) (*types.Document, error) {
