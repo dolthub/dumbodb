@@ -341,6 +341,10 @@ func (m *Manager) ObserveHeartbeat(host string, heartbeat Heartbeat) error {
 	return nil
 }
 
+// MaxBootstrapContacts bounds the hosts learned from inbound heartbeats before
+// a configuration is installed, matching MongoDB's maximum replica-set size.
+const MaxBootstrapContacts = 50
+
 // ObserveMemberContact records an inbound heartbeat from memberID at host.
 // The sender is not verified, so the contact never changes the term, primary
 // or sync source; those are learned only by polling members. Before a
@@ -355,8 +359,12 @@ func (m *Manager) ObserveMemberContact(host string, memberID int) error {
 	}
 	previous := cloneSnapshot(m.state)
 	status, exists := m.state.Members[memberID]
+	if !exists && len(m.state.Members) >= MaxBootstrapContacts {
+		m.evictOldestContactLocked()
+	}
 	status.MemberID = memberID
 	status.Host = host
+	status.LastHeartbeat = time.Now()
 	if !exists {
 		status.State = StateUnknown
 	}
@@ -367,6 +375,20 @@ func (m *Manager) ObserveMemberContact(host string, memberID int) error {
 		listener()
 	}
 	return nil
+}
+
+// evictOldestContactLocked drops the bootstrap contact heard from longest ago.
+func (m *Manager) evictOldestContactLocked() {
+	oldestID, found := 0, false
+	var oldest time.Time
+	for id, member := range m.state.Members {
+		if !found || member.LastHeartbeat.Before(oldest) {
+			oldestID, oldest, found = id, member.LastHeartbeat, true
+		}
+	}
+	if found {
+		delete(m.state.Members, oldestID)
+	}
 }
 
 func (m *Manager) MarkInitialSyncComplete(checkpoint control.Checkpoint) error {
