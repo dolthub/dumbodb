@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -159,7 +160,7 @@ func runSubPipeline(ctx context.Context, inputDocs []*types.Document, stages []a
 		}
 	}
 
-	result, err := iterator.ConsumeValues(iter)
+	result, err := common.ConsumeDocuments(iter, "$facet")
 	if err != nil {
 		return nil, lazyerrors.Error(err)
 	}
@@ -169,7 +170,7 @@ func runSubPipeline(ctx context.Context, inputDocs []*types.Document, stages []a
 
 func (f *facet) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
 	// Collect all input documents  -- each sub-pipeline gets the same set.
-	inputDocs, err := iterator.ConsumeValues(iter)
+	inputDocs, err := common.ConsumeDocuments(iter, "$facet")
 	if err != nil {
 		return nil, lazyerrors.Error(err)
 	}

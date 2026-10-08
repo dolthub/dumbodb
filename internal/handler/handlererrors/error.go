@@ -129,6 +129,10 @@ const (
 
 	ErrExceededMemoryLimit = ErrorCode(146) // ExceededMemoryLimit
 
+	// ErrQueryExceededMemoryLimitNoDiskUseAllowed indicates a blocking
+	// aggregation stage passed its memory limit and could not spill to disk.
+	ErrQueryExceededMemoryLimitNoDiskUseAllowed = ErrorCode(292) // QueryExceededMemoryLimitNoDiskUseAllowed
+
 	// ErrViewDepthLimitExceeded indicates a view resolves through more than the
 	// maximum nesting depth (20).
 	ErrViewDepthLimitExceeded = ErrorCode(165) // ViewDepthLimitExceeded

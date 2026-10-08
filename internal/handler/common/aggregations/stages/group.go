@@ -57,7 +57,12 @@ type group struct {
 type groupBy struct {
 	accumulator accumulators.Accumulator
 	outputField string
+	retains     bool // the accumulator keeps input values ($push, $addToSet, $mergeObjects)
 }
+
+// retainingAccumulators keep (part of) every input value, so their memory
+// grows with the input rather than with the number of groups.
+var retainingAccumulators = map[string]bool{"$addToSet": true, "$mergeObjects": true, "$push": true}
 
 func newGroup(stage *types.Document) (aggregations.Stage, error) {
 	fields, err := common.GetRequiredParam[*types.Document](stage, "$group")
@@ -100,9 +105,11 @@ func newGroup(stage *types.Document) (aggregations.Stage, error) {
 			return nil, processGroupStageError(err)
 		}
 
+		spec, _ := v.(*types.Document)
 		groups = append(groups, groupBy{
 			outputField: field,
 			accumulator: accumulator,
+			retains:     spec != nil && retainingAccumulators[spec.Command()],
 		})
 	}
 
@@ -137,6 +144,14 @@ func (g *group) Process(ctx context.Context, iter types.DocumentsIterator, close
 	// inherently-retaining accumulators like $push), not the input size.
 	gm := newGroupMap(g.groupBy)
 
+	// Memory grows with each new group's key and, for retaining
+	// accumulators, with every input document.
+	budget := common.NewStageBudget("$group")
+	retains := false
+	for _, spec := range g.groupBy {
+		retains = retains || spec.retains
+	}
+
 	for {
 		_, doc, err := iter.Next()
 		if errors.Is(err, iterator.ErrIteratorDone) {
@@ -152,9 +167,21 @@ func (g *group) Process(ctx context.Context, iter types.DocumentsIterator, close
 			return nil, err
 		}
 
+		groups := len(gm.docs)
 		if err := gm.accumulate(groupKey, doc); err != nil {
 			// existing accumulators rarely return error
 			return nil, processGroupStageError(err)
+		}
+
+		if len(gm.docs) > groups {
+			if err = budget.ChargeDocument(must.NotFail(types.NewDocument("_id", groupKey))); err != nil {
+				return nil, err
+			}
+		}
+		if retains {
+			if err = budget.ChargeDocument(doc); err != nil {
+				return nil, err
+			}
 		}
 	}
 

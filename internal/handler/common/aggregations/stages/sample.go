@@ -18,6 +18,7 @@ import (
 	"context"
 	"math/rand/v2"
 
+	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
@@ -80,7 +81,7 @@ func newSample(stage *types.Document) (aggregations.Stage, error) {
 // It consumes all documents from iter, randomly selects up to size of them,
 // and returns an iterator over the selected documents.
 func (s *sample) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
-	docs, err := iterator.ConsumeValues(iter)
+	docs, err := common.ConsumeDocuments(iter, "$sample")
 	if err != nil {
 		return nil, lazyerrors.Error(err)
 	}
