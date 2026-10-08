@@ -42,6 +42,9 @@ func (b *Backend) DumboDBClone(ctx context.Context, params *backends.CloneParams
 	if params.As == "" {
 		return nil, fmt.Errorf("dumboClone: target database name is required")
 	}
+	if !backends.ValidDatabaseDirName(params.As) {
+		return nil, fmt.Errorf("dumboClone: invalid database name %q", params.As)
+	}
 	if isReservedDatabase(params.As) {
 		return nil, fmt.Errorf("dumboClone: %q is a reserved database name", params.As)
 	}

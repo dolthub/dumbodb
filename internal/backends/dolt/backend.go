@@ -728,6 +728,9 @@ func (b *Backend) DropDatabase(ctx context.Context, params *backends.DropDatabas
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	if !backends.ValidDatabaseDirName(params.Name) {
+		return backends.NewError(backends.ErrorCodeDatabaseNameIsInvalid, fmt.Errorf("invalid database name %q", params.Name))
+	}
 	dbDir := filepath.Join(b.dataDir, params.Name)
 
 	if _, err := os.Stat(dbDir); os.IsNotExist(err) {
@@ -805,6 +808,11 @@ func (b *Backend) getOrOpenDBLocked(ctx context.Context, dbName string, create b
 		return db, false, nil
 	}
 
+	// Every route from a database name to the filesystem passes here; names
+	// that could leave the data directory never reach filepath.Join.
+	if !backends.ValidDatabaseDirName(dbName) {
+		return nil, false, backends.NewError(backends.ErrorCodeDatabaseNameIsInvalid, fmt.Errorf("invalid database name %q", dbName))
+	}
 	dbDir := filepath.Join(b.dataDir, dbName)
 
 	if !create {
