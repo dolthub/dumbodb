@@ -127,6 +127,12 @@ const (
 
 	ErrInvalidIndexSpecificationOption = ErrorCode(197) // InvalidIndexSpecificationOption
 
+	// ErrTimeProofMismatch indicates a $clusterTime signature does not match its key.
+	ErrTimeProofMismatch = ErrorCode(204) // TimeProofMismatch
+
+	// ErrKeysNotFound indicates no signing key matches a $clusterTime signature.
+	ErrKeysNotFound = ErrorCode(211) // KeysNotFound
+
 	ErrExceededMemoryLimit = ErrorCode(146) // ExceededMemoryLimit
 
 	// ErrQueryExceededMemoryLimitNoDiskUseAllowed indicates a blocking
