@@ -41,6 +41,18 @@ func docToBSON(doc *types.Document) ([]byte, error) {
 	return sorted.AppendBSON(stored), nil
 }
 
+func bsonToDocFields(stored []byte, fields []string) (*types.Document, error) {
+	raw, err := stripVersion(stored)
+	if err != nil {
+		return nil, err
+	}
+	doc, err := bson.DecodeRawDocumentFields(raw, fields)
+	if err != nil {
+		return nil, fmt.Errorf("decoding document: %w", err)
+	}
+	return doc, nil
+}
+
 func bsonToDoc(stored []byte) (*types.Document, error) {
 	raw, err := stripVersion(stored)
 	if err != nil {

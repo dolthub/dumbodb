@@ -166,8 +166,13 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 	}
 
 	iter := newMapIter(ctx, state.ns, m, reverse, limit, onlyRecordIDs, pf)
-	if mi, ok := iter.(*mapIter); ok && state.backend != nil && state.backend.backgroundRP != nil {
-		mi.release = state.backend.backgroundRP.pinRoot(state.name, m.HashOf())
+	if mi, ok := iter.(*mapIter); ok {
+		if params != nil {
+			mi.fields = params.Fields
+		}
+		if state.backend != nil && state.backend.backgroundRP != nil {
+			mi.release = state.backend.backgroundRP.pinRoot(state.name, m.HashOf())
+		}
 	}
 	return &backends.QueryResult{Iter: iter}, nil
 }
@@ -3390,10 +3395,6 @@ func applyMutationsToDoc(doc *types.Document, mutations []backends.FieldMutation
 	return nil
 }
 
-func decodeDocFromJSON(storedBytes []byte) (*types.Document, error) {
-	return bsonToDoc(storedBytes)
-}
-
 func decodeDocument(data []byte) (*types.Document, error) {
 	doc, err := bson.DecodeRawDocument(data)
 	if err != nil {
@@ -3426,6 +3427,7 @@ type mapIter struct {
 	// true means "may match  -- run the full filter downstream." A nil
 	// prefilter keeps the unconditional full-scan behavior.
 	prefilter func([]byte) bool
+	fields    []string
 	// release, if set, unpins the iterated map's root from GC on Close.
 	release func()
 }
@@ -3503,7 +3505,7 @@ func (it *mapIter) Next() (struct{}, *types.Document, error) {
 				continue
 			}
 		}
-		doc, err = decodeDocFromJSON(jsonBytes)
+		doc, err = bsonToDocFields(jsonBytes, it.fields)
 		if err != nil {
 			return struct{}{}, nil, err
 		}

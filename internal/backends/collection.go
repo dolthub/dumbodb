@@ -117,6 +117,10 @@ type QueryParams struct {
 
 	// Collation is the effective operation collation, nil when simple/binary.
 	Collation *types.Document
+
+	// Fields, if non-nil, names the only top-level fields the caller reads.
+	// Returned documents may omit any other field.
+	Fields []string
 }
 
 type QueryResult struct {

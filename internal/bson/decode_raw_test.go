@@ -192,3 +192,46 @@ func requireSameValue(t *testing.T, want, got any) {
 		require.Equal(t, want, got)
 	}
 }
+
+func TestDecodeRawDocumentFieldsKeepsOnlyNamedFields(t *testing.T) {
+	for name, doc := range decodeRawTestDocs() {
+		t.Run(name, func(t *testing.T) {
+			raw := doc.AppendBSON(nil)
+			for _, fields := range [][]string{{}, {"_id"}, {"document", "int32", "missing"}, doc.Keys()} {
+				got, err := DecodeRawDocumentFields(raw, fields)
+				require.NoError(t, err)
+				requireSameValue(t, keepFields(t, doc, fields), got)
+			}
+		})
+	}
+}
+
+func FuzzDecodeRawDocumentFields(f *testing.F) {
+	for _, d := range decodeRawTestDocs() {
+		f.Add(d.AppendBSON(nil), "_id")
+	}
+	f.Fuzz(func(t *testing.T, raw []byte, field string) {
+		full, err := DecodeRawDocument(raw)
+		if err != nil {
+			return
+		}
+		got, err := DecodeRawDocumentFields(raw, []string{field})
+		require.NoError(t, err)
+		requireSameValue(t, keepFields(t, full, []string{field}), got)
+	})
+}
+
+func keepFields(t *testing.T, doc *types.Document, fields []string) *types.Document {
+	t.Helper()
+	keys, values := doc.Keys(), doc.Values()
+	kept := new(types.Document)
+	for i, k := range keys {
+		for _, f := range fields {
+			if k == f {
+				kept.AppendDecoded(k, values[i])
+				break
+			}
+		}
+	}
+	return kept
+}
