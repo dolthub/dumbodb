@@ -95,17 +95,7 @@ func (r *Registry) NewCursor(ctx context.Context, iter types.DocumentsIterator, 
 	r.m[id] = c
 
 	r.wg.Add(1)
-	go func() {
-		defer r.wg.Done()
-
-		select {
-		case <-ctx.Done():
-			r.CloseAndRemove(c)
-		case <-c.removed: // for c.Close() and normal cursors
-		}
-
-		<-c.removed
-	}()
+	c.stopWatch = context.AfterFunc(ctx, func() { r.CloseAndRemove(c) })
 
 	return c
 }
@@ -147,6 +137,8 @@ func (r *Registry) CloseAndRemove(c *Cursor) {
 
 	delete(r.m, c.ID)
 	close(c.removed)
+	c.stopWatch()
+	r.wg.Done()
 }
 
 // randomCursorID returns a random positive 63-bit cursor ID.
