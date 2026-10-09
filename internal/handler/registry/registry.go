@@ -55,6 +55,7 @@ type NewHandlerOpts struct {
 	SetupUsername         string
 	SetupPassword         password.Password
 	SetupTimeout          time.Duration
+	SlowOpThreshold       time.Duration
 
 	// DoltDataDir is the directory where dolt backend stores its data.
 	// Used only by the "dolt" handler.

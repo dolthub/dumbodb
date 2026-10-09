@@ -253,6 +253,63 @@ func ValidateProjection(projection *types.Document) (*types.Document, bool, erro
 
 // ProjectDocument applies projection to the copy of the document.
 func ProjectDocument(doc, projection *types.Document, inclusion bool) (*types.Document, error) {
+	projected, err := projectID(doc, projection)
+	if err != nil {
+		return nil, err
+	}
+
+	projectedWithoutID, err := projectDocumentWithoutID(doc, projection, inclusion)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, key := range projectedWithoutID.Keys() {
+		projected.Set(key, must.NotFail(projectedWithoutID.Get(key)))
+	}
+
+	return projected, nil
+}
+
+// topLevelInclusionFields returns the fields of a validated inclusion projection
+// when it includes only top-level fields, which projectTopLevelInclusion applies.
+func topLevelInclusionFields(projection *types.Document, inclusion bool) ([]string, bool) {
+	if !inclusion {
+		return nil, false
+	}
+	keys := projection.Keys()
+	var fields []string
+	for i, v := range projection.Values() {
+		if keys[i] == "_id" {
+			continue
+		}
+		include, ok := v.(bool)
+		if !ok || !include || strings.ContainsAny(keys[i], ".$") {
+			return nil, false
+		}
+		fields = append(fields, keys[i])
+	}
+	return fields, true
+}
+
+// projectTopLevelInclusion is ProjectDocument for a projection whose included
+// fields are those returned by topLevelInclusionFields.
+func projectTopLevelInclusion(doc, projection *types.Document, fields []string) (*types.Document, error) {
+	projected, err := projectID(doc, projection)
+	if err != nil {
+		return nil, err
+	}
+	keys := doc.Keys()
+	for i, v := range doc.Values() {
+		if keys[i] != "_id" && slices.Contains(fields, keys[i]) {
+			projected.Set(keys[i], v)
+		}
+	}
+	return projected, nil
+}
+
+// projectID starts a projected document with the _id the projection keeps or
+// sets.
+func projectID(doc, projection *types.Document) (*types.Document, error) {
 	// _id carries through by default, but only when the input document
 	// actually has it. Pipeline stages can emit documents without _id
 	// (e.g. an earlier {$project: {_id: 0}}, {$group}, {$unwind} of a
@@ -316,15 +373,6 @@ func ProjectDocument(doc, projection *types.Document, inclusion bool) (*types.Do
 		if !set {
 			projected.Remove("_id")
 		}
-	}
-
-	projectedWithoutID, err := projectDocumentWithoutID(doc, projection, inclusion)
-	if err != nil {
-		return nil, err
-	}
-
-	for _, key := range projectedWithoutID.Keys() {
-		projected.Set(key, must.NotFail(projectedWithoutID.Get(key)))
 	}
 
 	return projected, nil

@@ -105,6 +105,10 @@ type NewOpts struct {
 	SetupPassword password.Password
 	SetupTimeout  time.Duration
 
+	// SlowOpThreshold is the duration above which a command is logged at INFO;
+	// zero means 100ms and a negative value logs every command at INFO.
+	SlowOpThreshold time.Duration
+
 	L             *slog.Logger
 	StateProvider *state.Provider
 
@@ -136,6 +140,10 @@ func New(opts *NewOpts) (*Handler, error) {
 
 	if opts.BatchSize == 0 {
 		opts.BatchSize = int(maxWriteBatchSize)
+	}
+
+	if opts.SlowOpThreshold == 0 {
+		opts.SlowOpThreshold = 100 * time.Millisecond
 	}
 
 	h := &Handler{

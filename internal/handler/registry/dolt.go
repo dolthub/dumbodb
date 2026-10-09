@@ -56,6 +56,8 @@ func newDoltHandler(opts *NewHandlerOpts) (*handler.Handler, CloseBackendFunc, e
 		SetupPassword: opts.SetupPassword,
 		SetupTimeout:  opts.SetupTimeout,
 
+		SlowOpThreshold: opts.SlowOpThreshold,
+
 		L:             opts.Logger,
 		StateProvider: opts.StateProvider,
 

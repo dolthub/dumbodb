@@ -136,6 +136,42 @@ func storedBlobAddr(ctx context.Context, ns tree.NodeStore, v val.Tuple) hash.Ha
 	return hash.Hash{}
 }
 
+// readStoredBytesReusing returns the stored document in v. An out-of-band value
+// is read leaf by leaf into buf, which is returned grown for reuse; an inline
+// value is returned without copying and leaves buf untouched.
+func readStoredBytesReusing(ctx context.Context, ns tree.NodeStore, v val.Tuple, buf []byte) (stored, grown []byte, err error) {
+	result, ok, err := storedValueReadDesc.GetBytesAdaptiveValue(ctx, 0, ns, v)
+	if err != nil {
+		return nil, buf, fmt.Errorf("reading bytes value from tuple: %w", err)
+	}
+	if !ok {
+		return nil, buf, fmt.Errorf("value tuple missing bytes field")
+	}
+	switch existing := result.(type) {
+	case []byte:
+		return existing, buf, nil
+	case *val.ByteArray:
+		buf, err = appendBlobBytes(ctx, ns, existing.Addr, buf[:0])
+		return buf, buf, err
+	default:
+		return nil, buf, fmt.Errorf("unexpected BytesAdaptiveValue type %T", result)
+	}
+}
+
+func appendBlobBytes(ctx context.Context, ns tree.NodeStore, addr hash.Hash, dst []byte) ([]byte, error) {
+	root, err := ns.Read(ctx, addr)
+	if err != nil {
+		return dst, err
+	}
+	err = tree.WalkNodes(ctx, root, ns, func(_ context.Context, n *tree.Node) error {
+		if n.IsLeaf() {
+			dst = append(dst, n.GetValue(0)...)
+		}
+		return nil
+	})
+	return dst, err
+}
+
 func readBSONDocFromValue(ctx context.Context, ns tree.NodeStore, v val.Tuple) (*types.Document, error) {
 	stored, err := getBSONStoredBytes(ctx, ns, v)
 	if err != nil {

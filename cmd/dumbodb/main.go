@@ -31,6 +31,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	doltevents "github.com/dolthub/dolt/go/libraries/events"
 	eventsapi "github.com/dolthub/eventsapi_schema/dolt/services/eventsapi/v1alpha1"
@@ -108,6 +109,7 @@ func run(logger *slog.Logger) error {
 	tlsClusterAuthX509Attributes := fs.String("tlsClusterAuthX509Attributes", "", "cluster membership certificate subject attributes")
 	registerUnsupportedTLSFlags(fs)
 	logLevel := fs.String("log-level", "info", "log level (debug, info, warn, error)")
+	slowMS := fs.Int("slowms", 100, "log commands slower than this many milliseconds at INFO; 0 logs every command")
 	autoCommit := fs.Bool("auto-commit", false, "automatically commit each write (insert/update/delete) to Dolt history")
 	// Session isolation (per-connection working-set overlay, doltCommit merges)
 	// is disabled, not removed: the backend and wire paths still accept the
@@ -333,6 +335,7 @@ func run(logger *slog.Logger) error {
 		SessionIsolation:      sessionIsolation,
 		SessionTimeout:        *sessionTimeout,
 		SessionSweepPeriod:    *sessionSweepPeriod,
+		SlowOpThreshold:       slowOpThreshold(*slowMS),
 		TestOpts: registry.TestOpts{
 			EnableNewAuth: *auth,
 		},
@@ -535,4 +538,11 @@ func envDisablesMetrics() bool {
 	}
 	b, err := strconv.ParseBool(v)
 	return err == nil && b
+}
+
+func slowOpThreshold(slowMS int) time.Duration {
+	if slowMS <= 0 {
+		return -1
+	}
+	return time.Duration(slowMS) * time.Millisecond
 }
