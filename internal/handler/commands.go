@@ -283,60 +283,67 @@ func (h *Handler) initCommands() {
 				return nil, err
 			}
 
-			var db, ns, cmdName string
-			if doc, err := opMsgCommandDocument(msg); err == nil {
-				if v, err := doc.Get("$db"); err == nil {
-					if s, ok := v.(string); ok {
-						db = s
-					}
-				}
-				if keys := doc.Keys(); len(keys) > 0 {
-					cmdName = keys[0]
-					if v, err := doc.Get(keys[0]); err == nil {
-						if col, ok := v.(string); ok && col != "" {
-							ns = db + "." + col
-						}
-					}
-				}
-			}
-			if ns == "" {
-				ns = db
-			}
-
-			conn := ""
-			if info := conninfo.Get(ctx); info != nil && info.Peer.IsValid() {
-				conn = info.Peer.String()
-			}
-
 			res, handlerErr := next(ctx, msg)
 			if handlerErr == nil && res != nil {
 				res = h.postProcessResponse(ctx, msg, res)
 			}
 
-			durationMs := time.Since(start).Milliseconds()
-
-			if handlerErr != nil {
-				l.InfoContext(ctx, "command error",
-					slog.String("conn", conn),
-					slog.String("cmd", cmdName),
-					slog.String("db", db),
-					slog.String("ns", ns),
-					slog.Int64("duration_ms", durationMs),
-					logging.Error(handlerErr),
-				)
-			} else {
-				l.InfoContext(ctx, "command",
-					slog.String("conn", conn),
-					slog.String("cmd", cmdName),
-					slog.String("db", db),
-					slog.String("ns", ns),
-					slog.Int64("duration_ms", durationMs),
-				)
-			}
+			h.logCommand(ctx, l, msg, time.Since(start), handlerErr)
 
 			return res, handlerErr
 		}
 	}
+}
+
+// logCommand logs a finished command at DEBUG, or at INFO as "Slow query" when
+// it ran longer than SlowOpThreshold, as MongoDB does with slowms.
+func (h *Handler) logCommand(ctx context.Context, l *slog.Logger, msg *wire.OpMsg, duration time.Duration, err error) {
+	level, text := slog.LevelDebug, "command"
+	if duration > h.SlowOpThreshold {
+		level, text = slog.LevelInfo, "Slow query"
+	} else if err != nil {
+		text = "command error"
+	}
+	if !l.Enabled(ctx, level) {
+		return
+	}
+
+	var db, ns, cmdName string
+	if doc, docErr := opMsgCommandDocument(msg); docErr == nil {
+		if v, getErr := doc.Get("$db"); getErr == nil {
+			if s, ok := v.(string); ok {
+				db = s
+			}
+		}
+		if keys := doc.Keys(); len(keys) > 0 {
+			cmdName = keys[0]
+			if v, getErr := doc.Get(keys[0]); getErr == nil {
+				if col, ok := v.(string); ok && col != "" {
+					ns = db + "." + col
+				}
+			}
+		}
+	}
+	if ns == "" {
+		ns = db
+	}
+
+	conn := ""
+	if info := conninfo.Get(ctx); info != nil && info.Peer.IsValid() {
+		conn = info.Peer.String()
+	}
+
+	attrs := []slog.Attr{
+		slog.String("conn", conn),
+		slog.String("cmd", cmdName),
+		slog.String("db", db),
+		slog.String("ns", ns),
+		slog.Int64("duration_ms", duration.Milliseconds()),
+	}
+	if err != nil {
+		attrs = append(attrs, logging.Error(err))
+	}
+	l.LogAttrs(ctx, level, text, attrs...)
 }
 
 func alwaysMutatesState(*wire.OpMsg) bool {
