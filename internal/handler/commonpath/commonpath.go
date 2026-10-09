@@ -188,3 +188,55 @@ func hasMissingBranch(v any, keys []string) bool {
 		return true
 	}
 }
+
+// IndexKeyValues returns the keys MongoDB generates for doc in an index on
+// path. A missing field, a scalar before the path ends, an empty array before
+// the path ends, and a non-document element of an array before the path ends
+// each produce null. At the end of the path an empty array produces undefined
+// and any other array produces its elements.
+func IndexKeyValues(doc *types.Document, path types.Path) []any {
+	return appendIndexKeyValues(nil, doc, path.Slice())
+}
+
+func appendIndexKeyValues(out []any, v any, keys []string) []any {
+	if len(keys) == 0 {
+		arr, ok := v.(*types.Array)
+		switch {
+		case !ok:
+			return append(out, v)
+		case arr.Len() == 0:
+			return append(out, types.Undefined)
+		}
+		for i := 0; i < arr.Len(); i++ {
+			el, _ := arr.Get(i)
+			out = append(out, el)
+		}
+		return out
+	}
+
+	switch v := v.(type) {
+	case *types.Document:
+		next, err := v.Get(keys[0])
+		if err != nil {
+			return append(out, types.Null)
+		}
+		return appendIndexKeyValues(out, next, keys[1:])
+
+	case *types.Array:
+		if v.Len() == 0 {
+			return append(out, types.Null)
+		}
+		for i := 0; i < v.Len(); i++ {
+			el, _ := v.Get(i)
+			if elDoc, ok := el.(*types.Document); ok {
+				out = appendIndexKeyValues(out, elDoc, keys)
+			} else {
+				out = append(out, types.Null)
+			}
+		}
+		return out
+
+	default:
+		return append(out, types.Null)
+	}
+}

@@ -308,6 +308,47 @@ func FilterDistinctValues(iter types.DocumentsIterator, key string, cmp *collati
 	return distinct, nil
 }
 
+// IndexKeyDistinctValues returns the distinct values MongoDB reports when it
+// answers distinct from an index on key (DISTINCT_SCAN): every document's index
+// keys, so a missing field yields null and an empty array yields undefined. A
+// sparse index omits documents in which the path reaches no value.
+func IndexKeyDistinctValues(iter types.DocumentsIterator, key string, sparse bool) (*types.Array, error) {
+	defer iter.Close()
+
+	path, err := types.NewPathFromString(key)
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+
+	var keys []any
+	for {
+		_, doc, err := iter.Next()
+		if errors.Is(err, iterator.ErrIteratorDone) {
+			break
+		}
+		if err != nil {
+			return nil, lazyerrors.Error(err)
+		}
+
+		if sparse {
+			vals, err := commonpath.FindValues(doc, path, &commonpath.FindValuesOpts{
+				FindArrayIndex:     true,
+				FindArrayDocuments: true,
+			})
+			if err != nil {
+				return nil, lazyerrors.Error(err)
+			}
+			if len(vals) == 0 {
+				continue
+			}
+		}
+
+		keys = append(keys, commonpath.IndexKeyValues(doc, path)...)
+	}
+
+	return DedupDistinctValues(keys)
+}
+
 // DedupDistinctValues deduplicates a slice of pre-extracted field values and
 // returns them sorted ascending. Used by the backend DistinctScanner fast path,
 // where the backend has already iterated documents and emits raw field values.
@@ -394,3 +435,4 @@ func (s *distinctSet) array() *types.Array {
 	}
 	return arr
 }
+

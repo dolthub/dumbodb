@@ -659,14 +659,11 @@ func TestCRUD_Distinct_Indexed(t *testing.T) {
 		bson.D{{Key: "other", Value: "no-cat"}},
 	)
 
+	// Like MongoDB's DISTINCT_SCAN, the unfiltered distinct reads index keys,
+	// so the document missing the field contributes null.
 	var values []any
 	require.NoError(t, coll.Distinct(ctx, "cat", bson.D{}).Decode(&values))
-	require.Len(t, values, 3)
-	got := map[string]bool{}
-	for _, v := range values {
-		got[v.(string)] = true
-	}
-	assert.True(t, got["A"] && got["B"] && got["C"])
+	assert.Equal(t, []any{nil, "A", "B", "C"}, values)
 }
 
 // TestCRUD_Distinct_NumericTypes verifies that numerically-equal values

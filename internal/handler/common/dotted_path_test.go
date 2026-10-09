@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
@@ -127,6 +128,44 @@ func TestSortDottedPathThroughArrays(t *testing.T) {
 			}
 			if !slices.Equal(got, tc.want) {
 				t.Fatalf("order %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// Expectations were recorded against MongoDB 8.0 (unfiltered distinct over an
+// index on a.b, answered by DISTINCT_SCAN).
+func TestIndexKeyDistinctValues(t *testing.T) {
+	docs := []*types.Document{
+		dpDoc("_id", int32(1), "a", dpDoc("b", int32(1))),
+		dpDoc("_id", int32(2), "a", dpDoc("b", dpArr())),
+		dpDoc("_id", int32(3), "a", dpDoc("c", int32(1))),
+		dpDoc("_id", int32(4), "a", dpArr(dpDoc("b", int32(2)), dpDoc("c", int32(1)))),
+		dpDoc("_id", int32(5), "a", dpDoc("b", dpArr(int32(3), dpArr(int32(4), int32(5))))),
+		dpDoc("_id", int32(6), "a", dpDoc("b", types.Null)),
+		dpDoc("_id", int32(7), "a", dpArr()),
+		dpDoc("_id", int32(8), "a", int32(9)),
+	}
+	all := []any{types.Undefined, types.Null, int32(1), int32(2), int32(3), int32(4), int32(5)}
+	for _, tc := range []struct {
+		name   string
+		sparse bool
+	}{
+		{"non-sparse", false},
+		{"sparse", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := IndexKeyDistinctValues(iterator.Values(iterator.ForSlice(docs)), "a.b", tc.sparse)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Len() != len(all) {
+				t.Fatalf("got %v, want %v", got, all)
+			}
+			for i, want := range all {
+				if !types.Identical(must.NotFail(got.Get(i)), want) {
+					t.Fatalf("got %v, want %v", got, all)
+				}
 			}
 		})
 	}

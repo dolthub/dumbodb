@@ -2589,8 +2589,7 @@ func (c *collection) DistinctScan(ctx context.Context, params *backends.Distinct
 		}
 		// Partial indexes only cover a subset of documents  -- a distinct
 		// scan over them would silently drop values from non-matching docs.
-		// Sparse indexes are fine because distinct already ignores missing
-		// fields.
+		// Sparse indexes are fine: MongoDB also reads distinct from them.
 		if idx.PartialFilterExpression != nil {
 			continue
 		}
@@ -2614,7 +2613,9 @@ func (c *collection) DistinctScan(ctx context.Context, params *backends.Distinct
 // per unique KeyString prefix. The secondary index key layout is
 // `[KeyString(value)][0x04][primaryID(20 bytes)]`; values with the same
 // KeyString prefix share a distinct value, so a single doc fetch per group
-// suffices to recover the original typed value.
+// suffices to recover the original typed value. Each fetched doc contributes
+// its MongoDB index keys, including null for a missing field and undefined for
+// an empty array, as MongoDB's DISTINCT_SCAN does.
 func scanDistinctFromIndex(
 	ctx context.Context,
 	idxMap prolly.Map,
@@ -2623,6 +2624,11 @@ func scanDistinctFromIndex(
 	field string,
 ) ([]any, error) {
 	const primaryIDLen = 20
+
+	path, err := types.NewPathFromString(field)
+	if err != nil {
+		return nil, err
+	}
 
 	iter, err := idxMap.IterAll(ctx)
 	if err != nil {
@@ -2669,16 +2675,12 @@ func scanDistinctFromIndex(
 		idBytes := make([]byte, primaryIDLen)
 		copy(idBytes, composite[idStart:])
 
-		val, err := lookupFieldFromPrimary(ctx, primary, ns, idBytes, field)
+		doc, err := lookupDocFromPrimary(ctx, primary, ns, idBytes)
 		if err != nil {
 			return nil, err
 		}
-		// A nil val means the document is missing the indexed field  --
-		// distinct ignores that case (matching FilterDistinctValues
-		// semantics). Sparse indexes won't produce these entries; for
-		// non-sparse indexes we still skip them.
-		if val != types.Null && val != nil {
-			out = append(out, val)
+		if doc != nil {
+			out = append(out, commonpath.IndexKeyValues(doc, path)...)
 		}
 
 		prevPrefix = append(prevPrefix[:0], prefix...)
@@ -2688,15 +2690,14 @@ func scanDistinctFromIndex(
 	return out, nil
 }
 
-// lookupFieldFromPrimary fetches the primary document by encoded _id bytes and
-// returns the value of `field`. Returns types.Null if the field is missing.
-func lookupFieldFromPrimary(
+// lookupDocFromPrimary fetches the primary document by encoded _id bytes, or
+// nil if it does not exist.
+func lookupDocFromPrimary(
 	ctx context.Context,
 	primary prolly.Map,
 	ns tree.NodeStore,
 	idBytes []byte,
-	field string,
-) (any, error) {
+) (*types.Document, error) {
 	key, err := buildKey(idBytes)
 	if err != nil {
 		return nil, fmt.Errorf("distinct scan building key: %w", err)
@@ -2716,14 +2717,7 @@ func lookupFieldFromPrimary(
 	}); err != nil {
 		return nil, fmt.Errorf("distinct scan primary fetch: %w", err)
 	}
-	if doc == nil {
-		return types.Null, nil
-	}
-	v, err := doc.Get(field)
-	if err != nil {
-		return types.Null, nil
-	}
-	return v, nil
+	return doc, nil
 }
 
 func (c *collection) ListIndexes(ctx context.Context, params *backends.ListIndexesParams) (*backends.ListIndexesResult, error) {
