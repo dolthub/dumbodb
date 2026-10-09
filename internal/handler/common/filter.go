@@ -78,6 +78,7 @@ func FilterDocumentColl(doc, filter *types.Document, cmp *collation.Comparator) 
 // filterDocumentPair handles a single filter element key/value pair {filterKey: filterValue}.
 func filterDocumentPair(doc *types.Document, filterKey string, filterValue any, cmp *collation.Comparator) (bool, error) {
 	var vals []any
+	var missing bool
 	filterSuffix := filterKey
 
 	if strings.ContainsRune(filterKey, '.') {
@@ -96,9 +97,12 @@ func filterDocumentPair(doc *types.Document, filterKey string, filterValue any, 
 		}); err != nil {
 			return false, lazyerrors.Error(err)
 		}
+		missing = commonpath.HasMissingBranch(doc, path)
 	} else {
 		if val, _ := doc.Get(filterKey); val != nil {
 			vals = []any{val}
+		} else {
+			missing = true
 		}
 	}
 
@@ -109,29 +113,24 @@ func filterDocumentPair(doc *types.Document, filterKey string, filterValue any, 
 
 	switch filterValue := filterValue.(type) {
 	case *types.Document:
-		var docs []*types.Document
+		branches := make([]*types.Document, 0, len(vals)+1)
 		for _, val := range vals {
-			docs = append(docs, must.NotFail(types.NewDocument(filterSuffix, val)))
+			branches = append(branches, must.NotFail(types.NewDocument(filterSuffix, val)))
 		}
 
-		if len(docs) == 0 {
-			// operators like $nin uses empty document to filter non-existent field
-			docs = append(docs, types.MakeDocument(0))
+		if missing {
+			// an empty document stands for the non-existent field
+			branches = append(branches, types.MakeDocument(0))
 		}
 
-		for _, doc := range docs {
+		if len(branches) == 1 {
 			// {field: {expr}} or {field: {document}}
-			ok, err := filterFieldExpr(doc, filterKey, filterSuffix, filterValue, cmp)
-			if err != nil {
-				return false, err
-			}
-
-			if ok {
-				return true, nil
-			}
+			return filterFieldExpr(branches[0], filterKey, filterSuffix, filterValue, cmp)
 		}
+
+		return filterFieldExprBranches(branches, filterKey, filterSuffix, filterValue, cmp)
 	case types.NullType:
-		if len(vals) == 0 {
+		if missing {
 			// comparing non-existent field with null returns true
 			return true, nil
 		}
@@ -162,6 +161,73 @@ func filterDocumentPair(doc *types.Document, filterKey string, filterValue any, 
 
 	// If we got here, it means that none of the documents matched the filter.
 	return false, nil
+}
+
+// filterFieldExprBranches evaluates {field: {expr}} when a dotted path reaches
+// zero or several branches through arrays. Like MongoDB, each operator is
+// evaluated on its own: a positive operator needs one matching branch, a
+// negated one ($ne, $nin, $not, $exists: false) needs every branch to match.
+func filterFieldExprBranches(branches []*types.Document, filterKey, filterSuffix string, expr *types.Document, cmp *collation.Comparator) (bool, error) {
+	// Zero branches still evaluate once so invalid operator arguments surface.
+	errProbe := types.MakeDocument(0)
+
+	if expr.Len() == 0 || !strings.HasPrefix(expr.Keys()[0], "$") {
+		if _, err := filterFieldExpr(errProbe, filterKey, filterSuffix, expr, cmp); err != nil {
+			return false, err
+		}
+		for _, branch := range branches {
+			if ok, err := filterFieldExpr(branch, filterKey, filterSuffix, expr, cmp); err != nil || ok {
+				return ok, err
+			}
+		}
+		return false, nil
+	}
+
+	for _, op := range expr.Keys() {
+		if op == "$options" {
+			continue
+		}
+
+		opValue := must.NotFail(expr.Get(op))
+		opExpr := must.NotFail(types.NewDocument(op, opValue))
+		if options, err := expr.Get("$options"); err == nil && op == "$regex" {
+			opExpr.Set("$options", options)
+		}
+
+		if _, err := filterFieldExpr(errProbe, filterKey, filterSuffix, opExpr, cmp); err != nil {
+			return false, err
+		}
+
+		negated := isNegatedFieldOperator(op, opValue)
+		matched := negated
+		for _, branch := range branches {
+			ok, err := filterFieldExpr(branch, filterKey, filterSuffix, opExpr, cmp)
+			if err != nil {
+				return false, err
+			}
+			if ok != negated {
+				matched = ok
+				break
+			}
+		}
+
+		if !matched {
+			return false, nil
+		}
+	}
+
+	return true, nil
+}
+
+func isNegatedFieldOperator(op string, value any) bool {
+	switch op {
+	case "$ne", "$nin", "$not":
+		return true
+	case "$exists":
+		exists, err := filterFieldExprExists(true, value)
+		return err == nil && !exists
+	}
+	return false
 }
 
 // filterOperator handles a top-level operator filter {$operator: filterValue}.
