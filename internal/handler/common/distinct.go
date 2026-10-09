@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"sort"
 	"strconv"
 	"time"
 
@@ -32,6 +33,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 //nolint:vet // for readability
@@ -303,7 +305,7 @@ func FilterDistinctValues(iter types.DocumentsIterator, key string, cmp *collati
 	}
 
 	distinct := dedup.array()
-	SortArray(distinct, types.Ascending)
+	sortDistinctValues(distinct)
 
 	return distinct, nil
 }
@@ -373,7 +375,7 @@ func DedupDistinctValues(values []any) (*types.Array, error) {
 	}
 
 	out := dedup.array()
-	SortArray(out, types.Ascending)
+	sortDistinctValues(out)
 	return out, nil
 }
 
@@ -436,3 +438,18 @@ func (s *distinctSet) array() *types.Array {
 	return arr
 }
 
+// sortDistinctValues orders values canonically like MongoDB's distinct: by BSON
+// type, then value, comparing arrays element-wise rather than by their minimum
+// element as a sort does.
+func sortDistinctValues(arr *types.Array) {
+	vals := make([]any, arr.Len())
+	for i := range vals {
+		vals[i] = must.NotFail(arr.Get(i))
+	}
+	sort.SliceStable(vals, func(i, j int) bool {
+		return types.CompareForAggregation(vals[i], vals[j]) == types.Less
+	})
+	for i, v := range vals {
+		must.NoError(arr.Set(i, v))
+	}
+}
