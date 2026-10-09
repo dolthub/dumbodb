@@ -367,11 +367,7 @@ type mergeLoser struct {
 func indexKeyDoc(doc *types.Document, idx backends.IndexInfo) *types.Document {
 	kd := must.NotFail(types.NewDocument())
 	for _, kp := range idx.Key {
-		v, err := doc.Get(kp.Field)
-		if err != nil {
-			v = types.Null
-		}
-		kd.Set(kp.Field, v)
+		kd.Set(kp.Field, indexFieldValue(doc, kp.Field))
 	}
 	return kd
 }

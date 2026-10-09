@@ -35,6 +35,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/bson"
 	"github.com/dolthub/dumbodb/internal/bsonindexed"
 	"github.com/dolthub/dumbodb/internal/collation"
+	"github.com/dolthub/dumbodb/internal/handler/commonpath"
 	idxpkg "github.com/dolthub/dumbodb/internal/index"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
@@ -1526,11 +1527,7 @@ func pickHintedIndex(hint any, idxInfos []backends.IndexInfo) string {
 func extractIndexKey(doc *types.Document, idx backends.IndexInfo) []any {
 	key := make([]any, len(idx.Key))
 	for i, kp := range idx.Key {
-		val, err := doc.Get(kp.Field)
-		if err != nil {
-			val = types.Null
-		}
-		key[i] = val
+		key[i] = indexFieldValue(doc, kp.Field)
 	}
 	return key
 }
@@ -1651,11 +1648,7 @@ func idDupKey(id any) *types.Document {
 func indexDupKey(doc *types.Document, idx backends.IndexInfo) *types.Document {
 	pairs := make([]any, 0, len(idx.Key)*2)
 	for _, kp := range idx.Key {
-		v, err := doc.Get(kp.Field)
-		if err != nil {
-			v = types.Null
-		}
-		pairs = append(pairs, kp.Field, v)
+		pairs = append(pairs, kp.Field, indexFieldValue(doc, kp.Field))
 	}
 	return must.NotFail(types.NewDocument(pairs...))
 }
@@ -3165,14 +3158,48 @@ func (c *collection) validateUniqueOnUpdate(ctx context.Context, state *dbState,
 func extractIndexFieldValues(doc *types.Document, idx backends.IndexInfo) []any {
 	vals := make([]any, len(idx.Key))
 	for i, kp := range idx.Key {
-		v, err := doc.Get(kp.Field)
-		if err != nil {
-			vals[i] = types.Null
-		} else {
-			vals[i] = v
-		}
+		vals[i] = indexFieldValue(doc, kp.Field)
 	}
 	return vals
+}
+
+// indexFieldValue resolves an index key field, which may be a dotted path,
+// against doc. A missing path yields types.Null. A path that traverses arrays
+// and reaches several values yields them as one flattened *types.Array, so the
+// caller's multikey expansion indexes each.
+func indexFieldValue(doc *types.Document, field string) any {
+	if !strings.Contains(field, ".") {
+		v, err := doc.Get(field)
+		if err != nil {
+			return types.Null
+		}
+		return v
+	}
+	path, err := types.NewPathFromString(field)
+	if err != nil {
+		return types.Null
+	}
+	vals, err := commonpath.FindValues(doc, path, &commonpath.FindValuesOpts{
+		FindArrayDocuments: true,
+		FindArrayIndex:     true,
+	})
+	if err != nil || len(vals) == 0 {
+		return types.Null
+	}
+	if len(vals) == 1 {
+		return vals[0]
+	}
+	flat := types.MakeArray(len(vals))
+	for _, v := range vals {
+		if arr, ok := v.(*types.Array); ok {
+			for i := 0; i < arr.Len(); i++ {
+				flat.Append(must.NotFail(arr.Get(i)))
+			}
+			continue
+		}
+		flat.Append(v)
+	}
+	return flat
 }
 
 // expandMultiKeyValues expands field values for multi-key indexing. If any
