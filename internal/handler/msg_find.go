@@ -355,6 +355,12 @@ func (h *Handler) makeFindQueryParams(ctx context.Context, params *common.FindPa
 		qp.Limit = params.Limit
 	}
 
+	if !h.DisablePushdown {
+		if fields, ok := findRootFields(params); ok {
+			qp.Fields = fields
+		}
+	}
+
 	if h.L.Enabled(ctx, slog.LevelDebug) {
 		h.L.DebugContext(ctx, fmt.Sprintf("Converted %+v for %+v to %+v.", params, cInfo, qp))
 	}
