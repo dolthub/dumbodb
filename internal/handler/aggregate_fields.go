@@ -17,6 +17,7 @@ package handler
 import (
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -24,8 +25,8 @@ import (
 
 // pipelineRootFields returns the top-level fields of the source documents that
 // a pipeline reads. It returns false unless the pipeline is $match, $sort,
-// $limit and $skip stages ending in $group or $count, which discard every
-// field they do not read.
+// $limit and $skip stages followed by $group, $count or an inclusion $project,
+// which discard every field they do not read.
 func pipelineRootFields(pipeline []any) ([]string, bool) {
 	var roots []string
 	for _, v := range pipeline {
@@ -68,11 +69,60 @@ func pipelineRootFields(pipeline []any) ([]string, bool) {
 				return nil, false
 			}
 			return roots, true
+		case "$project":
+			projection, ok := spec.(*types.Document)
+			if !ok {
+				return nil, false
+			}
+			roots = appendRoot(roots, "_id")
+			if included, ok := appendProjectStageRootFields(projection, &roots, true); !ok || !included {
+				return nil, false
+			}
+			return roots, true
 		default:
 			return nil, false
 		}
 	}
 	return nil, false
+}
+
+// appendProjectStageRootFields adds the fields an inclusion $project reads and
+// reports whether it includes anything. It returns false for exclusions.
+func appendProjectStageRootFields(projection *types.Document, roots *[]string, top bool) (included, ok bool) {
+	keys := projection.Keys()
+	for i, v := range projection.Values() {
+		key := keys[i]
+		switch v := v.(type) {
+		case bool, int32, int64, float64:
+			if !isTruthy(v) {
+				if top && key == "_id" {
+					continue
+				}
+				return false, false
+			}
+			*roots = appendRoot(*roots, key)
+		case *types.Document:
+			if op := v.Command(); strings.HasPrefix(op, "$") {
+				if op == "$meta" || !appendExprRootFields(v, roots) {
+					return false, false
+				}
+			} else {
+				*roots = appendRoot(*roots, key)
+				if _, ok := appendProjectStageRootFields(v, roots, false); !ok {
+					return false, false
+				}
+			}
+		case string, *types.Array:
+			if !appendExprRootFields(v, roots) {
+				return false, false
+			}
+		case types.Binary, types.ObjectID, time.Time, types.NullType, types.Regex, types.Timestamp:
+		default:
+			return false, false
+		}
+		included = true
+	}
+	return included, true
 }
 
 // appendExprRootFields adds the fields an aggregation expression reads. It
