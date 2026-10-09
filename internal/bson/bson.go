@@ -110,6 +110,11 @@ func convertFromTypes(v any) (any, error) {
 		// This path is a best-effort fallback that encodes MaxKey as null.
 		return wirebson.Null, nil
 
+	case types.UndefinedType:
+		// wirebson doesn't support Undefined; command replies encode it via
+		// types.Document.AppendBSON. This fallback encodes it as null.
+		return wirebson.Null, nil
+
 	default:
 		panic(fmt.Sprintf("invalid type %T", v))
 	}

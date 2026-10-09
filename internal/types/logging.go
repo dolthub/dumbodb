@@ -94,6 +94,9 @@ func slogValue(v any, depth int) slog.Value {
 	case NullType:
 		return slog.Value{}
 
+	case UndefinedType:
+		return slog.StringValue("undefined")
+
 	case Regex:
 		return slog.StringValue(fmt.Sprintf("%#v", v))
 

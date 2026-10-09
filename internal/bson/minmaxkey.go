@@ -29,9 +29,10 @@ import (
 )
 
 const (
-	bsonTagMinKey byte = 0xFF
-	bsonTagMaxKey byte = 0x7F
-	bsonTagNull   byte = 0x0A
+	bsonTagMinKey    byte = 0xFF
+	bsonTagMaxKey    byte = 0x7F
+	bsonTagNull      byte = 0x0A
+	bsonTagUndefined byte = 0x06
 )
 
 // hasMinMaxKey returns true if the raw BSON document contains MinKey or MaxKey at the top level.
@@ -354,6 +355,10 @@ func writeRawField(buf *bytes.Buffer, k string, v any) error {
 		// No value bytes.
 	case types.MaxKeyType:
 		buf.WriteByte(bsonTagMaxKey)
+		writeRawCString(buf, k)
+		// No value bytes.
+	case types.UndefinedType:
+		buf.WriteByte(bsonTagUndefined)
 		writeRawCString(buf, k)
 		// No value bytes.
 	case *types.Document:

@@ -179,6 +179,9 @@ func Identical(a, b any) bool {
 		}
 
 		return a == b
+	case UndefinedType:
+		_, ok := b.(UndefinedType)
+		return ok
 	case MinKeyType:
 		_, ok := b.(MinKeyType)
 		return ok

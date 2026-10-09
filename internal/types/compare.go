@@ -233,6 +233,12 @@ func compareScalars(v1, v2 any) CompareResult {
 
 		return compareTypeOrder(v1, v2)
 
+	case UndefinedType:
+		if _, ok := v2.(UndefinedType); ok {
+			return Equal
+		}
+		return compareTypeOrder(v1, v2)
+
 	case MinKeyType:
 		if _, ok := v2.(MinKeyType); ok {
 			return Equal

@@ -186,6 +186,9 @@ func distinctKey(v any) ([]byte, bool) {
 	case types.MinKeyType:
 		return []byte{tagMinKey}, true
 
+	case types.UndefinedType:
+		return []byte{tagUndefined}, true
+
 	case types.MaxKeyType:
 		return []byte{tagMaxKey}, true
 
@@ -223,6 +226,7 @@ const (
 	tagMinKey     byte = 0x09
 	tagMaxKey     byte = 0x0a
 	tagDecimal128 byte = 0x0b
+	tagUndefined  byte = 0x0c
 )
 
 // numericIntKey encodes an integer in the numeric bucket. int32(n), int64(n),

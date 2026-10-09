@@ -66,6 +66,8 @@ func FormatAnyValue(value any) string {
 		return fmt.Sprintf("new Date(%d)", value.UnixMilli())
 	case NullType:
 		return "null"
+	case UndefinedType:
+		return "undefined"
 	case Regex:
 		return fmt.Sprintf("/%s/%s", value.Pattern, value.Options)
 	case int32:
