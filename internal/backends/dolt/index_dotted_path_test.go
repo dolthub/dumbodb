@@ -17,7 +17,6 @@ package dolt
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"testing"
 
 	"github.com/dolthub/dumbodb/internal/backends"
@@ -27,11 +26,15 @@ import (
 
 func newDottedPathTestCollection(t *testing.T, idx backends.IndexInfo) backends.Collection {
 	t.Helper()
+	_, c := newDottedPathTestBackend(t, idx)
+	return c
+}
+
+// newDottedPathTestBackend creates idxdb.tests holding a seed doc {_id: 0} and idx.
+func newDottedPathTestBackend(t *testing.T, idx backends.IndexInfo) (*Backend, backends.Collection) {
+	t.Helper()
 	ctx := context.Background()
-	b, err := NewBackend(t.TempDir(), slog.Default(), false, false, 0, 0)
-	if err != nil {
-		t.Fatalf("NewBackend: %v", err)
-	}
+	b := newTestBackend(t)
 	db, err := b.Database("idxdb")
 	if err != nil {
 		t.Fatalf("Database: %v", err)
@@ -47,7 +50,7 @@ func newDottedPathTestCollection(t *testing.T, idx backends.IndexInfo) backends.
 	if _, err := c.CreateIndexes(ctx, &backends.CreateIndexesParams{Indexes: []backends.IndexInfo{idx}}); err != nil {
 		t.Fatalf("CreateIndexes: %v", err)
 	}
-	return c
+	return b, c
 }
 
 func insertDottedPathDoc(c backends.Collection, doc *types.Document) error {
