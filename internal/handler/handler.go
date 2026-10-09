@@ -110,7 +110,6 @@ type NewOpts struct {
 
 	// test options
 	DisablePushdown         bool
-	EnableNestedPushdown    bool
 	CappedCleanupInterval   time.Duration
 	CappedCleanupPercentage uint8
 	EnableNewAuth           bool

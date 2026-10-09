@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"sort"
 	"strconv"
 	"time"
 
@@ -32,6 +33,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 //nolint:vet // for readability
@@ -186,6 +188,9 @@ func distinctKey(v any) ([]byte, bool) {
 	case types.MinKeyType:
 		return []byte{tagMinKey}, true
 
+	case types.UndefinedType:
+		return []byte{tagUndefined}, true
+
 	case types.MaxKeyType:
 		return []byte{tagMaxKey}, true
 
@@ -223,6 +228,7 @@ const (
 	tagMinKey     byte = 0x09
 	tagMaxKey     byte = 0x0a
 	tagDecimal128 byte = 0x0b
+	tagUndefined  byte = 0x0c
 )
 
 // numericIntKey encodes an integer in the numeric bucket. int32(n), int64(n),
@@ -299,9 +305,50 @@ func FilterDistinctValues(iter types.DocumentsIterator, key string, cmp *collati
 	}
 
 	distinct := dedup.array()
-	SortArray(distinct, types.Ascending)
+	sortDistinctValues(distinct)
 
 	return distinct, nil
+}
+
+// IndexKeyDistinctValues returns the distinct values MongoDB reports when it
+// answers distinct from an index on key (DISTINCT_SCAN): every document's index
+// keys, so a missing field yields null and an empty array yields undefined. A
+// sparse index omits documents in which the path reaches no value.
+func IndexKeyDistinctValues(iter types.DocumentsIterator, key string, sparse bool) (*types.Array, error) {
+	defer iter.Close()
+
+	path, err := types.NewPathFromString(key)
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+
+	var keys []any
+	for {
+		_, doc, err := iter.Next()
+		if errors.Is(err, iterator.ErrIteratorDone) {
+			break
+		}
+		if err != nil {
+			return nil, lazyerrors.Error(err)
+		}
+
+		if sparse {
+			vals, err := commonpath.FindValues(doc, path, &commonpath.FindValuesOpts{
+				FindArrayIndex:     true,
+				FindArrayDocuments: true,
+			})
+			if err != nil {
+				return nil, lazyerrors.Error(err)
+			}
+			if len(vals) == 0 {
+				continue
+			}
+		}
+
+		keys = append(keys, commonpath.IndexKeyValues(doc, path)...)
+	}
+
+	return DedupDistinctValues(keys)
 }
 
 // DedupDistinctValues deduplicates a slice of pre-extracted field values and
@@ -328,7 +375,7 @@ func DedupDistinctValues(values []any) (*types.Array, error) {
 	}
 
 	out := dedup.array()
-	SortArray(out, types.Ascending)
+	sortDistinctValues(out)
 	return out, nil
 }
 
@@ -389,4 +436,20 @@ func (s *distinctSet) array() *types.Array {
 		arr.Append(v)
 	}
 	return arr
+}
+
+// sortDistinctValues orders values canonically like MongoDB's distinct: by BSON
+// type, then value, comparing arrays element-wise rather than by their minimum
+// element as a sort does.
+func sortDistinctValues(arr *types.Array) {
+	vals := make([]any, arr.Len())
+	for i := range vals {
+		vals[i] = must.NotFail(arr.Get(i))
+	}
+	sort.SliceStable(vals, func(i, j int) bool {
+		return types.CompareForAggregation(vals[i], vals[j]) == types.Less
+	})
+	for i, v := range vals {
+		must.NoError(arr.Set(i, v))
+	}
 }

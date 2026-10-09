@@ -53,7 +53,7 @@ func bsonValueSize(v any) int {
 		return ObjectIDLen
 	case bool:
 		return 1
-	case NullType, MinKeyType, MaxKeyType:
+	case NullType, MinKeyType, MaxKeyType, UndefinedType:
 		return 0
 	case Regex:
 		return len(v.Pattern) + 1 + len(v.Options) + 1

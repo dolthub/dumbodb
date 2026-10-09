@@ -29,6 +29,7 @@ type compareTypeOrderResult uint8
 const (
 	_ compareTypeOrderResult = iota
 	minKeyDataType
+	undefinedDataType
 	nullDataType
 	nanDataType
 	numbersDataType
@@ -87,6 +88,8 @@ func detectDataType(value any) compareTypeOrderResult {
 		return numbersDataType
 	case MinKeyType:
 		return minKeyDataType
+	case UndefinedType:
+		return undefinedDataType
 	case MaxKeyType:
 		return maxKeyDataType
 	default:

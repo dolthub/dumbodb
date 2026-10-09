@@ -17,7 +17,6 @@ package handler
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/collation"
@@ -122,7 +121,7 @@ func (f *foreignFetcher) Fetch(ctx context.Context, collName string, filter *typ
 		defer closer.Close()
 
 		cmp := collation.Parse(info.Collation).Comparator()
-		iter, err := viewSourceIterator(ctx, db, info.Name, info.ViewOn, info.ViewPipeline, cmp, closer, false, false)
+		iter, err := viewSourceIterator(ctx, db, info.Name, info.ViewOn, info.ViewPipeline, cmp, closer, false)
 		if err != nil {
 			return nil, err
 		}
@@ -393,7 +392,7 @@ func pipelineForeignNamespaces(pipeline *types.Array) []string {
 // Callers layer their own filter, sort, projection, skip and limit on top of
 // the returned iterator, matching how MongoDB resolves a read against a view to
 // an aggregation over its source.
-func viewSourceIterator(ctx context.Context, db backends.Database, viewName, viewOn string, viewPipeline *types.Array, cmp *collation.Comparator, closer *iterator.MultiCloser, disablePushdown, enableNestedPushdown bool) (types.DocumentsIterator, error) { //nolint:lll // for readability
+func viewSourceIterator(ctx context.Context, db backends.Database, viewName, viewOn string, viewPipeline *types.Array, cmp *collation.Comparator, closer *iterator.MultiCloser, disablePushdown bool) (types.DocumentsIterator, error) { //nolint:lll // for readability
 	baseCollection, viewStages, rawStages, err := resolveViewChain(ctx, db, viewName, viewOn, viewPipeline, cmp)
 	if err != nil {
 		return nil, err
@@ -416,18 +415,6 @@ func viewSourceIterator(ctx context.Context, db backends.Database, viewName, vie
 
 	if !disablePushdown {
 		qp.Filter = filter
-	}
-
-	if !enableNestedPushdown && filter != nil {
-		qp.Filter = filter.DeepCopy()
-
-		for _, k := range qp.Filter.Keys() {
-			if !strings.ContainsRune(k, '.') {
-				continue
-			}
-
-			qp.Filter.Remove(k)
-		}
 	}
 
 	return processStagesDocuments(ctx, closer, &stagesDocumentsParams{srcColl, qp, viewStages})

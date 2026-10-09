@@ -65,15 +65,8 @@ func collCompareOrderOp(a, b any, order types.SortType, cmp *collation.Comparato
 // cmp and falls back to standard ordering for non-string values.
 func lessFuncCollated(sortPath types.Path, sortType types.SortType, cmp *collation.Comparator) func(a, b *types.Document) bool {
 	return func(a, b *types.Document) bool {
-		aField, err := a.GetByPath(sortPath)
-		if err != nil {
-			aField = types.Null
-		}
-
-		bField, err := b.GetByPath(sortPath)
-		if err != nil {
-			bField = types.Null
-		}
+		aField := sortKeyValue(a, sortPath)
+		bField := sortKeyValue(b, sortPath)
 
 		aStr, aIsStr := aField.(string)
 		bStr, bIsStr := bField.(string)

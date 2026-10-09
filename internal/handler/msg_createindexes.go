@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/FerretDB/wire"
@@ -181,6 +180,7 @@ func (h *Handler) MsgCreateIndexes(connCtx context.Context, msg *wire.OpMsg) (*w
 		numIndexesBefore = 1
 	}
 
+	requested := len(toCreate)
 	if toCreate, err = validateIndexesForCreation(command, beforeCreate.Indexes, toCreate); err != nil {
 		return nil, err
 	}
@@ -203,10 +203,14 @@ func (h *Handler) MsgCreateIndexes(connCtx context.Context, msg *wire.OpMsg) (*w
 	resp.Set("numIndexesBefore", int32(numIndexesBefore))
 	resp.Set("numIndexesAfter", int32(numIndexesBefore+len(toCreate)))
 
-	if len(toCreate) > 0 {
-		resp.Set("createdCollectionAutomatically", createCollection)
-	} else {
+	switch {
+	case len(toCreate) == 0:
 		resp.Set("note", "all indexes already exist")
+	case len(toCreate) < requested:
+		resp.Set("createdCollectionAutomatically", createCollection)
+		resp.Set("note", "index already exists")
+	default:
+		resp.Set("createdCollectionAutomatically", createCollection)
 	}
 
 	resp.Set("ok", float64(1))
@@ -605,8 +609,7 @@ func sameCollation(a, b *types.Document) bool {
 // validateIndexesForCreation filters duplicates out of toCreate and returns an
 // error if any index conflicts with an existing one or has an invalid spec.
 func validateIndexesForCreation(command string, existing, toCreate []backends.IndexInfo) ([]backends.IndexInfo, error) {
-	filteredToCreate := make([]backends.IndexInfo, len(toCreate))
-	copy(filteredToCreate, toCreate)
+	filteredToCreate := make([]backends.IndexInfo, 0, len(toCreate))
 
 	for i, newIdx := range toCreate {
 		newKey := formatIndexKey(newIdx.Key)
@@ -667,12 +670,13 @@ func validateIndexesForCreation(command string, existing, toCreate []backends.In
 			}
 		}
 
+		identical := false
 		for _, existingIdx := range existing {
 			existingKey := formatIndexKey(existingIdx.Key)
 
 			if (newIdx.Name == existingIdx.Name && newKey == existingKey && sameCollation(newIdx.Collation, existingIdx.Collation)) || newKey == "_id: 1" {
 				// Fully identical indexes are ignored, no need to attempt to create them.
-				filteredToCreate = slices.Delete(filteredToCreate, i, i+1)
+				identical = true
 				break
 			}
 
@@ -692,6 +696,9 @@ func validateIndexesForCreation(command string, existing, toCreate []backends.In
 				msg := fmt.Sprintf("Index already exists with a different name: %s", existingIdx.Name)
 				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIndexOptionsConflict, msg, command)
 			}
+		}
+		if !identical {
+			filteredToCreate = append(filteredToCreate, newIdx)
 		}
 	}
 

@@ -390,18 +390,6 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			qp.Filter = filter
 		}
 
-		if !h.EnableNestedPushdown && filter != nil {
-			qp.Filter = filter.DeepCopy()
-
-			for _, k := range qp.Filter.Keys() {
-				if !strings.ContainsRune(k, '.') {
-					continue
-				}
-
-				qp.Filter.Remove(k)
-			}
-		}
-
 		if sort, err = common.ValidateSortDocument(sort); err != nil {
 			closer.Close()
 
@@ -536,6 +524,10 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			}
 
 			qp.Sort = sort
+		}
+
+		if hint, _ := document.Get("hint"); hint != nil {
+			qp.Hint = hint
 		}
 
 		iter, err = processStagesDocuments(ctx, closer, &stagesDocumentsParams{c, qp, stagesDocuments})

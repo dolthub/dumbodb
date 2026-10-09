@@ -9,29 +9,30 @@ func _() {
 	// Re-run the stringer command to generate them again.
 	var x [1]struct{}
 	_ = x[minKeyDataType-1]
-	_ = x[nullDataType-2]
-	_ = x[nanDataType-3]
-	_ = x[numbersDataType-4]
-	_ = x[stringDataType-5]
-	_ = x[documentDataType-6]
-	_ = x[arrayDataType-7]
-	_ = x[binDataType-8]
-	_ = x[objectIDDataType-9]
-	_ = x[booleanDataType-10]
-	_ = x[dateDataType-11]
-	_ = x[timestampDataType-12]
-	_ = x[regexDataType-13]
-	_ = x[maxKeyDataType-14]
+	_ = x[undefinedDataType-2]
+	_ = x[nullDataType-3]
+	_ = x[nanDataType-4]
+	_ = x[numbersDataType-5]
+	_ = x[stringDataType-6]
+	_ = x[documentDataType-7]
+	_ = x[arrayDataType-8]
+	_ = x[binDataType-9]
+	_ = x[objectIDDataType-10]
+	_ = x[booleanDataType-11]
+	_ = x[dateDataType-12]
+	_ = x[timestampDataType-13]
+	_ = x[regexDataType-14]
+	_ = x[maxKeyDataType-15]
 }
 
-const _compareTypeOrderResult_name = "minKeyDataTypenullDataTypenanDataTypenumbersDataTypestringDataTypedocumentDataTypearrayDataTypebinDataTypeobjectIDDataTypebooleanDataTypedateDataTypetimestampDataTyperegexDataTypemaxKeyDataType"
+const _compareTypeOrderResult_name = "minKeyDataTypeundefinedDataTypenullDataTypenanDataTypenumbersDataTypestringDataTypedocumentDataTypearrayDataTypebinDataTypeobjectIDDataTypebooleanDataTypedateDataTypetimestampDataTyperegexDataTypemaxKeyDataType"
 
-var _compareTypeOrderResult_index = [...]uint8{0, 14, 26, 37, 52, 66, 82, 95, 106, 122, 137, 149, 166, 179, 193}
+var _compareTypeOrderResult_index = [...]uint8{0, 14, 31, 43, 54, 69, 83, 99, 112, 123, 139, 154, 166, 183, 196, 210}
 
 func (i compareTypeOrderResult) String() string {
-	i -= 1
-	if i >= compareTypeOrderResult(len(_compareTypeOrderResult_index)-1) {
-		return "compareTypeOrderResult(" + strconv.FormatInt(int64(i+1), 10) + ")"
+	idx := int(i) - 1
+	if i < 1 || idx >= len(_compareTypeOrderResult_index)-1 {
+		return "compareTypeOrderResult(" + strconv.FormatInt(int64(i), 10) + ")"
 	}
-	return _compareTypeOrderResult_name[_compareTypeOrderResult_index[i]:_compareTypeOrderResult_index[i+1]]
+	return _compareTypeOrderResult_name[_compareTypeOrderResult_index[idx]:_compareTypeOrderResult_index[idx+1]]
 }

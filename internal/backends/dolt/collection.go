@@ -35,6 +35,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/bson"
 	"github.com/dolthub/dumbodb/internal/bsonindexed"
 	"github.com/dolthub/dumbodb/internal/collation"
+	"github.com/dolthub/dumbodb/internal/handler/commonpath"
 	idxpkg "github.com/dolthub/dumbodb/internal/index"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
@@ -111,7 +112,22 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 	// index lookup and the _id point lookup below.
 	naturalHint := params != nil && backends.HintIsNatural(params.Hint)
 
-	if !naturalHint && params != nil && params.Filter != nil && params.Sort.Len() == 0 &&
+	sparseHint, err := c.hintedSparseIndex(ctx, state, params)
+	if err != nil {
+		return nil, err
+	}
+	if sparseHint != nil {
+		res, err := c.queryUnhintedSparse(ctx, params)
+		if err != nil {
+			return nil, err
+		}
+		res.Iter = newSparseMemberIter(res.Iter, *sparseHint)
+		return res, nil
+	}
+
+	fieldSort := params != nil && sortIsSingleField(params.Sort)
+
+	if !naturalHint && params != nil && params.Filter != nil && (params.Sort.Len() == 0 || fieldSort) &&
 		(!params.Collated || params.Collation != nil) {
 		if docs, used, err := c.tryIndexLookup(ctx, state, m, params.Filter, params.Hint, params.Collation); used {
 			if err != nil {
@@ -123,8 +139,18 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 		}
 	}
 
+	if !naturalHint && fieldSort {
+		iter, ok, err := c.trySortWalk(ctx, state, m, params)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			return &backends.QueryResult{Iter: iter, Sorted: true}, nil
+		}
+	}
+
 	reverse := false
-	if params != nil && params.Sort != nil && params.Sort.Len() > 0 {
+	if params != nil && sortIsNatural(params.Sort) {
 		sortVal := params.Sort.Map()["$natural"].(int64)
 		reverse = sortVal == -1
 	}
@@ -175,6 +201,55 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 		}
 	}
 	return &backends.QueryResult{Iter: iter}, nil
+}
+
+// hintedSparseIndex returns the sparse index params hints, or nil.
+func (c *collection) hintedSparseIndex(ctx context.Context, state *dbState, params *backends.QueryParams) (*backends.IndexInfo, error) {
+	if params == nil || params.Hint == nil || params.OnlyRecordIDs || backends.HintIsNatural(params.Hint) {
+		return nil, nil
+	}
+	state.mu.RLock()
+	infos, _, err := resolveIndexes(ctx, c, state)
+	state.mu.RUnlock()
+	if err != nil {
+		return nil, err
+	}
+	name := backends.MatchHintedIndex(params.Hint, infos)
+	for i := range infos {
+		if infos[i].Name == name && infos[i].Sparse {
+			return &infos[i], nil
+		}
+	}
+	return nil, nil
+}
+
+// queryUnhintedSparse runs params with its sparse-index hint removed; the
+// caller restricts the result to the index's members.
+func (c *collection) queryUnhintedSparse(ctx context.Context, params *backends.QueryParams) (*backends.QueryResult, error) {
+	unhinted := *params
+	unhinted.Hint = nil
+	return c.Query(ctx, &unhinted)
+}
+
+// sparseMemberIter yields only documents a sparse index holds. MongoDB answers
+// a query hinted onto a sparse index from the index alone, so documents
+// missing every indexed field are absent even when the filter matches them.
+type sparseMemberIter struct {
+	types.DocumentsIterator
+	idx backends.IndexInfo
+}
+
+func newSparseMemberIter(iter types.DocumentsIterator, idx backends.IndexInfo) types.DocumentsIterator {
+	return &sparseMemberIter{DocumentsIterator: iter, idx: idx}
+}
+
+func (it *sparseMemberIter) Next() (struct{}, *types.Document, error) {
+	for {
+		k, doc, err := it.DocumentsIterator.Next()
+		if err != nil || !sparseExcludes(doc, it.idx) {
+			return k, doc, err
+		}
+	}
 }
 
 // buildScanPrefilter returns a byte-level predicate over a document's raw
@@ -430,10 +505,6 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 		if strings.HasPrefix(k, "$") {
 			return nil, false, nil
 		}
-		// Index is keyed on the flat field, so dotted-path constraints can't use it.
-		if strings.ContainsRune(k, '.') {
-			continue
-		}
 		entry, ok := indexedField[k]
 		if !ok {
 			continue
@@ -452,6 +523,9 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 		}
 		if queryCmp != nil {
 			v = collateFilterValue(v, queryCmp)
+		}
+		if idxInfos[entry.mapIdx].Multikey {
+			v = multikeyScanBound(v)
 		}
 		s, e, ok := indexBoundsForFilterValue(v)
 		if !ok {
@@ -593,6 +667,24 @@ func indexPointRangesForIn(v any) ([][2][]byte, bool) {
 // Returns ok=false for value shapes the index path can't handle (regex,
 // $in, $ne, nested operators, mixed comparisons against arrays, ...); the
 // caller falls back to the full-scan path.
+// multikeyScanBound drops the upper-bound operators from a range that has both
+// sides. On a multikey field each operator may be met by a different element
+// ({$gt: 2, $lt: 3} matches [1, 3]), so the sides cannot be intersected; like
+// MongoDB, scan one bound and let the filter re-check the rest.
+func multikeyScanBound(v any) any {
+	opDoc, ok := v.(*types.Document)
+	if !ok || opDoc.Has("$eq") || !(opDoc.Has("$gt") || opDoc.Has("$gte")) || !(opDoc.Has("$lt") || opDoc.Has("$lte")) {
+		return v
+	}
+	lower := types.MakeDocument(2)
+	for _, op := range opDoc.Keys() {
+		if op == "$gt" || op == "$gte" {
+			lower.Set(op, must.NotFail(opDoc.Get(op)))
+		}
+	}
+	return lower
+}
+
 func indexBoundsForFilterValue(v any) (startKey, stopKey []byte, ok bool) {
 	opDoc, isOp := v.(*types.Document)
 	if !isOp {
@@ -808,6 +900,9 @@ func compoundIndexBounds(idx backends.IndexInfo, filter *types.Document, queryCm
 			prefix = append(prefix, idxpkg.EncodeValue(eqVal)...)
 			continue
 		}
+		if idx.Multikey {
+			v = multikeyScanBound(v)
+		}
 		s, e, bok := indexBoundsForFilterValue(v)
 		if !bok {
 			if i == 0 {
@@ -912,7 +1007,7 @@ func buildOrUnionPlan(params *backends.ExplainParams, idxInfos []backends.IndexI
 			return nil, false
 		}
 		field := clause.Keys()[0]
-		if strings.HasPrefix(field, "$") || strings.ContainsRune(field, '.') {
+		if strings.HasPrefix(field, "$") {
 			return nil, false
 		}
 		val, err := clause.Get(field)
@@ -1026,15 +1121,14 @@ func pickIndexForFilter(filter *types.Document, idxInfos []backends.IndexInfo, q
 		if strings.HasPrefix(k, "$") {
 			return backends.IndexInfo{}, false
 		}
-		if strings.ContainsRune(k, '.') {
-			continue
-		}
 		v, err := filter.Get(k)
 		if err != nil {
 			continue
 		}
 		if _, _, ok := indexBoundsForFilterValue(v); !ok {
-			continue
+			if _, inOK := indexPointRangesForIn(v); !inOK {
+				continue
+			}
 		}
 		// Pick the best-ranked index whose leading field is k. A partial
 		// index is eligible only when the filter implies its partial
@@ -1206,14 +1300,10 @@ func (c *collection) Explain(ctx context.Context, params *backends.ExplainParams
 	// can drive the scan in sorted order without a SORT stage.
 	sortByIndex := false
 	if !naturalHint && !indexPicked && params != nil && sortIsSingleField(params.Sort) {
-		sortField := params.Sort.Keys()[0]
-		for _, idx := range idxInfos {
-			if len(idx.Key) == 1 && idx.Key[0].Field == sortField {
-				picked = idx
-				indexPicked = true
-				sortByIndex = true
-				break
-			}
+		if i, ok := sortWalkIndex(idxInfos, params.Sort, params.Collation); ok {
+			picked = idxInfos[i]
+			indexPicked = true
+			sortByIndex = true
 		}
 	} else if indexPicked && params != nil && sortIsSingleField(params.Sort) {
 		// Filter-driven pick: the sort is free whenever the sort key is
@@ -1221,9 +1311,14 @@ func (c *collection) Explain(ctx context.Context, params *backends.ExplainParams
 		// bound by an equality predicate in the filter (so the scan
 		// emits each remaining suffix in index order). Direction must
 		// agree with the index (ascending sort vs ascending key, etc.).
+		// A multikey index's bounded scan can't yield sort order: a document
+		// sorts by its min or max element, not the element the bounds matched.
 		sortField := params.Sort.Keys()[0]
 		sortAsc := sortDirectionAscending(params.Sort)
 		for pos, k := range picked.Key {
+			if picked.Multikey {
+				break
+			}
 			if k.Field != sortField {
 				continue
 			}
@@ -1238,7 +1333,7 @@ func (c *collection) Explain(ctx context.Context, params *backends.ExplainParams
 		}
 	}
 
-	if indexPicked && params != nil {
+	if indexPicked && params != nil && !picked.Multikey {
 		covered = projectionIsCoveredBy(params.Projection, picked)
 	}
 
@@ -1297,17 +1392,22 @@ func buildExplainPlan(command string, params *backends.ExplainParams, picked bac
 		return &explainStage{stage: "COUNT", input: leaf}
 
 	case "distinct":
-		// MongoDB emits PROJECTION_COVERED above DISTINCT_SCAN. DumboDB's
-		// DistinctScan path uses the index covering the distinct key; if
-		// no usable index, fall back to COLLSCAN (rare in practice; the
-		// parity test always provides one).
+		// MongoDB emits PROJECTION_COVERED above DISTINCT_SCAN for a top-level
+		// key and PROJECTION_DEFAULT for a dotted one. DumboDB's DistinctScan
+		// path uses the index covering the distinct key; if no usable index,
+		// fall back to COLLSCAN (rare in practice; the parity test always
+		// provides one).
 		if indexPicked {
 			leaf := &explainStage{
 				stage:      "DISTINCT_SCAN",
 				indexName:  picked.Name,
 				keyPattern: keyPatternOf(picked),
 			}
-			return &explainStage{stage: "PROJECTION_COVERED", input: leaf}
+			projection := "PROJECTION_COVERED"
+			if strings.ContainsRune(params.DistinctKey, '.') {
+				projection = "PROJECTION_DEFAULT"
+			}
+			return &explainStage{stage: projection, input: leaf}
 		}
 		return &explainStage{stage: "COLLSCAN"}
 
@@ -1437,8 +1537,7 @@ func sortIsSingleField(sort *types.Document) bool {
 	if sort == nil || sort.Len() != 1 {
 		return false
 	}
-	k := sort.Keys()[0]
-	return k != "$natural" && !strings.ContainsRune(k, '.')
+	return sort.Keys()[0] != "$natural"
 }
 
 // sortDirectionAscending assumes sort is already single-field (see sortIsSingleField).
@@ -1526,23 +1625,9 @@ func pickHintedIndex(hint any, idxInfos []backends.IndexInfo) string {
 func extractIndexKey(doc *types.Document, idx backends.IndexInfo) []any {
 	key := make([]any, len(idx.Key))
 	for i, kp := range idx.Key {
-		val, err := doc.Get(kp.Field)
-		if err != nil {
-			val = types.Null
-		}
-		key[i] = val
+		key[i] = indexFieldValue(doc, kp.Field)
 	}
 	return key
-}
-
-// allNull detects sparse index entries that are excluded from unique checks.
-func allNull(key []any) bool {
-	for _, v := range key {
-		if v != types.Null {
-			return false
-		}
-	}
-	return true
 }
 
 func indexKeysEqual(a, b []any) bool {
@@ -1651,11 +1736,7 @@ func idDupKey(id any) *types.Document {
 func indexDupKey(doc *types.Document, idx backends.IndexInfo) *types.Document {
 	pairs := make([]any, 0, len(idx.Key)*2)
 	for _, kp := range idx.Key {
-		v, err := doc.Get(kp.Field)
-		if err != nil {
-			v = types.Null
-		}
-		pairs = append(pairs, kp.Field, v)
+		pairs = append(pairs, kp.Field, indexFieldValue(doc, kp.Field))
 	}
 	return must.NotFail(types.NewDocument(pairs...))
 }
@@ -2385,7 +2466,7 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 	}
 
 	field := filter.Keys()[0]
-	if strings.HasPrefix(field, "$") || strings.ContainsRune(field, '.') {
+	if strings.HasPrefix(field, "$") {
 		return 0, false, nil
 	}
 
@@ -2546,12 +2627,6 @@ func (c *collection) DistinctScan(ctx context.Context, params *backends.Distinct
 	if params == nil || params.Key == "" {
 		return nil, nil
 	}
-	// Dotted paths address sub-document fields; the index is keyed on the
-	// flat top-level field, so it can't answer the request soundly.
-	if strings.ContainsRune(params.Key, '.') {
-		return nil, nil
-	}
-
 	m, exists, state, err := c.getMap(ctx)
 	if err != nil {
 		return nil, err
@@ -2596,8 +2671,7 @@ func (c *collection) DistinctScan(ctx context.Context, params *backends.Distinct
 		}
 		// Partial indexes only cover a subset of documents  -- a distinct
 		// scan over them would silently drop values from non-matching docs.
-		// Sparse indexes are fine because distinct already ignores missing
-		// fields.
+		// Sparse indexes are fine: MongoDB also reads distinct from them.
 		if idx.PartialFilterExpression != nil {
 			continue
 		}
@@ -2621,7 +2695,9 @@ func (c *collection) DistinctScan(ctx context.Context, params *backends.Distinct
 // per unique KeyString prefix. The secondary index key layout is
 // `[KeyString(value)][0x04][primaryID(20 bytes)]`; values with the same
 // KeyString prefix share a distinct value, so a single doc fetch per group
-// suffices to recover the original typed value.
+// suffices to recover the original typed value. Each fetched doc contributes
+// its MongoDB index keys, including null for a missing field and undefined for
+// an empty array, as MongoDB's DISTINCT_SCAN does.
 func scanDistinctFromIndex(
 	ctx context.Context,
 	idxMap prolly.Map,
@@ -2630,6 +2706,11 @@ func scanDistinctFromIndex(
 	field string,
 ) ([]any, error) {
 	const primaryIDLen = 20
+
+	path, err := types.NewPathFromString(field)
+	if err != nil {
+		return nil, err
+	}
 
 	iter, err := idxMap.IterAll(ctx)
 	if err != nil {
@@ -2669,23 +2750,21 @@ func scanDistinctFromIndex(
 		}
 		prefix := composite[:idStart-1]
 
-		if havePrev && bytes.Equal(prefix, prevPrefix) {
+		// Subdocuments and arrays all encode to one marker, so a group keyed by
+		// a marker holds distinct values and every member must be read.
+		if havePrev && bytes.Equal(prefix, prevPrefix) && !idxpkg.KeyMergesValues(prefix) {
 			continue
 		}
 
 		idBytes := make([]byte, primaryIDLen)
 		copy(idBytes, composite[idStart:])
 
-		val, err := lookupFieldFromPrimary(ctx, primary, ns, idBytes, field)
+		doc, err := lookupDocFromPrimary(ctx, primary, ns, idBytes)
 		if err != nil {
 			return nil, err
 		}
-		// A nil val means the document is missing the indexed field  --
-		// distinct ignores that case (matching FilterDistinctValues
-		// semantics). Sparse indexes won't produce these entries; for
-		// non-sparse indexes we still skip them.
-		if val != types.Null && val != nil {
-			out = append(out, val)
+		if doc != nil {
+			out = append(out, commonpath.IndexKeyValues(doc, path)...)
 		}
 
 		prevPrefix = append(prevPrefix[:0], prefix...)
@@ -2695,15 +2774,14 @@ func scanDistinctFromIndex(
 	return out, nil
 }
 
-// lookupFieldFromPrimary fetches the primary document by encoded _id bytes and
-// returns the value of `field`. Returns types.Null if the field is missing.
-func lookupFieldFromPrimary(
+// lookupDocFromPrimary fetches the primary document by encoded _id bytes, or
+// nil if it does not exist.
+func lookupDocFromPrimary(
 	ctx context.Context,
 	primary prolly.Map,
 	ns tree.NodeStore,
 	idBytes []byte,
-	field string,
-) (any, error) {
+) (*types.Document, error) {
 	key, err := buildKey(idBytes)
 	if err != nil {
 		return nil, fmt.Errorf("distinct scan building key: %w", err)
@@ -2723,14 +2801,7 @@ func lookupFieldFromPrimary(
 	}); err != nil {
 		return nil, fmt.Errorf("distinct scan primary fetch: %w", err)
 	}
-	if doc == nil {
-		return types.Null, nil
-	}
-	v, err := doc.Get(field)
-	if err != nil {
-		return types.Null, nil
-	}
-	return v, nil
+	return doc, nil
 }
 
 func (c *collection) ListIndexes(ctx context.Context, params *backends.ListIndexesParams) (*backends.ListIndexesResult, error) {
@@ -3026,7 +3097,7 @@ func checkUniqueBuildConflict(seen map[string][]byte, idx backends.IndexInfo, do
 			return nil
 		}
 	}
-	if idx.Sparse && allNull(extractIndexKey(doc, idx)) {
+	if sparseExcludes(doc, idx) {
 		return nil
 	}
 	for _, row := range rows {
@@ -3077,10 +3148,10 @@ func (c *collection) scanUniqueConflict(ctx context.Context, state *dbState, m p
 				continue
 			}
 		}
-		existKey := extractIndexKey(existingDoc, idx)
-		if idx.Sparse && allNull(existKey) {
+		if sparseExcludes(existingDoc, idx) {
 			continue
 		}
+		existKey := extractIndexKey(existingDoc, idx)
 		if indexKeysEqualColl(newKey, existKey, cmp) {
 			return true, nil
 		}
@@ -3165,14 +3236,81 @@ func (c *collection) validateUniqueOnUpdate(ctx context.Context, state *dbState,
 func extractIndexFieldValues(doc *types.Document, idx backends.IndexInfo) []any {
 	vals := make([]any, len(idx.Key))
 	for i, kp := range idx.Key {
-		v, err := doc.Get(kp.Field)
-		if err != nil {
-			vals[i] = types.Null
-		} else {
-			vals[i] = v
-		}
+		vals[i] = indexFieldValue(doc, kp.Field)
 	}
 	return vals
+}
+
+// sparseExcludes reports whether a sparse idx skips doc. Like MongoDB, a sparse
+// index holds every document in which some indexed field is present, even when
+// its value is null.
+func sparseExcludes(doc *types.Document, idx backends.IndexInfo) bool {
+	if !idx.Sparse {
+		return false
+	}
+	for _, kp := range idx.Key {
+		if indexFieldPresent(doc, kp.Field) {
+			return false
+		}
+	}
+	return true
+}
+
+// indexFieldPresent reports whether field, which may be a dotted path, reaches
+// at least one value in doc.
+func indexFieldPresent(doc *types.Document, field string) bool {
+	if !strings.Contains(field, ".") {
+		_, err := doc.Get(field)
+		return err == nil
+	}
+	path, err := types.NewPathFromString(field)
+	if err != nil {
+		return false
+	}
+	vals, err := commonpath.FindValues(doc, path, &commonpath.FindValuesOpts{
+		FindArrayDocuments: true,
+		FindArrayIndex:     true,
+	})
+	return err == nil && len(vals) > 0
+}
+
+// indexFieldValue resolves an index key field, which may be a dotted path,
+// against doc. A missing path yields types.Null. A path that traverses arrays
+// and reaches several values yields them as one flattened *types.Array, so the
+// caller's multikey expansion indexes each.
+func indexFieldValue(doc *types.Document, field string) any {
+	if !strings.Contains(field, ".") {
+		v, err := doc.Get(field)
+		if err != nil {
+			return types.Null
+		}
+		return v
+	}
+	path, err := types.NewPathFromString(field)
+	if err != nil {
+		return types.Null
+	}
+	vals, err := commonpath.FindValues(doc, path, &commonpath.FindValuesOpts{
+		FindArrayDocuments: true,
+		FindArrayIndex:     true,
+	})
+	if err != nil || len(vals) == 0 {
+		return types.Null
+	}
+	if len(vals) == 1 {
+		return vals[0]
+	}
+	flat := types.MakeArray(len(vals))
+	for _, v := range vals {
+		if arr, ok := v.(*types.Array); ok {
+			for i := 0; i < arr.Len(); i++ {
+				flat.Append(must.NotFail(arr.Get(i)))
+			}
+			continue
+		}
+		flat.Append(v)
+	}
+	return flat
 }
 
 // expandMultiKeyValues expands field values for multi-key indexing. If any

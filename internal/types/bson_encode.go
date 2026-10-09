@@ -92,6 +92,8 @@ func appendBSONValue(dst []byte, tagAt int, v any) []byte {
 		dst = binary.LittleEndian.AppendUint64(dst, uint64(v.UnixMilli()))
 	case NullType:
 		tag = 0x0a
+	case UndefinedType:
+		tag = 0x06
 	case Regex:
 		tag = 0x0b
 		dst = append(dst, v.Pattern...)

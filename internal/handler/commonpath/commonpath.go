@@ -148,3 +148,95 @@ func lookupArrayDocuments(array *types.Array, documentKey string) ([]any, error)
 
 	return res, nil
 }
+
+// HasMissingBranch reports whether resolving path against doc ends early on
+// any branch: at a document lacking the next field, or at a non-array scalar
+// before the path is exhausted. MongoDB matches such a branch against null and
+// sorts it as null. Arrays are entered through their document elements (and by
+// position for a numeric component); other array elements, and a position out
+// of range, contribute no branch.
+func HasMissingBranch(doc *types.Document, path types.Path) bool {
+	return hasMissingBranch(doc, path.Slice())
+}
+
+func hasMissingBranch(v any, keys []string) bool {
+	if len(keys) == 0 {
+		return false
+	}
+
+	switch v := v.(type) {
+	case *types.Document:
+		next, err := v.Get(keys[0])
+		if err != nil {
+			return true
+		}
+		return hasMissingBranch(next, keys[1:])
+
+	case *types.Array:
+		if el, err := findArrayIndex(v, keys[0]); err == nil && hasMissingBranch(el, keys[1:]) {
+			return true
+		}
+		for i := 0; i < v.Len(); i++ {
+			el, _ := v.Get(i)
+			if elDoc, ok := el.(*types.Document); ok && hasMissingBranch(elDoc, keys) {
+				return true
+			}
+		}
+		return false
+
+	default:
+		return true
+	}
+}
+
+// IndexKeyValues returns the keys MongoDB generates for doc in an index on
+// path. A missing field, a scalar before the path ends, an empty array before
+// the path ends, and a non-document element of an array before the path ends
+// each produce null. At the end of the path an empty array produces undefined
+// and any other array produces its elements.
+func IndexKeyValues(doc *types.Document, path types.Path) []any {
+	return appendIndexKeyValues(nil, doc, path.Slice())
+}
+
+func appendIndexKeyValues(out []any, v any, keys []string) []any {
+	if len(keys) == 0 {
+		arr, ok := v.(*types.Array)
+		switch {
+		case !ok:
+			return append(out, v)
+		case arr.Len() == 0:
+			return append(out, types.Undefined)
+		}
+		for i := 0; i < arr.Len(); i++ {
+			el, _ := arr.Get(i)
+			out = append(out, el)
+		}
+		return out
+	}
+
+	switch v := v.(type) {
+	case *types.Document:
+		next, err := v.Get(keys[0])
+		if err != nil {
+			return append(out, types.Null)
+		}
+		return appendIndexKeyValues(out, next, keys[1:])
+
+	case *types.Array:
+		if v.Len() == 0 {
+			return append(out, types.Null)
+		}
+		for i := 0; i < v.Len(); i++ {
+			el, _ := v.Get(i)
+			if elDoc, ok := el.(*types.Document); ok {
+				out = appendIndexKeyValues(out, elDoc, keys)
+			} else {
+				out = append(out, types.Null)
+			}
+		}
+		return out
+
+	default:
+		return append(out, types.Null)
+	}
+}

@@ -194,22 +194,23 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 	closer := iterator.NewMultiCloser(iterator.CloserFunc(cancel))
 
 	var srcIter types.DocumentsIterator
+	var sorted bool
 	if isView {
 		viewCmp := collation.Parse(params.Collation).Comparator()
-		srcIter, err = viewSourceIterator(ctx, db, viewName, viewOn, viewPipeline, viewCmp, closer, h.DisablePushdown, h.EnableNestedPushdown)
+		srcIter, err = viewSourceIterator(ctx, db, viewName, viewOn, viewPipeline, viewCmp, closer, h.DisablePushdown)
 	} else {
 		var queryRes *backends.QueryResult
 		if queryRes, err = coll.Query(ctx, qp); err != nil {
 			return nil, handleMaxTimeMSError(err, params.MaxTimeMS, "find")
 		}
-		srcIter = queryRes.Iter
+		srcIter, sorted = queryRes.Iter, queryRes.Sorted
 	}
 
 	if err != nil {
 		return nil, handleMaxTimeMSError(err, params.MaxTimeMS, "find")
 	}
 
-	iter, err := h.makeFindIter(srcIter, closer, params)
+	iter, err := h.makeFindIter(srcIter, closer, params, sorted)
 	if err != nil {
 		return nil, handleMaxTimeMSError(err, params.MaxTimeMS, "find")
 	}
@@ -308,18 +309,6 @@ func (h *Handler) makeFindQueryParams(ctx context.Context, params *common.FindPa
 		qp.Filter = params.Filter
 	}
 
-	if !h.EnableNestedPushdown && params.Filter != nil {
-		qp.Filter = params.Filter.DeepCopy()
-
-		for _, k := range qp.Filter.Keys() {
-			if !strings.ContainsRune(k, '.') {
-				continue
-			}
-
-			qp.Filter.Remove(k)
-		}
-	}
-
 	if params.Sort, err = common.ValidateSortDocument(params.Sort); err != nil {
 		var pathErr *types.PathError
 		if errors.As(err, &pathErr) && pathErr.Code() == types.ErrPathElementEmpty {
@@ -339,10 +328,8 @@ func (h *Handler) makeFindQueryParams(ctx context.Context, params *common.FindPa
 		// Capped collections default to $natural (recordID) order.
 		qp.Sort = must.NotFail(types.NewDocument("$natural", int64(1)))
 	case params.Sort.Len() == 1:
-		if params.Sort.Keys()[0] != "$natural" {
-			break
-		}
-
+		// A $natural sort is honored by the scan; a field sort may be served by
+		// walking an index, which the backend reports with QueryResult.Sorted.
 		qp.Sort = params.Sort
 	}
 
@@ -364,10 +351,11 @@ func (h *Handler) makeFindQueryParams(ctx context.Context, params *common.FindPa
 
 // makeFindIter builds the find iterator chain. All iterators, including the
 // initial one, are added to the passed closer, and the returned iterator is
-// wrapped with it.
+// wrapped with it. sorted reports that iter already yields params.Sort order,
+// so no blocking sort is needed and a limit stops reading early.
 //
 //nolint:lll // for readability
-func (h *Handler) makeFindIter(iter types.DocumentsIterator, closer *iterator.MultiCloser, params *common.FindParams) (types.DocumentsIterator, error) {
+func (h *Handler) makeFindIter(iter types.DocumentsIterator, closer *iterator.MultiCloser, params *common.FindParams, sorted bool) (types.DocumentsIterator, error) {
 	closer.Add(iter)
 
 	// A non-simple collation compares strings locale-aware in both the filter
@@ -387,7 +375,7 @@ func (h *Handler) makeFindIter(iter types.DocumentsIterator, closer *iterator.Mu
 	var sortErr error
 	if geoSort := common.FindGeoSortKey(filterDoc); geoSort != nil {
 		iter, sortErr = common.GeoDistanceSortIterator(iter, closer, geoSort)
-	} else {
+	} else if !sorted {
 		iter, sortErr = common.SortIteratorWithCollation(iter, closer, params.Sort, cmp)
 	}
 

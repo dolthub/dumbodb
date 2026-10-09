@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/FerretDB/wire"
 
@@ -36,22 +35,36 @@ import (
 
 // countExplainExecution runs a best-effort counting pass for executionStats
 // verbosity; any backend error returns zeros so the caller still produces a
-// structurally valid executionStats document. When the winning plan contains an
-// IXSCAN node every examined doc was reached via the index, so
-// totalKeysExamined = totalDocsExamined. count and distinct return zeros today.
+// structurally valid executionStats document. It pulls documents the way the
+// query pipeline does: when no blocking sort is needed (no sort, or the backend
+// walked an index in sort order) a limit stops the pass, otherwise every
+// candidate is examined and the limit only caps nReturned. When the winning
+// plan contains an IXSCAN node every examined doc was reached via the index,
+// so totalKeysExamined = totalDocsExamined. count and distinct return zeros
+// today.
 func countExplainExecution(ctx context.Context, coll backends.Collection, qp *backends.ExplainParams, winningPlan *types.Document) (nReturned, totalDocsExamined, totalKeysExamined int32) {
 	if qp.Command != "find" && qp.Command != "aggregate" {
 		return 0, 0, 0
 	}
 	usesIndex := planContainsIndexScan(winningPlan)
 
-	qres, err := coll.Query(ctx, &backends.QueryParams{Filter: qp.Filter, Collated: qp.Collated, Collation: qp.Collation})
+	query := &backends.QueryParams{Filter: qp.Filter, Collated: qp.Collated, Collation: qp.Collation, Hint: qp.Hint}
+	if qp.Sort.Len() == 1 {
+		query.Sort = qp.Sort
+	}
+	qres, err := coll.Query(ctx, query)
 	if err != nil || qres == nil || qres.Iter == nil {
 		return 0, 0, 0
 	}
 	defer qres.Iter.Close()
 
-	for {
+	limit := int32(qp.Limit)
+	if limit < 0 {
+		limit = -limit
+	}
+	stopAtLimit := limit > 0 && (qp.Sort.Len() == 0 || qres.Sorted)
+
+	for !stopAtLimit || nReturned < limit {
 		_, doc, err := qres.Iter.Next()
 		if err != nil {
 			break
@@ -67,6 +80,9 @@ func countExplainExecution(ctx context.Context, coll backends.Collection, qp *ba
 		}
 	}
 
+	if limit > 0 && nReturned > limit {
+		nReturned = limit
+	}
 	if usesIndex {
 		totalKeysExamined = totalDocsExamined
 	}
@@ -290,18 +306,6 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 	effColl := h.effectiveCollation(connCtx, db, params.Collection, opCollation)
 	qp.Collation = effColl
 	qp.Collated = !collation.Parse(effColl).IsSimple()
-
-	if !h.EnableNestedPushdown && params.Filter != nil {
-		qp.Filter = params.Filter.DeepCopy()
-
-		for _, k := range qp.Filter.Keys() {
-			if !strings.ContainsRune(k, '.') {
-				continue
-			}
-
-			qp.Filter.Remove(k)
-		}
-	}
 
 	if params.Sort, err = common.ValidateSortDocument(params.Sort); err != nil {
 		var pathErr *types.PathError

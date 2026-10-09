@@ -188,6 +188,18 @@ func EncodeValueLossy(v any) bool {
 	return true
 }
 
+// LeadingKeyMergesValues reports whether key's leading value is a bare type
+// marker that EncodeValue emits for every subdocument or every array.
+func LeadingKeyMergesValues(key []byte) bool {
+	return len(key) > 0 && (key[0] == ctypeObject || key[0] == ctypeArray)
+}
+
+// KeyMergesValues reports whether key is a bare type marker that EncodeValue
+// emits for every subdocument or every array, so distinct values share it.
+func KeyMergesValues(key []byte) bool {
+	return len(key) == 1 && (key[0] == ctypeObject || key[0] == ctypeArray)
+}
+
 // ValueLossy reports whether v cannot be faithfully represented by the
 // KeyString encoding, so an index containing it must not be consulted by the
 // planner. This is EncodeValueLossy plus a value-aware check for
