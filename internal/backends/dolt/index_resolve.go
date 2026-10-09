@@ -246,10 +246,10 @@ func indexEntriesForDoc(doc *types.Document, idx backends.IndexInfo) (rows [][]a
 			return nil, false, false
 		}
 	}
-	fieldVals := extractIndexFieldValues(doc, idx)
-	if idx.Sparse && allNull(fieldVals) {
+	if sparseExcludes(doc, idx) {
 		return nil, false, false
 	}
+	fieldVals := extractIndexFieldValues(doc, idx)
 	for _, v := range fieldVals {
 		if _, isArr := v.(*types.Array); isArr {
 			multikey = true

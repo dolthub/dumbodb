@@ -112,6 +112,19 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 	// index lookup and the _id point lookup below.
 	naturalHint := params != nil && backends.HintIsNatural(params.Hint)
 
+	sparseHint, err := c.hintedSparseIndex(ctx, state, params)
+	if err != nil {
+		return nil, err
+	}
+	if sparseHint != nil {
+		res, err := c.queryUnhintedSparse(ctx, params)
+		if err != nil {
+			return nil, err
+		}
+		res.Iter = newSparseMemberIter(res.Iter, *sparseHint)
+		return res, nil
+	}
+
 	if !naturalHint && params != nil && params.Filter != nil && params.Sort.Len() == 0 &&
 		(!params.Collated || params.Collation != nil) {
 		if docs, used, err := c.tryIndexLookup(ctx, state, m, params.Filter, params.Hint, params.Collation); used {
@@ -176,6 +189,55 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 		}
 	}
 	return &backends.QueryResult{Iter: iter}, nil
+}
+
+// hintedSparseIndex returns the sparse index params hints, or nil.
+func (c *collection) hintedSparseIndex(ctx context.Context, state *dbState, params *backends.QueryParams) (*backends.IndexInfo, error) {
+	if params == nil || params.Hint == nil || params.OnlyRecordIDs || backends.HintIsNatural(params.Hint) {
+		return nil, nil
+	}
+	state.mu.RLock()
+	infos, _, err := resolveIndexes(ctx, c, state)
+	state.mu.RUnlock()
+	if err != nil {
+		return nil, err
+	}
+	name := backends.MatchHintedIndex(params.Hint, infos)
+	for i := range infos {
+		if infos[i].Name == name && infos[i].Sparse {
+			return &infos[i], nil
+		}
+	}
+	return nil, nil
+}
+
+// queryUnhintedSparse runs params with its sparse-index hint removed; the
+// caller restricts the result to the index's members.
+func (c *collection) queryUnhintedSparse(ctx context.Context, params *backends.QueryParams) (*backends.QueryResult, error) {
+	unhinted := *params
+	unhinted.Hint = nil
+	return c.Query(ctx, &unhinted)
+}
+
+// sparseMemberIter yields only documents a sparse index holds. MongoDB answers
+// a query hinted onto a sparse index from the index alone, so documents
+// missing every indexed field are absent even when the filter matches them.
+type sparseMemberIter struct {
+	types.DocumentsIterator
+	idx backends.IndexInfo
+}
+
+func newSparseMemberIter(iter types.DocumentsIterator, idx backends.IndexInfo) types.DocumentsIterator {
+	return &sparseMemberIter{DocumentsIterator: iter, idx: idx}
+}
+
+func (it *sparseMemberIter) Next() (struct{}, *types.Document, error) {
+	for {
+		k, doc, err := it.DocumentsIterator.Next()
+		if err != nil || !sparseExcludes(doc, it.idx) {
+			return k, doc, err
+		}
+	}
 }
 
 // buildScanPrefilter returns a byte-level predicate over a document's raw
@@ -1530,16 +1592,6 @@ func extractIndexKey(doc *types.Document, idx backends.IndexInfo) []any {
 		key[i] = indexFieldValue(doc, kp.Field)
 	}
 	return key
-}
-
-// allNull detects sparse index entries that are excluded from unique checks.
-func allNull(key []any) bool {
-	for _, v := range key {
-		if v != types.Null {
-			return false
-		}
-	}
-	return true
 }
 
 func indexKeysEqual(a, b []any) bool {
@@ -3013,7 +3065,7 @@ func checkUniqueBuildConflict(seen map[string][]byte, idx backends.IndexInfo, do
 			return nil
 		}
 	}
-	if idx.Sparse && allNull(extractIndexKey(doc, idx)) {
+	if sparseExcludes(doc, idx) {
 		return nil
 	}
 	for _, row := range rows {
@@ -3064,10 +3116,10 @@ func (c *collection) scanUniqueConflict(ctx context.Context, state *dbState, m p
 				continue
 			}
 		}
-		existKey := extractIndexKey(existingDoc, idx)
-		if idx.Sparse && allNull(existKey) {
+		if sparseExcludes(existingDoc, idx) {
 			continue
 		}
+		existKey := extractIndexKey(existingDoc, idx)
 		if indexKeysEqualColl(newKey, existKey, cmp) {
 			return true, nil
 		}
@@ -3155,6 +3207,39 @@ func extractIndexFieldValues(doc *types.Document, idx backends.IndexInfo) []any 
 		vals[i] = indexFieldValue(doc, kp.Field)
 	}
 	return vals
+}
+
+// sparseExcludes reports whether a sparse idx skips doc. Like MongoDB, a sparse
+// index holds every document in which some indexed field is present, even when
+// its value is null.
+func sparseExcludes(doc *types.Document, idx backends.IndexInfo) bool {
+	if !idx.Sparse {
+		return false
+	}
+	for _, kp := range idx.Key {
+		if indexFieldPresent(doc, kp.Field) {
+			return false
+		}
+	}
+	return true
+}
+
+// indexFieldPresent reports whether field, which may be a dotted path, reaches
+// at least one value in doc.
+func indexFieldPresent(doc *types.Document, field string) bool {
+	if !strings.Contains(field, ".") {
+		_, err := doc.Get(field)
+		return err == nil
+	}
+	path, err := types.NewPathFromString(field)
+	if err != nil {
+		return false
+	}
+	vals, err := commonpath.FindValues(doc, path, &commonpath.FindValuesOpts{
+		FindArrayDocuments: true,
+		FindArrayIndex:     true,
+	})
+	return err == nil && len(vals) > 0
 }
 
 // indexFieldValue resolves an index key field, which may be a dotted path,

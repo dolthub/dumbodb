@@ -538,6 +538,10 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			qp.Sort = sort
 		}
 
+		if hint, _ := document.Get("hint"); hint != nil {
+			qp.Hint = hint
+		}
+
 		iter, err = processStagesDocuments(ctx, closer, &stagesDocumentsParams{c, qp, stagesDocuments})
 	} else {
 		statistics := stages.GetStatistics(collStatsDocuments)
