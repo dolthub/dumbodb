@@ -125,7 +125,9 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 		return res, nil
 	}
 
-	if !naturalHint && params != nil && params.Filter != nil && params.Sort.Len() == 0 &&
+	fieldSort := params != nil && sortIsSingleField(params.Sort)
+
+	if !naturalHint && params != nil && params.Filter != nil && (params.Sort.Len() == 0 || fieldSort) &&
 		(!params.Collated || params.Collation != nil) {
 		if docs, used, err := c.tryIndexLookup(ctx, state, m, params.Filter, params.Hint, params.Collation); used {
 			if err != nil {
@@ -137,8 +139,18 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 		}
 	}
 
+	if !naturalHint && fieldSort {
+		iter, ok, err := c.trySortWalk(ctx, state, m, params)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			return &backends.QueryResult{Iter: iter, Sorted: true}, nil
+		}
+	}
+
 	reverse := false
-	if params != nil && params.Sort != nil && params.Sort.Len() > 0 {
+	if params != nil && sortIsNatural(params.Sort) {
 		sortVal := params.Sort.Map()["$natural"].(int64)
 		reverse = sortVal == -1
 	}
@@ -1288,14 +1300,10 @@ func (c *collection) Explain(ctx context.Context, params *backends.ExplainParams
 	// can drive the scan in sorted order without a SORT stage.
 	sortByIndex := false
 	if !naturalHint && !indexPicked && params != nil && sortIsSingleField(params.Sort) {
-		sortField := params.Sort.Keys()[0]
-		for _, idx := range idxInfos {
-			if len(idx.Key) == 1 && idx.Key[0].Field == sortField {
-				picked = idx
-				indexPicked = true
-				sortByIndex = true
-				break
-			}
+		if i, ok := sortWalkIndex(idxInfos, params.Sort, params.Collation); ok {
+			picked = idxInfos[i]
+			indexPicked = true
+			sortByIndex = true
 		}
 	} else if indexPicked && params != nil && sortIsSingleField(params.Sort) {
 		// Filter-driven pick: the sort is free whenever the sort key is

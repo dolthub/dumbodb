@@ -303,3 +303,10 @@ func KeyDescriptor() *val.TupleDesc {
 func ValDescriptor() *val.TupleDesc {
 	return idxValDesc
 }
+
+// HoldsArrayKeys reports whether m holds an entry whose leading value is an
+// array, which a multikey index stores for an empty or nested array.
+func HoldsArrayKeys(ctx context.Context, m prolly.Map) (bool, error) {
+	ids, _, err := RangeLookupCapped(ctx, m, []byte{ctypeArray}, []byte{ctypeArray + 1}, 1)
+	return len(ids) > 0, err
+}

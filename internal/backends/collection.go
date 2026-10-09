@@ -125,6 +125,10 @@ type QueryParams struct {
 
 type QueryResult struct {
 	Iter types.DocumentsIterator
+
+	// Sorted reports that Iter yields documents in QueryParams.Sort order, so
+	// the caller need not sort them.
+	Sorted bool
 }
 
 // Query executes a query against the collection.
@@ -138,9 +142,9 @@ type QueryResult struct {
 // Filter may be ignored, or safely applied partially or entirely.
 // Extra documents will be filtered out by the handler.
 //
-// Sort should have one of the following forms: nil, {}, {"$natural": int64(1)} or {"$natural": int64(-1)}.
-// Other field names are not supported.
-// If non-empty, it should be applied.
+// Sort should be nil, {}, or hold a single key. {"$natural": int64(1)} or
+// {"$natural": int64(-1)} must be applied. A field sort may be applied, in which
+// case the result reports Sorted; otherwise the caller sorts.
 //
 // Limit, if non-zero, should be applied.
 func (cc *collectionContract) Query(ctx context.Context, params *QueryParams) (*QueryResult, error) {
@@ -153,10 +157,11 @@ func (cc *collectionContract) Query(ctx context.Context, params *QueryParams) (*
 
 	if params.Sort.Len() != 0 {
 		must.BeTrue(params.Sort.Len() == 1)
-		sortValue := params.Sort.Map()["$natural"].(int64)
 
-		if sortValue != -1 && sortValue != 1 {
-			panic("sort value must be 1 (for ascending) or -1 (for descending)")
+		if natural, ok := params.Sort.Map()["$natural"]; ok {
+			if sortValue := natural.(int64); sortValue != -1 && sortValue != 1 {
+				panic("sort value must be 1 (for ascending) or -1 (for descending)")
+			}
 		}
 	}
 
