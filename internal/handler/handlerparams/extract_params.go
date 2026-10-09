@@ -22,6 +22,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -163,39 +164,42 @@ type tagOptions struct {
 	collection             bool
 }
 
+type fieldTag struct {
+	key     string
+	options tagOptions
+	missing bool
+}
+
+var fieldTagsByType sync.Map
+
+// fieldTags returns the parsed tags of t's fields, in field order.
+func fieldTags(t reflect.Type) []fieldTag {
+	if tags, ok := fieldTagsByType.Load(t); ok {
+		return tags.([]fieldTag)
+	}
+	tags := make([]fieldTag, t.NumField())
+	for i := range tags {
+		tag := t.Field(i).Tag.Get("dumbo")
+		optionsList := strings.Split(tag, ",")
+		tags[i] = fieldTag{key: optionsList[0], options: *tagOptionsFromList(optionsList[1:]), missing: tag == ""}
+	}
+	fieldTagsByType.Store(t, tags)
+	return tags
+}
+
 // lookupFieldTag looks for the tag and returns its options.
 func lookupFieldTag(key string, value *reflect.Value) (*int, *tagOptions, error) {
-	var to *tagOptions
-	var i int
-	var found bool
-
-	for ; i < value.NumField(); i++ {
-		field := value.Type().Field(i)
-
-		tag := field.Tag.Get("dumbo")
-
-		if tag == "" {
-			return nil, nil, lazyerrors.Errorf("no tag provided for %s", field.Name)
+	for i, tag := range fieldTags(value.Type()) {
+		if tag.missing {
+			return nil, nil, lazyerrors.Errorf("no tag provided for %s", value.Type().Field(i).Name)
 		}
-
-		optionsList := strings.Split(tag, ",")
-
-		if optionsList[0] != key {
-			continue
+		if tag.key == key {
+			to := tag.options
+			return &i, &to, nil
 		}
-
-		to = tagOptionsFromList(optionsList[1:])
-
-		found = true
-
-		break
 	}
 
-	if !found {
-		return nil, nil, nil
-	}
-
-	return &i, to, nil
+	return nil, nil, nil
 }
 
 func tagOptionsFromList(optionsList []string) *tagOptions {
@@ -426,18 +430,8 @@ func setStructField(elem *reflect.Value, o *tagOptions, i int, command, key stri
 
 // checkAllRequiredFieldsPopulated checks that all required fields are populated.
 func checkAllRequiredFieldsPopulated(v *reflect.Value, command string, keys []string) error {
-	for i := 0; i < v.NumField(); i++ {
-		field := v.Type().Field(i)
-
-		tag := field.Tag.Get("dumbo")
-
-		optionsList := strings.Split(tag, ",")
-
-		if len(optionsList) == 0 {
-			return lazyerrors.Errorf("no tag provided for %s", field.Name)
-		}
-
-		to := tagOptionsFromList(optionsList[1:])
+	for i, tag := range fieldTags(v.Type()) {
+		to := tag.options
 		if to.ignored || to.optional || to.unimplemented || to.nonDefault {
 			continue
 		}
@@ -451,7 +445,7 @@ func checkAllRequiredFieldsPopulated(v *reflect.Value, command string, keys []st
 			}
 		}
 
-		key := optionsList[0]
+		key := tag.key
 
 		// Fields with "-" are ignored when parsing parameters.
 		if key == "-" {

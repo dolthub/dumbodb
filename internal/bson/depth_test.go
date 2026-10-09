@@ -68,3 +68,16 @@ func TestToDocumentRejectsHugeNestingWithoutCrashing(t *testing.T) {
 	_, err := ToDocument(wirebson.RawDocument(nestedRaw(2_000_000, false)))
 	require.ErrorIs(t, err, ErrNestingTooDeep)
 }
+
+func TestDecodeRawDocumentNestingDepth(t *testing.T) {
+	_, err := DecodeRawDocument(nestedRaw(MaxNestingDepth, false))
+	require.NoError(t, err)
+
+	for _, arrays := range []bool{false, true} {
+		_, err := DecodeRawDocument(nestedRaw(MaxNestingDepth+2, arrays))
+		require.ErrorIs(t, err, ErrNestingTooDeep, "arrays=%v", arrays)
+	}
+
+	_, err = DecodeRawDocument(nestedRaw(2_000_000, false))
+	require.ErrorIs(t, err, ErrNestingTooDeep)
+}

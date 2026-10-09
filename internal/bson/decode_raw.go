@@ -28,66 +28,113 @@ import (
 // DecodeRawDocument decodes a BSON document directly into [*types.Document],
 // following the same validation rules as [ToDocument] without building an
 // intermediate wirebson document. MinKey and MaxKey decode at any depth.
+//
+// Input nested deeper than [MaxNestingDepth] returns [ErrNestingTooDeep].
 func DecodeRawDocument(raw []byte) (*types.Document, error) {
-	pairs, err := decodeRawFields(raw, false)
-	if err != nil {
-		return nil, err
-	}
-	return types.NewDocument(pairs...)
+	return decodeRawDocument(raw, 1, nil)
 }
 
-func decodeRawArray(raw []byte) (*types.Array, error) {
-	pairs, err := decodeRawFields(raw, true)
-	if err != nil {
+// DecodeRawDocumentFields is DecodeRawDocument keeping only the named top-level
+// fields, or all fields when fields is nil. Other fields are skipped unvalidated.
+func DecodeRawDocumentFields(raw []byte, fields []string) (*types.Document, error) {
+	return decodeRawDocument(raw, 1, fields)
+}
+
+func decodeRawDocument(raw []byte, depth int, fields []string) (*types.Document, error) {
+	if depth > MaxNestingDepth {
+		return nil, ErrNestingTooDeep
+	}
+	doc := types.MakeDocument(8)
+	if err := decodeRawFields(raw, false, depth, fields, doc.AppendDecoded); err != nil {
 		return nil, err
 	}
-	values := make([]any, len(pairs)/2)
-	for i := range values {
-		values[i] = pairs[2*i+1]
+	if doc.Len() == 0 {
+		return new(types.Document), nil
+	}
+	return doc, nil
+}
+
+func decodeRawArray(raw []byte, depth int) (*types.Array, error) {
+	if depth > MaxNestingDepth {
+		return nil, ErrNestingTooDeep
+	}
+	values := make([]any, 0, 8)
+	if err := decodeRawFields(raw, true, depth, nil, func(_ string, v any) { values = append(values, v) }); err != nil {
+		return nil, err
 	}
 	return types.NewArray(values...)
 }
 
-// decodeRawFields returns alternating names and values. For arrays, names
-// must be the element indexes in order.
-func decodeRawFields(raw []byte, isArray bool) ([]any, error) {
+// decodeRawFields calls add for each field in order, or for each field named in
+// want when it is non-nil. For arrays, names must be the element indexes in order.
+func decodeRawFields(raw []byte, isArray bool, depth int, want []string, add func(name string, v any)) error {
 	if err := checkRawLength(raw); err != nil {
-		return nil, err
+		return err
 	}
 
-	var pairs []any
+	count := 0
 	offset := 4
 	for {
 		if offset >= len(raw) {
-			return nil, fmt.Errorf("bson: unexpected end of document at offset %d", offset)
+			return fmt.Errorf("bson: unexpected end of document at offset %d", offset)
 		}
 		t := raw[offset]
 		if t == 0 {
 			if offset != len(raw)-1 {
-				return nil, fmt.Errorf("bson: document terminator at offset %d of %d bytes", offset, len(raw))
+				return fmt.Errorf("bson: document terminator at offset %d of %d bytes", offset, len(raw))
 			}
-			return pairs, nil
+			return nil
 		}
 		offset++
 
 		end := bytes.IndexByte(raw[offset:], 0)
 		if end < 0 {
-			return nil, fmt.Errorf("bson: unterminated field name at offset %d", offset)
+			return fmt.Errorf("bson: unterminated field name at offset %d", offset)
 		}
-		name := string(raw[offset : offset+end])
+		nameBytes := raw[offset : offset+end]
 		offset += end + 1
 
-		if isArray && name != strconv.Itoa(len(pairs)/2) {
-			return nil, fmt.Errorf("bson: invalid array index %q", name)
+		if want != nil && !containsName(want, nameBytes) {
+			n, err := rawBSONValueSize(raw[offset:], t)
+			if err != nil {
+				return fmt.Errorf("bson: field %q: %w", nameBytes, err)
+			}
+			if n < 0 || n > len(raw)-offset {
+				return fmt.Errorf("bson: field %q: value of %d bytes overruns document", nameBytes, n)
+			}
+			offset += n
+			continue
 		}
 
-		v, n, err := decodeRawValue(raw[offset:], t)
+		var name string
+		if isArray {
+			if string(nameBytes) != strconv.Itoa(count) {
+				return fmt.Errorf("bson: invalid array index %q", nameBytes)
+			}
+		} else {
+			name = string(nameBytes)
+		}
+
+		v, n, err := decodeRawValue(raw[offset:], t, depth)
 		if err != nil {
-			return nil, fmt.Errorf("bson: field %q: %w", name, err)
+			if isArray {
+				name = string(nameBytes)
+			}
+			return fmt.Errorf("bson: field %q: %w", name, err)
 		}
 		offset += n
-		pairs = append(pairs, name, v)
+		add(name, v)
+		count++
 	}
+}
+
+func containsName(names []string, name []byte) bool {
+	for _, n := range names {
+		if n == string(name) {
+			return true
+		}
+	}
+	return false
 }
 
 func checkRawLength(raw []byte) error {
@@ -116,7 +163,7 @@ func embeddedLength(b []byte) (int, error) {
 	return int(l), nil
 }
 
-func decodeRawValue(b []byte, t byte) (any, int, error) {
+func decodeRawValue(b []byte, t byte, depth int) (any, int, error) {
 	fixed := func(n int) error {
 		if len(b) < n {
 			return fmt.Errorf("value of tag 0x%02x needs %d bytes, got %d", t, n, len(b))
@@ -152,7 +199,7 @@ func decodeRawValue(b []byte, t byte) (any, int, error) {
 		if err != nil {
 			return nil, 0, err
 		}
-		doc, err := DecodeRawDocument(b[:l])
+		doc, err := decodeRawDocument(b[:l], depth+1, nil)
 		return doc, l, err
 
 	case 0x04:
@@ -160,7 +207,7 @@ func decodeRawValue(b []byte, t byte) (any, int, error) {
 		if err != nil {
 			return nil, 0, err
 		}
-		arr, err := decodeRawArray(b[:l])
+		arr, err := decodeRawArray(b[:l], depth+1)
 		return arr, l, err
 
 	case 0x05:

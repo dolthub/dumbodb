@@ -73,7 +73,7 @@ func TestApplyFieldMutations_InlineDoesNotWriteToChunkStore(t *testing.T) {
 	doc := mustDoc(t, "_id", "doc1", "email", "old@example.com", "age", int32(30))
 	stored, err := docToBSON(doc)
 	require.NoError(t, err)
-	tup, err := buildValue(ctx, cns, stored)
+	tup, err := buildValue(ctx, cns, stored, hash.Hash{})
 	require.NoError(t, err)
 
 	cns.Reset()
@@ -98,7 +98,7 @@ func TestApplyFieldMutations_InlineHandlesUnset(t *testing.T) {
 	doc := mustDoc(t, "_id", "doc1", "email", "old@example.com", "disposable", "x")
 	stored, err := docToBSON(doc)
 	require.NoError(t, err)
-	tup, err := buildValue(ctx, cns, stored)
+	tup, err := buildValue(ctx, cns, stored, hash.Hash{})
 	require.NoError(t, err)
 
 	cns.Reset()
@@ -127,7 +127,7 @@ func TestApplyFieldMutations_OutOfBandRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Greater(t, len(stored), 3000, "test setup: stored doc should exceed inline threshold")
 
-	tup, err := buildValue(ctx, cns, stored)
+	tup, err := buildValue(ctx, cns, stored, hash.Hash{})
 	require.NoError(t, err)
 
 	result, ok, err := valDescFor(cns).GetBytesAdaptiveValue(ctx, 0, cns, tup)

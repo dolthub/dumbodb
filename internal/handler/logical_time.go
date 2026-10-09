@@ -191,7 +191,7 @@ func (h *Handler) internalMemberAuthenticated(ctx context.Context) bool {
 }
 
 func (h *Handler) observeLogicalTime(ctx context.Context, msg *wire.OpMsg) error {
-	document, err := opMsgDocument(msg)
+	document, err := opMsgCommandDocument(msg)
 	if err != nil {
 		return err
 	}

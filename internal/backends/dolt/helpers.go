@@ -78,17 +78,17 @@ func newEmptyMap(ctx context.Context, ns tree.NodeStore) (prolly.Map, error) {
 
 // openCollection opens a prolly.Map for a collection from a hash stored in the ADRM.
 func openCollection(ctx context.Context, cs *nbs.GenerationalNBS, ns tree.NodeStore, collHash hash.Hash) (prolly.Map, error) {
-	chunk, err := cs.Get(ctx, collHash)
+	data, err := readTableChunk(ctx, cs, collHash)
 	if err != nil {
 		return prolly.Map{}, fmt.Errorf("reading collection chunk: %w", err)
 	}
 
-	fileID := serial.GetFileID(chunk.Data())
+	fileID := serial.GetFileID(data)
 	if fileID != serial.TableFileID {
 		return prolly.Map{}, fmt.Errorf("unexpected file ID %q for collection (want DTBL)", fileID)
 	}
 
-	tbl, err := serial.TryGetRootAsTable(chunk.Data(), serial.MessagePrefixSz)
+	tbl, err := serial.TryGetRootAsTable(data, serial.MessagePrefixSz)
 	if err != nil {
 		return prolly.Map{}, fmt.Errorf("parsing DTBL: %w", err)
 	}
@@ -458,9 +458,11 @@ func buildKey(idBytes []byte) (val.Tuple, error) {
 	return tup, nil
 }
 
-func buildValue(ctx context.Context, ns tree.NodeStore, docBytes []byte) (val.Tuple, error) {
+// buildValue stores docBytes as a value tuple. When docBytes replaces a value
+// stored out-of-band at |prior|, the unchanged parts of that blob are reused.
+func buildValue(ctx context.Context, ns tree.NodeStore, docBytes []byte, prior hash.Hash) (val.Tuple, error) {
 	tb := val.NewTupleBuilder(valDescFor(ns), ns)
-	if err := tb.PutAdaptiveBytesFromInline(ctx, 0, docBytes); err != nil {
+	if err := tb.ReplaceAdaptiveBytesFromInline(ctx, 0, prior, docBytes); err != nil {
 		return nil, fmt.Errorf("writing inline bytes to value tuple: %w", err)
 	}
 

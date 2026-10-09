@@ -20,6 +20,7 @@ import (
 	"sort"
 
 	"github.com/FerretDB/wire/wirebson"
+	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/prolly/tree"
 	"github.com/dolthub/dolt/go/store/val"
 
@@ -35,22 +36,21 @@ const bsonFormatVersion byte = 0x01
 // form for diff and merge), prepended with bsonFormatVersion.
 func docToBSON(doc *types.Document) ([]byte, error) {
 	sorted := sortDocumentKeys(doc)
-	if docHasMinMaxKey(sorted) {
-		raw, err := bson.FromDocumentRaw(sorted)
-		if err != nil {
-			return nil, fmt.Errorf("encoding document with MinKey/MaxKey to BSON: %w", err)
-		}
-		return prependVersion(raw), nil
-	}
-	wdoc, err := bson.FromDocument(sorted)
+	stored := make([]byte, 1, 1+sorted.BSONSize())
+	stored[0] = bsonFormatVersion
+	return sorted.AppendBSON(stored), nil
+}
+
+func bsonToDocFields(stored []byte, fields []string) (*types.Document, error) {
+	raw, err := stripVersion(stored)
 	if err != nil {
-		return nil, fmt.Errorf("encoding document to wirebson: %w", err)
+		return nil, err
 	}
-	raw, err := wdoc.Encode()
+	doc, err := bson.DecodeRawDocumentFields(raw, fields)
 	if err != nil {
-		return nil, fmt.Errorf("encoding wirebson document: %w", err)
+		return nil, fmt.Errorf("decoding document: %w", err)
 	}
-	return prependVersion(raw), nil
+	return doc, nil
 }
 
 func bsonToDoc(stored []byte) (*types.Document, error) {
@@ -120,7 +120,20 @@ func writeBSONDocToValue(ctx context.Context, ns tree.NodeStore, doc *types.Docu
 	if err != nil {
 		return nil, err
 	}
-	return buildValue(ctx, ns, stored)
+	return buildValue(ctx, ns, stored, hash.Hash{})
+}
+
+// storedBlobAddr returns the address of the stored document's out-of-band
+// blob, or the empty hash when it is stored inline.
+func storedBlobAddr(ctx context.Context, ns tree.NodeStore, v val.Tuple) hash.Hash {
+	result, ok, err := storedValueReadDesc.GetBytesAdaptiveValue(ctx, 0, ns, v)
+	if err != nil || !ok {
+		return hash.Hash{}
+	}
+	if ba, isOutOfBand := result.(*val.ByteArray); isOutOfBand {
+		return ba.Addr
+	}
+	return hash.Hash{}
 }
 
 func readBSONDocFromValue(ctx context.Context, ns tree.NodeStore, v val.Tuple) (*types.Document, error) {

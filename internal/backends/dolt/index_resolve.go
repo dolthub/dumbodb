@@ -94,11 +94,10 @@ func indexAMForDTBL(ctx context.Context, cs *nbs.GenerationalNBS, ns tree.NodeSt
 	if dtblHash.IsEmpty() {
 		return emptyIndexAM(ns)
 	}
-	chunk, err := cs.Get(ctx, dtblHash)
+	data, err := readTableChunk(ctx, cs, dtblHash)
 	if err != nil {
 		return prolly.AddressMap{}, fmt.Errorf("indexAMForDTBL: reading DTBL chunk: %w", err)
 	}
-	data := chunk.Data()
 	if len(data) == 0 {
 		return emptyIndexAM(ns)
 	}

@@ -69,6 +69,7 @@ type Cursor struct {
 	l            *slog.Logger
 	token        *resource.Token
 	removed      chan struct{} // protected by m
+	stopWatch    func() bool
 	ID           int64
 	lastRecordID int64 // protected by m
 	m            sync.Mutex

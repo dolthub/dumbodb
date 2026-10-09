@@ -494,6 +494,12 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			}
 		}
 
+		if !cInfo.IsView && !h.DisablePushdown {
+			if fields, ok := pipelineRootFields(aggregationStages); ok {
+				qp.Fields = fields
+			}
+		}
+
 		if cInfo.IsView {
 			view := cList.Collections[0]
 			baseCollection, viewStages, _, vErr := resolveViewChain(ctx, db, view.Name, view.ViewOn, view.ViewPipeline, collCmp)

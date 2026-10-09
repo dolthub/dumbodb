@@ -23,7 +23,7 @@ import (
 )
 
 func withWriteConcernResult(request, response *wire.OpMsg) (*wire.OpMsg, error) {
-	requestDoc, err := opMsgDocument(request)
+	requestDoc, err := opMsgCommandDocument(request)
 	if err != nil {
 		return nil, err
 	}

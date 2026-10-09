@@ -17,6 +17,7 @@ package handler
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/FerretDB/wire"
 
@@ -136,6 +137,10 @@ func (h *Handler) MsgDistinct(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 
 	var qp backends.QueryParams
 	qp.Collated = cmp != nil
+	if fields, ok := common.FilterRootFields(params.Filter); ok {
+		keyRoot, _, _ := strings.Cut(params.Key, ".")
+		qp.Fields = append(fields, keyRoot)
+	}
 	if !h.DisablePushdown {
 		qp.Filter = params.Filter
 	}

@@ -32,7 +32,7 @@ import (
 // that is not a field and can't be accessed by most methods.
 // It is used to locate the document in the backend.
 type Document struct {
-	keys     map[string]int
+	keys     map[string]int // nil until the document has keyIndexMinFields fields
 	fields   []field
 	frozen   bool
 	recordID int64
@@ -44,13 +44,14 @@ type field struct {
 	key   string
 }
 
+const keyIndexMinFields = 16
+
 func MakeDocument(capacity int) *Document {
 	if capacity == 0 {
 		return new(Document)
 	}
 
 	return &Document{
-		keys:   make(map[string]int, capacity),
 		fields: make([]field, 0, capacity),
 	}
 }
@@ -65,7 +66,6 @@ func NewDocument(pairs ...any) (*Document, error) {
 		return new(Document), nil
 	}
 
-	docKeys := make(map[string]int, l/2)
 	docFields := make([]field, l/2)
 
 	for i := 0; i < l; i += 2 {
@@ -77,17 +77,24 @@ func NewDocument(pairs ...any) (*Document, error) {
 		value := pairs[i+1]
 		assertType(value)
 
-		docKeys[key]++
 		docFields[i/2] = field{
 			key:   key,
 			value: value,
 		}
 	}
 
-	return &Document{
-		keys:   docKeys,
-		fields: docFields,
-	}, nil
+	d := &Document{fields: docFields}
+	if len(docFields) >= keyIndexMinFields {
+		d.buildKeyIndex()
+	}
+	return d, nil
+}
+
+func (d *Document) buildKeyIndex() {
+	d.keys = make(map[string]int, len(d.fields))
+	for _, f := range d.fields {
+		d.keys[f.key]++
+	}
 }
 
 func (*Document) compositeType() {}
@@ -225,8 +232,16 @@ func (d *Document) Command() string {
 }
 
 func (d *Document) Has(key string) bool {
-	_, ok := d.keys[key]
-	return ok
+	if d.keys != nil {
+		_, ok := d.keys[key]
+		return ok
+	}
+	for _, f := range d.fields {
+		if f.key == key {
+			return true
+		}
+	}
+	return false
 }
 
 // Get returns a value at the given key.
@@ -293,15 +308,27 @@ func (d *Document) Set(key string, value any) {
 		}
 	}
 
-	if d.keys == nil {
-		d.keys = make(map[string]int, 1)
-	}
-	d.keys[key]++
-
 	d.fields = append(d.fields, field{
 		key:   key,
 		value: value,
 	})
+
+	if d.keys != nil {
+		d.keys[key]++
+	} else if len(d.fields) >= keyIndexMinFields {
+		d.buildKeyIndex()
+	}
+}
+
+// AppendDecoded appends a field without Set's type and duplicate-key checks,
+// keeping duplicates as NewDocument does. For decoders of valid BSON.
+func (d *Document) AppendDecoded(key string, value any) {
+	d.fields = append(d.fields, field{key: key, value: value})
+	if d.keys != nil {
+		d.keys[key]++
+	} else if len(d.fields) >= keyIndexMinFields {
+		d.buildKeyIndex()
+	}
 }
 
 // Remove the given key and return its value, or nil if the key does not exist.
@@ -408,7 +435,19 @@ func (d *Document) SortFieldsByKey() {
 }
 
 func (d *Document) isKeyDuplicate(targetKey string) bool {
-	return d.keys[targetKey] > 1
+	if d.keys != nil {
+		return d.keys[targetKey] > 1
+	}
+	seen := false
+	for _, f := range d.fields {
+		if f.key == targetKey {
+			if seen {
+				return true
+			}
+			seen = true
+		}
+	}
+	return false
 }
 
 func (d *Document) moveIDToTheFirstIndex() {
