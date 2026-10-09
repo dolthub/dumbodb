@@ -60,7 +60,6 @@ func newDoltHandler(opts *NewHandlerOpts) (*handler.Handler, CloseBackendFunc, e
 		StateProvider: opts.StateProvider,
 
 		DisablePushdown:         opts.TestOpts.DisablePushdown,
-		EnableNestedPushdown:    opts.TestOpts.EnableNestedPushdown,
 		CappedCleanupInterval:   opts.TestOpts.CappedCleanupInterval,
 		CappedCleanupPercentage: opts.TestOpts.CappedCleanupPercentage,
 		EnableNewAuth:           opts.TestOpts.EnableNewAuth,

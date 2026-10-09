@@ -493,10 +493,6 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 		if strings.HasPrefix(k, "$") {
 			return nil, false, nil
 		}
-		// Index is keyed on the flat field, so dotted-path constraints can't use it.
-		if strings.ContainsRune(k, '.') {
-			continue
-		}
 		entry, ok := indexedField[k]
 		if !ok {
 			continue
@@ -515,6 +511,9 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 		}
 		if queryCmp != nil {
 			v = collateFilterValue(v, queryCmp)
+		}
+		if idxInfos[entry.mapIdx].Multikey {
+			v = multikeyScanBound(v)
 		}
 		s, e, ok := indexBoundsForFilterValue(v)
 		if !ok {
@@ -656,6 +655,24 @@ func indexPointRangesForIn(v any) ([][2][]byte, bool) {
 // Returns ok=false for value shapes the index path can't handle (regex,
 // $in, $ne, nested operators, mixed comparisons against arrays, ...); the
 // caller falls back to the full-scan path.
+// multikeyScanBound drops the upper-bound operators from a range that has both
+// sides. On a multikey field each operator may be met by a different element
+// ({$gt: 2, $lt: 3} matches [1, 3]), so the sides cannot be intersected; like
+// MongoDB, scan one bound and let the filter re-check the rest.
+func multikeyScanBound(v any) any {
+	opDoc, ok := v.(*types.Document)
+	if !ok || opDoc.Has("$eq") || !(opDoc.Has("$gt") || opDoc.Has("$gte")) || !(opDoc.Has("$lt") || opDoc.Has("$lte")) {
+		return v
+	}
+	lower := types.MakeDocument(2)
+	for _, op := range opDoc.Keys() {
+		if op == "$gt" || op == "$gte" {
+			lower.Set(op, must.NotFail(opDoc.Get(op)))
+		}
+	}
+	return lower
+}
+
 func indexBoundsForFilterValue(v any) (startKey, stopKey []byte, ok bool) {
 	opDoc, isOp := v.(*types.Document)
 	if !isOp {
@@ -871,6 +888,9 @@ func compoundIndexBounds(idx backends.IndexInfo, filter *types.Document, queryCm
 			prefix = append(prefix, idxpkg.EncodeValue(eqVal)...)
 			continue
 		}
+		if idx.Multikey {
+			v = multikeyScanBound(v)
+		}
 		s, e, bok := indexBoundsForFilterValue(v)
 		if !bok {
 			if i == 0 {
@@ -975,7 +995,7 @@ func buildOrUnionPlan(params *backends.ExplainParams, idxInfos []backends.IndexI
 			return nil, false
 		}
 		field := clause.Keys()[0]
-		if strings.HasPrefix(field, "$") || strings.ContainsRune(field, '.') {
+		if strings.HasPrefix(field, "$") {
 			return nil, false
 		}
 		val, err := clause.Get(field)
@@ -1089,15 +1109,14 @@ func pickIndexForFilter(filter *types.Document, idxInfos []backends.IndexInfo, q
 		if strings.HasPrefix(k, "$") {
 			return backends.IndexInfo{}, false
 		}
-		if strings.ContainsRune(k, '.') {
-			continue
-		}
 		v, err := filter.Get(k)
 		if err != nil {
 			continue
 		}
 		if _, _, ok := indexBoundsForFilterValue(v); !ok {
-			continue
+			if _, inOK := indexPointRangesForIn(v); !inOK {
+				continue
+			}
 		}
 		// Pick the best-ranked index whose leading field is k. A partial
 		// index is eligible only when the filter implies its partial
@@ -1284,9 +1303,14 @@ func (c *collection) Explain(ctx context.Context, params *backends.ExplainParams
 		// bound by an equality predicate in the filter (so the scan
 		// emits each remaining suffix in index order). Direction must
 		// agree with the index (ascending sort vs ascending key, etc.).
+		// A multikey index's bounded scan can't yield sort order: a document
+		// sorts by its min or max element, not the element the bounds matched.
 		sortField := params.Sort.Keys()[0]
 		sortAsc := sortDirectionAscending(params.Sort)
 		for pos, k := range picked.Key {
+			if picked.Multikey {
+				break
+			}
 			if k.Field != sortField {
 				continue
 			}
@@ -1301,7 +1325,7 @@ func (c *collection) Explain(ctx context.Context, params *backends.ExplainParams
 		}
 	}
 
-	if indexPicked && params != nil {
+	if indexPicked && params != nil && !picked.Multikey {
 		covered = projectionIsCoveredBy(params.Projection, picked)
 	}
 
@@ -1360,17 +1384,22 @@ func buildExplainPlan(command string, params *backends.ExplainParams, picked bac
 		return &explainStage{stage: "COUNT", input: leaf}
 
 	case "distinct":
-		// MongoDB emits PROJECTION_COVERED above DISTINCT_SCAN. DumboDB's
-		// DistinctScan path uses the index covering the distinct key; if
-		// no usable index, fall back to COLLSCAN (rare in practice; the
-		// parity test always provides one).
+		// MongoDB emits PROJECTION_COVERED above DISTINCT_SCAN for a top-level
+		// key and PROJECTION_DEFAULT for a dotted one. DumboDB's DistinctScan
+		// path uses the index covering the distinct key; if no usable index,
+		// fall back to COLLSCAN (rare in practice; the parity test always
+		// provides one).
 		if indexPicked {
 			leaf := &explainStage{
 				stage:      "DISTINCT_SCAN",
 				indexName:  picked.Name,
 				keyPattern: keyPatternOf(picked),
 			}
-			return &explainStage{stage: "PROJECTION_COVERED", input: leaf}
+			projection := "PROJECTION_COVERED"
+			if strings.ContainsRune(params.DistinctKey, '.') {
+				projection = "PROJECTION_DEFAULT"
+			}
+			return &explainStage{stage: projection, input: leaf}
 		}
 		return &explainStage{stage: "COLLSCAN"}
 
@@ -1500,8 +1529,7 @@ func sortIsSingleField(sort *types.Document) bool {
 	if sort == nil || sort.Len() != 1 {
 		return false
 	}
-	k := sort.Keys()[0]
-	return k != "$natural" && !strings.ContainsRune(k, '.')
+	return sort.Keys()[0] != "$natural"
 }
 
 // sortDirectionAscending assumes sort is already single-field (see sortIsSingleField).
@@ -2430,7 +2458,7 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 	}
 
 	field := filter.Keys()[0]
-	if strings.HasPrefix(field, "$") || strings.ContainsRune(field, '.') {
+	if strings.HasPrefix(field, "$") {
 		return 0, false, nil
 	}
 
@@ -2591,12 +2619,6 @@ func (c *collection) DistinctScan(ctx context.Context, params *backends.Distinct
 	if params == nil || params.Key == "" {
 		return nil, nil
 	}
-	// Dotted paths address sub-document fields; the index is keyed on the
-	// flat top-level field, so it can't answer the request soundly.
-	if strings.ContainsRune(params.Key, '.') {
-		return nil, nil
-	}
-
 	m, exists, state, err := c.getMap(ctx)
 	if err != nil {
 		return nil, err

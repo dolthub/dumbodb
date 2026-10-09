@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/FerretDB/wire"
 
@@ -290,18 +289,6 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 	effColl := h.effectiveCollation(connCtx, db, params.Collection, opCollation)
 	qp.Collation = effColl
 	qp.Collated = !collation.Parse(effColl).IsSimple()
-
-	if !h.EnableNestedPushdown && params.Filter != nil {
-		qp.Filter = params.Filter.DeepCopy()
-
-		for _, k := range qp.Filter.Keys() {
-			if !strings.ContainsRune(k, '.') {
-				continue
-			}
-
-			qp.Filter.Remove(k)
-		}
-	}
 
 	if params.Sort, err = common.ValidateSortDocument(params.Sort); err != nil {
 		var pathErr *types.PathError

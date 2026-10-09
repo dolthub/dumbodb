@@ -196,7 +196,7 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 	var srcIter types.DocumentsIterator
 	if isView {
 		viewCmp := collation.Parse(params.Collation).Comparator()
-		srcIter, err = viewSourceIterator(ctx, db, viewName, viewOn, viewPipeline, viewCmp, closer, h.DisablePushdown, h.EnableNestedPushdown)
+		srcIter, err = viewSourceIterator(ctx, db, viewName, viewOn, viewPipeline, viewCmp, closer, h.DisablePushdown)
 	} else {
 		var queryRes *backends.QueryResult
 		if queryRes, err = coll.Query(ctx, qp); err != nil {
@@ -306,18 +306,6 @@ func (h *Handler) makeFindQueryParams(ctx context.Context, params *common.FindPa
 
 	if !h.DisablePushdown {
 		qp.Filter = params.Filter
-	}
-
-	if !h.EnableNestedPushdown && params.Filter != nil {
-		qp.Filter = params.Filter.DeepCopy()
-
-		for _, k := range qp.Filter.Keys() {
-			if !strings.ContainsRune(k, '.') {
-				continue
-			}
-
-			qp.Filter.Remove(k)
-		}
 	}
 
 	if params.Sort, err = common.ValidateSortDocument(params.Sort); err != nil {

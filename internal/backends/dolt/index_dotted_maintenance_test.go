@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/dolthub/dumbodb/internal/backends"
@@ -239,4 +240,77 @@ func TestMergeUniqueCollisionOnDottedPath(t *testing.T) {
 	expectHolders(t, ctx, merged, "a_b_unique", "x", []int32{30}, 30)
 	expectHolders(t, ctx, merged, "a_b_unique", "y", []int32{30}, 30)
 	expectHolders(t, ctx, merged, "a_b_unique", "seed", []int32{1}, 1)
+}
+
+
+func queryCandidateIDs(t *testing.T, ctx context.Context, coll backends.Collection, filter *types.Document) []int32 {
+	t.Helper()
+	res, err := coll.Query(ctx, &backends.QueryParams{Filter: filter})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	defer res.Iter.Close()
+	ids := []int32{}
+	for {
+		_, doc, err := res.Iter.Next()
+		if err != nil {
+			break
+		}
+		ids = append(ids, must.NotFail(doc.Get("_id")).(int32))
+	}
+	slices.Sort(ids)
+	return ids
+}
+
+// The backend returns only index candidates for a dotted filter rather than
+// every document (the handler re-filters candidates).
+func TestDottedFilterUsesIndex(t *testing.T) {
+	ctx := context.Background()
+	c := newDottedPathTestCollection(t, backends.IndexInfo{Name: "a_b", Key: []backends.IndexKeyPair{{Field: "a.b"}}})
+	for i := int32(1); i <= 10; i++ {
+		if err := insertDottedPathDoc(c, abDoc(i, bDoc(i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	eq := must.NotFail(types.NewDocument("a.b", int32(3)))
+	if got := queryCandidateIDs(t, ctx, c, eq); !slices.Equal(got, []int32{3}) {
+		t.Fatalf("equality candidates = %v, want [3]", got)
+	}
+	in := must.NotFail(types.NewDocument("a.b", must.NotFail(types.NewDocument("$in", must.NotFail(types.NewArray(int32(2), int32(7)))))))
+	if got := queryCandidateIDs(t, ctx, c, in); !slices.Equal(got, []int32{2, 7}) {
+		t.Fatalf("$in candidates = %v, want [2 7]", got)
+	}
+
+	res, err := c.Count(ctx, &backends.CountParams{Filter: eq})
+	if err != nil {
+		t.Fatalf("Count: %v", err)
+	}
+	if !res.Filtered || res.Count != 1 {
+		t.Fatalf("Count = %+v, want an index-answered count of 1", res)
+	}
+}
+
+// On a multikey field each range operator may be met by a different element, so
+// the index scan must not intersect the bounds. Expectations were recorded
+// against MongoDB 8.0.
+func TestMultikeyRangeDoesNotIntersectBounds(t *testing.T) {
+	ctx := context.Background()
+	c := newDottedPathTestCollection(t, backends.IndexInfo{Name: "a_b", Key: []backends.IndexKeyPair{{Field: "a.b"}}})
+	for _, d := range []*types.Document{
+		abDoc(1, bDoc(must.NotFail(types.NewArray(int32(1), int32(3))))),
+		abDoc(2, bArr(int32(1), int32(4))),
+		abDoc(3, bDoc(int32(9))),
+	} {
+		if err := insertDottedPathDoc(c, d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rng := must.NotFail(types.NewDocument("a.b", must.NotFail(types.NewDocument("$gt", int32(2), "$lt", int32(3)))))
+	got := queryCandidateIDs(t, ctx, c, rng)
+	for _, want := range []int32{1, 2} {
+		if !slices.Contains(got, want) {
+			t.Fatalf("range candidates = %v, missing %d", got, want)
+		}
+	}
 }
