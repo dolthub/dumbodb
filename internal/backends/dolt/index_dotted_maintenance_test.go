@@ -242,6 +242,46 @@ func TestMergeUniqueCollisionOnDottedPath(t *testing.T) {
 	expectHolders(t, ctx, merged, "a_b_unique", "seed", []int32{1}, 1)
 }
 
+// Every subdocument and every array encodes to one index marker, so the
+// index-driven distinct scan must read each document in such a group.
+func TestDistinctScanReadsEveryMarkerGroupMember(t *testing.T) {
+	ctx := context.Background()
+	c := newDottedPathTestCollection(t, backends.IndexInfo{Name: "y", Key: []backends.IndexKeyPair{{Field: "y"}}})
+	arr := func(v ...any) *types.Array { return must.NotFail(types.NewArray(v...)) }
+	for _, d := range []*types.Document{
+		must.NotFail(types.NewDocument("_id", int32(1), "y", must.NotFail(types.NewDocument("p", int32(1))))),
+		must.NotFail(types.NewDocument("_id", int32(2), "y", must.NotFail(types.NewDocument("p", int32(2))))),
+		must.NotFail(types.NewDocument("_id", int32(3), "y", arr(arr(int32(7)), arr(int32(8))))),
+		must.NotFail(types.NewDocument("_id", int32(4), "y", arr())),
+	} {
+		if err := insertDottedPathDoc(c, d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	res, err := c.(backends.DistinctScanner).DistinctScan(ctx, &backends.DistinctParams{Key: "y"})
+	if err != nil {
+		t.Fatalf("DistinctScan: %v", err)
+	}
+	want := []any{
+		must.NotFail(types.NewDocument("p", int32(1))),
+		must.NotFail(types.NewDocument("p", int32(2))),
+		arr(int32(7)),
+		arr(int32(8)),
+		types.Undefined,
+	}
+	for _, w := range want {
+		found := false
+		for _, v := range res.Values {
+			if types.Identical(v, w) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("DistinctScan values %v missing %v", res.Values, w)
+		}
+	}
+}
 
 func queryCandidateIDs(t *testing.T, ctx context.Context, coll backends.Collection, filter *types.Document) []int32 {
 	t.Helper()
