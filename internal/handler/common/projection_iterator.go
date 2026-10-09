@@ -38,6 +38,7 @@ func ProjectionIterator(iter types.DocumentsIterator, closer *iterator.MultiClos
 		filter:     filter,
 		inclusion:  inclusion,
 	}
+	res.topLevelFields, res.topLevel = topLevelInclusionFields(projectionValidated, inclusion)
 	closer.Add(res)
 
 	return res, nil
@@ -48,6 +49,9 @@ type projectionIterator struct {
 	projection *types.Document
 	filter     *types.Document // filter is used by positional operator to get first matching array element.
 	inclusion  bool
+
+	topLevelFields []string
+	topLevel       bool
 }
 
 func (iter *projectionIterator) Next() (struct{}, *types.Document, error) {
@@ -58,7 +62,12 @@ func (iter *projectionIterator) Next() (struct{}, *types.Document, error) {
 		return unused, nil, lazyerrors.Error(err)
 	}
 
-	projected, err := ProjectDocument(doc, iter.projection, iter.filter, iter.inclusion)
+	var projected *types.Document
+	if iter.topLevel {
+		projected, err = projectTopLevelInclusion(doc, iter.projection, iter.topLevelFields)
+	} else {
+		projected, err = ProjectDocument(doc, iter.projection, iter.filter, iter.inclusion)
+	}
 	if err != nil {
 		return unused, nil, lazyerrors.Error(err)
 	}
