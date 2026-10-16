@@ -246,6 +246,11 @@ type Backend struct {
 	dbs      map[string]*dbState // dbName -> dbState
 	branchMu sync.Mutex
 
+	// configURLMu serializes registering a remote or backup URL, so the
+	// check that no conflicting config owns the URL and the insert that
+	// claims it are one step.
+	configURLMu sync.Mutex
+
 	provider *dumbodbProvider
 
 	gcController *gcctx.GCSafepointController
@@ -727,7 +732,11 @@ func (b *Backend) ListDatabases(ctx context.Context, params *backends.ListDataba
 func (b *Backend) DropDatabase(ctx context.Context, params *backends.DropDatabaseParams) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	return b.dropDatabaseLocked(params)
+}
 
+// dropDatabaseLocked soft-deletes a database. The caller holds b.mu.
+func (b *Backend) dropDatabaseLocked(params *backends.DropDatabaseParams) error {
 	if !backends.ValidDatabaseDirName(params.Name) {
 		return backends.NewError(backends.ErrorCodeDatabaseNameIsInvalid, fmt.Errorf("invalid database name %q", params.Name))
 	}
@@ -791,6 +800,39 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 	return db, nil
 }
 
+// openDatabaseStore opens, or creates when dbDir is empty, the generational
+// chunk store laid out in dbDir: a journaling newgen store, oldgen/ and the
+// ghost block store.
+func openDatabaseStore(ctx context.Context, dbDir string) (*nbs.GenerationalNBS, error) {
+	q := nbs.NewUnlimitedMemQuotaProvider()
+
+	newGenSt, err := nbs.NewLocalJournalingStore(ctx, dolttypes.Format_DOLT.VersionString(), dbDir, q, false, nil)
+	if err != nil {
+		return nil, fmt.Errorf("opening newgen NBS store: %w", err)
+	}
+
+	oldgenDir := filepath.Join(dbDir, "oldgen")
+	if err := os.MkdirAll(oldgenDir, 0o755); err != nil {
+		_ = newGenSt.Close()
+		return nil, fmt.Errorf("creating oldgen directory: %w", err)
+	}
+
+	oldGenSt, err := nbs.NewLocalStore(ctx, newGenSt.Version(), oldgenDir, defaultMemTableSize, q, false)
+	if err != nil {
+		_ = newGenSt.Close()
+		return nil, fmt.Errorf("opening oldgen NBS store: %w", err)
+	}
+
+	ghostGen, err := nbs.NewGhostBlockStore(dbDir)
+	if err != nil {
+		_ = oldGenSt.Close()
+		_ = newGenSt.Close()
+		return nil, fmt.Errorf("opening ghost block store: %w", err)
+	}
+
+	return nbs.NewGenerationalCS(oldGenSt, newGenSt, ghostGen), nil
+}
+
 func (b *Backend) getOrOpenDBLocked(ctx context.Context, dbName string, create bool) (*dbState, bool, error) {
 	b.mu.RLock()
 	db, ok := b.dbs[dbName]
@@ -830,33 +872,10 @@ func (b *Backend) getOrOpenDBLocked(ctx context.Context, dbName string, create b
 		return nil, false, fmt.Errorf("creating db directory for %q: %w", dbName, err)
 	}
 
-	q := nbs.NewUnlimitedMemQuotaProvider()
-
-	newGenSt, err := nbs.NewLocalJournalingStore(ctx, dolttypes.Format_DOLT.VersionString(), dbDir, q, false, nil)
+	cs, err := openDatabaseStore(ctx, dbDir)
 	if err != nil {
-		return nil, false, fmt.Errorf("opening newgen NBS store for %q: %w", dbName, err)
+		return nil, false, fmt.Errorf("opening store for %q: %w", dbName, err)
 	}
-
-	oldgenDir := filepath.Join(dbDir, "oldgen")
-	if err := os.MkdirAll(oldgenDir, 0o755); err != nil {
-		_ = newGenSt.Close()
-		return nil, false, fmt.Errorf("creating oldgen directory for %q: %w", dbName, err)
-	}
-
-	oldGenSt, err := nbs.NewLocalStore(ctx, newGenSt.Version(), oldgenDir, defaultMemTableSize, q, false)
-	if err != nil {
-		_ = newGenSt.Close()
-		return nil, false, fmt.Errorf("opening oldgen NBS store for %q: %w", dbName, err)
-	}
-
-	ghostGen, err := nbs.NewGhostBlockStore(dbDir)
-	if err != nil {
-		_ = oldGenSt.Close()
-		_ = newGenSt.Close()
-		return nil, false, fmt.Errorf("opening ghost block store for %q: %w", dbName, err)
-	}
-
-	cs := nbs.NewGenerationalCS(oldGenSt, newGenSt, ghostGen)
 
 	ns := newInstrumentedNodeStore(tree.NewNodeStore(cs))
 

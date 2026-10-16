@@ -61,6 +61,12 @@ func (b *Backend) DumboDBClone(ctx context.Context, params *backends.CloneParams
 		return nil, fmt.Errorf("dumboClone: unsupported remote scheme %q; supported schemes: file, http(s), s3, gs, az, oss, oci, git+file/http/https/ssh", ru.Scheme)
 	}
 
+	// The clone registers its source as the origin remote, which a backup URL
+	// may not be; refuse before anything is created.
+	if err = b.checkURLConflict(ctx, "dumboClone", ru.Raw, "", backupsCollection); err != nil {
+		return nil, err
+	}
+
 	remoteParams, err := b.remoteDBParams(ru.Scheme)
 	if err != nil {
 		return nil, fmt.Errorf("dumboClone: %w", err)

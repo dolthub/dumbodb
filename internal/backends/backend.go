@@ -414,6 +414,14 @@ func (bc *backendContract) DumboDBRemote(ctx context.Context, params *RemotePara
 	return nil, newVersioningUnsupportedError("DumboDBRemote")
 }
 
+func (bc *backendContract) DumboDBBackup(ctx context.Context, params *BackupParams) (*BackupResult, error) {
+	if vb, ok := bc.b.(VersioningBackend); ok {
+		return vb.DumboDBBackup(ctx, params)
+	}
+
+	return nil, newVersioningUnsupportedError("DumboDBBackup")
+}
+
 func (bc *backendContract) DumboDBPush(ctx context.Context, params *PushParams) (*PushResult, error) {
 	if vb, ok := bc.b.(VersioningBackend); ok {
 		return vb.DumboDBPush(ctx, params)

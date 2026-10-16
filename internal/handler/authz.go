@@ -163,10 +163,11 @@ var readWriteActions = []authz.Action{authz.ActionFind, authz.ActionInsert, auth
 // filesystem access and credentials, so they are disabled under access
 // control.
 var remoteVersioningCommands = map[string]bool{
-	"doltClone": true,
-	"doltFetch": true,
-	"doltPull":  true,
-	"doltPush":  true,
+	"doltBackup": true,
+	"doltClone":  true,
+	"doltFetch":  true,
+	"doltPull":   true,
+	"doltPush":   true,
 }
 
 func (h *Handler) authorize(ctx context.Context, msg *wire.OpMsg) error {
@@ -219,7 +220,7 @@ func (h *Handler) authorize(ctx context.Context, msg *wire.OpMsg) error {
 	if remoteVersioningCommands[command] {
 		return handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrUnauthorized,
-			fmt.Sprintf("%s is disabled when access control is enabled: push, pull, fetch and clone use the server's own credentials", command),
+			fmt.Sprintf("%s is disabled when access control is enabled: push, pull, fetch, clone and backup use the server's own credentials", command),
 			command,
 		)
 	}

@@ -16,20 +16,6 @@ jobs:
   parity:
     runs-on: ubuntu-latest
 
-    services:
-      mongo:
-        # Pinned to the MongoDB release DumboDB is tested against; keep in
-        # sync with internal/version MongoDBVersion and the README. Bump
-        # deliberately to a newer 8.0.x when adopting it.
-        image: public.ecr.aws/docker/library/mongo:8.0.28
-        ports:
-          - 27017:27017
-        options: >-
-          --health-cmd "mongosh --eval 'db.runCommand({ping:1})' --quiet"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
     env:
       MONGO_URI: mongodb://localhost:27017
       DUMBODB_URI: mongodb://localhost:27018
@@ -45,8 +31,10 @@ jobs:
       - name: Build DumboDB
         run: go build -o /usr/local/bin/dumbodb ./cmd/dumbodb
 
-      # The harness spawns the auth pair and replica set from a mongod binary;
-      # the service container above only supplies the plain MONGO_URI server.
+      # One mongod binary serves both the MONGO_URI reference server started
+      # below and the auth pair and replica set the harness spawns. It comes
+      # from MongoDB's apt repository rather than a container registry, whose
+      # anonymous pull limits are shared across GitHub runner IPs.
       - name: Install mongod binary
         run: |
           codename=$(. /etc/os-release && echo "$VERSION_CODENAME")
@@ -55,9 +43,30 @@ jobs:
           echo "deb [ signed-by=/usr/share/keyrings/mongodb-server-8.0.gpg ] https://repo.mongodb.org/apt/ubuntu ${codename}/mongodb-org/8.0 multiverse" \
             | sudo tee /etc/apt/sources.list.d/mongodb-org-8.0.list
           sudo apt-get update
-          # Pin to the same release as the mongo service image above.
+          # Pinned to the MongoDB release DumboDB is tested against; keep in
+          # sync with internal/version MongoDBVersion and the README. Bump
+          # deliberately to a newer 8.0.x when adopting it.
           sudo apt-get install -y mongodb-org-server=8.0.28
           mongod --version
+
+      # --fork returns only once mongod is accepting connections, and fails the
+      # step if it cannot start. The port check below is a second, explicit
+      # gate: the suite must never run against a missing reference server.
+      - name: Start MongoDB
+        run: |
+          mkdir -p /tmp/mongod-data
+          if ! mongod --port 27017 --bind_ip 127.0.0.1 --dbpath /tmp/mongod-data \
+              --logpath /tmp/mongod.log --pidfilepath /tmp/mongod.pid --fork; then
+            echo "mongod failed to start. Log:" >&2
+            cat /tmp/mongod.log >&2
+            exit 1
+          fi
+          if ! nc -z 127.0.0.1 27017; then
+            echo "mongod reported started but is not listening on 27017. Log:" >&2
+            cat /tmp/mongod.log >&2
+            exit 1
+          fi
+          echo "MongoDB ready: $(mongod --version | head -1)"
 
       - name: Start DumboDB
         run: |
@@ -127,7 +136,7 @@ jobs:
           #
           # tests/tls needs no job of its own: it spawns its own mongod and
           # dumbodb per case from the two binaries already resolved above, and
-          # ignores the service container and the long-running server entirely.
+          # ignores the long-running MONGO_URI and DUMBODB_URI servers entirely.
           go test ./tests/ ./tests/tls/ -v -timeout 20m -json | tee results/parity.json
 
       - name: Report parity failures

@@ -11,6 +11,7 @@ Every verify doc has a matching automated test in `tests/verify/` (package
 
 | Document | Test file (in `tests/verify/`) | Test function |
 |----------|--------------------------------|---------------|
+| backup.md | backup_test.go | TestBackupVerify |
 | branch.md | branch_test.go | TestBranchVerify |
 | branch-status.md | branch_status_test.go | TestBranchStatusVerify |
 | cherry-pick.md | cherry_pick_test.go | TestCherryPickVerify |

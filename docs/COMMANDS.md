@@ -84,6 +84,7 @@ Every `dumbo*` command has an identical `dolt*` alias:
 | `dumboPush` | `doltPush` |
 | `dumboFetch` | `doltFetch` |
 | `dumboPull` | `doltPull` |
+| `dumboBackup` | `doltBackup` |
 
 ---
 
@@ -1783,12 +1784,13 @@ admin.runCommand({ dumboUndrop: 1, purgeMatching: { name: "orders", droppedBefor
 
 `dumboRemote`, `dumboClone`, `dumboPush`, `dumboFetch`, and `dumboPull` give a
 DumboDB database the same remote workflow as git, reusing Dolt's chunk-transfer
-machinery. A remote is a named URL stored per database in `admin.system.remotes`;
+machinery. `dumboBackup` copies a database's whole state, uncommitted work
+included, the way Dolt backups do. A remote is a named URL stored per database in `admin.system.remotes`;
 branch upstream tracking is stored in `admin.system.branches`. Both are internal
 storage -- the supported interface is these commands plus `dumboBranch` (the
 `git branch -vv` analog), not direct reads of those collections.
 
-**Remote URLs.** A remote's `url` (and `dumboClone`'s `from`) accepts:
+**Remote URLs.** A remote's `url` (and `dumboClone`'s `from`, and a backup's `url`) accepts:
 `file://` (a local directory), `http(s)://` (a Dolt remotesapi gRPC endpoint such
 as DoltHub), `s3://`, `gs://`, `az://`, `oss://`, `oci://` (object stores), and
 `git+file://` / `git+http(s)://` / `git+ssh://` (a Dolt database stored in a git
@@ -1796,6 +1798,14 @@ repository). A scheme-less value is expanded like the Dolt CLI: `org/repo`
 becomes `https://doltremoteapi.dolthub.com/org/repo`. Secure gRPC remotes
 (`https://`, DoltHub) require credentials from `dolt login` in the server's
 environment; object stores read credentials from the ambient environment.
+
+**Access control.** These commands reach other systems with the server's own
+filesystem access and credentials, so under `--auth` push, pull, fetch, clone
+and every `dumboBackup` action are refused with `Unauthorized` for every user.
+
+**The admin database** holds every user's SCRAM keys and never leaves the
+server: `dumboPush` and `dumboRemote` `add` on `admin` are refused with
+`Unauthorized`, and `dumboBackup` refuses `admin` as a source or restore target.
 
 ---
 
@@ -1845,6 +1855,7 @@ db.runCommand({ dumboRemote: 1, action: "remove", name: "origin" })
 | `action` is not `add`/`list`/`remove` | `BadValue: dumboRemote: action must be add, list, or remove` |
 | `add`/`remove` without `name` | `BadValue: dumboRemote <action>: name is required` |
 | `add` without `url` | `BadValue: dumboRemote add: url is required` |
+| `add` with a URL used by any database's backup | `OperationFailed: dumboRemote add: url "<url>" is already used by backup "<db>.<name>"` |
 
 ### Notes
 
@@ -1899,6 +1910,7 @@ admin.runCommand({ dumboClone: 1, from: "myorg/orders", as: "orders" })
 | `as` is a reserved name (`admin`, `config`, `local`) | `OperationFailed: dumboClone: "<name>" is a reserved database name` |
 | A database named `as` already exists | `OperationFailed: dumboClone: database "<name>" already exists` |
 | Remote scheme not cloneable | `OperationFailed: dumboClone: unsupported remote scheme "<scheme>"` |
+| `from` is a backup's URL (restore it with `dumboBackup` instead) | `OperationFailed: dumboClone: url "<url>" is already used by backup "<db>.<name>"` |
 
 ### Notes
 
@@ -2111,3 +2123,73 @@ db.runCommand({ dumboPull: 1, ffOnly: true })
 
 - `dumboPull` defaults its remote to the current branch's upstream; `dumboFetch` defaults to the default branch's upstream.
 - A fast-forward moves the branch with no new commit; otherwise a merge commit is created (`message`/`author` name it). `noFF` forces a merge commit even when a fast-forward was possible.
+
+---
+
+## dumboBackup
+
+Backs up one database to a URL, and restores a database from one, following
+Dolt backups. A backup holds the database's whole root: every branch, tag and
+working set, so uncommitted changes are included. Must be run against the
+`admin` database; the database being backed up is named by `db`.
+
+**Alias:** `doltBackup`
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `action` | string | yes | -- | `"add"`, `"list"`, `"remove"`, `"sync"`, `"sync-url"`, or `"restore"` |
+| `db` | string | for all but `restore` | -- | Database being backed up |
+| `name` | string | for `add`/`remove`/`sync` | -- | Backup name (e.g. `"nightly"`) |
+| `url` | string | for `add`/`sync-url`/`restore` | -- | Backup URL (see [Remote URLs](#remote-sync)) |
+| `as` | string | for `restore` | -- | Name of the database to create |
+| `force` | bool | no | `false` | `restore` only: replace an existing database named `as` |
+
+### Response fields
+
+| Action | Fields |
+|--------|--------|
+| `add` | `name`, `url`, `ok` |
+| `list` | `backups` (array of `{ name, url }`), `ok` |
+| `remove` | `ok` |
+| `sync` / `sync-url` | `url`, `root` (the backup's root hash), `upToDate`, `ok` |
+| `restore` | `db`, `url`, `root` (the restored root hash), `ok` |
+
+### Example
+
+```js
+var admin = db.getSiblingDB("admin")
+
+admin.runCommand({ dumboBackup: 1, action: "add", db: "orders", name: "nightly", url: "file:///srv/backups/orders" })
+// { name: "nightly", url: "file:///srv/backups/orders", ok: 1 }
+
+admin.runCommand({ dumboBackup: 1, action: "sync", db: "orders", name: "nightly" })
+// { url: "file:///srv/backups/orders", root: "<hash>", upToDate: false, ok: 1 }
+
+admin.runCommand({ dumboBackup: 1, action: "sync-url", db: "orders", url: "s3://bucket/orders-adhoc" })
+
+admin.runCommand({ dumboBackup: 1, action: "restore", url: "file:///srv/backups/orders", as: "orders_restored" })
+// { db: "orders_restored", url: "file:///srv/backups/orders", root: "<hash>", ok: 1 }
+```
+
+### Error cases
+
+| Condition | Error |
+|-----------|-------|
+| Not run against `admin` | `OperationFailed: dumboBackup: can only be run against the admin database` |
+| `action` unknown | `BadValue: dumboBackup: action must be add, list, remove, sync, sync-url, or restore` |
+| A required field is missing | `BadValue: dumboBackup <action>: <field> is required` |
+| `db` or `as` is `admin`, `config` or `local` | `OperationFailed: dumboBackup: ...` |
+| `url` is used by a remote, or by another database's backup | `OperationFailed: dumboBackup: url "<url>" is already used by ...` |
+| `restore` target exists and `force` is not set | `OperationFailed: dumboBackup restore: database "<as>" already exists; use force to replace it` |
+| `restore` from a URL with no backup | `OperationFailed: dumboBackup restore: no backup found at "<url>"` |
+| Server runs with `--auth` | `Unauthorized` (every action) |
+
+### Notes
+
+- A sync replaces the backup's root with the database's; the first sync copies every chunk and later ones only the missing chunks. Writes still open in a client transaction are not included.
+- Like Dolt, a backup carries one database only. Users and roles, remotes, backups and branch config live in `admin` and are not carried: a database restored under a new name has no remotes or upstreams.
+- `restore` with `force` drops the existing database first (it can be brought back with `dumboUndrop`). That name's remotes and branch config in `admin` are left as they were.
+- `remove` deletes the backup definition only; data already synced to the URL is kept and can still be restored.
+- `list`, `sync` and `sync-url` may run on a replica-set secondary; `add`, `remove` and `restore` may not.

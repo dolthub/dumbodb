@@ -139,7 +139,7 @@ func (b *Backend) DumboDBPush(ctx context.Context, params *backends.PushParams) 
 	// PrepareDB creates local stores on demand and inits a git+file bare repo,
 	// but is unsupported for gRPC (http/https) and git+http/https/ssh remotes,
 	// which must already exist. Skip it for those.
-	if !isGRPCScheme(ru.Scheme) && !(isGitScheme(ru.Scheme) && !gitPreparable(ru.Scheme)) {
+	if remotePreparable(ru.Scheme) {
 		if err := dbfactory.PrepareDB(ctx, nbf, ru.Raw, nil); err != nil {
 			return nil, fmt.Errorf("dumboPush: preparing remote %q: %w", remote, err)
 		}

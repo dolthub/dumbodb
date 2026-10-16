@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/FerretDB/wire"
@@ -178,6 +179,7 @@ func (h *Handler) initCommands() {
 	h.register(&Command{Handler: h.MsgDumboDBRebase, MutatesState: alwaysMutatesState, Help: "Reapplies commits on the current branch onto the tip of another branch, rewriting history."}, "doltRebase", "dumboRebase")
 	h.register(&Command{Handler: h.MsgDumboDBReset, MutatesState: alwaysMutatesState, Help: "Resets the branch HEAD to a target commit, optionally resetting the working tree."}, "doltReset", "dumboReset")
 	h.register(&Command{Handler: h.MsgDumboDBRemote, MutatesState: remoteMutatesState, Help: "Adds, lists, or removes a named remote (name + url) for the database. Stored in admin.system.remotes."}, "doltRemote", "dumboRemote")
+	h.register(&Command{Handler: h.MsgDumboDBBackup, MutatesState: backupMutatesState, Help: "Manages backups of a database's whole root (every branch, tag and working set): add, list, remove, sync, sync-url, restore. Run against the admin database. Stored in admin.system.backups."}, "doltBackup", "dumboBackup")
 	h.register(&Command{Handler: h.MsgDumboDBPush, MutatesState: alwaysMutatesState, Help: "Pushes a branch's committed HEAD to a configured remote (reuses Dolt push)."}, "doltPush", "dumboPush")
 	h.register(&Command{Handler: h.MsgDumboDBFetch, MutatesState: alwaysMutatesState, Help: "Fetches a branch from a configured remote and updates the local tracking ref (reuses Dolt fetch)."}, "doltFetch", "dumboFetch")
 	h.register(&Command{Handler: h.MsgDumboDBPull, MutatesState: alwaysMutatesState, Help: "Fetches from a remote and merges the fetched commit into the current branch (git pull)."}, "doltPull", "dumboPull")
@@ -264,6 +266,9 @@ func (h *Handler) initCommands() {
 					return nil, guardErr
 				}
 				if guardErr := guardAdminHistory(canonicalName, msg); guardErr != nil {
+					return nil, guardErr
+				}
+				if guardErr := guardAdminExport(canonicalName, msg); guardErr != nil {
 					return nil, guardErr
 				}
 				if authenticated {
@@ -558,6 +563,41 @@ func guardAdminHistory(command string, msg *wire.OpMsg) error {
 	return handlererrors.NewCommandErrorMsgWithArgument(
 		handlererrors.ErrUnauthorized,
 		fmt.Sprintf("cannot run %s on the admin database: its history is managed through the user management commands", command),
+		command,
+	)
+}
+
+// adminExporters are the version-control commands (by canonical name) that
+// would copy the admin database, and with it every user's SCRAM keys, to a
+// remote. Removing or listing an admin remote stays allowed.
+var adminExporters = map[string]func(*wire.OpMsg) bool{
+	"doltPush":   alwaysMutatesState,
+	"doltRemote": remoteAddsRemote,
+}
+
+func remoteAddsRemote(msg *wire.OpMsg) bool {
+	document, err := opMsgDocument(msg)
+	if err != nil {
+		return false
+	}
+	value, _ := document.Get("action")
+	action, ok := value.(string)
+	return ok && strings.ToLower(strings.TrimSpace(action)) == "add"
+}
+
+// guardAdminExport refuses commands that would send the admin database to a
+// remote. Like guardAdminHistory it applies with or without access control.
+func guardAdminExport(command string, msg *wire.OpMsg) error {
+	exports, ok := adminExporters[command]
+	if !ok || !exports(msg) {
+		return nil
+	}
+	if _, db, _ := wireCommandTarget(msg); !isAdminDatabase(db) {
+		return nil
+	}
+	return handlererrors.NewCommandErrorMsgWithArgument(
+		handlererrors.ErrUnauthorized,
+		fmt.Sprintf("cannot run %s on the admin database: it may not be copied to a remote", command),
 		command,
 	)
 }

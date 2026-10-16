@@ -117,6 +117,12 @@ func gitPreparable(scheme string) bool {
 	return scheme == dbfactory.GitFileScheme
 }
 
+// remotePreparable reports whether dbfactory.PrepareDB can create a missing
+// remote of this scheme. gRPC and git+http/https/ssh remotes must already exist.
+func remotePreparable(scheme string) bool {
+	return !isGRPCScheme(scheme) && !(isGitScheme(scheme) && !gitPreparable(scheme))
+}
+
 // isCloneableScheme reports whether dumboClone can materialize a new database
 // from a remote of this scheme: direct stores (file, s3, gs, az, oss, oci,
 // localbs) and the gRPC transports. mem is excluded (in-process only, nothing

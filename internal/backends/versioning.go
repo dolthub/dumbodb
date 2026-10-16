@@ -693,6 +693,11 @@ type VersioningBackend interface {
 	// DumboDBRemote adds, lists, or removes a named remote for a database.
 	DumboDBRemote(context.Context, *RemoteParams) (*RemoteResult, error)
 
+	// DumboDBBackup manages Dolt-style backups of a single database: named
+	// backup registration (add, list, remove), sync to a backup URL, and
+	// restore from one.
+	DumboDBBackup(context.Context, *BackupParams) (*BackupResult, error)
+
 	// DumboDBPush pushes a branch's committed HEAD to a configured remote.
 	DumboDBPush(context.Context, *PushParams) (*PushResult, error)
 
@@ -780,6 +785,33 @@ type RemoteInfo struct {
 // the database; for add it holds the created remote; for remove it is empty.
 type RemoteResult struct {
 	Remotes []RemoteInfo
+}
+
+// BackupParams are the arguments to DumboDBBackup.
+type BackupParams struct {
+	DBName string // database being backed up (add, list, remove, sync, sync-url)
+	Action string // "add", "list", "remove", "sync", "sync-url", or "restore"
+	Name   string // backup name (add, remove, sync)
+	URL    string // backup url (add, sync-url, restore)
+	As     string // database to create (restore)
+	Force  bool   // replace an existing database (restore)
+}
+
+// BackupInfo describes a single configured backup.
+type BackupInfo struct {
+	Name string
+	URL  string
+}
+
+// BackupResult is returned by DumboDBBackup. For list it holds all backups for
+// the database; for add it holds the created backup; for remove it is empty.
+// sync and sync-url fill URL, Root and UpToDate; restore fills DB, URL and Root.
+type BackupResult struct {
+	Backups  []BackupInfo
+	DB       string // the restored database
+	URL      string
+	Root     string // the backup's root hash after a sync, or the restored root
+	UpToDate bool   // true when the backup already held the database's root
 }
 
 // PushParams are the arguments to DumboDBPush.

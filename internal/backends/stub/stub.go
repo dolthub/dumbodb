@@ -245,6 +245,16 @@ func (b *Backend) DumboDBRemote(_ context.Context, params *backends.RemoteParams
 	return &backends.RemoteResult{Remotes: []backends.RemoteInfo{}}, nil
 }
 
+func (b *Backend) DumboDBBackup(_ context.Context, params *backends.BackupParams) (*backends.BackupResult, error) {
+	b.l.Info("stub: DumboDBBackup",
+		slog.String("db", params.DBName),
+		slog.String("action", params.Action),
+		slog.String("name", params.Name),
+	)
+
+	return &backends.BackupResult{Backups: []backends.BackupInfo{}}, nil
+}
+
 func (b *Backend) DumboDBPush(_ context.Context, params *backends.PushParams) (*backends.PushResult, error) {
 	b.l.Info("stub: DumboDBPush",
 		slog.String("db", params.DBName),

@@ -91,3 +91,29 @@ func TestAdminHistoryIsReservedWithoutAuth(t *testing.T) {
 	requireCode(t, err, codeUnauthorized)
 	require.NoError(t, runIn(env.Client, "admin", bson.D{{Key: "dumboLog", Value: 1}}))
 }
+
+// The admin database holds every user's SCRAM keys, so it must never be sent
+// to a remote. Removing and listing an admin remote stay allowed so a remote
+// added before the guard existed can be cleaned up.
+func TestAdminCannotBeExportedToRemote(t *testing.T) {
+	env := startDumboDB(t)
+	url := "file://" + t.TempDir() + "/adminremote"
+
+	for _, action := range []string{"add", " ADD "} {
+		err := runIn(env.Client, "admin", bson.D{{Key: "dumboRemote", Value: int32(1)},
+			{Key: "action", Value: action}, {Key: "name", Value: "origin"}, {Key: "url", Value: url}})
+		requireCode(t, err, codeUnauthorized)
+	}
+	err := runIn(env.Client, "admin@main", bson.D{{Key: "doltRemote", Value: int32(1)},
+		{Key: "action", Value: "add"}, {Key: "name", Value: "origin"}, {Key: "url", Value: url}})
+	requireCode(t, err, codeUnauthorized)
+
+	requireCode(t, runIn(env.Client, "admin", bson.D{{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"}}), codeUnauthorized)
+	requireCode(t, runIn(env.Client, "admin@main", bson.D{{Key: "doltPush", Value: int32(1)}, {Key: "to", Value: "origin"}}), codeUnauthorized)
+
+	require.NoError(t, runIn(env.Client, "admin", bson.D{{Key: "dumboRemote", Value: int32(1)}, {Key: "action", Value: "list"}}))
+
+	require.NoError(t, insert(env.Client, "appdb", "things", bson.D{{Key: "_id", Value: 1}}))
+	require.NoError(t, runIn(env.Client, "appdb", bson.D{{Key: "dumboRemote", Value: int32(1)},
+		{Key: "action", Value: "add"}, {Key: "name", Value: "origin"}, {Key: "url", Value: url}}))
+}

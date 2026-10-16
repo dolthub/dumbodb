@@ -23,7 +23,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// Push, pull, fetch and clone reach other systems with the server's own
+// Push, pull, fetch, clone and backup reach other systems with the server's own
 // filesystem access and credentials, so under --auth they are refused for
 // every user. Remote configuration (add/list/remove) is a local operation
 // that needs readWrite on the database.
@@ -33,7 +33,7 @@ func TestAuthorize_RemoteOperationsDisabledUnderAuth(t *testing.T) {
 	createUserWithRole(t, h, "mydb", "writer", "readWrite")
 	createUserWithRole(t, h, "admin", "boss", "root")
 
-	for _, name := range []string{"dumboPush", "doltPush", "dumboFetch", "doltFetch", "dumboPull", "doltPull", "dumboClone", "doltClone"} {
+	for _, name := range []string{"dumboPush", "doltPush", "dumboFetch", "doltFetch", "dumboPull", "doltPull", "dumboClone", "doltClone", "dumboBackup", "doltBackup"} {
 		msg := must.NotFail(documentOpMsg(must.NotFail(types.NewDocument(name, int32(1), "$db", "mydb"))))
 		require.True(t, isUnauthorized(t, h.authorize(authCtx("boss", "admin"), msg)), "%s as root", name)
 		require.True(t, isUnauthorized(t, h.authorize(authCtx("writer", "mydb"), msg)), "%s as readWrite", name)
@@ -43,5 +43,17 @@ func TestAuthorize_RemoteOperationsDisabledUnderAuth(t *testing.T) {
 		msg := must.NotFail(documentOpMsg(must.NotFail(types.NewDocument(name, int32(1), "action", "list", "$db", "mydb"))))
 		require.NoError(t, h.authorize(authCtx("writer", "mydb"), msg), "%s as readWrite", name)
 		require.True(t, isUnauthorized(t, h.authorize(authCtx("reader", "mydb"), msg)), "%s as read", name)
+	}
+}
+
+// Every dumboBackup action, read-only ones included, is refused under --auth
+// until remote commands get access control.
+func TestAuthorize_BackupDisabledUnderAuthForEveryAction(t *testing.T) {
+	h := authGateHandler(t, true)
+	createUserWithRole(t, h, "admin", "boss", "root")
+
+	for _, action := range []string{"add", "list", "remove", "sync", "sync-url", "restore"} {
+		msg := must.NotFail(documentOpMsg(must.NotFail(types.NewDocument("dumboBackup", int32(1), "action", action, "db", "mydb", "$db", "admin"))))
+		require.True(t, isUnauthorized(t, h.authorize(authCtx("boss", "admin"), msg)), "dumboBackup %s as root", action)
 	}
 }
