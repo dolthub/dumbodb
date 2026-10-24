@@ -15,9 +15,14 @@
 package handler
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // dolthub/dumbodb#113: specs identical to existing indexes are dropped from the
@@ -57,4 +62,70 @@ func TestValidateIndexesForCreationSkipsExisting(t *testing.T) {
 			}
 		})
 	}
+}
+
+// dolthub/dumbodb#153: unknown index-spec options are ignored only when
+// ignoreUnknownIndexOptions is set; legacy specs like { ns: ... } stay rejected.
+func TestProcessIndexIgnoreUnknownIndexOptions(t *testing.T) {
+	newSpec := func() *types.Document {
+		return must.NotFail(types.NewDocument(
+			"key", must.NotFail(types.NewDocument("a", int32(1))),
+			"name", "a_1",
+			"ns", "db.coll",
+		))
+	}
+
+	assertErrCode := func(t *testing.T, err error, code handlererrors.ErrorCode) {
+		t.Helper()
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		var ce *handlererrors.CommandError
+		if !errors.As(err, &ce) || ce.Code() != code {
+			t.Fatalf("expected %v, got %v", code, err)
+		}
+	}
+
+	t.Run("enabled", func(t *testing.T) {
+		idx, err := processIndex("createIndexes", newSpec(), true)
+		if err != nil {
+			t.Fatalf("processIndex: %v", err)
+		}
+		if idx.Name != "a_1" || len(idx.Key) != 1 || idx.Key[0].Field != "a" {
+			t.Fatalf("unexpected index: %+v", idx)
+		}
+	})
+
+	t.Run("disabled", func(t *testing.T) {
+		_, err := processIndex("createIndexes", newSpec(), false)
+		assertErrCode(t, err, handlererrors.ErrBadValue)
+		if !strings.Contains(err.Error(), `Index option "ns" is unknown`) {
+			t.Fatalf("unexpected error %v", err)
+		}
+	})
+
+	t.Run("omitted", func(t *testing.T) {
+		arr := must.NotFail(types.NewArray(newSpec()))
+
+		_, err := processIndexesArray("createIndexes", arr, false)
+		assertErrCode(t, err, handlererrors.ErrBadValue)
+	})
+
+	t.Run("recognized options still work when enabled", func(t *testing.T) {
+		spec := must.NotFail(types.NewDocument(
+			"key", must.NotFail(types.NewDocument("a", int32(1))),
+			"name", "a_1",
+			"unique", true,
+			"sparse", true,
+			"ns", "db.coll",
+		))
+
+		idx, err := processIndex("createIndexes", spec, true)
+		if err != nil {
+			t.Fatalf("processIndex: %v", err)
+		}
+		if !idx.Unique || !idx.Sparse {
+			t.Fatalf("unexpected index: %+v", idx)
+		}
+	})
 }
