@@ -387,9 +387,12 @@ func TestIndexScanInSortOrder(t *testing.T) {
 		t.Fatalf("descending = %v, want %v", ids, want)
 	}
 
+	// $in on the prefix spans several prefixes, so a scan of the ranges is not
+	// in k order; the lookup sorts the matched entries on their k keys.
 	in := must.NotFail(types.NewDocument("grp", must.NotFail(types.NewDocument("$in", must.NotFail(types.NewArray(int32(1), int32(2)))))))
-	if _, sorted := sortWalkQuery(t, c, &backends.QueryParams{Filter: in, Sort: sortOn("k", 1)}); sorted {
-		t.Fatal("$in on the prefix spans several prefixes; the scan is not in k order")
+	ids, sorted = sortWalkQuery(t, c, &backends.QueryParams{Filter: in, Sort: sortOn("k", 1)})
+	if want := []int32{3, 2, 4, 1, 7, 6, 5}; !sorted || !slices.Equal(ids, want) {
+		t.Fatalf("$in ascending = %v sorted=%v, want %v sorted on the index keys", ids, sorted, want)
 	}
 }
 

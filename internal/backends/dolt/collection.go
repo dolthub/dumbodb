@@ -782,8 +782,14 @@ func chooseIndexRange(idxInfos []backends.IndexInfo, filter *types.Document, hin
 		if err != nil {
 			continue
 		}
-		if queryCmp == nil && !entry.compound {
+		if queryCmp == nil {
 			if ranges, ok := indexPointRangesForIn(v); ok {
+				if entry.compound {
+					// Each point brackets every key with that leading value.
+					for i, r := range ranges {
+						ranges[i][0], ranges[i][1] = compoundLeadingBounds(r[0], r[1])
+					}
+				}
 				chosenMapIdx = entry.mapIdx
 				// Scan the points in key order so ids come back in index order.
 				slices.SortFunc(ranges, func(a, b [2][]byte) int { return bytes.Compare(a[0], b[0]) })
