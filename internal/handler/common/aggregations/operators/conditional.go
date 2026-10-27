@@ -141,7 +141,7 @@ func (n *ifNullOp) Process(doc *types.Document) (any, error) {
 		}
 
 		// Return the first non-null value OR always return the last argument.
-		if v != types.Null || i == len(n.args)-1 {
+		if !isNullish(v) || i == len(n.args)-1 {
 			return v, nil
 		}
 	}

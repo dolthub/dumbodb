@@ -41,7 +41,7 @@ func (op *firstOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	if v == types.Null {
+	if isNullish(v) {
 		return types.Null, nil
 	}
 
@@ -85,7 +85,7 @@ func (op *lastOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	if v == types.Null {
+	if isNullish(v) {
 		return types.Null, nil
 	}
 

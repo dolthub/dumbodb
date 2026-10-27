@@ -357,7 +357,16 @@ func projectID(doc, projection *types.Document) (*types.Document, error) {
 			set = true
 			projected.Set("_id", value)
 
-		case *types.Array, string, types.Binary, types.ObjectID,
+		case *types.Array:
+			arr, err := evalArrayExpression(idValue, doc)
+			if err != nil {
+				return nil, err
+			}
+			projected.Set("_id", arr)
+
+			set = true
+
+		case string, types.Binary, types.ObjectID,
 			time.Time, types.NullType, types.Regex, types.Timestamp: // all this types are treated as new fields value
 			projected.Set("_id", idValue)
 
@@ -463,7 +472,14 @@ func projectDocumentWithoutID(doc *types.Document, projection *types.Document, i
 				projected.Set(key, value)
 			}
 
-		case *types.Array, types.Binary, types.ObjectID,
+		case *types.Array:
+			arr, err := evalArrayExpression(value, doc)
+			if err != nil {
+				return nil, err
+			}
+			projected.Set(key, arr)
+
+		case types.Binary, types.ObjectID,
 			time.Time, types.NullType, types.Regex, types.Timestamp: // all these types are treated as new fields value
 			projected.Set(key, value)
 
@@ -825,4 +841,30 @@ func processOperatorError(err error) error {
 	}
 
 	return lazyerrors.Error(err)
+}
+
+// evalArrayExpression evaluates each element of an array literal as an
+// expression; a missing field becomes null.
+func evalArrayExpression(arr *types.Array, doc *types.Document) (*types.Array, error) {
+	out := types.MakeArray(arr.Len())
+	for i := 0; i < arr.Len(); i++ {
+		v := must.NotFail(arr.Get(i))
+		if nested, ok := v.(*types.Array); ok {
+			evaluated, err := evalArrayExpression(nested, doc)
+			if err != nil {
+				return nil, err
+			}
+			out.Append(evaluated)
+			continue
+		}
+		evaluated, err := operators.EvalArgValue(v, doc)
+		if errors.Is(err, operators.ErrMissingValue) {
+			evaluated, err = types.Null, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		out.Append(evaluated)
+	}
+	return out, nil
 }

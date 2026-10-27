@@ -34,7 +34,7 @@ func collectArray(arg any, doc *types.Document, opName string) (*types.Array, bo
 		return nil, false, err
 	}
 
-	if v == types.Null {
+	if isNullish(v) {
 		return nil, true, nil
 	}
 
@@ -160,7 +160,7 @@ func (op *arrayElemAtOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	if idxV == types.Null {
+	if isNullish(idxV) {
 		return types.Null, nil
 	}
 
@@ -397,7 +397,7 @@ func (op *indexOfArrayOp) Process(doc *types.Document) (any, error) {
 			return nil, err
 		}
 
-		if sv != types.Null {
+		if !isNullish(sv) {
 			start = toBoundedInt(sv)
 		}
 	}
@@ -408,7 +408,7 @@ func (op *indexOfArrayOp) Process(doc *types.Document) (any, error) {
 			return nil, err
 		}
 
-		if ev != types.Null {
+		if !isNullish(ev) {
 			end = toBoundedInt(ev)
 		}
 	}
@@ -910,7 +910,7 @@ func (op *zipOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	if inputsV == types.Null {
+	if isNullish(inputsV) {
 		return types.Null, nil
 	}
 
@@ -974,7 +974,7 @@ func (op *zipOp) Process(doc *types.Document) (any, error) {
 			return nil, err
 		}
 
-		if dV != types.Null {
+		if !isNullish(dV) {
 			if dArr, ok := dV.(*types.Array); ok {
 				defaults, err = arrayToSlice(dArr)
 				if err != nil {
@@ -1026,7 +1026,7 @@ func (op *objectToArrayOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	if v == types.Null {
+	if isNullish(v) {
 		return types.Null, nil
 	}
 
@@ -1071,7 +1071,7 @@ func (op *arrayToObjectOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	if v == types.Null {
+	if isNullish(v) {
 		return types.Null, nil
 	}
 

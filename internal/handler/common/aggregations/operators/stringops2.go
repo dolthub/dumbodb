@@ -40,7 +40,7 @@ func (op *strLenBytesOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	if v == types.Null {
+	if isNullish(v) {
 		return types.Null, nil
 	}
 
@@ -72,7 +72,7 @@ func (op *strLenCPOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	if v == types.Null {
+	if isNullish(v) {
 		return types.Null, nil
 	}
 
@@ -111,7 +111,7 @@ func (op *substrOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	if sv == types.Null {
+	if isNullish(sv) {
 		return "", nil
 	}
 
@@ -180,7 +180,7 @@ func (op *substrCPOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	if sv == types.Null {
+	if isNullish(sv) {
 		return "", nil
 	}
 
@@ -283,7 +283,7 @@ func (op *trimOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	if sv == types.Null {
+	if isNullish(sv) {
 		return types.Null, nil
 	}
 
@@ -301,7 +301,7 @@ func (op *trimOp) Process(doc *types.Document) (any, error) {
 			return nil, err
 		}
 
-		if cv != types.Null {
+		if !isNullish(cv) {
 			if cs, ok := cv.(string); ok {
 				cutset = cs
 			}
@@ -340,7 +340,7 @@ func (op *splitOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	if sv == types.Null {
+	if isNullish(sv) {
 		return types.Null, nil
 	}
 
@@ -355,7 +355,7 @@ func (op *splitOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	if dv == types.Null {
+	if isNullish(dv) {
 		return types.Null, nil
 	}
 
@@ -405,7 +405,7 @@ func (op *indexOfBytesOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	if sv == types.Null {
+	if isNullish(sv) {
 		return types.Null, nil
 	}
 
@@ -436,7 +436,7 @@ func (op *indexOfBytesOp) Process(doc *types.Document) (any, error) {
 			return nil, err
 		}
 
-		if stv != types.Null {
+		if !isNullish(stv) {
 			start = toBoundedInt(stv)
 		}
 	}
@@ -447,7 +447,7 @@ func (op *indexOfBytesOp) Process(doc *types.Document) (any, error) {
 			return nil, err
 		}
 
-		if ev != types.Null {
+		if !isNullish(ev) {
 			end = toBoundedInt(ev)
 		}
 	}
@@ -502,7 +502,7 @@ func (op *indexOfCPOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	if sv == types.Null {
+	if isNullish(sv) {
 		return types.Null, nil
 	}
 
@@ -533,7 +533,7 @@ func (op *indexOfCPOp) Process(doc *types.Document) (any, error) {
 			return nil, err
 		}
 
-		if stv != types.Null {
+		if !isNullish(stv) {
 			start = toBoundedInt(stv)
 		}
 	}
@@ -544,7 +544,7 @@ func (op *indexOfCPOp) Process(doc *types.Document) (any, error) {
 			return nil, err
 		}
 
-		if ev != types.Null {
+		if !isNullish(ev) {
 			end = toBoundedInt(ev)
 		}
 	}
@@ -666,7 +666,7 @@ func (op *regexMatchOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	if sv == types.Null {
+	if isNullish(sv) {
 		return false, nil
 	}
 
@@ -730,7 +730,7 @@ func (op *regexFindOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	if sv == types.Null {
+	if isNullish(sv) {
 		return types.Null, nil
 	}
 

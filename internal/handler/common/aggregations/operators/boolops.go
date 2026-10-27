@@ -26,7 +26,7 @@ func isBoolFalsy(v any) bool {
 	switch val := v.(type) {
 	case bool:
 		return !val
-	case types.NullType:
+	case types.NullType, types.UndefinedType:
 		return true
 	default:
 		_ = val

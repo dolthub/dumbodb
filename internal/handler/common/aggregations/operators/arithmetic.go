@@ -50,7 +50,7 @@ func (a *addOp) Process(doc *types.Document) (any, error) {
 			return nil, err
 		}
 
-		if v == types.Null {
+		if isNullish(v) {
 			return types.Null, nil
 		}
 
@@ -95,7 +95,7 @@ func (s *subtractOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	if a == types.Null || b == types.Null {
+	if isNullish(a) || isNullish(b) {
 		return types.Null, nil
 	}
 
@@ -217,7 +217,7 @@ func (d *divideOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	if a == types.Null || b == types.Null {
+	if isNullish(a) || isNullish(b) {
 		return types.Null, nil
 	}
 	if !isNumber(a) || !isNumber(b) {

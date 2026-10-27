@@ -1900,6 +1900,10 @@ func filterFieldValueByTypeCode(fieldValue any, code handlerparams.TypeCode) (bo
 		if _, ok := fieldValue.(types.Decimal128); !ok {
 			return false, nil
 		}
+	case handlerparams.TypeCodeUndefined:
+		if _, ok := fieldValue.(types.UndefinedType); !ok {
+			return false, nil
+		}
 	case handlerparams.TypeCodeMinKey:
 		if _, ok := fieldValue.(types.MinKeyType); !ok {
 			return false, nil
