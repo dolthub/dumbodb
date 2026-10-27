@@ -185,13 +185,15 @@ func buildCollectionTableSchema() serial.Message {
 // artifactsHash is the 20-byte noms hash of the ArtifactMap node in the value store;
 // pass hash.Hash{} (all zeros) when there are no conflict artifacts.
 func buildDoltTableFlatbuffer(m prolly.Map, schemaHash hash.Hash, indexAM prolly.AddressMap, artifactsHash hash.Hash) serial.Message {
-	b := fb.NewBuilder(1024)
-
 	// Primary index: inline TUPM bytes (prolly.Map root node).
 	rowBytes := []byte(tree.ValueFromNode(m.Node()).(dolttypes.SerialMessage))
-
 	// Secondary indexes: per-collection ADRM (name -> IndexEntry chunk hash).
 	idxBytes := []byte(tree.ValueFromNode(indexAM.Node()).(dolttypes.SerialMessage))
+	return buildDoltTableFlatbufferBytes(rowBytes, schemaHash, idxBytes, artifactsHash)
+}
+
+func buildDoltTableFlatbufferBytes(rowBytes []byte, schemaHash hash.Hash, idxBytes []byte, artifactsHash hash.Hash) serial.Message {
+	b := fb.NewBuilder(1024)
 
 	// Conflict struct fields (legacy format) and violations are always zero hashes.
 	var emptyHashBytes [hash.ByteLen]byte
@@ -872,6 +874,11 @@ func (state *dbState) updateWorkingRoot(ctx context.Context, branch, commitMsg s
 	newRV, err := fn(ws.WorkingRoot())
 	if err != nil {
 		return err
+	}
+	if ws.MergeActive() {
+		if newRV, err = carryConflictArtifactsToRoot(ctx, state, ws.WorkingRoot(), newRV); err != nil {
+			return err
+		}
 	}
 
 	stagedRV := ws.StagedRoot()

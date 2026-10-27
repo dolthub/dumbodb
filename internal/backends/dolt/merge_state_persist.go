@@ -526,6 +526,86 @@ func collectionsWithArtifacts(ctx context.Context, state *dbState, am prolly.Add
 	return names, nil
 }
 
+// carryConflictArtifacts keeps a paused operation's conflict markers through a
+// write. A write rebuilds the tables of the collections it changes with no
+// markers, so every collection whose table differs between before and after,
+// and had markers in before but has none in after, gets before's markers back.
+// Only resolving a conflict removes its marker, and that does not come through
+// here. Callers run it only while an operation is paused, the only time a
+// table carries markers.
+func carryConflictArtifacts(ctx context.Context, state *dbState, before, after prolly.AddressMap) (prolly.AddressMap, error) {
+	names, err := collectionsWithArtifacts(ctx, state, before)
+	if err != nil || len(names) == 0 {
+		return after, err
+	}
+	ed := after.Editor()
+	for _, name := range names {
+		beforeH, err := before.Get(ctx, name)
+		if err != nil {
+			return prolly.AddressMap{}, err
+		}
+		afterH, err := after.Get(ctx, name)
+		if err != nil {
+			return prolly.AddressMap{}, err
+		}
+		if afterH.IsEmpty() || afterH == beforeH {
+			continue
+		}
+		beforeTbl, err := readTable(ctx, state, beforeH)
+		if err != nil {
+			return prolly.AddressMap{}, fmt.Errorf("reading %q before the write: %w", name, err)
+		}
+		afterTbl, err := readTable(ctx, state, afterH)
+		if err != nil {
+			return prolly.AddressMap{}, fmt.Errorf("reading %q after the write: %w", name, err)
+		}
+		if afterTbl == nil || !hash.New(afterTbl.ArtifactsBytes()).IsEmpty() {
+			continue
+		}
+		msg := buildDoltTableFlatbufferBytes(afterTbl.PrimaryIndexBytes(), hash.New(afterTbl.SchemaBytes()),
+			afterTbl.SecondaryIndexesBytes(), hash.New(beforeTbl.ArtifactsBytes()))
+		ref, err := state.vs.WriteValue(ctx, dolttypes.SerialMessage(msg))
+		if err != nil {
+			return prolly.AddressMap{}, fmt.Errorf("writing %q with its conflict markers: %w", name, err)
+		}
+		if err := ed.Update(ctx, name, ref.TargetHash()); err != nil {
+			return prolly.AddressMap{}, err
+		}
+	}
+	return ed.Flush(ctx)
+}
+
+func carryConflictArtifactsToRoot(ctx context.Context, state *dbState, before, after doltdb.RootValue) (doltdb.RootValue, error) {
+	beforeAM, err := amFromWorkingRoot(ctx, before, state.ns)
+	if err != nil {
+		return nil, err
+	}
+	afterAM, err := amFromWorkingRoot(ctx, after, state.ns)
+	if err != nil {
+		return nil, err
+	}
+	carried, err := carryConflictArtifacts(ctx, state, beforeAM, afterAM)
+	if err != nil {
+		return nil, err
+	}
+	if carried.HashOf() == afterAM.HashOf() {
+		return after, nil
+	}
+	return rootValueFromAM(ctx, state, carried)
+}
+
+// readTable parses the DTBL at h, or returns nil when h is not one.
+func readTable(ctx context.Context, state *dbState, h hash.Hash) (*serial.Table, error) {
+	chunk, err := state.cs.Get(ctx, h)
+	if err != nil {
+		return nil, err
+	}
+	if serial.GetFileID(chunk.Data()) != serial.TableFileID {
+		return nil, nil
+	}
+	return serial.TryGetRootAsTable(chunk.Data(), serial.MessagePrefixSz)
+}
+
 // loadNamespaceConflicts rebuilds the view and collection-metadata conflicts
 // named in the merge state by re-reading the three sides of the operation.
 func loadNamespaceConflicts(ctx context.Context, state *dbState, ms *mergeInProgress, names []string, oursDesc, theirsDesc string) error {

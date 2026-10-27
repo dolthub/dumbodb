@@ -59,12 +59,16 @@ func (state *dbState) reconcileWorkingSets(ctx context.Context, branch string, b
 		return nil, nil, fmt.Errorf("hashing theirs root: %w", err)
 	}
 
+	// The published working set takes everything but its roots from theirs:
+	// the branch's own state -- an operation paused or settled on it since
+	// this write began -- is not the write's to change.
+	//
 	// One side changed nothing, so there is nothing to reconcile.
 	if baseHash == oursHash {
 		return theirs, nil, nil
 	}
 	if baseHash == theirsHash {
-		return ours, nil, nil
+		return theirs.WithWorkingRoot(ours.WorkingRoot()).WithStagedRoot(ours.StagedRoot()), nil, nil
 	}
 	// Deliberately no fast path for ours == theirs. Two sides reaching the
 	// identical result is the convergent edit, which is the case the Touched
@@ -111,9 +115,14 @@ func (state *dbState) reconcileWorkingSets(ctx context.Context, branch string, b
 		return nil, unresolved, &backends.MergeConflictError{Conflicts: unresolved.summaries()}
 	}
 
+	if theirs.MergeActive() {
+		if mergedAM, err = carryConflictArtifacts(ctx, state, theirsAM, mergedAM); err != nil {
+			return nil, nil, fmt.Errorf("keeping the paused operation's conflicts: %w", err)
+		}
+	}
 	mergedRV, err := rootValueFromAM(ctx, state, mergedAM)
 	if err != nil {
 		return nil, nil, fmt.Errorf("building merged root: %w", err)
 	}
-	return ours.WithWorkingRoot(mergedRV).WithStagedRoot(mergedRV), nil, nil
+	return theirs.WithWorkingRoot(mergedRV).WithStagedRoot(mergedRV), nil, nil
 }
