@@ -48,6 +48,7 @@ import (
 //   - `ErrNotImplemented` when there is unimplemented projection operators and expressions.
 func ValidateProjection(projection *types.Document) (*types.Document, bool, error) {
 	validated := types.MakeDocument(0)
+	projection = FlattenProjection(projection)
 
 	if projection.Len() == 0 {
 		return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
@@ -253,6 +254,10 @@ func ValidateProjection(projection *types.Document) (*types.Document, bool, erro
 
 // ProjectDocument applies projection to the copy of the document.
 func ProjectDocument(doc, projection *types.Document, inclusion bool) (*types.Document, error) {
+	if inclusion && operators.SpecHasComputedPath(projection, true) {
+		return operators.ProjectInclusionTree(doc, projection)
+	}
+
 	projected, err := projectID(doc, projection)
 	if err != nil {
 		return nil, err
@@ -358,7 +363,7 @@ func projectID(doc, projection *types.Document) (*types.Document, error) {
 			projected.Set("_id", value)
 
 		case *types.Array:
-			arr, err := evalArrayExpression(idValue, doc)
+			arr, err := operators.EvalArrayExpression(idValue, doc)
 			if err != nil {
 				return nil, err
 			}
@@ -473,7 +478,7 @@ func projectDocumentWithoutID(doc *types.Document, projection *types.Document, i
 			}
 
 		case *types.Array:
-			arr, err := evalArrayExpression(value, doc)
+			arr, err := operators.EvalArrayExpression(value, doc)
 			if err != nil {
 				return nil, err
 			}
@@ -843,28 +848,22 @@ func processOperatorError(err error) error {
 	return lazyerrors.Error(err)
 }
 
-// evalArrayExpression evaluates each element of an array literal as an
-// expression; a missing field becomes null.
-func evalArrayExpression(arr *types.Array, doc *types.Document) (*types.Array, error) {
-	out := types.MakeArray(arr.Len())
-	for i := 0; i < arr.Len(); i++ {
-		v := must.NotFail(arr.Get(i))
-		if nested, ok := v.(*types.Array); ok {
-			evaluated, err := evalArrayExpression(nested, doc)
-			if err != nil {
-				return nil, err
-			}
-			out.Append(evaluated)
+// FlattenProjection rewrites nested specification objects as dotted keys, so
+// {a: {b: 1, c: "$x"}} reads as {"a.b": 1, "a.c": "$x"}. Operator objects and
+// empty objects are kept as values.
+func FlattenProjection(projection *types.Document) *types.Document {
+	out := types.MakeDocument(projection.Len())
+	for _, key := range projection.Keys() {
+		value := must.NotFail(projection.Get(key))
+		nested, ok := value.(*types.Document)
+		if !ok || nested.Len() == 0 || strings.HasPrefix(nested.Keys()[0], "$") {
+			out.Set(key, value)
 			continue
 		}
-		evaluated, err := operators.EvalArgValue(v, doc)
-		if errors.Is(err, operators.ErrMissingValue) {
-			evaluated, err = types.Null, nil
+		flat := FlattenProjection(nested)
+		for _, sub := range flat.Keys() {
+			out.Set(key+"."+sub, must.NotFail(flat.Get(sub)))
 		}
-		if err != nil {
-			return nil, err
-		}
-		out.Append(evaluated)
 	}
-	return out, nil
+	return out
 }
