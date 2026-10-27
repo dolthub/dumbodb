@@ -136,6 +136,13 @@ func (err *Error) Error() string {
 // tried again. Callers match it with errors.Is.
 var ErrWriteRaced = errors.New("write raced another publish on this branch")
 
+// ErrUncommittedChanges reports that a merge, cherry-pick, revert or rebase
+// refused to start because the branch has uncommitted changes. A server's
+// working set is shared by every session, so these operations do not carry
+// uncommitted changes through, unlike git; the client commits or resets them
+// first. Callers match it with errors.Is.
+var ErrUncommittedChanges = errors.New("the branch has uncommitted changes")
+
 // ErrorCodeIs reports whether err (or any error it wraps) is *Error with one
 // of the given error codes. Uses errors.As, so callers that wrap with
 // lazyerrors / fmt.Errorf still match.

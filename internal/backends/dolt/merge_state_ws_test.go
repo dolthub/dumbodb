@@ -283,7 +283,12 @@ func TestOperationCommitAndSettleAreOneUpdate(t *testing.T) {
 		db.mu.Unlock()
 		t.Fatalf("clearConflictArtifacts: %v", err)
 	}
-	res, err := b.commitMerge(ctx, db, ms.fromLabel, ms.intoBranch, ms.intoHash, ms.fromHash, ms.resolvedAM, "merged", "t <t@e>", "")
+	tip, err := db.readBranchTip(ctx, ms.intoBranch)
+	if err != nil {
+		db.mu.Unlock()
+		t.Fatalf("readBranchTip: %v", err)
+	}
+	res, err := b.commitMerge(ctx, db, tip, ms.fromLabel, ms.intoHash, ms.fromHash, ms.resolvedAM, "merged", "t <t@e>", "")
 	if err != nil {
 		db.mu.Unlock()
 		t.Fatalf("commitMerge: %v", err)

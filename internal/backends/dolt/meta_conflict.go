@@ -222,11 +222,11 @@ func (b *Backend) reconcileMetaCollExistence(ctx context.Context, db *dbState, m
 // resolution edits the live state of the branch rather than the root staged
 // when the operation paused. A --session-isolation merge has no shared branch
 // root to adopt: its state stays in ms.resolvedAM until the finalizing commit.
-func (b *Backend) adoptBranchWrites(ctx context.Context, db *dbState, ms *mergeInProgress) error {
+func (b *Backend) adoptBranchWrites(ctx context.Context, db *dbState, tip *branchTip, ms *mergeInProgress) error {
 	if ms.isSessionCommit {
 		return nil
 	}
-	liveAM, err := b.currentWorkingAM(ctx, db, ms.intoBranch)
+	liveAM, err := tip.workingAM(ctx, db)
 	if err != nil {
 		return fmt.Errorf("DumboDBResolveConflict: %w", err)
 	}
@@ -239,16 +239,15 @@ func (b *Backend) adoptBranchWrites(ctx context.Context, db *dbState, ms *mergeI
 // the shrinking conflict set land together. For a --session-isolation commit it
 // is a NO-OP (the resolution stays in ms.resolvedAM until finalize commits it).
 // Callers hold db.mu.
-func (b *Backend) applyResolvedAM(ctx context.Context, db *dbState, ms *mergeInProgress, finalAM prolly.AddressMap) error {
+func (b *Backend) applyResolvedAM(ctx context.Context, db *dbState, tip *branchTip, ms *mergeInProgress, finalAM prolly.AddressMap) error {
 	if ms.isSessionCommit {
 		return nil
 	}
-	db.setAM(ctx, ms.intoBranch, finalAM)
 	workingRtvl := buildRootValueFlatbuffer(finalAM)
 	if _, err := db.vs.WriteValue(ctx, dolttypes.SerialMessage(workingRtvl)); err != nil {
 		return fmt.Errorf("DumboDBResolveConflict: writing working RTVL: %w", err)
 	}
-	if err := persistConflictState(ctx, db, ms); err != nil {
+	if err := persistConflictState(ctx, db, tip, ms); err != nil {
 		return fmt.Errorf("DumboDBResolveConflict: updating working set: %w", err)
 	}
 	return nil
@@ -256,7 +255,7 @@ func (b *Backend) applyResolvedAM(ctx context.Context, db *dbState, ms *mergeInP
 
 // resolveMetaConflict resolves a collection-metadata merge conflict. The caller
 // holds db.mu (write lock).
-func (b *Backend) resolveMetaConflict(ctx context.Context, db *dbState, ms *mergeInProgress, mce *metaConflictEntry, params *backends.ResolveConflictParams) (*backends.ResolveConflictResult, error) {
+func (b *Backend) resolveMetaConflict(ctx context.Context, db *dbState, tip *branchTip, ms *mergeInProgress, mce *metaConflictEntry, params *backends.ResolveConflictParams) (*backends.ResolveConflictResult, error) {
 	if mce.resolved {
 		return nil, fmt.Errorf("DumboDBResolveConflict: metadata conflict for %q is already resolved", params.Collection)
 	}
@@ -307,7 +306,7 @@ func (b *Backend) resolveMetaConflict(ctx context.Context, db *dbState, ms *merg
 	ms.resolvedAM = finalAM
 	mce.resolved = true
 
-	if err := b.applyResolvedAM(ctx, db, ms, finalAM); err != nil {
+	if err := b.applyResolvedAM(ctx, db, tip, ms, finalAM); err != nil {
 		return nil, err
 	}
 	return &backends.ResolveConflictResult{}, nil
