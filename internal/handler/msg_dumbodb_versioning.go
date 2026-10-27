@@ -28,6 +28,7 @@ import (
 	"github.com/dolthub/dolt/go/store/hash"
 
 	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -736,6 +737,15 @@ func (h *Handler) MsgDumboDBCommit(connCtx context.Context, msg *wire.OpMsg) (*w
 	author, committer, err := h.commitAuthorCommitter(connCtx, author)
 	if err != nil {
 		return nil, err
+	}
+
+	// As Dolt's dolt_commit does, a commit made inside a client transaction
+	// finishes that transaction first, so the commit takes its writes; the
+	// client carries on in a fresh transaction on the new tip.
+	if conninfo.Get(connCtx).InTransaction() {
+		if err := h.finishClientTransaction(connCtx); err != nil {
+			return nil, err
+		}
 	}
 
 	res, err := vb.DumboDBCommit(connCtx, &backends.CommitParams{

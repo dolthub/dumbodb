@@ -68,31 +68,43 @@ func (h *Handler) MsgCommitTransaction(connCtx context.Context, msg *wire.OpMsg)
 		return nil, err
 	}
 
-	ci := conninfo.Get(connCtx)
-	if ci.TxnAborted() {
-		// dispatch's EnsureTxn opens a fresh dsess txn before this handler
-		// runs; clear it so it doesn't leak writes into the next command.
-		if sab, ok := h.b.(backends.SessionAwareBackend); ok {
-			sab.OnTransactionAbort(ci.Owner())
-		}
-		ci.SetInTransaction(false)
-		return nil, handlererrors.NewCommandError(
-			handlererrors.ErrNoSuchTransaction,
-			errors.New("Transaction was aborted by a prior server-side rejection."),
-		)
+	if err := h.finishClientTransaction(connCtx); err != nil {
+		return nil, err
 	}
-	if sab, ok := h.b.(backends.SessionAwareBackend); ok {
-		if err := sab.OnTransactionCommit(connCtx, ci.Owner()); err != nil {
-			return nil, handleTransactionCommitError(sab, ci, err)
-		}
-	}
-	ci.SetInTransaction(false)
+	conninfo.Get(connCtx).SetInTransaction(false)
 
 	return documentOpMsg(
 		must.NotFail(types.NewDocument(
 			"ok", float64(1),
 		)),
 	)
+}
+
+// finishClientTransaction reconciles the connection's open transaction against
+// the branch tip and publishes it. A refusal aborts the transaction and comes
+// back as the WriteConflict a driver retries the transaction on. Whether the
+// client is still in a transaction afterwards is the caller's call.
+func (h *Handler) finishClientTransaction(connCtx context.Context) error {
+	ci := conninfo.Get(connCtx)
+	sab, ok := h.b.(backends.SessionAwareBackend)
+	if ci.TxnAborted() {
+		// dispatch's EnsureTxn opens a fresh dsess txn before the handler
+		// runs; clear it so it doesn't leak writes into the next command.
+		if ok {
+			sab.OnTransactionAbort(ci.Owner())
+		}
+		ci.SetInTransaction(false)
+		return handlererrors.NewCommandError(
+			handlererrors.ErrNoSuchTransaction,
+			errors.New("Transaction was aborted by a prior server-side rejection."),
+		)
+	}
+	if ok {
+		if err := sab.OnTransactionCommit(connCtx, ci.Owner()); err != nil {
+			return handleTransactionCommitError(sab, ci, err)
+		}
+	}
+	return nil
 }
 
 func handleTransactionCommitError(
