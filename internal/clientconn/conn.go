@@ -49,7 +49,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/proxy"
 	"github.com/dolthub/dumbodb/internal/sqlctx"
-	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 	"github.com/dolthub/dumbodb/internal/util/logging"
 	"github.com/dolthub/dumbodb/internal/util/must"
@@ -523,16 +522,17 @@ func (c *conn) route(connCtx context.Context, reqHeader *wire.MsgHeader, reqBody
 		}
 
 		// The wire library only checked the body's length.
-		doc, decodeErr := section0.Decode()
+		typedDoc, decodeErr := bson.DecodeRawDocument(section0)
+		if errors.Is(decodeErr, bson.ErrNestingTooDeep) {
+			err = decodeErr
+			break
+		}
 		if decodeErr != nil {
 			err = handlererrors.NewCommandErrorMsg(handlererrors.ErrInvalidBSON, "Invalid BSON in OP_MSG body: "+decodeErr.Error())
 			break
 		}
 
-		var typedDoc *types.Document
-		typedDoc, err = bson.ToDocument(doc)
-
-		command = doc.Command()
+		command = typedDoc.Command()
 		cmd := c.h.Commands()[command]
 
 		// A command may not repeat a field, at any depth. See

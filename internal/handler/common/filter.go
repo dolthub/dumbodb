@@ -145,6 +145,8 @@ func filterDocumentPair(doc *types.Document, filterKey string, filterValue any, 
 				return true, nil
 			}
 		}
+	case types.UndefinedType:
+		return false, errCompareToUndefined(filterKey)
 	case types.Regex:
 		for _, val := range vals {
 			ok, err := filterFieldRegex(val, filterValue)
@@ -480,6 +482,12 @@ func filterFieldExpr(doc *types.Document, filterKey, filterSuffix string, expr *
 			return true, nil
 		}
 		return false, nil
+	}
+
+	for _, exprKey := range expr.Keys() {
+		if err := checkUndefinedOperand(exprKey, must.NotFail(expr.Get(exprKey))); err != nil {
+			return false, err
+		}
 	}
 
 	for _, exprKey := range expr.Keys() {
@@ -1586,6 +1594,54 @@ func filterFieldExprExists(fieldExist bool, exprValue any) (bool, error) {
 	default:
 		return false, nil
 	}
+}
+
+// checkUndefinedOperand returns the error MongoDB gives for undefined as the
+// operand of a comparison operator, or as an element of $in, $nin or $all,
+// including inside $not and an operator-form $elemMatch.
+func checkUndefinedOperand(op string, operand any) error {
+	switch op {
+	case "$not", "$elemMatch":
+		inner, ok := operand.(*types.Document)
+		if !ok {
+			return nil
+		}
+		for _, k := range inner.Keys() {
+			if !strings.HasPrefix(k, "$") {
+				continue
+			}
+			if err := checkUndefinedOperand(k, must.NotFail(inner.Get(k))); err != nil {
+				return err
+			}
+		}
+	case "$eq", "$ne", "$gt", "$gte", "$lt", "$lte":
+		if operand == types.Undefined {
+			return errCompareToUndefined(op)
+		}
+	case "$in", "$nin", "$all":
+		arr, ok := operand.(*types.Array)
+		if !ok || !arrayHasUndefined(arr) {
+			return nil
+		}
+		if op == "$all" {
+			return errCompareToUndefined(op)
+		}
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue, "Cannot insert undefined into InListData", op)
+	}
+	return nil
+}
+
+func arrayHasUndefined(arr *types.Array) bool {
+	for i := 0; i < arr.Len(); i++ {
+		if must.NotFail(arr.Get(i)) == types.Undefined {
+			return true
+		}
+	}
+	return false
+}
+
+func errCompareToUndefined(argument string) error {
+	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue, "cannot compare to undefined", argument)
 }
 
 // existsOperandTrue reports whether $exists's operand asks for the field to
