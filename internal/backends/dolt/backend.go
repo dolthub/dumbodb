@@ -187,6 +187,42 @@ func (s *dbState) persistAM(ctx context.Context, branch string, workingAM prolly
 	return nil
 }
 
+// maxStagedAdvanceRetries bounds advanceStagedAfterCommit's reloads. Each pass
+// is one reload and one compare-and-swap, so it only runs out if writers keep
+// publishing faster than that; it is a livelock brake, not a policy.
+const maxStagedAdvanceRetries = 32
+
+// advanceStagedAfterCommit sets branch's staged root to committedAM, the root
+// a commit just recorded, and keeps the working root as it is now: a client
+// write published after the commit read the working set is in it, and stays
+// there uncommitted. persistAM, which replaces the working root, would discard
+// such a write. The cached working set can lag a lock-free publish, so a
+// failed optimistic lock reloads it from disk and retries. The caller must
+// hold s.mu (write lock).
+func (s *dbState) advanceStagedAfterCommit(ctx context.Context, branch string, committedAM prolly.AddressMap) error {
+	committedRV, err := amToRootValue(ctx, s, committedAM)
+	if err != nil {
+		return err
+	}
+	for attempt := 0; ; attempt++ {
+		var newWS *doltdb.WorkingSet
+		err := s.updateBranchWS(ctx, branch, func(cur *doltdb.WorkingSet) (*doltdb.WorkingSet, error) {
+			newWS = cur.WithStagedRoot(committedRV)
+			return newWS, nil
+		})
+		if err == nil {
+			s.pushWSToSession(ctx, branch, newWS)
+			return nil
+		}
+		if !errors.Is(err, datas.ErrOptimisticLockFailed) || attempt >= maxStagedAdvanceRetries {
+			return err
+		}
+		if err := s.reloadBranchWSFromDisk(ctx, branch); err != nil {
+			return err
+		}
+	}
+}
+
 // setAM is a bridge for version-control operations that still produce raw AMs.
 // Wraps the AM in a RootValue and updates the branch working set in memory only;
 // callers persist via persistAM or a separate updateWorkingSet path.
@@ -1590,7 +1626,8 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 			return nil, fmt.Errorf("DumboDBCommit: committing db %q: %w", params.DBName, err)
 		}
 
-		if err := db.persistAM(ctx, defaultBranch, workingAM); err != nil {
+		runCommitPersistHook(ctx)
+		if err := db.advanceStagedAfterCommit(ctx, defaultBranch, workingAM); err != nil {
 			return nil, fmt.Errorf("DumboDBCommit: updating working set for %q: %w", params.DBName, err)
 		}
 
@@ -1648,7 +1685,8 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 		return nil, fmt.Errorf("DumboDBCommit: committing branch %q: %w", branch, err)
 	}
 
-	if err := db.persistAM(ctx, branch, branchAM); err != nil {
+	runCommitPersistHook(ctx)
+	if err := db.advanceStagedAfterCommit(ctx, branch, branchAM); err != nil {
 		return nil, fmt.Errorf("DumboDBCommit: updating working set for branch %q: %w", branch, err)
 	}
 
@@ -1669,6 +1707,17 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 		Committer:          committerOrAuthor(params.Author, params.Committer),
 		CommitterTimestamp: ts.UnixMilli(),
 	}, nil
+}
+
+// commitPersistHookKey makes dumboCommit's race with a concurrent publish,
+// between reading the working set and writing it back, deterministic in
+// backend tests.
+type commitPersistHookKey struct{}
+
+func runCommitPersistHook(ctx context.Context) {
+	if hook, ok := ctx.Value(commitPersistHookKey{}).(func()); ok {
+		hook()
+	}
 }
 
 // DumboDBBranch implements backends.VersioningBackend, dispatching on
