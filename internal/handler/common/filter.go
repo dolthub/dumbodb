@@ -1576,11 +1576,7 @@ func filterFieldMod(fieldValue, exprValue any) (bool, error) {
 
 // filterFieldExprExists handles {field: {$exists: value}} filter.
 func filterFieldExprExists(fieldExist bool, exprValue any) (bool, error) {
-	expr, ok := exprValue.(bool)
-	// return all documents if filter value is not bool type
-	if !ok {
-		return true, nil
-	}
+	expr := existsOperandTrue(exprValue)
 
 	switch {
 	case fieldExist && expr:
@@ -1590,6 +1586,35 @@ func filterFieldExprExists(fieldExist bool, exprValue any) (bool, error) {
 	default:
 		return false, nil
 	}
+}
+
+// existsOperandTrue reports whether $exists's operand asks for the field to
+// exist: false, zero numbers and null mean no, any other value yes.
+func existsOperandTrue(v any) bool {
+	switch v := v.(type) {
+	case bool:
+		return v
+	case int32:
+		return v != 0
+	case int64:
+		return v != 0
+	case float64:
+		return v != 0
+	case types.Decimal128:
+		return !decimal128IsZero(v)
+	case types.NullType, types.UndefinedType:
+		return false
+	}
+	return true
+}
+
+// decimal128IsZero reports whether d, an IEEE 754 BID decimal, is a zero of
+// any sign and exponent; a non-canonical coefficient counts as zero.
+func decimal128IsZero(d types.Decimal128) bool {
+	if (d.H>>61)&3 == 3 {
+		return (d.H>>58)&0x1f < 0x1e
+	}
+	return d.H&(1<<49-1) == 0 && d.L == 0
 }
 
 // filterFieldExprType handles {field: {$type: value}} filter.
