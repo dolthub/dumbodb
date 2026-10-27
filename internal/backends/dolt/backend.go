@@ -223,33 +223,6 @@ func (s *dbState) advanceStagedAfterCommit(ctx context.Context, branch string, c
 	}
 }
 
-// setAM is a bridge for version-control operations that still produce raw AMs.
-// Wraps the AM in a RootValue and updates the branch working set in memory only;
-// callers persist via persistAM or a separate updateWorkingSet path.
-// The caller must hold s.mu (write lock).
-func (s *dbState) setAM(ctx context.Context, branch string, am prolly.AddressMap) {
-	rtvlMsg := buildRootValueFlatbuffer(am)
-	rv, err := doltdb.NewRootValue(ctx, s.doltDB.ValueReadWriter(), s.doltDB.NodeStore(), dolttypes.SerialMessage(rtvlMsg))
-	if err != nil {
-		return
-	}
-	cur, err := s.loadBranchWS(ctx, branch)
-	if err != nil {
-		// Branch may not have an on-disk WS yet (e.g., a freshly
-		// created branch). Build a minimal WS from HEAD.
-		wsRef := doltref.NewWorkingSetRef("heads/" + branch)
-		headRV, headErr := headRootValueForBranch(ctx, s, branch)
-		if headErr != nil {
-			headRV = rv
-		}
-		cur = doltdb.EmptyWorkingSet(wsRef).WithStagedRoot(headRV)
-	}
-	// Only update working root; staged stays where it was (HEAD until explicit stage).
-	newWS := cur.WithWorkingRoot(rv)
-	s.setBranchWS(branch, newWS)
-	s.pushWSToSession(ctx, branch, newWS)
-}
-
 // pushWSToSession mirrors a side-channel WS update onto the calling
 // session's branchState so VisitGCRoots sees the post-op state.
 //
@@ -3285,7 +3258,6 @@ func (b *Backend) dumboDBReset(
 		if err := db.persistAM(ctx, branch, targetAM); err != nil {
 			return nil, fmt.Errorf("DumboDBReset: updating working set (hard) for branch %q: %w", branch, err)
 		}
-		db.setAM(ctx, branch, targetAM)
 	} else {
 		// Soft reset: keep working tree, change staged to target commit.
 		stagedRV, stagedErr := amToRootValue(ctx, db, targetAM)

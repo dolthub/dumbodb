@@ -102,13 +102,9 @@ func (s *dbState) loadBranchWS(ctx context.Context, branch string) (*doltdb.Work
 	return ws, nil
 }
 
-// setBranchWS updates the cached WS for branch without writing to
-// disk. entry.wsHash is unchanged (the on-disk WS has not moved),
-// which keeps it correct for the next updateBranchWS's optimistic
-// lock. Used by version-control flows that update the in-memory
-// cache and persist via a separate path (e.g., the setAM/persistAM
-// split, or merge-conflict staging that updates state in-memory
-// before the saved merge-state JSON drives the disk write).
+// setBranchWS caches ws for a branch that has no working set on disk
+// yet, without writing one. entry.wsHash stays zero, which is the
+// optimistic-lock value that creates the on-disk working set.
 func (s *dbState) setBranchWS(branch string, ws *doltdb.WorkingSet) {
 	e := s.branchEntry(branch)
 	e.mu.Lock()
