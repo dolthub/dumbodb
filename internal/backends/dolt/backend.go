@@ -3245,36 +3245,37 @@ func (b *Backend) dumboDBReset(
 		}
 	}
 
-	branchDS, dsErr := db.datasDB.GetDataset(ctx, branchDataset)
-	if dsErr != nil {
-		return nil, fmt.Errorf("DumboDBReset: resolving branch %q for db %q: %w", branch, params.DBName, dsErr)
-	}
-	if _, err := db.datasDB.SetHead(ctx, branchDS, targetHash, ""); err != nil {
-		return nil, fmt.Errorf("DumboDBReset: setting HEAD for branch %q to %q: %w", branch, commitID, err)
-	}
-
 	if params.Hard {
-		// Hard reset: working tree and staged root both point to the target commit.
+		// Hard reset: working tree and staged root both point to the target
+		// commit. It discards the working set by definition, so a write
+		// published while it runs is discarded with it.
+		branchDS, dsErr := db.datasDB.GetDataset(ctx, branchDataset)
+		if dsErr != nil {
+			return nil, fmt.Errorf("DumboDBReset: resolving branch %q for db %q: %w", branch, params.DBName, dsErr)
+		}
+		if _, err := db.datasDB.SetHead(ctx, branchDS, targetHash, ""); err != nil {
+			return nil, fmt.Errorf("DumboDBReset: setting HEAD for branch %q to %q: %w", branch, commitID, err)
+		}
 		if err := db.persistAM(ctx, branch, targetAM); err != nil {
 			return nil, fmt.Errorf("DumboDBReset: updating working set (hard) for branch %q: %w", branch, err)
 		}
 	} else {
-		// Soft reset: keep working tree, change staged to target commit.
+		// Soft reset: keep the working root, move HEAD and the staged root to
+		// the target. Both moves are compare-and-swaps against the working set
+		// read here. Should the second lose a race, HEAD has moved but the
+		// staged root has not; nothing is lost, and the retry finishes it.
 		stagedRV, stagedErr := amToRootValue(ctx, db, targetAM)
 		if stagedErr != nil {
 			return nil, fmt.Errorf("DumboDBReset (soft): building staged root: %w", stagedErr)
 		}
-		fallbackWS, fbErr := db.loadBranchWS(ctx, branch)
-		if fbErr != nil {
-			return nil, fmt.Errorf("DumboDBReset (soft): loading working set for branch %q: %w", branch, fbErr)
+		tip, tipErr := db.readBranchTip(ctx, branch)
+		if tipErr != nil {
+			return nil, fmt.Errorf("DumboDBReset (soft): %w", tipErr)
 		}
-		ws, wsErr := workingSetViaSession(ctx, sessionFromContext(ctx), fallbackWS, params.DBName, branch)
-		if wsErr != nil {
-			return nil, fmt.Errorf("DumboDBReset (soft): reading working set for branch %q: %w", branch, wsErr)
+		if err := db.setHeadOverTip(ctx, tip, targetHash); err != nil {
+			return nil, fmt.Errorf("DumboDBReset: setting HEAD for branch %q to %q: %w", branch, commitID, err)
 		}
-		if err := db.updateBranchWS(ctx, branch, func(_ *doltdb.WorkingSet) (*doltdb.WorkingSet, error) {
-			return ws.WithStagedRoot(stagedRV), nil
-		}); err != nil {
+		if err := db.publishOverTip(ctx, tip, tip.ws.WithStagedRoot(stagedRV)); err != nil {
 			return nil, fmt.Errorf("DumboDBReset: updating working set (soft) for branch %q: %w", branch, err)
 		}
 	}
@@ -3857,41 +3858,16 @@ func pauseRebase(ctx context.Context, db *dbState, tip *branchTip, ms *mergeInPr
 }
 
 // restoreRebaseHead puts the branch HEAD back on the pre-rebase tip, if the
-// rebase has moved it, leaving the working set as it is. The precondition ties
-// the move to the working set tip read, so a write published since makes it
-// fail as a race.
+// rebase has moved it, leaving the working set as it is.
 func restoreRebaseHead(ctx context.Context, db *dbState, tip *branchTip, ms *mergeInProgress) error {
-	branchDS, err := db.datasDB.GetDataset(ctx, branchRefPrefix+ms.intoBranch)
+	head, err := branchHeadHash(ctx, db, ms.intoBranch)
 	if err != nil {
-		return fmt.Errorf("resolving branch %q: %w", ms.intoBranch, err)
+		return err
 	}
-	head, ok := branchDS.MaybeHeadAddr()
-	if !ok || head == ms.rebaseBranchHash {
+	if head == ms.rebaseBranchHash {
 		return nil
 	}
-	if tip.lost {
-		return tip.raced()
-	}
-	runBranchOpHook(ctx)
-	wsPath := doltref.NewWorkingSetRef("heads/" + ms.intoBranch).String()
-	unmoved := func(ctx context.Context, datasets prolly.AddressMap, targetID string) error {
-		ws, err := datasets.Get(ctx, wsPath)
-		if err != nil {
-			return err
-		}
-		cur, err := datasets.Get(ctx, targetID)
-		if err != nil {
-			return err
-		}
-		if ws != tip.hash || cur != head {
-			return datas.ErrOptimisticLockFailed
-		}
-		return nil
-	}
-	if _, err := db.datasDB.SetHead(ctx, branchDS, ms.rebaseBranchHash, "", unmoved); err != nil {
-		if errors.Is(err, datas.ErrOptimisticLockFailed) {
-			return tip.raced()
-		}
+	if err := db.setHeadOverTip(ctx, tip, ms.rebaseBranchHash); err != nil {
 		return fmt.Errorf("resetting branch %q to the pre-rebase tip: %w", ms.intoBranch, err)
 	}
 	return nil

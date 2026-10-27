@@ -19,7 +19,10 @@ import (
 	"io"
 	"log/slog"
 	"testing"
+	"time"
 
+	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
+	doltref "github.com/dolthub/dolt/go/libraries/doltcore/ref"
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/stretchr/testify/require"
 
@@ -368,4 +371,94 @@ func insertDocInTransaction(t *testing.T, be *Backend, ctx context.Context, dbNa
 	require.NoError(t, err)
 	_, err = coll.InsertAll(ctx, &backends.InsertAllParams{Docs: []*types.Document{doc}})
 	require.NoError(t, err)
+}
+
+// A soft reset moves HEAD and the staged root and keeps the working root. A
+// client write published after the reset read the branch must not be
+// overwritten by the working root it read: the reset fails with
+// ErrWriteRaced and changes nothing, and succeeds when retried.
+func TestSoftResetFailsWhenAWriteLandsWhileItRuns(t *testing.T) {
+	f := newRaceFixture(t)
+	f.commitDoc(defaultBranch, "main", must.NotFail(types.NewDocument("_id", "main")))
+	headBefore := f.head()
+	reset := func(ctx context.Context) error {
+		_, err := f.be.DumboDBReset(ctx, &backends.ResetParams{DBName: f.db, Branch: defaultBranch, CommitID: f.commitID["base"]})
+		return err
+	}
+
+	require.ErrorIs(t, reset(f.racing("during-reset")), backends.ErrWriteRaced)
+	require.Equal(t, headBefore, f.head(), "a reset that lost the race moved the branch")
+	require.True(t, f.ids()["during-reset"], "the write published while the reset ran was lost")
+
+	require.NoError(t, reset(f.op))
+	require.Equal(t, f.commitID["base"], f.head())
+	ids := f.ids()
+	require.True(t, ids["during-reset"] && ids["main"], "a soft reset keeps the working root: %v", ids)
+}
+
+// When a command's write lands but another write replaces it before the
+// command reads it back, the hash its write was published under is unknown.
+// The command's next write must then fail as a race rather than swap against
+// a working set it never saw.
+func TestBranchTipRefusesTheNextWriteOnceItLosesTrackOfItsOwn(t *testing.T) {
+	f := newRaceFixture(t)
+	ctx := context.Background()
+	state, err := f.be.getOrOpenDB(ctx, f.db, false)
+	require.NoError(t, err)
+	tip, err := state.readBranchTip(ctx, defaultBranch)
+	require.NoError(t, err)
+
+	written := tip.ws.WithStagedRoot(tip.ws.StagedRoot())
+	var rsc doltdb.ReplicationStatusController
+	require.NoError(t, state.doltDB.UpdateWorkingSet(ctx, doltref.NewWorkingSetRef("heads/"+defaultBranch), written, tip.hash, doltdb.TodoWorkingSetMeta(), &rsc))
+	insertInTransaction(t, f.be, f.writer, f.db, "replaced-it")
+	commitTransaction(t, f.be, f.writer)
+
+	require.NoError(t, state.advanceTip(ctx, tip, written))
+	require.True(t, tip.lost)
+	require.ErrorIs(t, state.publishOverTip(ctx, tip, tip.ws), backends.ErrWriteRaced)
+	require.True(t, f.ids()["replaced-it"])
+}
+
+// A rebase writes its replayed commits before any branch references them, and
+// moves the branch onto them only in its last swap. A garbage collection that
+// runs meanwhile must not sweep them: the rebase runs inside a session command,
+// and GC does not finish while one is in flight.
+func TestRebaseCommitsSurviveAConcurrentGC(t *testing.T) {
+	f := newRaceFixture(t)
+	f.commitDoc("feature", "feat", must.NotFail(types.NewDocument("_id", "feat")))
+	for _, id := range []string{"m1", "m2", "m3"} {
+		f.commitDoc(defaultBranch, id, must.NotFail(types.NewDocument("_id", id)))
+	}
+	gcCtx, _ := ctxWithSessionAs(t, f.be, "gc-lsid", "")
+
+	gcDone := make(chan error, 1)
+	gcFinishedDuringRebase := false
+	hook := func() {
+		go func() {
+			_, err := f.be.DumboDBGC(gcCtx, &backends.GCParams{DBName: f.db, Mode: "full"})
+			gcDone <- err
+		}()
+		select {
+		case err := <-gcDone:
+			gcFinishedDuringRebase = true
+			gcDone <- err
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+	sess := sessionFromContext(f.op)
+	require.NoError(t, sess.CommandBegin())
+	err := f.rebaseOntoFeature(context.WithValue(f.op, branchOpHookKey{}, hook))
+	sess.CommandEnd()
+	require.NoError(t, err)
+	require.NoError(t, <-gcDone)
+	require.False(t, gcFinishedDuringRebase, "GC finished while the rebase command was in flight")
+
+	logRes, err := f.be.DumboDBLog(f.op, &backends.LogParams{DBName: f.db, Branch: defaultBranch})
+	require.NoError(t, err, "a commit the rebase wrote was swept")
+	require.Len(t, logRes.Commits, 6, "base, feat, three replayed commits and the database's initial commit")
+	ids := f.ids()
+	for _, id := range []string{"base", "feat", "m1", "m2", "m3"} {
+		require.True(t, ids[id], "missing %q after the rebase and GC: %v", id, ids)
+	}
 }

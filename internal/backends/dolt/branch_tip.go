@@ -142,6 +142,43 @@ func (s *dbState) commitOverTip(
 	return commitHash, s.advanceTip(ctx, tip, newWS)
 }
 
+// setHeadOverTip moves tip's branch HEAD to target, leaving the working set as
+// it is. The move fails as a race unless the branch still holds the working set
+// tip read and the HEAD it had when this was called.
+func (s *dbState) setHeadOverTip(ctx context.Context, tip *branchTip, target hash.Hash) error {
+	if tip.lost {
+		return tip.raced()
+	}
+	branchDS, err := s.datasDB.GetDataset(ctx, branchRefPrefix+tip.branch)
+	if err != nil {
+		return fmt.Errorf("resolving branch %q: %w", tip.branch, err)
+	}
+	head, _ := branchDS.MaybeHeadAddr()
+	runBranchOpHook(ctx)
+	wsPath := doltref.NewWorkingSetRef("heads/" + tip.branch).String()
+	unmoved := func(ctx context.Context, datasets prolly.AddressMap, targetID string) error {
+		ws, err := datasets.Get(ctx, wsPath)
+		if err != nil {
+			return err
+		}
+		cur, err := datasets.Get(ctx, targetID)
+		if err != nil {
+			return err
+		}
+		if ws != tip.hash || cur != head {
+			return datas.ErrOptimisticLockFailed
+		}
+		return nil
+	}
+	if _, err := s.datasDB.SetHead(ctx, branchDS, target, "", unmoved); err != nil {
+		if errors.Is(err, datas.ErrOptimisticLockFailed) {
+			return tip.raced()
+		}
+		return err
+	}
+	return nil
+}
+
 // pendingCommit builds the commit for commitRV with exactly parents.
 func (s *dbState) pendingCommit(ctx context.Context, branch string, commitRV doltdb.RootValue, parents []hash.Hash, cm *datas.CommitMeta) (*doltdb.PendingCommit, error) {
 	headRoot, err := headRootValueForBranch(ctx, s, branch)
