@@ -45,13 +45,21 @@ func FilterIteratorColl(iter types.DocumentsIterator, closer *iterator.MultiClos
 }
 
 type filterIterator struct {
-	iter   types.DocumentsIterator
-	filter *types.Document
-	cmp    *collation.Comparator
+	iter      types.DocumentsIterator
+	filter    *types.Document
+	cmp       *collation.Comparator
+	validated bool
 }
 
 func (iter *filterIterator) Next() (struct{}, *types.Document, error) {
 	var unused struct{}
+
+	if !iter.validated {
+		iter.validated = true
+		if err := ValidateFilter(iter.filter, iter.cmp); err != nil {
+			return unused, nil, lazyerrors.Error(err)
+		}
+	}
 
 	for {
 		_, doc, err := iter.iter.Next()
