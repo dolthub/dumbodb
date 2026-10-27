@@ -1034,13 +1034,15 @@ func filterFieldRegex(fieldValue any, regex types.Regex) (bool, error) {
 	switch fieldValue := fieldValue.(type) {
 	case *types.Array:
 		for i := 0; i < fieldValue.Len(); i++ {
-			arrValue := must.NotFail(fieldValue.Get(i))
-			s, isString := arrValue.(string)
-			if !isString {
-				continue
-			}
-			if re.MatchString(s) {
-				return true, nil
+			switch arrValue := must.NotFail(fieldValue.Get(i)).(type) {
+			case string:
+				if re.MatchString(arrValue) {
+					return true, nil
+				}
+			case types.Regex:
+				if types.Compare(arrValue, regex) == types.Equal {
+					return true, nil
+				}
 			}
 		}
 
@@ -1208,26 +1210,33 @@ func filterFieldExprAll(doc *types.Document, filterKey, filterSuffix string, fie
 		return true, nil
 	}
 
-	switch value := fieldValue.(type) {
-	case *types.Document:
+	if _, ok := fieldValue.(*types.Document); ok {
 		// For documents we return false as $all doesn't work on documents.
 		return false, nil
+	}
 
-	case *types.Array:
-		// For arrays we check that the array contains all the elements of the query.
-		return value.ContainsAll(query), nil
-
-	default:
-		// For other types (scalars) we check that the value is equal to each scalar in the query.
-		// Example: value: 42, query: [42, 42] should give us `true`
-		for i := 0; i < query.Len(); i++ {
-			res := types.Compare(value, must.NotFail(query.Get(i)))
-			if res != types.Equal {
+	// Each query element must match on its own: a regex as a regex query
+	// does, any other value as an array element or an equal scalar.
+	for i := 0; i < query.Len(); i++ {
+		q := must.NotFail(query.Get(i))
+		if re, ok := q.(types.Regex); ok {
+			matched, err := filterFieldRegex(fieldValue, re)
+			if err != nil || !matched {
+				return false, err
+			}
+			continue
+		}
+		if arr, ok := fieldValue.(*types.Array); ok {
+			if !arr.Contains(q) {
 				return false, nil
 			}
+			continue
 		}
-		return true, nil
+		if types.Compare(fieldValue, q) != types.Equal {
+			return false, nil
+		}
 	}
+	return true, nil
 }
 
 // filterFieldExprBitsAllClear handles {field: {$bitsAllClear: value}} filter.
@@ -1983,6 +1992,12 @@ func filterFieldExprElemMatch(doc *types.Document, filterKey, filterSuffix strin
 			// against each individual element. This ensures multi-condition $elemMatch
 			// correctly requires ALL conditions to be satisfied by the SAME element,
 			// rather than allowing different elements to satisfy different conditions.
+			//
+			// A regex tests the element itself; it does not reach into an element
+			// that is an array.
+			if _, isArray := elem.(*types.Array); isArray && expr.Has("$regex") {
+				continue
+			}
 			tempDoc := must.NotFail(types.NewDocument(filterSuffix, elem))
 			matches, err = filterFieldExpr(tempDoc, filterKey, filterSuffix, expr, cmp)
 		} else {
