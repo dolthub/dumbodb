@@ -92,6 +92,11 @@ func (iter *addFieldsIterator) Next() (struct{}, *types.Document, error) {
 			}
 
 			val, err = op.Process(doc)
+			if errors.Is(err, operators.ErrMissingValue) {
+				// A missing value removes the field, as in MongoDB.
+				doc.Remove(key)
+				continue
+			}
 			if err = processAddFieldsError(err); err != nil {
 				return unused, nil, err
 			}
@@ -105,7 +110,8 @@ func (iter *addFieldsIterator) Next() (struct{}, *types.Document, error) {
 					if evalErr == nil {
 						val = evaluated
 					} else {
-						// Field not found: omit this field (MongoDB $set/$addFields behavior).
+						// A missing value removes the field, as in MongoDB.
+						doc.Remove(key)
 						continue
 					}
 				}

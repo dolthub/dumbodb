@@ -171,16 +171,12 @@ func (op *arrayElemAtOp) Process(doc *types.Document) (any, error) {
 		idx = n + idx
 	}
 
+	// MongoDB's $arrayElemAt is missing, not null, for an index out of range.
 	if idx < 0 || idx >= n {
-		return types.Null, nil
+		return nil, aggregations.ErrMissingValue
 	}
 
-	v, err := arr.Get(idx)
-	if err != nil {
-		return types.Null, nil
-	}
-
-	return v, nil
+	return must.NotFail(arr.Get(idx)), nil
 }
 
 var _ Operator = (*arrayElemAtOp)(nil)

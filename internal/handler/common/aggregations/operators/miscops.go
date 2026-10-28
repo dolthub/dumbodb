@@ -96,7 +96,7 @@ func (op *letOp) Process(doc *types.Document) (any, error) {
 		augmented.Set("$$"+varName, val)
 	}
 
-	return evalArgValue(op.inExpr, augmented)
+	return evalBranch(op.inExpr, augmented)
 }
 
 var _ Operator = (*letOp)(nil)

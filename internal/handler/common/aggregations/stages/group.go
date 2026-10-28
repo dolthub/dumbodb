@@ -230,7 +230,13 @@ func (g *group) evalGroupKey(doc *types.Document) (any, error) {
 	switch groupKey := g.groupExpression.(type) {
 	case *types.Document:
 		return evaluateDocument(groupKey, doc, false)
-	case *types.Array, float64, types.Binary, types.ObjectID, bool, time.Time, types.NullType,
+	case *types.Array:
+		v, _, err := operators.EvalOperand(groupKey, doc)
+		if err != nil {
+			return nil, processGroupStageError(err)
+		}
+		return v, nil
+	case float64, types.Binary, types.ObjectID, bool, time.Time, types.NullType,
 		types.Regex, int32, types.Timestamp, int64:
 		return groupKey, nil
 	case string:
@@ -255,20 +261,41 @@ func (g *group) evalGroupKey(doc *types.Document) (any, error) {
 // validateGroupKey returns error on invalid group key.
 // If group key is a document, it recursively validates operator and expression.
 func validateGroupKey(groupKey any) error {
+	return validateGroupKeyDocument(groupKey, true)
+}
+
+// validateGroupKeyDocument checks a group key; at the top level, MongoDB's
+// parseIdExpression rejects number and boolean fields of an object _id as
+// inclusion-style expressions.
+func validateGroupKeyDocument(groupKey any, topLevel bool) error {
 	doc, ok := groupKey.(*types.Document)
 	if !ok {
 		return nil
 	}
 
-	if operators.IsOperator(doc) {
+	isOperator := operators.IsOperator(doc)
+	if isOperator {
 		op, err := operators.NewOperator(doc)
 		if err != nil {
 			return processGroupStageError(err)
 		}
 
-		_, err = op.Process(nil)
-		if err != nil {
+		_, err = op.Process(types.MakeDocument(0))
+		if err != nil && !errors.Is(err, operators.ErrMissingValue) {
 			return processGroupStageError(err)
+		}
+	}
+
+	if topLevel && !isOperator {
+		for _, k := range doc.Keys() {
+			switch must.NotFail(doc.Get(k)).(type) {
+			case int32, int64, float64, types.Decimal128, bool:
+				return handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrGroupInclusionStyle,
+					"$group does not support inclusion-style expressions",
+					"$group (stage)",
+				)
+			}
 		}
 	}
 
@@ -298,7 +325,9 @@ func validateGroupKey(groupKey any) error {
 
 		switch v := v.(type) {
 		case *types.Document:
-			return validateGroupKey(v)
+			if err := validateGroupKeyDocument(v, false); err != nil {
+				return err
+			}
 		case string:
 			_, err := aggregations.NewExpression(v, nil)
 			var exprErr *aggregations.ExpressionError
@@ -316,7 +345,10 @@ func validateGroupKey(groupKey any) error {
 	return nil
 }
 
-// evaluateDocument recursively evaluates document's field expressions and operators.
+// evaluateDocument evaluates an object or operator group key. As MongoDB's
+// group processor does, a key that is a single expression, or an object with
+// a single field, reads a missing value as null; an object with several
+// fields omits the missing ones.
 func evaluateDocument(expr, doc *types.Document, nestedField bool) (any, error) {
 	if operators.IsOperator(expr) {
 		op, err := operators.NewOperator(expr)
@@ -326,6 +358,9 @@ func evaluateDocument(expr, doc *types.Document, nestedField bool) (any, error) 
 		}
 
 		v, err := op.Process(doc)
+		if errors.Is(err, operators.ErrMissingValue) {
+			return types.Null, nil
+		}
 		if err != nil {
 			// operator and expression errors are validated in newGroup
 			return nil, processGroupStageError(err)
@@ -334,57 +369,19 @@ func evaluateDocument(expr, doc *types.Document, nestedField bool) (any, error) 
 		return v, nil
 	}
 
-	iter := expr.Iterator()
-	defer iter.Close()
-
-	evaluatedDocument := new(types.Document)
-
-	for {
-		k, exprVal, err := iter.Next()
-		if errors.Is(err, iterator.ErrIteratorDone) {
-			break
-		}
-
+	evaluatedDocument := types.MakeDocument(expr.Len())
+	for _, k := range expr.Keys() {
+		v, missing, err := operators.EvalOperand(must.NotFail(expr.Get(k)), doc)
 		if err != nil {
-			return nil, lazyerrors.Error(err)
+			return nil, processGroupStageError(err)
 		}
-
-		switch exprVal := exprVal.(type) {
-		case *types.Document:
-			v, err := evaluateDocument(exprVal, doc, true)
-			if err != nil {
-				return nil, lazyerrors.Error(err)
-			}
-
-			evaluatedDocument.Set(k, v)
-		case string:
-			expression, err := aggregations.NewExpression(exprVal, nil)
-
-			var exprErr *aggregations.ExpressionError
-			if errors.As(err, &exprErr) && exprErr.Code() == aggregations.ErrNotExpression {
-				evaluatedDocument.Set(k, exprVal)
+		if missing {
+			if expr.Len() != 1 || nestedField {
 				continue
 			}
-
-			if err != nil {
-				// expression error was validated in newGroup.
-				return nil, lazyerrors.Error(err)
-			}
-
-			v, err := expression.Evaluate(doc)
-			if err != nil {
-				if expr.Len() == 1 && !nestedField {
-					// non-existent path is set to null if expression contains single field and not a nested document
-					evaluatedDocument.Set(k, types.Null)
-				}
-
-				continue
-			}
-
-			evaluatedDocument.Set(k, v)
-		default:
-			evaluatedDocument.Set(k, exprVal)
+			v = types.Null
 		}
+		evaluatedDocument.Set(k, v)
 	}
 
 	return evaluatedDocument, nil

@@ -37,23 +37,18 @@ func EvalOperand(expr any, doc *types.Document) (value any, missing bool, err er
 	switch v := expr.(type) {
 	case *types.Document:
 		if IsOperator(v) {
-			value, err = evalArgValue(v, doc)
+			op, err := cachedOperator(v)
+			if err != nil {
+				return nil, false, err
+			}
+			value, err = op.Process(doc)
 			if errors.Is(err, aggregations.ErrMissingValue) {
 				return nil, true, nil
 			}
 			return value, false, err
 		}
-		out := types.MakeDocument(v.Len())
-		for _, k := range v.Keys() {
-			fieldValue, fieldMissing, err := EvalOperand(must.NotFail(v.Get(k)), doc)
-			if err != nil {
-				return nil, false, err
-			}
-			if !fieldMissing {
-				out.Set(k, fieldValue)
-			}
-		}
-		return out, false, nil
+		value, err = evalDocumentExpressions(v, doc)
+		return value, false, err
 
 	case *types.Array:
 		out := types.MakeArray(v.Len())
@@ -84,6 +79,22 @@ func EvalOperand(expr any, doc *types.Document) (value any, missing bool, err er
 	}
 }
 
+// evalBranch evaluates an expression an operator returns as is, such as a
+// $cond branch, so that a missing value stays missing (ErrMissingValue).
+func evalBranch(arg any, doc *types.Document) (any, error) {
+	v, missing, err := EvalOperand(arg, doc)
+	if err != nil {
+		return nil, err
+	}
+	if missing {
+		return nil, aggregations.ErrMissingValue
+	}
+	return v, nil
+}
+
+// evalArgValue evaluates an operand. A missing field, or an operator that
+// produces the missing value, reads as null, as MongoDB's operators treat
+// missing operands as nullish; $$REMOVE alone is reported as ErrMissingValue.
 func evalArgValue(arg any, doc *types.Document) (any, error) {
 	switch v := arg.(type) {
 	case *types.Document:
@@ -93,7 +104,11 @@ func evalArgValue(arg any, doc *types.Document) (any, error) {
 				return nil, err
 			}
 
-			return op.Process(doc)
+			res, err := op.Process(doc)
+			if errors.Is(err, aggregations.ErrMissingValue) {
+				return types.Null, nil
+			}
+			return res, err
 		}
 
 		return evalDocumentExpressions(v, doc)
@@ -203,18 +218,19 @@ func evalArgValue(arg any, doc *types.Document) (any, error) {
 	}
 }
 
+// evalDocumentExpressions evaluates a document literal as MongoDB's
+// ExpressionObject does: a field whose value is missing is omitted.
 func evalDocumentExpressions(expr *types.Document, doc *types.Document) (*types.Document, error) {
-	result := must.NotFail(types.NewDocument())
+	result := types.MakeDocument(expr.Len())
 
 	for _, k := range expr.Keys() {
-		val := must.NotFail(expr.Get(k))
-
-		evaluated, err := evalArgValue(val, doc)
+		evaluated, missing, err := EvalOperand(must.NotFail(expr.Get(k)), doc)
 		if err != nil {
 			return nil, err
 		}
-
-		result.Set(k, evaluated)
+		if !missing {
+			result.Set(k, evaluated)
+		}
 	}
 
 	return result, nil
