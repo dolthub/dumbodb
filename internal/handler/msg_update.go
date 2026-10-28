@@ -185,7 +185,7 @@ func (h *Handler) updateDocument(ctx context.Context, params *common.UpdateParam
 
 		result, err := common.UpdateDocument(ctx, c, "update", iter, &u)
 		if err != nil {
-			if backends.ErrorCodeIs(err, backends.ErrorCodeReadOnlyDatabase, backends.ErrorCodeReadOnlyCollection) {
+			if backends.ErrorCodeIs(err, backends.ErrorCodeReadOnlyDatabase, backends.ErrorCodeReadOnlyCollection, backends.ErrorCodeBranchInConflict) {
 				return 0, 0, nil, common.TranslateBackendWriteError(ctx, err)
 			}
 			if backends.ErrorCodeIs(err, backends.ErrorCodeWriteConflict) {

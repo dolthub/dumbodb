@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strings"
 
@@ -104,6 +105,41 @@ type mergeInProgress struct {
 	// fromHash (above) stores the parent hash of the reverted commit (the "theirs" side in artifacts).
 	// originalMsg (above) stores the reverted commit's message for the default annotation.
 	isRevert bool
+}
+
+// clone copies ms deeply enough that resolving, continuing or replaying on the
+// copy leaves ms as it was: the conflict entries those steps mark resolved and
+// the replay queue they consume are copied; the AddressMaps are immutable.
+func (ms *mergeInProgress) clone() *mergeInProgress {
+	if ms == nil {
+		return nil
+	}
+	c := *ms
+	c.conflicts = make(map[string][]*conflictEntry, len(ms.conflicts))
+	for coll, entries := range ms.conflicts {
+		copied := make([]*conflictEntry, len(entries))
+		for i, e := range entries {
+			ec := *e
+			copied[i] = &ec
+		}
+		c.conflicts[coll] = copied
+	}
+	c.viewConflicts = make(map[string]*viewConflictEntry, len(ms.viewConflicts))
+	for name, e := range ms.viewConflicts {
+		ec := *e
+		c.viewConflicts[name] = &ec
+	}
+	c.metaConflicts = make(map[string]*metaConflictEntry, len(ms.metaConflicts))
+	for name, e := range ms.metaConflicts {
+		ec := *e
+		c.metaConflicts[name] = &ec
+	}
+	c.deferredCollections = make(map[string]struct{}, len(ms.deferredCollections))
+	for name := range ms.deferredCollections {
+		c.deferredCollections[name] = struct{}{}
+	}
+	c.rebaseRemainingHashes = slices.Clone(ms.rebaseRemainingHashes)
+	return &c
 }
 
 func (m *mergeInProgress) hasUnresolvedConflicts() bool {
@@ -485,7 +521,7 @@ func viewMetaToDefinition(vm *viewMeta) *backends.ViewDefinition {
 }
 
 // DumboDBResolveConflict implements backends.VersioningBackend.
-func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.ResolveConflictParams) (*backends.ResolveConflictResult, error) {
+func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.ResolveConflictParams) (_ *backends.ResolveConflictResult, err error) {
 	db, err := b.getOrOpenDB(ctx, params.DBName, false)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBResolveConflict: opening db %q: %w", params.DBName, err)
@@ -502,11 +538,16 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 	if ms == nil {
 		return nil, fmt.Errorf("DumboDBResolveConflict: no merge or cherry-pick in progress on branch %q", params.Branch)
 	}
+	var tip *branchTip
+	defer db.keepOperationStateConsistent(db.mergeState.clone(), &tip, &err)
+	tip, err = db.readCommandTip(ctx, ms.intoBranch)
+	if err != nil {
+		return nil, fmt.Errorf("DumboDBResolveConflict: %w", err)
+	}
 
-	// Build on whatever has been written to the branch since the operation
-	// paused, so resolving one conflict does not stamp the staged root back
-	// over unrelated writes made during the conflict window.
-	if err := b.adoptBranchWrites(ctx, db, ms); err != nil {
+	// Build on the branch as it is now, so resolving one conflict does not
+	// stamp the root back over the conflicts resolved before it.
+	if err := b.adoptBranchWrites(ctx, db, tip, ms); err != nil {
 		return nil, err
 	}
 
@@ -526,14 +567,14 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 		if vce.id != params.ConflictID {
 			return nil, fmt.Errorf("DumboDBResolveConflict: conflict %q not found in view %q", params.ConflictID, params.Collection)
 		}
-		return b.resolveViewConflict(ctx, db, ms, vce, params)
+		return b.resolveViewConflict(ctx, db, tip, ms, vce, params)
 	}
 
 	if mce, ok := ms.metaConflicts[params.Collection]; ok && !mce.resolved {
 		if mce.id != params.ConflictID {
 			return nil, fmt.Errorf("DumboDBResolveConflict: conflict %q not found in collection %q", params.ConflictID, params.Collection)
 		}
-		return b.resolveMetaConflict(ctx, db, ms, mce, params)
+		return b.resolveMetaConflict(ctx, db, tip, ms, mce, params)
 	}
 
 	entries, ok := ms.conflicts[params.Collection]
@@ -588,7 +629,7 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 			}
 			ms.resolvedAM = clearedAM
 			target.resolved = true
-			if err := b.applyResolvedAM(ctx, db, ms, clearedAM); err != nil {
+			if err := b.applyResolvedAM(ctx, db, tip, ms, clearedAM); err != nil {
 				return nil, err
 			}
 			return &backends.ResolveConflictResult{}, nil
@@ -815,7 +856,7 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 	ms.resolvedAM = finalAM
 	target.resolved = true
 
-	if err := b.applyResolvedAM(ctx, db, ms, finalAM); err != nil {
+	if err := b.applyResolvedAM(ctx, db, tip, ms, finalAM); err != nil {
 		return nil, err
 	}
 
@@ -838,14 +879,14 @@ func viewMetaFromDoc(doc *types.Document) *viewMeta {
 
 // resolveViewConflict resolves a view-definition merge conflict. The caller
 // holds db.mu (write lock).
-func (b *Backend) resolveViewConflict(ctx context.Context, db *dbState, ms *mergeInProgress, vce *viewConflictEntry, params *backends.ResolveConflictParams) (*backends.ResolveConflictResult, error) {
+func (b *Backend) resolveViewConflict(ctx context.Context, db *dbState, tip *branchTip, ms *mergeInProgress, vce *viewConflictEntry, params *backends.ResolveConflictParams) (*backends.ResolveConflictResult, error) {
 	if vce.resolved {
 		return nil, fmt.Errorf("DumboDBResolveConflict: view conflict %q is already resolved", params.ConflictID)
 	}
 
 	if params.Resolution == "ours" {
 		vce.resolved = true
-		if err := b.applyResolvedAM(ctx, db, ms, ms.resolvedAM); err != nil {
+		if err := b.applyResolvedAM(ctx, db, tip, ms, ms.resolvedAM); err != nil {
 			return nil, err
 		}
 		return &backends.ResolveConflictResult{}, nil
@@ -898,7 +939,7 @@ func (b *Backend) resolveViewConflict(ctx context.Context, db *dbState, ms *merg
 	ms.resolvedAM = finalAM
 	vce.resolved = true
 
-	if err := b.applyResolvedAM(ctx, db, ms, finalAM); err != nil {
+	if err := b.applyResolvedAM(ctx, db, tip, ms, finalAM); err != nil {
 		return nil, err
 	}
 	return &backends.ResolveConflictResult{}, nil

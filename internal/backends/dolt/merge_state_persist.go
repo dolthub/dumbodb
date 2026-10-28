@@ -31,6 +31,8 @@ import (
 	dolttypes "github.com/dolthub/dolt/go/store/types"
 	"github.com/dolthub/dolt/go/store/val"
 	"github.com/dolthub/go-mysql-server/sql"
+
+	"github.com/dolthub/dumbodb/internal/backends"
 )
 
 const deferredCollectionStatePrefix = "__dumbo_deferred_collection__"
@@ -51,7 +53,8 @@ const deferredCollectionStatePrefix = "__dumbo_deferred_collection__"
 //	fromBranch / ontoBranch MergeState.CommitSpecStr
 //	intoHash                MergeState.PreMergeHeadCommit; during a rebase that
 //	                        slot holds rebaseBranchHash and intoHash is the
-//	                        branch HEAD the replay has advanced to
+//	                        branch HEAD the replay has advanced to, or the onto
+//	                        commit while HEAD is still the pre-rebase tip
 //	rebaseOntoHash          RebaseState.OntoCommit
 //	rebaseCommitsReplayed   RebaseState.LastAttemptedStep
 //	conflicts               ArtifactMaps inside the conflicting DTBLs
@@ -62,7 +65,7 @@ const deferredCollectionStatePrefix = "__dumbo_deferred_collection__"
 // A rebase puts its PRE-REBASE TIP in MergeState.Commit rather than the pick it
 // paused on, because that slot and MergeState.PreMergeWorkingRoot are the only
 // two a working set exposes to the chunk walker (see SerialMessage.WalkAddrs).
-// The replay moves the branch HEAD off the original commits, so pinning the tip
+// Once a pick lands the branch HEAD has moved off the original commits, so pinning the tip
 // is what keeps the whole run -- the paused pick and every pick still queued
 // behind it -- reachable through a GC. The pick it paused on is not stored: the
 // plan is recomputed with findCommitsToReplay over the same two commits it was
@@ -222,110 +225,69 @@ func withOperationState(ctx context.Context, state *dbState, ws *doltdb.WorkingS
 	), nil
 }
 
-// persistConflictState publishes the paused operation: the partially merged
-// root (carrying the conflict artifacts in its DTBLs) and the operation
-// metadata go out in a single working set update. The caller must hold
-// state.mu (write lock).
-func persistConflictState(ctx context.Context, state *dbState, ms *mergeInProgress) error {
-	premergeRV, err := amToRootValue(ctx, state, ms.premergeAM)
+// persistConflictState publishes the paused operation over tip: the partially
+// merged root (carrying the conflict artifacts in its DTBLs) and the operation
+// metadata go out in a single working set update.
+func persistConflictState(ctx context.Context, state *dbState, tip *branchTip, ms *mergeInProgress) error {
+	ws, err := pausedWorkingSet(ctx, state, tip.ws, ms, ms.resolvedAM)
 	if err != nil {
-		return fmt.Errorf("building pre-operation root value: %w", err)
+		return err
 	}
-	conflictRV, err := amToRootValue(ctx, state, ms.resolvedAM)
-	if err != nil {
-		return fmt.Errorf("building conflict root value: %w", err)
-	}
-
-	var newWS *doltdb.WorkingSet
-	if err := state.updateBranchWS(ctx, ms.intoBranch, func(cur *doltdb.WorkingSet) (*doltdb.WorkingSet, error) {
-		seeded := cur.WithWorkingRoot(premergeRV).WithStagedRoot(premergeRV)
-		stamped, stampErr := withOperationState(ctx, state, seeded, ms, premergeRV)
-		if stampErr != nil {
-			return nil, stampErr
-		}
-		// Working and staged both carry the conflicted root so `dolt checkout`
-		// sees no uncommitted diff; the artifacts ride inside its DTBLs.
-		newWS = stamped.WithWorkingRoot(conflictRV).WithStagedRoot(conflictRV)
-		return newWS, nil
-	}); err != nil {
+	if err := state.publishOverTip(ctx, tip, ws); err != nil {
 		return fmt.Errorf("persisting merge state for %q: %w", ms.intoBranch, err)
 	}
-	state.pushWSToSession(ctx, ms.intoBranch, newWS)
 	return nil
 }
 
+// pausedWorkingSet is ws carrying ms's operation metadata, with working and
+// staged both at conflictAM so `dolt checkout` sees no uncommitted diff; the
+// artifacts ride inside its DTBLs.
+func pausedWorkingSet(ctx context.Context, state *dbState, ws *doltdb.WorkingSet, ms *mergeInProgress, conflictAM prolly.AddressMap) (*doltdb.WorkingSet, error) {
+	premergeRV, err := amToRootValue(ctx, state, ms.premergeAM)
+	if err != nil {
+		return nil, fmt.Errorf("building pre-operation root value: %w", err)
+	}
+	conflictRV, err := amToRootValue(ctx, state, conflictAM)
+	if err != nil {
+		return nil, fmt.Errorf("building conflict root value: %w", err)
+	}
+	stamped, err := withOperationState(ctx, state, ws.WithWorkingRoot(premergeRV).WithStagedRoot(premergeRV), ms, premergeRV)
+	if err != nil {
+		return nil, err
+	}
+	return stamped.WithWorkingRoot(conflictRV).WithStagedRoot(conflictRV), nil
+}
+
 // commitAndClear publishes an operation's final commit and a working set with
-// no operation metadata left on it, in one update. The caller must hold state.mu.
-func commitAndClear(ctx context.Context, state *dbState, branch string, finalAM prolly.AddressMap, parents []hash.Hash, cm *datas.CommitMeta) (hash.Hash, error) {
+// no operation metadata left on it, in one update over tip.
+func commitAndClear(ctx context.Context, state *dbState, tip *branchTip, finalAM prolly.AddressMap, parents []hash.Hash, cm *datas.CommitMeta) (hash.Hash, error) {
 	rv, err := amToRootValue(ctx, state, finalAM)
 	if err != nil {
 		return hash.Hash{}, fmt.Errorf("building commit root value: %w", err)
 	}
-	return state.commitBranchRoot(ctx, branch, rv, parents, cm, func(ws *doltdb.WorkingSet) (*doltdb.WorkingSet, error) {
+	return state.commitOverTip(ctx, tip, rv, parents, cm, func(ws *doltdb.WorkingSet) (*doltdb.WorkingSet, error) {
 		return ws.ClearMerge().ClearRebase(), nil
 	})
 }
 
-// commitAndAdvance publishes a replayed commit together with the operation
-// state the branch is left in, in one update, so a rebase interrupted between
-// picks is found at the pick it actually reached rather than one it has already
-// applied. ms must already describe the state after this commit lands. The
-// caller must hold state.mu.
-func commitAndAdvance(ctx context.Context, state *dbState, ms *mergeInProgress, commitAM prolly.AddressMap, parents []hash.Hash, cm *datas.CommitMeta) (hash.Hash, error) {
-	rv, err := amToRootValue(ctx, state, commitAM)
-	if err != nil {
-		return hash.Hash{}, fmt.Errorf("building commit root value: %w", err)
-	}
-	premergeRV, err := amToRootValue(ctx, state, ms.premergeAM)
-	if err != nil {
-		return hash.Hash{}, fmt.Errorf("building pre-operation root value: %w", err)
-	}
-	return state.commitBranchRoot(ctx, ms.intoBranch, rv, parents, cm, func(ws *doltdb.WorkingSet) (*doltdb.WorkingSet, error) {
-		stamped, stampErr := withOperationState(ctx, state, ws.WithWorkingRoot(premergeRV).WithStagedRoot(premergeRV), ms, premergeRV)
-		if stampErr != nil {
-			return nil, stampErr
-		}
-		return stamped.WithWorkingRoot(rv).WithStagedRoot(rv), nil
-	})
-}
-
-// settleMergeState points branch's working set at finalAM and drops the
-// operation metadata in one update, so a completed operation cannot leave a
-// conflicted root or stale metadata behind. The caller must hold state.mu.
-func settleMergeState(ctx context.Context, state *dbState, branch string, finalAM prolly.AddressMap) error {
+// settleMergeState points tip's working set at finalAM and drops the operation
+// metadata in one update, so a completed operation cannot leave a conflicted
+// root or stale metadata behind.
+func settleMergeState(ctx context.Context, state *dbState, tip *branchTip, finalAM prolly.AddressMap) error {
 	finalRV, err := amToRootValue(ctx, state, finalAM)
 	if err != nil {
 		return fmt.Errorf("building settled root value: %w", err)
 	}
-	var newWS *doltdb.WorkingSet
-	if err := state.updateBranchWS(ctx, branch, func(cur *doltdb.WorkingSet) (*doltdb.WorkingSet, error) {
-		newWS = cur.WithWorkingRoot(finalRV).WithStagedRoot(finalRV).ClearMerge().ClearRebase()
-		return newWS, nil
-	}); err != nil {
-		return fmt.Errorf("clearing merge state for %q: %w", branch, err)
+	if err := state.publishOverTip(ctx, tip, tip.ws.WithWorkingRoot(finalRV).WithStagedRoot(finalRV).ClearMerge().ClearRebase()); err != nil {
+		return fmt.Errorf("clearing merge state for %q: %w", tip.branch, err)
 	}
-	state.pushWSToSession(ctx, branch, newWS)
-	return nil
-}
-
-// clearMergeState drops any operation metadata from branch's working set,
-// leaving its roots alone. The caller must hold state.mu.
-func clearMergeState(ctx context.Context, state *dbState, branch string) error {
-	var newWS *doltdb.WorkingSet
-	if err := state.updateBranchWS(ctx, branch, func(cur *doltdb.WorkingSet) (*doltdb.WorkingSet, error) {
-		newWS = cur.ClearMerge().ClearRebase()
-		return newWS, nil
-	}); err != nil {
-		return fmt.Errorf("clearing merge state for %q: %w", branch, err)
-	}
-	state.pushWSToSession(ctx, branch, newWS)
 	return nil
 }
 
 // abortMergeState restores the pre-operation root and drops the operation
-// metadata in one update. The caller must hold state.mu.
-func abortMergeState(ctx context.Context, state *dbState, ms *mergeInProgress) error {
-	return settleMergeState(ctx, state, ms.intoBranch, ms.premergeAM)
+// metadata in one update.
+func abortMergeState(ctx context.Context, state *dbState, tip *branchTip, ms *mergeInProgress) error {
+	return settleMergeState(ctx, state, tip, ms.premergeAM)
 }
 
 // loadMergeState rebuilds the operation paused on any branch of state, or
@@ -406,10 +368,15 @@ func mergeStateFromWS(ctx context.Context, state *dbState, branch string, ws *do
 		if ms.rebaseOntoHash, err = ws.RebaseState().OntoCommit().HashOf(); err != nil {
 			return nil, fmt.Errorf("hashing rebase onto commit: %w", err)
 		}
-		// The replay has moved the branch HEAD; that tip is the "into" side of
-		// the paused pick.
+		// The rebase moves HEAD only with the working set it publishes: a
+		// rebase paused on its first pick has left HEAD at the pre-rebase tip
+		// and builds on the onto commit; one paused later has moved HEAD to the
+		// last pick it replayed.
 		if ms.intoHash, err = branchHeadHash(ctx, state, branch); err != nil {
 			return nil, err
+		}
+		if ms.intoHash == ms.rebaseBranchHash {
+			ms.intoHash = ms.rebaseOntoHash
 		}
 		if err = restoreRebasePlan(ctx, state, ms); err != nil {
 			return nil, err
@@ -559,6 +526,40 @@ func collectionsWithArtifacts(ctx context.Context, state *dbState, am prolly.Add
 	}
 	sort.Strings(names)
 	return names, nil
+}
+
+// refuseWritesWhilePaused refuses a write to branch while ws records an
+// operation paused on conflicts. Nothing may land on the branch between the
+// pause and its continue or abort: an abort would discard it, and a continue
+// would commit it as part of the operation.
+func refuseWritesWhilePaused(branch string, ws *doltdb.WorkingSet) error {
+	if !ws.MergeActive() {
+		return nil
+	}
+	op, cmd := "merge", "dumboMerge"
+	switch {
+	case ws.RebaseActive():
+		op, cmd = "rebase", "dumboRebase"
+	case ws.MergeState().IsCherryPick():
+		op, cmd = "cherry-pick", "dumboCherryPick"
+	case ws.MergeState().IsRevert():
+		op, cmd = "revert", "dumboRevert"
+	}
+	return backends.NewError(backends.ErrorCodeBranchInConflict, refusePaused(
+		"branch %q is in a conflicting state: a %s is paused on conflicts, and no writes are accepted until it is finished. "+
+			"Resolve the conflicts with dumboResolveConflict, then run %s with continue (or abort)", branch, op, cmd))
+}
+
+// pausedRefusal is a refusal made because an operation is paused on
+// conflicts. It reads as its message and matches backends.ErrOperationPaused.
+type pausedRefusal struct{ msg string }
+
+func (e pausedRefusal) Error() string { return e.msg }
+
+func (e pausedRefusal) Is(target error) bool { return target == backends.ErrOperationPaused }
+
+func refusePaused(format string, args ...any) error {
+	return pausedRefusal{msg: fmt.Sprintf(format, args...)}
 }
 
 // loadNamespaceConflicts rebuilds the view and collection-metadata conflicts

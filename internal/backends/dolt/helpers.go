@@ -691,6 +691,10 @@ func (state *dbState) reconcileBranchForSession(
 	if err != nil {
 		return nil, nil, fmt.Errorf("resolving theirs WS for %q: %w", branch, err)
 	}
+	// A transaction begun before the branch paused reaches it here.
+	if err := refuseWritesWhilePaused(branch, theirs); err != nil {
+		return nil, nil, err
+	}
 	// The fork point: what the branch held when this reconcile read it. The
 	// publish below may only replace exactly this, or the merge it produced is
 	// answering a question about a branch that has already moved on.
@@ -713,8 +717,7 @@ func (state *dbState) reconcileBranchForSession(
 	if err := sess.SetWorkingSet(sqlCtx, qualified, merged); err != nil {
 		return nil, nil, fmt.Errorf("updating sess WS for %q: %w", qualified, err)
 	}
-	// Refresh the singleton entry so non-session readers see the merged WS and
-	// the next updateBranchWS's optimistic lock uses the post-merge wsHash.
+	// Refresh the singleton entry so non-session readers see the merged WS.
 	if err := state.reloadBranchWSFromDisk(sqlCtx, branch); err != nil {
 		return nil, nil, fmt.Errorf("refreshing cache for %q: %w", qualified, err)
 	}
@@ -857,6 +860,21 @@ func (state *dbState) updateWorkingRoot(ctx context.Context, branch, commitMsg s
 	if err != nil {
 		return err
 	}
+	sess := sessionFromContext(ctx)
+	onSession := sess != nil && sess.GetTransaction() != nil && dbNameDsessFriendly(state.name) && !alwaysAutoCommit(state.name)
+	var tip *branchTip
+	if !onSession {
+		// A write straight to the branch builds on the working set it
+		// compare-and-swaps against, read together with that set's hash.
+		if tip, err = state.readBranchTip(ctx, branch); err != nil {
+			return err
+		}
+		ws = tip.ws
+	}
+
+	if err := refuseWritesWhilePaused(branch, ws); err != nil {
+		return err
+	}
 
 	newRV, err := fn(ws.WorkingRoot())
 	if err != nil {
@@ -889,8 +907,7 @@ func (state *dbState) updateWorkingRoot(ctx context.Context, branch, commitMsg s
 		}
 	}
 
-	sess := sessionFromContext(ctx)
-	if sess != nil && sess.GetTransaction() != nil && dbNameDsessFriendly(state.name) && !alwaysAutoCommit(state.name) {
+	if onSession {
 		sqlCtx := sqlctx.Wrap(ctx, sess)
 		qualified := qualifiedDbName(state.name, branch)
 		if err := sess.SetWorkingSet(sqlCtx, qualified, newWS); err != nil {
@@ -899,10 +916,9 @@ func (state *dbState) updateWorkingRoot(ctx context.Context, branch, commitMsg s
 		return nil
 	}
 
-	// Non-txn: full update (cache + disk + hash refresh).
-	if err := state.updateBranchWS(ctx, branch, func(_ *doltdb.WorkingSet) (*doltdb.WorkingSet, error) {
-		return newWS, nil
-	}); err != nil {
+	// A session write published since the read fails the compare-and-swap,
+	// and this write with it, rather than being overwritten.
+	if err := state.publishOverTip(ctx, tip, newWS); err != nil {
 		return fmt.Errorf("updating working set: %w", err)
 	}
 
@@ -930,12 +946,4 @@ func (state *dbState) updateAddressMap(ctx context.Context, branch, commitMsg st
 		rtvlMsg := buildRootValueFlatbuffer(newAM)
 		return doltdb.NewRootValue(ctx, state.doltDB.ValueReadWriter(), state.doltDB.NodeStore(), dolttypes.SerialMessage(rtvlMsg))
 	})
-}
-
-// headRootAM returns the collections AddressMap from HEAD's rootValue.
-// This is the correct staged root: staged stays equal to HEAD until an
-// explicit stage operation advances it.
-// The caller must hold state.mu (read or write lock).
-func (state *dbState) headRootAM(ctx context.Context) (prolly.AddressMap, error) {
-	return headRootAMForBranch(ctx, state, defaultBranch)
 }

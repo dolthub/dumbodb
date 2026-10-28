@@ -45,6 +45,10 @@ const (
 	ErrorCodeWriteConflict
 
 	ErrorCodeReadOnlyCollection
+
+	// ErrorCodeBranchInConflict refuses a write to a branch that has an
+	// operation paused on conflicts.
+	ErrorCodeBranchInConflict
 )
 
 // Error represents a backend error returned by all Backend, Database and Collection methods.
@@ -126,6 +130,14 @@ func (err *Error) DupKey() *types.Document {
 
 // There is intentionally no method to return the internal error.
 
+// Message is the error's description without its code.
+func (err *Error) Message() string {
+	if err.err == nil {
+		return err.code.String()
+	}
+	return err.err.Error()
+}
+
 func (err *Error) Error() string {
 	return fmt.Sprintf("%s: %v", err.code, err.err)
 }
@@ -135,6 +147,18 @@ func (err *Error) Error() string {
 // write is still valid, it just has to be reconciled against the new tip and
 // tried again. Callers match it with errors.Is.
 var ErrWriteRaced = errors.New("write raced another publish on this branch")
+
+// ErrUncommittedChanges reports that a merge, cherry-pick, revert or rebase
+// refused to start because the branch has uncommitted changes. A server's
+// working set is shared by every session, so these operations do not carry
+// uncommitted changes through, unlike git; the client commits or resets them
+// first. Callers match it with errors.Is.
+var ErrUncommittedChanges = errors.New("the branch has uncommitted changes")
+
+// ErrOperationPaused reports a command or write refused because a merge,
+// cherry-pick, revert or rebase is paused on conflicts on its branch. Callers
+// match it with errors.Is.
+var ErrOperationPaused = errors.New("an operation is paused on conflicts")
 
 // ErrorCodeIs reports whether err (or any error it wraps) is *Error with one
 // of the given error codes. Uses errors.As, so callers that wrap with

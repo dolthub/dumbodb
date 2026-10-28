@@ -64,7 +64,8 @@ func extractAndSetLSID(ctx context.Context, doc *types.Document) {
 //     continuation that arrives on a fresh TCP connection -- the
 //     SessionRegistry resumes the underlying DoltSession but ConnInfo is
 //     per-TCP-connection, so the second frame must set InTransaction
-//     from the wire field rather than carrying it forward).
+//     from the wire field rather than carrying it forward). A frame
+//     without it clears InTransaction for the same reason.
 //
 // Returns whether startTransaction:true was observed; the conn-level
 // routing uses that specifically to reject the wire frame in
@@ -85,12 +86,20 @@ func extractAndSetTransactionFlag(ctx context.Context, doc *types.Document) (sta
 		}
 	}
 
-	if doc.Has("autocommit") {
-		if v, err := doc.Get("autocommit"); err == nil {
-			if b, ok := v.(bool); ok && !b {
-				ci.SetInTransaction(true)
-			}
+	// A transaction belongs to its session, and every command in one says so
+	// with autocommit:false. One without it is not in a transaction, whatever
+	// an earlier command on this connection was in: a driver sends any
+	// session's commands down any pooled connection.
+	inTxn := started
+	if v, err := doc.Get("autocommit"); err == nil {
+		if b, ok := v.(bool); ok && !b {
+			inTxn = true
 		}
+	}
+	if !inTxn {
+		ci.SetInTransaction(false)
+	} else if !started {
+		ci.SetInTransaction(true)
 	}
 
 	return started

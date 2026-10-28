@@ -40,8 +40,8 @@ import (
 //
 // RunUnderGCSafepointKeeper also uses it to bracket background mutators
 // (capped collection cleanup). Their chunks need no root accounting -- every
-// chunk the background tick writes goes through updateBranchWS, which fsyncs
-// the on-disk working_set ref first -- the bracket only gates GC's
+// chunk the background tick writes is published to the on-disk working_set
+// ref before it returns -- the bracket only gates GC's
 // pre-finalize safepoint on the tick's completion.
 type backgroundGCRootsProvider struct {
 	mu     sync.Mutex
