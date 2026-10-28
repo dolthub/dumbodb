@@ -14,7 +14,9 @@ env:
 
 jobs:
   bats:
-    runs-on: ubuntu-latest
+    # The mongosh step uses apt-key and MongoDB's jammy repository; newer
+    # ubuntu-latest images ship without apt-key. Matches parity and replication.
+    runs-on: ubuntu-22.04
 
     steps:
       - uses: actions/checkout@v6
