@@ -58,3 +58,22 @@ type refusal struct{}
 
 func (refusal) Error() string        { return "merge in progress" }
 func (refusal) Is(target error) bool { return target == backends.ErrOperationPaused }
+
+// Once dumboCommit has committed the client's transaction, a lost race it then
+// gives up on is not labelled TransientTransactionError: the driver would run
+// the transaction again and apply writes that already committed.
+func TestDumboCommitErrorAfterCommittingTheTransaction(t *testing.T) {
+	inTxn := conninfo.New()
+	inTxn.SetInTransaction(true)
+	ctx := conninfo.Ctx(context.Background(), inTxn)
+	raced := fmt.Errorf("x: %w", backends.ErrWriteRaced)
+	for _, tc := range []struct {
+		committedTxn bool
+		label        bool
+	}{{committedTxn: true, label: false}, {committedTxn: false, label: true}} {
+		var ce *handlererrors.CommandError
+		require.ErrorAs(t, dumboCommitError(ctx, raced, tc.committedTxn), &ce)
+		require.Equal(t, handlererrors.ErrWriteConflict, ce.Code())
+		require.Equal(t, tc.label, ce.Document().Get("errorLabels") != nil, "committedTxn=%v", tc.committedTxn)
+	}
+}

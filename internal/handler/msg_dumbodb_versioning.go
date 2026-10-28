@@ -670,6 +670,20 @@ func (h *Handler) versioningBackend() backends.VersioningBackend {
 	return vb
 }
 
+// dumboCommitError reports a failed dumboCommit. One that has already committed
+// the client's transaction reports a lost race without the
+// TransientTransactionError label: a driver retrying on it would run the
+// transaction again and apply writes that already committed.
+func dumboCommitError(ctx context.Context, err error, committedTxn bool) error {
+	switch {
+	case errors.Is(err, backends.ErrEmptyCommit):
+		return handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, "dumboCommit: "+err.Error())
+	case committedTxn && errors.Is(err, backends.ErrWriteRaced):
+		return handlererrors.NewCommandError(handlererrors.ErrWriteConflict, err)
+	}
+	return versioningError(ctx, err)
+}
+
 // versioningError reports a version-control command's backend failure. A lost
 // race gets a code of its own, and so does a refusal over uncommitted changes
 // or a paused operation, so a client can tell "run it again" and "finish
@@ -761,10 +775,12 @@ func (h *Handler) MsgDumboDBCommit(connCtx context.Context, msg *wire.OpMsg) (*w
 	// As Dolt's dolt_commit does, a commit made inside a client transaction
 	// finishes that transaction first, so the commit takes its writes; the
 	// client carries on in a fresh transaction on the new tip.
+	committedTxn := false
 	if conninfo.Get(connCtx).InTransaction() {
 		if err := h.finishClientTransaction(connCtx); err != nil {
 			return nil, err
 		}
+		committedTxn = true
 	}
 
 	res, err := vb.DumboDBCommit(connCtx, &backends.CommitParams{
@@ -778,13 +794,7 @@ func (h *Handler) MsgDumboDBCommit(connCtx context.Context, msg *wire.OpMsg) (*w
 		Amend:      amend,
 	})
 	if err != nil {
-		if errors.Is(err, backends.ErrEmptyCommit) {
-			return nil, handlererrors.NewCommandErrorMsg(
-				handlererrors.ErrOperationFailed,
-				"dumboCommit: "+err.Error(),
-			)
-		}
-		return nil, versioningError(connCtx, err)
+		return nil, dumboCommitError(connCtx, err, committedTxn)
 	}
 
 	return documentOpMsg(
