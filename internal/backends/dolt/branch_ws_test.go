@@ -21,11 +21,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
-	doltref "github.com/dolthub/dolt/go/libraries/doltcore/ref"
-	"github.com/dolthub/dolt/go/store/prolly"
-	dolttypes "github.com/dolthub/dolt/go/store/types"
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -39,29 +34,6 @@ func newTestDbState(t *testing.T) *dbState {
 	state, err := be.getOrOpenDB(context.Background(), "test", true)
 	require.NoError(t, err)
 	return state
-}
-
-// mutateWS produces a new WorkingSet whose chunk hash differs from
-// the input by replacing its working root with a freshly-built
-// RootValue that holds a unique tagged AddressMap entry. The entry's
-// value points at the database's schema chunk (a known-reachable
-// hash) so the chunk store's dangling-ref check passes. Used by the
-// tests to advance the on-disk WS without exercising the full
-// insert/commit machinery.
-func mutateWS(t *testing.T, state *dbState, cur *doltdb.WorkingSet, tag string) *doltdb.WorkingSet {
-	t.Helper()
-	ctx := context.Background()
-	require.False(t, state.collSchemaHash.IsEmpty(), "test pre-condition: schema chunk must be written")
-	am, err := prolly.NewEmptyAddressMap(state.ns)
-	require.NoError(t, err)
-	ed := am.Editor()
-	require.NoError(t, ed.Add(ctx, "ws-test-"+tag, state.collSchemaHash))
-	am, err = ed.Flush(ctx)
-	require.NoError(t, err)
-	rtvlMsg := buildRootValueFlatbuffer(am)
-	rv, err := doltdb.NewRootValue(ctx, state.doltDB.ValueReadWriter(), state.doltDB.NodeStore(), dolttypes.SerialMessage(rtvlMsg))
-	require.NoError(t, err)
-	return cur.WithWorkingRoot(rv)
 }
 
 // TestBranchEntry_Singleton: the entry pointer returned for a given
@@ -123,22 +95,4 @@ func TestLoadBranchWS_LazyLoad(t *testing.T) {
 	ws2, err := state.loadBranchWS(ctx, defaultBranch)
 	require.NoError(t, err)
 	assert.Same(t, ws1, ws2, "second call must hit the cache and return the same WS pointer")
-}
-
-// makeBranch creates a branch named name from the current HEAD of
-// defaultBranch. Used by the contention test so each branch has an
-// on-disk working_set ref.
-func makeBranch(ctx context.Context, state *dbState, name string) error {
-	// The dolt branch-create path goes through DumboDBBranch on the
-	// backend, but for unit tests we can construct the WS ref directly
-	// off HEAD: ResolveWorkingSet for the default branch, then write
-	// the same WS under the new branch's ref.
-	mainRef := doltref.NewWorkingSetRef("heads/" + defaultBranch)
-	mainWS, err := state.doltDB.ResolveWorkingSet(ctx, mainRef)
-	if err != nil {
-		return err
-	}
-	newRef := doltref.NewWorkingSetRef("heads/" + name)
-	newWS := doltdb.EmptyWorkingSet(newRef).WithWorkingRoot(mainWS.WorkingRoot()).WithStagedRoot(mainWS.StagedRoot())
-	return initializeWorkingSet(ctx, state.doltDB, newWS, name)
 }
