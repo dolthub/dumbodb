@@ -315,6 +315,11 @@ const (
 	ErrDateFromPartsMixedISO     = ErrorCode(40525) // Location40525
 	ErrDatePartOutOfRange        = ErrorCode(31034) // Location31034
 	ErrDateFromPartsISOYearRange = ErrorCode(31095) // Location31095
+	ErrCannotConvertToDate       = ErrorCode(16006) // Location16006
+	ErrDateToPartsUnknownField   = ErrorCode(40520) // Location40520
+	ErrDateToPartsISONotBool     = ErrorCode(40521) // Location40521
+	ErrDateToPartsNoDate         = ErrorCode(40522) // Location40522
+	ErrDateToPartsNotObject      = ErrorCode(40524) // Location40524
 
 	// ErrOpMsgNoBody indicates an OP_MSG without a kind-0 body section.
 	ErrOpMsgNoBody = ErrorCode(40587) // Location40587

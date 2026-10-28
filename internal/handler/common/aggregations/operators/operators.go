@@ -141,6 +141,7 @@ func NewOperator(doc *types.Document) (Operator, error) {
 // passed through whole so the operator can reject it.
 var objectArgumentOperators = map[string]struct{}{
 	"$dateFromParts": {},
+	"$dateToParts":   {},
 }
 
 // Operators maps all standard aggregation operators.
@@ -173,6 +174,7 @@ var Operators = map[string]newOperatorFunc{
 	"$dateAdd":          newDateAdd,
 	"$dateDiff":         newDateDiff,
 	"$dateFromParts":    newDateFromParts,
+	"$dateToParts":      newDateToParts,
 	"$dateTrunc":        newDateTrunc,
 	"$dateToString":     newDateToString,
 	"$degreesToRadians": newDegreesToRadians,
@@ -293,7 +295,6 @@ var unsupportedOperators = map[string]struct{}{
 	"$covariancePop":  {},
 	"$covarianceSamp": {},
 	"$dateSubtract":   {},
-	"$dateToParts":    {},
 	"$dateFromString": {},
 	"$denseRank":      {},
 	"$derivative":     {},
