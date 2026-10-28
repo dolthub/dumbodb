@@ -162,6 +162,22 @@ func mergeDeferredCollections(ctx context.Context, state *dbState, ms *mergeInPr
 			delete(ms.deferredCollections, name)
 			continue
 		}
+		// The destination side is the collection as the branch holds it now,
+		// writes made during the pause included, not as it was committed. A
+		// rebase replays onto the branch, so for it that is theirs.
+		if !ms.isSessionCommit {
+			liveH, getErr := ms.resolvedAM.Get(ctx, name)
+			if getErr != nil {
+				return false, fmt.Errorf("reading live collection %q: %w", name, getErr)
+			}
+			if !liveH.IsEmpty() {
+				if ms.isRebase {
+					fromH = liveH
+				} else {
+					intoH = liveH
+				}
+			}
+		}
 		mergedH, conflicts, mergeErr := mergeCollectionDTBL(ctx, state, name, intoH, fromH, baseH,
 			ms.theirHash(), baseHash, oursDesc, theirsDesc, mergeModeOrDefault(resolvedMeta.MergeMode))
 		if mergeErr != nil {

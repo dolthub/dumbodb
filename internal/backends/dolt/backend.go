@@ -164,29 +164,6 @@ func amToRootValue(ctx context.Context, db *dbState, am prolly.AddressMap) (dolt
 	return doltdb.NewRootValue(ctx, db.doltDB.ValueReadWriter(), db.doltDB.NodeStore(), dolttypes.SerialMessage(rtvlMsg))
 }
 
-// persistAM sets the working root for branch to am and immediately flushes to
-// the doltDB working set. Used by version-control operations that produce a new
-// AM and need it durable. The caller must hold s.mu (write lock).
-func (s *dbState) persistAM(ctx context.Context, branch string, workingAM prolly.AddressMap) error {
-	rtvlMsg := buildRootValueFlatbuffer(workingAM)
-	rv, err := doltdb.NewRootValue(ctx, s.doltDB.ValueReadWriter(), s.doltDB.NodeStore(), dolttypes.SerialMessage(rtvlMsg))
-	if err != nil {
-		return err
-	}
-	var newWS *doltdb.WorkingSet
-	if err := s.updateBranchWS(ctx, branch, func(cur *doltdb.WorkingSet) (*doltdb.WorkingSet, error) {
-		// Set both working and staged to the same root so dolt sees a
-		// clean working tree (no uncommitted diff). Conflict artifacts
-		// are stored in the DTBL ArtifactMap, not in working/staged.
-		newWS = cur.WithWorkingRoot(rv).WithStagedRoot(rv)
-		return newWS, nil
-	}); err != nil {
-		return err
-	}
-	s.pushWSToSession(ctx, branch, newWS)
-	return nil
-}
-
 // maxStagedAdvanceRetries bounds advanceStagedAfterCommit's reloads. Each pass
 // is one reload and one compare-and-swap, so it only runs out if writers keep
 // publishing faster than that; it is a livelock brake, not a policy.
@@ -195,8 +172,8 @@ const maxStagedAdvanceRetries = 32
 // advanceStagedAfterCommit sets branch's staged root to committedAM, the root
 // a commit just recorded, and keeps the working root as it is now: a client
 // write published after the commit read the working set is in it, and stays
-// there uncommitted. persistAM, which replaces the working root, would discard
-// such a write. The cached working set can lag a lock-free publish, so a
+// there uncommitted. Replacing the working root would discard such a write.
+// The cached working set can lag a lock-free publish, so a
 // failed optimistic lock reloads it from disk and retries. The caller must
 // hold s.mu (write lock).
 func (s *dbState) advanceStagedAfterCommit(ctx context.Context, branch string, committedAM prolly.AddressMap) error {
@@ -2044,12 +2021,13 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 		if db.mergeState == nil {
 			return nil, fmt.Errorf("DumboDBMerge: no merge in progress to abort")
 		}
-		if db.mergeState.isCherryPick {
-			return nil, fmt.Errorf("DumboDBMerge: cherry-pick in progress on branch %q; use dumboCherryPick abort instead", params.Into)
+		if err := notAMerge(db.mergeState, "abort"); err != nil {
+			return nil, err
 		}
 		ms := db.mergeState
-		defer db.restoreOperationStateOnRace(db.mergeState.clone(), &err)
-		tip, err := db.readBranchTip(ctx, ms.intoBranch)
+		var tip *branchTip
+		defer db.keepOperationStateConsistent(db.mergeState.clone(), &tip, &err)
+		tip, err = db.readBranchTip(ctx, ms.intoBranch)
 		if err != nil {
 			return nil, fmt.Errorf("DumboDBMerge: abort: %w", err)
 		}
@@ -2065,45 +2043,35 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 		if db.mergeState == nil || db.mergeState.intoBranch != params.Into {
 			return nil, fmt.Errorf("dumboMerge: no merge in progress")
 		}
-		if db.mergeState.isCherryPick {
-			return nil, fmt.Errorf("DumboDBMerge: cherry-pick in progress on branch %q; use dumboCherryPick continue instead", params.Into)
+		if err := notAMerge(db.mergeState, "continue"); err != nil {
+			return nil, err
 		}
 		if db.mergeState.hasUnresolvedConflicts() {
 			return nil, fmt.Errorf("dumboMerge: unresolved merge conflicts remain")
 		}
 		ms := db.mergeState
-		defer db.restoreOperationStateOnRace(db.mergeState.clone(), &err)
-		tip, err := db.readBranchTip(ctx, ms.intoBranch)
+		var tip *branchTip
+		defer db.keepOperationStateConsistent(db.mergeState.clone(), &tip, &err)
+		tip, err = db.readBranchTip(ctx, ms.intoBranch)
 		if err != nil {
 			return nil, fmt.Errorf("DumboDBMerge: continue: %w", err)
 		}
 
-		hadDeferredCollections := len(ms.deferredCollections) > 0
-		newConflicts := false
-		if hadDeferredCollections {
-			if newConflicts, err = mergeDeferredCollections(ctx, db, ms); err != nil {
-				return nil, fmt.Errorf("DumboDBMerge: continue: %w", err)
+		if len(ms.deferredCollections) == 0 {
+			newConflicts, recheckErr := b.recheckCrossValidation(ctx, db, ms)
+			if recheckErr != nil {
+				return nil, fmt.Errorf("DumboDBMerge: continue: %w", recheckErr)
 			}
-			if wsErr := persistConflictState(ctx, db, tip, ms); wsErr != nil {
-				return nil, fmt.Errorf("DumboDBMerge: continue: persisting deferred collection merge: %w", wsErr)
+			if newConflicts {
+				return nil, &backends.MergeConflictError{Conflicts: ms.summaries()}
 			}
-		} else if newConflicts, err = b.recheckCrossValidation(ctx, db, ms); err != nil {
-			return nil, fmt.Errorf("DumboDBMerge: continue: %w", err)
+		}
+		newConflicts, contErr := prepareContinue(ctx, db, tip, ms)
+		if contErr != nil {
+			return nil, fmt.Errorf("DumboDBMerge: continue: %w", contErr)
 		}
 		if newConflicts {
 			return nil, &backends.MergeConflictError{Conflicts: ms.summaries()}
-		}
-
-		// Adopt anything written to the branch during the conflict window, then
-		// sweep the artifacts off that root so the merge commits neither the
-		// conflict markers nor a stale view of the data.
-		contAM, amErr := tip.workingAM(ctx, db)
-		if amErr != nil {
-			return nil, fmt.Errorf("DumboDBMerge: continue: %w", amErr)
-		}
-		ms.resolvedAM = contAM
-		if clearErr := clearConflictArtifacts(ctx, db, ms); clearErr != nil {
-			return nil, fmt.Errorf("DumboDBMerge: continue: clearing artifacts: %w", clearErr)
 		}
 
 		mergeRes, err := b.commitMerge(ctx, db, tip, ms.fromLabel, ms.intoHash, ms.fromHash, ms.resolvedAM, params.Message, params.Author, params.Committer)
@@ -2171,8 +2139,9 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 		}, nil
 	}
 
-	defer db.restoreOperationStateOnRace(db.mergeState.clone(), &err)
-	tip, err := db.readBranchTip(ctx, params.Into)
+	var tip *branchTip
+	defer db.keepOperationStateConsistent(db.mergeState.clone(), &tip, &err)
+	tip, err = db.readBranchTip(ctx, params.Into)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBMerge: %w", err)
 	}
@@ -2189,7 +2158,9 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 	if baseHash == intoHash && !params.NoFF {
 		// FastForward refuses a dirty working set inside its own swap, so a
 		// write published since the check above makes it fail, not vanish.
-		runBranchOpHook(ctx)
+		if err := runBranchOpHook(ctx); err != nil {
+			return nil, err
+		}
 		wsRef := doltref.NewWorkingSetRef("heads/" + params.Into)
 		if _, ffErr := db.datasDB.FastForward(ctx, intoBranchDS, fromHash, wsRef.String(), false); ffErr != nil {
 			if errors.Is(ffErr, datas.ErrDirtyWorkspace) || errors.Is(ffErr, datas.ErrMergeNeeded) {
@@ -2346,8 +2317,9 @@ func (b *Backend) DumboDBCherryPick(ctx context.Context, params *backends.Cherry
 			return nil, fmt.Errorf("DumboDBCherryPick: no cherry-pick in progress to abort")
 		}
 		ms := db.mergeState
-		defer db.restoreOperationStateOnRace(db.mergeState.clone(), &err)
-		tip, err := db.readBranchTip(ctx, ms.intoBranch)
+		var tip *branchTip
+		defer db.keepOperationStateConsistent(db.mergeState.clone(), &tip, &err)
+		tip, err = db.readBranchTip(ctx, ms.intoBranch)
 		if err != nil {
 			return nil, fmt.Errorf("DumboDBCherryPick: abort: %w", err)
 		}
@@ -2367,31 +2339,18 @@ func (b *Backend) DumboDBCherryPick(ctx context.Context, params *backends.Cherry
 			return nil, fmt.Errorf("DumboDBCherryPick: unresolved cherry-pick conflicts remain")
 		}
 		ms := db.mergeState
-		defer db.restoreOperationStateOnRace(db.mergeState.clone(), &err)
-		tip, err := db.readBranchTip(ctx, ms.intoBranch)
+		var tip *branchTip
+		defer db.keepOperationStateConsistent(db.mergeState.clone(), &tip, &err)
+		tip, err = db.readBranchTip(ctx, ms.intoBranch)
 		if err != nil {
 			return nil, fmt.Errorf("DumboDBCherryPick: continue: %w", err)
 		}
-		if len(ms.deferredCollections) > 0 {
-			newConflicts, mergeErr := mergeDeferredCollections(ctx, db, ms)
-			if mergeErr != nil {
-				return nil, fmt.Errorf("DumboDBCherryPick: continue: %w", mergeErr)
-			}
-			if wsErr := persistConflictState(ctx, db, tip, ms); wsErr != nil {
-				return nil, fmt.Errorf("DumboDBCherryPick: continue: persisting deferred collection merge: %w", wsErr)
-			}
-			if newConflicts {
-				return nil, &backends.DumboDBCherryPickConflictError{Conflicts: ms.summaries()}
-			}
+		newConflicts, contErr := prepareContinue(ctx, db, tip, ms)
+		if contErr != nil {
+			return nil, fmt.Errorf("DumboDBCherryPick: continue: %w", contErr)
 		}
-
-		contAM, contAMErr := tip.workingAM(ctx, db)
-		if contAMErr != nil {
-			return nil, fmt.Errorf("DumboDBCherryPick: continue: %w", contAMErr)
-		}
-		ms.resolvedAM = contAM
-		if clearErr := clearConflictArtifacts(ctx, db, ms); clearErr != nil {
-			return nil, fmt.Errorf("DumboDBCherryPick: continue: clearing artifacts: %w", clearErr)
+		if newConflicts {
+			return nil, &backends.DumboDBCherryPickConflictError{Conflicts: ms.summaries()}
 		}
 
 		// Load original commit metadata to preserve author identity.
@@ -2489,8 +2448,9 @@ func (b *Backend) DumboDBCherryPick(ctx context.Context, params *backends.Cherry
 		return nil, fmt.Errorf("DumboDBCherryPick: into branch %q has no head address", branch)
 	}
 
-	defer db.restoreOperationStateOnRace(db.mergeState.clone(), &err)
-	tip, err := db.readBranchTip(ctx, branch)
+	var tip *branchTip
+	defer db.keepOperationStateConsistent(db.mergeState.clone(), &tip, &err)
+	tip, err = db.readBranchTip(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBCherryPick: %w", err)
 	}
@@ -3209,12 +3169,21 @@ func (b *Backend) dumboDBReset(
 	}
 	commitID = targetHash.String()
 
+	if db.mergeState != nil && db.mergeState.intoBranch == branch {
+		return nil, fmt.Errorf("DumboDBReset: an operation is paused on branch %q; continue or abort it first", branch)
+	}
+	tip, err := db.readBranchTip(ctx, branch)
+	if err != nil {
+		return nil, fmt.Errorf("DumboDBReset: %w", err)
+	}
+
 	targetAM, err := amFromCommitHash(ctx, db, commitID)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBReset: resolving target commit %q: %w", commitID, err)
 	}
+	commitAM := targetAM
 	if len(preserveCollections) > 0 {
-		currentAM, currentErr := db.getOrInitBranchAM(ctx, branch)
+		currentAM, currentErr := tip.workingAM(ctx, db)
 		if currentErr != nil {
 			return nil, fmt.Errorf("DumboDBReset: reading collections to preserve: %w", currentErr)
 		}
@@ -3245,39 +3214,32 @@ func (b *Backend) dumboDBReset(
 		}
 	}
 
+	// Every write below is a compare-and-swap against the working set read
+	// above, so a client write published since makes the reset fail with
+	// ErrWriteRaced. Where it takes two writes, the working set goes first: a
+	// reset that loses the race on the second has moved the working set but
+	// not HEAD, nothing is lost, and the retry finishes it.
+	if params.Hard && targetAM.HashOf() == commitAM.HashOf() {
+		// Working tree and staged root both point at the target commit: one
+		// swap moves HEAD and resets the working set with it.
+		if err := db.setHeadOverTip(ctx, tip, targetHash, true); err != nil {
+			return nil, fmt.Errorf("DumboDBReset: resetting branch %q to %q: %w", branch, commitID, err)
+		}
+		return &backends.ResetResult{CommitID: commitID}, nil
+	}
+	targetRV, err := amToRootValue(ctx, db, targetAM)
+	if err != nil {
+		return nil, fmt.Errorf("DumboDBReset: building target root: %w", err)
+	}
+	newWS := tip.ws.WithStagedRoot(targetRV)
 	if params.Hard {
-		// Hard reset: working tree and staged root both point to the target
-		// commit. It discards the working set by definition, so a write
-		// published while it runs is discarded with it.
-		branchDS, dsErr := db.datasDB.GetDataset(ctx, branchDataset)
-		if dsErr != nil {
-			return nil, fmt.Errorf("DumboDBReset: resolving branch %q for db %q: %w", branch, params.DBName, dsErr)
-		}
-		if _, err := db.datasDB.SetHead(ctx, branchDS, targetHash, ""); err != nil {
-			return nil, fmt.Errorf("DumboDBReset: setting HEAD for branch %q to %q: %w", branch, commitID, err)
-		}
-		if err := db.persistAM(ctx, branch, targetAM); err != nil {
-			return nil, fmt.Errorf("DumboDBReset: updating working set (hard) for branch %q: %w", branch, err)
-		}
-	} else {
-		// Soft reset: keep the working root, move HEAD and the staged root to
-		// the target. Both moves are compare-and-swaps against the working set
-		// read here. Should the second lose a race, HEAD has moved but the
-		// staged root has not; nothing is lost, and the retry finishes it.
-		stagedRV, stagedErr := amToRootValue(ctx, db, targetAM)
-		if stagedErr != nil {
-			return nil, fmt.Errorf("DumboDBReset (soft): building staged root: %w", stagedErr)
-		}
-		tip, tipErr := db.readBranchTip(ctx, branch)
-		if tipErr != nil {
-			return nil, fmt.Errorf("DumboDBReset (soft): %w", tipErr)
-		}
-		if err := db.setHeadOverTip(ctx, tip, targetHash); err != nil {
-			return nil, fmt.Errorf("DumboDBReset: setting HEAD for branch %q to %q: %w", branch, commitID, err)
-		}
-		if err := db.publishOverTip(ctx, tip, tip.ws.WithStagedRoot(stagedRV)); err != nil {
-			return nil, fmt.Errorf("DumboDBReset: updating working set (soft) for branch %q: %w", branch, err)
-		}
+		newWS = newWS.WithWorkingRoot(targetRV)
+	}
+	if err := db.publishOverTip(ctx, tip, newWS); err != nil {
+		return nil, fmt.Errorf("DumboDBReset: updating working set for branch %q: %w", branch, err)
+	}
+	if err := db.setHeadOverTip(ctx, tip, targetHash, false); err != nil {
+		return nil, fmt.Errorf("DumboDBReset: setting HEAD for branch %q to %q: %w", branch, commitID, err)
 	}
 
 	return &backends.ResetResult{CommitID: commitID}, nil
@@ -3490,15 +3452,13 @@ func (b *Backend) DumboDBRebase(ctx context.Context, params *backends.RebasePara
 			return nil, fmt.Errorf("DumboDBRebase: no rebase in progress to abort")
 		}
 		ms := db.mergeState
-		defer db.restoreOperationStateOnRace(db.mergeState.clone(), &err)
-		tip, err := db.readBranchTip(ctx, ms.intoBranch)
+		var tip *branchTip
+		defer db.keepOperationStateConsistent(db.mergeState.clone(), &tip, &err)
+		tip, err = db.readBranchTip(ctx, ms.intoBranch)
 		if err != nil {
 			return nil, fmt.Errorf("DumboDBRebase: abort: %w", err)
 		}
-		if err := restoreRebaseHead(ctx, db, tip, ms); err != nil {
-			return nil, fmt.Errorf("DumboDBRebase: abort: %w", err)
-		}
-		if err := abortMergeState(ctx, db, tip, ms); err != nil {
+		if err := abortRebase(ctx, db, tip, ms); err != nil {
 			return nil, fmt.Errorf("DumboDBRebase: abort: %w", err)
 		}
 		db.mergeState = nil
@@ -3517,36 +3477,20 @@ func (b *Backend) DumboDBRebase(ctx context.Context, params *backends.RebasePara
 			return nil, fmt.Errorf("DumboDBRebase: unresolved rebase conflicts remain")
 		}
 		ms := db.mergeState
-		defer db.restoreOperationStateOnRace(db.mergeState.clone(), &err)
-		tip, err := db.readBranchTip(ctx, ms.intoBranch)
+		var tip *branchTip
+		defer db.keepOperationStateConsistent(db.mergeState.clone(), &tip, &err)
+		tip, err = db.readBranchTip(ctx, ms.intoBranch)
 		if err != nil {
 			return nil, fmt.Errorf("DumboDBRebase: continue: %w", err)
 		}
-		if len(ms.deferredCollections) > 0 {
-			newConflicts, mergeErr := mergeDeferredCollections(ctx, db, ms)
-			if mergeErr != nil {
-				return nil, fmt.Errorf("DumboDBRebase: continue: %w", mergeErr)
-			}
-			if wsErr := persistConflictState(ctx, db, tip, ms); wsErr != nil {
-				return nil, fmt.Errorf("DumboDBRebase: continue: persisting deferred collection merge: %w", wsErr)
-			}
-			if newConflicts {
-				return nil, &backends.DumboDBRebaseConflictError{
-					Conflicts: ms.summaries(), ConflictCommit: ms.rebaseCurrentPick.String(),
-				}
-			}
+		newConflicts, contErr := prepareContinue(ctx, db, tip, ms)
+		if contErr != nil {
+			return nil, fmt.Errorf("DumboDBRebase: continue: %w", contErr)
 		}
-
-		// Clear artifact maps for the paused conflict before committing, taking
-		// the branch's current root so writes made during the conflict window
-		// are carried into the replayed commit.
-		contAM, contAMErr := tip.workingAM(ctx, db)
-		if contAMErr != nil {
-			return nil, fmt.Errorf("DumboDBRebase: continue: %w", contAMErr)
-		}
-		ms.resolvedAM = contAM
-		if clearErr := clearConflictArtifacts(ctx, db, ms); clearErr != nil {
-			return nil, fmt.Errorf("DumboDBRebase: continue: clearing artifacts: %w", clearErr)
+		if newConflicts {
+			return nil, &backends.DumboDBRebaseConflictError{
+				Conflicts: ms.summaries(), ConflictCommit: ms.rebaseCurrentPick.String(),
+			}
 		}
 
 		pickCommit, loadErr := datas.LoadCommitAddr(ctx, db.vs, ms.rebaseCurrentPick)
@@ -3645,8 +3589,9 @@ func (b *Backend) DumboDBRebase(ctx context.Context, params *backends.RebasePara
 		}, nil
 	}
 
-	defer db.restoreOperationStateOnRace(db.mergeState.clone(), &err)
-	tip, err := db.readBranchTip(ctx, branch)
+	var tip *branchTip
+	defer db.keepOperationStateConsistent(db.mergeState.clone(), &tip, &err)
+	tip, err = db.readBranchTip(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBRebase: %w", err)
 	}
@@ -3810,6 +3755,54 @@ func (b *Backend) replayRemainingCommits(ctx context.Context, db *dbState, tip *
 	}, nil
 }
 
+// notAMerge refuses a dumboMerge abort or continue of an operation that is not
+// a merge: each kind finishes and undoes itself differently.
+func notAMerge(ms *mergeInProgress, step string) error {
+	var op string
+	switch {
+	case ms.isCherryPick:
+		op = "cherry-pick"
+	case ms.isRevert:
+		op = "revert"
+	case ms.isRebase:
+		op = "rebase"
+	default:
+		return nil
+	}
+	cmd := map[string]string{"cherry-pick": "dumboCherryPick", "revert": "dumboRevert", "rebase": "dumboRebase"}[op]
+	return fmt.Errorf("DumboDBMerge: %s in progress on branch %q; use %s %s instead", op, ms.intoBranch, cmd, step)
+}
+
+// prepareContinue settles ms.resolvedAM to the root a continue commits: the
+// branch as tip read it -- writes made during the pause included -- with the
+// collections the pause deferred merged into it and the conflict markers swept
+// off. When merging the deferred collections turns up new conflicts it
+// publishes the operation paused on them instead and reports true; nothing is
+// to be committed then.
+func prepareContinue(ctx context.Context, db *dbState, tip *branchTip, ms *mergeInProgress) (bool, error) {
+	live, err := tip.workingAM(ctx, db)
+	if err != nil {
+		return false, err
+	}
+	ms.resolvedAM = live
+	if len(ms.deferredCollections) > 0 {
+		newConflicts, err := mergeDeferredCollections(ctx, db, ms)
+		if err != nil {
+			return false, err
+		}
+		if newConflicts {
+			if err := persistConflictState(ctx, db, tip, ms); err != nil {
+				return false, fmt.Errorf("persisting deferred collection merge: %w", err)
+			}
+			return true, nil
+		}
+	}
+	if err := clearConflictArtifacts(ctx, db, ms); err != nil {
+		return false, fmt.Errorf("clearing artifacts: %w", err)
+	}
+	return false, nil
+}
+
 // replayedPick is a rebased pick computed but not yet written: its root and
 // the metadata its commit will carry.
 type replayedPick struct {
@@ -3857,17 +3850,21 @@ func pauseRebase(ctx context.Context, db *dbState, tip *branchTip, ms *mergeInPr
 	return nil
 }
 
-// restoreRebaseHead puts the branch HEAD back on the pre-rebase tip, if the
-// rebase has moved it, leaving the working set as it is.
-func restoreRebaseHead(ctx context.Context, db *dbState, tip *branchTip, ms *mergeInProgress) error {
+// abortRebase puts the branch back as it was before the rebase: HEAD on the
+// pre-rebase tip and the working set on the pre-rebase root, with no rebase
+// state. A rebase that has moved HEAD is undone in one swap, which resets the
+// working set to that tip's root; that is the pre-rebase root, because a
+// rebase only starts on a clean branch. One paused before its first pick has
+// left HEAD where it was and needs only its working set settled.
+func abortRebase(ctx context.Context, db *dbState, tip *branchTip, ms *mergeInProgress) error {
 	head, err := branchHeadHash(ctx, db, ms.intoBranch)
 	if err != nil {
 		return err
 	}
 	if head == ms.rebaseBranchHash {
-		return nil
+		return abortMergeState(ctx, db, tip, ms)
 	}
-	if err := db.setHeadOverTip(ctx, tip, ms.rebaseBranchHash); err != nil {
+	if err := db.setHeadOverTip(ctx, tip, ms.rebaseBranchHash, true); err != nil {
 		return fmt.Errorf("resetting branch %q to the pre-rebase tip: %w", ms.intoBranch, err)
 	}
 	return nil
@@ -3970,8 +3967,9 @@ func (b *Backend) DumboDBRevert(ctx context.Context, params *backends.RevertPara
 			return nil, fmt.Errorf("DumboDBRevert: no revert in progress to abort")
 		}
 		ms := db.mergeState
-		defer db.restoreOperationStateOnRace(db.mergeState.clone(), &err)
-		tip, err := db.readBranchTip(ctx, ms.intoBranch)
+		var tip *branchTip
+		defer db.keepOperationStateConsistent(db.mergeState.clone(), &tip, &err)
+		tip, err = db.readBranchTip(ctx, ms.intoBranch)
 		if err != nil {
 			return nil, fmt.Errorf("DumboDBRevert: abort: %w", err)
 		}
@@ -3991,31 +3989,18 @@ func (b *Backend) DumboDBRevert(ctx context.Context, params *backends.RevertPara
 			return nil, fmt.Errorf("DumboDBRevert: unresolved revert conflicts remain")
 		}
 		ms := db.mergeState
-		defer db.restoreOperationStateOnRace(db.mergeState.clone(), &err)
-		tip, err := db.readBranchTip(ctx, ms.intoBranch)
+		var tip *branchTip
+		defer db.keepOperationStateConsistent(db.mergeState.clone(), &tip, &err)
+		tip, err = db.readBranchTip(ctx, ms.intoBranch)
 		if err != nil {
 			return nil, fmt.Errorf("DumboDBRevert: continue: %w", err)
 		}
-		if len(ms.deferredCollections) > 0 {
-			newConflicts, mergeErr := mergeDeferredCollections(ctx, db, ms)
-			if mergeErr != nil {
-				return nil, fmt.Errorf("DumboDBRevert: continue: %w", mergeErr)
-			}
-			if wsErr := persistConflictState(ctx, db, tip, ms); wsErr != nil {
-				return nil, fmt.Errorf("DumboDBRevert: continue: persisting deferred collection merge: %w", wsErr)
-			}
-			if newConflicts {
-				return nil, &backends.DumboDBRevertConflictError{Conflicts: ms.summaries()}
-			}
+		newConflicts, contErr := prepareContinue(ctx, db, tip, ms)
+		if contErr != nil {
+			return nil, fmt.Errorf("DumboDBRevert: continue: %w", contErr)
 		}
-
-		contAM, contAMErr := tip.workingAM(ctx, db)
-		if contAMErr != nil {
-			return nil, fmt.Errorf("DumboDBRevert: continue: %w", contAMErr)
-		}
-		ms.resolvedAM = contAM
-		if clearErr := clearConflictArtifacts(ctx, db, ms); clearErr != nil {
-			return nil, fmt.Errorf("DumboDBRevert: continue: clearing artifacts: %w", clearErr)
+		if newConflicts {
+			return nil, &backends.DumboDBRevertConflictError{Conflicts: ms.summaries()}
 		}
 
 		// pickHash is the commit being reverted; fromHash is the parent hash.
@@ -4104,8 +4089,9 @@ func (b *Backend) DumboDBRevert(ctx context.Context, params *backends.RevertPara
 		return nil, fmt.Errorf("DumboDBRevert: into branch %q has no head address", branch)
 	}
 
-	defer db.restoreOperationStateOnRace(db.mergeState.clone(), &err)
-	tip, err := db.readBranchTip(ctx, branch)
+	var tip *branchTip
+	defer db.keepOperationStateConsistent(db.mergeState.clone(), &tip, &err)
+	tip, err = db.readBranchTip(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBRevert: %w", err)
 	}

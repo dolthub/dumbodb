@@ -46,6 +46,8 @@ type branchTip struct {
 	// the time it was read back, so the hash it was published under is
 	// unknown. The next write fails as a race rather than guess.
 	lost bool
+	// published is set once any write over this tip has landed.
+	published bool
 }
 
 func (s *dbState) readBranchTip(ctx context.Context, branch string) (*branchTip, error) {
@@ -81,7 +83,9 @@ func (s *dbState) publishOverTip(ctx context.Context, tip *branchTip, ws *doltdb
 	if tip.lost {
 		return tip.raced()
 	}
-	runBranchOpHook(ctx)
+	if err := runBranchOpHook(ctx); err != nil {
+		return err
+	}
 	wsRef := doltref.NewWorkingSetRef("heads/" + tip.branch)
 	var rsc doltdb.ReplicationStatusController
 	err := s.doltDB.UpdateWorkingSet(ctx, wsRef, ws, tip.hash, doltdb.TodoWorkingSetMeta(), &rsc)
@@ -121,7 +125,9 @@ func (s *dbState) commitOverTip(
 		return hash.Hash{}, err
 	}
 
-	runBranchOpHook(ctx)
+	if err := runBranchOpHook(ctx); err != nil {
+		return hash.Hash{}, err
+	}
 	wsRef := doltref.NewWorkingSetRef("heads/" + tip.branch)
 	headRef, err := wsRef.ToHeadRef()
 	if err != nil {
@@ -142,10 +148,12 @@ func (s *dbState) commitOverTip(
 	return commitHash, s.advanceTip(ctx, tip, newWS)
 }
 
-// setHeadOverTip moves tip's branch HEAD to target, leaving the working set as
-// it is. The move fails as a race unless the branch still holds the working set
-// tip read and the HEAD it had when this was called.
-func (s *dbState) setHeadOverTip(ctx context.Context, tip *branchTip, target hash.Hash) error {
+// setHeadOverTip moves tip's branch HEAD to target. With resetWorkingSet the
+// same swap points the working set at target's root with no operation state;
+// otherwise the working set is left as it is. The move fails as a race unless
+// the branch still holds the working set tip read and the HEAD it had when
+// this was called.
+func (s *dbState) setHeadOverTip(ctx context.Context, tip *branchTip, target hash.Hash, resetWorkingSet bool) error {
 	if tip.lost {
 		return tip.raced()
 	}
@@ -154,7 +162,9 @@ func (s *dbState) setHeadOverTip(ctx context.Context, tip *branchTip, target has
 		return fmt.Errorf("resolving branch %q: %w", tip.branch, err)
 	}
 	head, _ := branchDS.MaybeHeadAddr()
-	runBranchOpHook(ctx)
+	if err := runBranchOpHook(ctx); err != nil {
+		return err
+	}
 	wsPath := doltref.NewWorkingSetRef("heads/" + tip.branch).String()
 	unmoved := func(ctx context.Context, datasets prolly.AddressMap, targetID string) error {
 		ws, err := datasets.Get(ctx, wsPath)
@@ -170,11 +180,27 @@ func (s *dbState) setHeadOverTip(ctx context.Context, tip *branchTip, target has
 		}
 		return nil
 	}
-	if _, err := s.datasDB.SetHead(ctx, branchDS, target, "", unmoved); err != nil {
+	resetPath := ""
+	if resetWorkingSet {
+		resetPath = wsPath
+	}
+	if _, err := s.datasDB.SetHead(ctx, branchDS, target, resetPath, unmoved); err != nil {
 		if errors.Is(err, datas.ErrOptimisticLockFailed) {
 			return tip.raced()
 		}
 		return err
+	}
+	tip.published = true
+	if resetWorkingSet {
+		// The swap wrote a working set this command never built, so there is
+		// no further write it could make over it.
+		tip.lost = true
+		if err := s.reloadBranchWSFromDisk(ctx, tip.branch); err != nil {
+			return err
+		}
+		if ws, err := s.loadBranchWS(ctx, tip.branch); err == nil {
+			s.pushWSToSession(ctx, tip.branch, ws)
+		}
 	}
 	return nil
 }
@@ -221,6 +247,7 @@ func (s *dbState) commitDangling(ctx context.Context, branch string, commitRV do
 // back; when its roots are no longer the ones written, another write has
 // already replaced them and tip is marked lost.
 func (s *dbState) advanceTip(ctx context.Context, tip *branchTip, written *doltdb.WorkingSet) error {
+	tip.published = true
 	if err := s.reloadBranchWSFromDisk(ctx, tip.branch); err != nil {
 		return err
 	}
@@ -262,14 +289,47 @@ func sameRoots(a, b *doltdb.WorkingSet) (bool, error) {
 	return a.MergeActive() == b.MergeActive() && a.RebaseActive() == b.RebaseActive(), nil
 }
 
-// restoreOperationStateOnRace puts db.mergeState back to saved, the state
-// snapshotted when the command started, if the command lost a race: it may
-// have changed the operation state in memory, but it published none of it.
-// Deferred as defer s.restoreOperationStateOnRace(s.mergeState.clone(), &err).
-func (s *dbState) restoreOperationStateOnRace(saved *mergeInProgress, errp *error) {
-	if errors.Is(*errp, backends.ErrWriteRaced) {
-		s.mergeState = saved
+// keepOperationStateConsistent keeps db.mergeState in step with the branch
+// when a command fails. A command that failed before publishing anything goes
+// back to saved, the state snapshotted when it started: it may have changed
+// the state in memory, but none of that reached the branch. One that failed
+// after publishing takes the state from the branch, as a restart would. A
+// conflict report is not a failure here: the paused state it describes has
+// been published, or was never more than in memory. Deferred as
+//
+//	var tip *branchTip
+//	defer db.keepOperationStateConsistent(db.mergeState.clone(), &tip, &err)
+func (s *dbState) keepOperationStateConsistent(saved *mergeInProgress, tipp **branchTip, errp *error) {
+	if *errp == nil || isConflictReport(*errp) {
+		return
 	}
+	tip := *tipp
+	if tip == nil || !tip.published {
+		s.mergeState = saved
+		return
+	}
+	// The command's context may be the reason it failed.
+	ctx := context.Background()
+	ws, err := s.doltDB.ResolveWorkingSet(ctx, doltref.NewWorkingSetRef("heads/"+tip.branch))
+	if err != nil || !ws.MergeActive() {
+		s.mergeState = nil
+		return
+	}
+	ms, err := mergeStateFromWS(ctx, s, tip.branch, ws)
+	if err != nil {
+		s.mergeState = nil
+		*errp = fmt.Errorf("%w (and reloading the paused operation on %q failed: %w)", *errp, tip.branch, err)
+		return
+	}
+	s.mergeState = ms
+}
+
+func isConflictReport(err error) bool {
+	var merge *backends.MergeConflictError
+	var pick *backends.DumboDBCherryPickConflictError
+	var revert *backends.DumboDBRevertConflictError
+	var rebase *backends.DumboDBRebaseConflictError
+	return errors.As(err, &merge) || errors.As(err, &pick) || errors.As(err, &revert) || errors.As(err, &rebase)
 }
 
 // requireNoUncommittedChanges refuses an operation that is starting while
@@ -327,11 +387,16 @@ func (s *dbState) requireNoUncommittedChanges(ctx context.Context, tip *branchTi
 
 // branchOpHookKey makes a write racing a version-control operation
 // deterministic in backend tests: the hook runs after the operation has read
-// the branch and before each compare-and-swap it makes.
+// the branch and before each compare-and-swap it makes. A hook returning an
+// error fails the command there.
 type branchOpHookKey struct{}
 
-func runBranchOpHook(ctx context.Context) {
-	if hook, ok := ctx.Value(branchOpHookKey{}).(func()); ok {
+func runBranchOpHook(ctx context.Context) error {
+	switch hook := ctx.Value(branchOpHookKey{}).(type) {
+	case func():
 		hook()
+	case func() error:
+		return hook()
 	}
+	return nil
 }

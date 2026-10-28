@@ -538,8 +538,9 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 	if ms == nil {
 		return nil, fmt.Errorf("DumboDBResolveConflict: no merge or cherry-pick in progress on branch %q", params.Branch)
 	}
-	defer db.restoreOperationStateOnRace(db.mergeState.clone(), &err)
-	tip, err := db.readBranchTip(ctx, ms.intoBranch)
+	var tip *branchTip
+	defer db.keepOperationStateConsistent(db.mergeState.clone(), &tip, &err)
+	tip, err = db.readBranchTip(ctx, ms.intoBranch)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBResolveConflict: %w", err)
 	}
