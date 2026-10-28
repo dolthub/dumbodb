@@ -122,7 +122,7 @@ func TestAutoCommit_CleanMergeOneCommit(t *testing.T) {
 	assert.True(t, docExists(t, main.Collection("items"), 3), "merge must bring feature's _id:3 into main")
 }
 
-// TestAutoCommit_MergeStateSurvivesRestart: a paused conflict still suppresses auto-commit after restart.
+// TestAutoCommit_MergeStateSurvivesRestart: a paused conflict survives a restart, still refusing writes.
 func TestAutoCommit_MergeStateSurvivesRestart(t *testing.T) {
 	env := startDumboDB(t, "--auto-commit")
 	ctx := context.Background()
@@ -145,8 +145,8 @@ func TestAutoCommit_MergeStateSurvivesRestart(t *testing.T) {
 
 	paused := acCommitCount(t, main)
 	_, err = main.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(99)}})
-	require.NoError(t, err)
-	assert.Equal(t, paused, acCommitCount(t, main), "conflict must survive restart and still suppress auto-commit")
+	requireRefusedWhilePaused(t, err)
+	assert.Equal(t, paused, acCommitCount(t, main), "conflict must survive restart and still hold off commits")
 
 	var conflictsRaw bson.M
 	require.NoError(t, main.RunCommand(ctx, bson.D{{Key: "doltConflicts", Value: int32(1)}}).Decode(&conflictsRaw))

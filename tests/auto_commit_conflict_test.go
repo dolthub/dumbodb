@@ -35,7 +35,16 @@ func acCommitCount(t *testing.T, db *mongo.Database) int {
 	return len(decodeLogResult(t, raw).Commits)
 }
 
+// requireRefusedWhilePaused asserts err is the refusal a write gets while an
+// operation is paused on conflicts on its branch.
+func requireRefusedWhilePaused(t *testing.T, err error) {
+	t.Helper()
+	require.ErrorContains(t, err, "conflicting state", "a write to a branch paused on conflicts must be refused")
+}
+
 // TestAutoCommit_ConflictWindow_Merge: conflict-window contract for a merge.
+// The branch accepts no writes while the merge is paused, and auto-commit
+// resumes once it is continued.
 func TestAutoCommit_ConflictWindow_Merge(t *testing.T) {
 	env := startDumboDB(t, "--auto-commit")
 	ctx := context.Background()
@@ -58,15 +67,14 @@ func TestAutoCommit_ConflictWindow_Merge(t *testing.T) {
 
 	paused := acCommitCount(t, main)
 	_, err = main.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(99)}, {Key: "v", Value: "during"}})
-	require.NoError(t, err)
-	_, err = main.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(98)}, {Key: "v", Value: "during2"}})
-	require.NoError(t, err)
-	assert.Equal(t, paused, acCommitCount(t, main), "writes during a conflict must not auto-commit")
+	requireRefusedWhilePaused(t, err)
+	_, err = main.Collection("items").UpdateOne(ctx, bson.D{{Key: "_id", Value: int32(1)}}, bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: "during"}}}})
+	requireRefusedWhilePaused(t, err)
+	assert.Equal(t, paused, acCommitCount(t, main), "a refused write must not commit")
 
 	resolveAllConflicts(t, main, "ours")
 	mergeContinue(t, main)
-	assert.True(t, docExists(t, main.Collection("items"), 99), "edit during conflict must survive --continue")
-	assert.True(t, docExists(t, main.Collection("items"), 98), "second edit during conflict must survive --continue")
+	assert.False(t, docExists(t, main.Collection("items"), 99), "a refused write must not land")
 
 	resumed := acCommitCount(t, main)
 	_, err = main.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(2)}, {Key: "v", Value: "after"}})
@@ -175,10 +183,10 @@ func conflictOps() []conflictOp {
 	}
 }
 
-// Every resolution is written through the branch working set, so each must
-// merge its edit into the branch's live root rather than stamp the root staged
-// when the operation paused back over it. Run against all four operations
-// because each one has its own continue path publishing that root.
+// Every resolution is written through the branch working set, and each must
+// still be there once the operation continues; the branch accepts no client
+// write meanwhile. Run against all four operations because each one has its
+// own continue path publishing that root.
 //
 // "ours" is covered per-operation by the contract tests below; these are the
 // resolutions that rewrite the conflicted document.
@@ -196,7 +204,7 @@ func TestAutoCommit_ConflictWindow_RewritingResolutions(t *testing.T) {
 
 					_, err := opDB.Collection("items").InsertOne(ctx,
 						bson.D{{Key: "_id", Value: int32(99)}, {Key: "v", Value: "during"}})
-					require.NoError(t, err)
+					requireRefusedWhilePaused(t, err)
 
 					wantV := op.theirsV
 					cmd := bson.D{
@@ -216,14 +224,11 @@ func TestAutoCommit_ConflictWindow_RewritingResolutions(t *testing.T) {
 					require.NoError(t, opDB.RunCommand(ctx, cmd).Decode(&resolveRaw))
 					require.EqualValues(t, 1, resolveRaw["ok"])
 
-					assert.True(t, docExists(t, opDB.Collection("items"), 99),
-						"edit during conflict must survive the resolution itself")
-
 					contRaw := runCommandRaw(t, opDB, op.continueCmd)
 					require.EqualValues(t, 1, contRaw["ok"], "continue must succeed")
 
-					assert.True(t, docExists(t, opDB.Collection("items"), 99),
-						"edit during conflict must survive continue")
+					assert.False(t, docExists(t, opDB.Collection("items"), 99),
+						"a refused write must not land")
 
 					var doc bson.M
 					require.NoError(t, opDB.Collection("items").FindOne(ctx,
@@ -236,8 +241,8 @@ func TestAutoCommit_ConflictWindow_RewritingResolutions(t *testing.T) {
 }
 
 // A view or collection-metadata conflict is resolved through the same working
-// set as a document conflict, so those two paths must leave a write made during
-// the conflict window alone as well.
+// set as a document conflict, and pauses the branch the same way: it accepts
+// no writes until the merge is continued.
 func TestAutoCommit_ConflictWindow_NamespaceResolutions(t *testing.T) {
 	cases := []struct {
 		name string
@@ -303,7 +308,7 @@ func TestAutoCommit_ConflictWindow_NamespaceResolutions(t *testing.T) {
 			require.EqualValues(t, 0, raw["ok"], "merge must conflict on %s", tc.entry)
 
 			_, err = main.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(99)}, {Key: "v", Value: "during"}})
-			require.NoError(t, err)
+			requireRefusedWhilePaused(t, err)
 
 			cid := soleConflictID(t, main)
 			var resolveRaw bson.M
@@ -315,12 +320,10 @@ func TestAutoCommit_ConflictWindow_NamespaceResolutions(t *testing.T) {
 			}).Decode(&resolveRaw))
 			require.EqualValues(t, 1, resolveRaw["ok"])
 
-			assert.True(t, docExists(t, main.Collection("items"), 99),
-				"edit during conflict must survive a %s resolution", tc.name)
-
 			mergeContinue(t, main)
-			assert.True(t, docExists(t, main.Collection("items"), 99),
-				"edit during conflict must survive --continue")
+			assert.False(t, docExists(t, main.Collection("items"), 99), "a refused write must not land")
+			_, err = main.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(100)}})
+			require.NoError(t, err, "writes are accepted again once the merge is continued")
 		})
 	}
 }
@@ -340,21 +343,21 @@ func acHeadHash(t *testing.T, db *mongo.Database) string {
 	return lr.Commits[0].CommitID
 }
 
-// assertConflictWindow: no auto-commit while paused; continue captures the edit and resumes.
+// assertConflictWindow: no writes while paused; auto-commit resumes after continue.
 func assertConflictWindow(t *testing.T, opDB *mongo.Database, continueCmd bson.D) {
 	t.Helper()
 	ctx := context.Background()
 
 	paused := acCommitCount(t, opDB)
 	_, err := opDB.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(99)}, {Key: "v", Value: "during"}})
-	require.NoError(t, err)
-	assert.Equal(t, paused, acCommitCount(t, opDB), "writes during a conflict must not auto-commit")
+	requireRefusedWhilePaused(t, err)
+	assert.Equal(t, paused, acCommitCount(t, opDB), "a refused write must not commit")
 
 	resolveAllConflicts(t, opDB, "ours")
 	raw := runCommandRaw(t, opDB, continueCmd)
 	require.EqualValues(t, 1, raw["ok"], "continue must succeed")
 
-	assert.True(t, docExists(t, opDB.Collection("items"), 99), "edit during conflict must survive continue")
+	assert.False(t, docExists(t, opDB.Collection("items"), 99), "a refused write must not land")
 
 	resumed := acCommitCount(t, opDB)
 	_, err = opDB.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(2)}, {Key: "v", Value: "after"}})
