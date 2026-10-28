@@ -101,7 +101,8 @@ func NewOperator(doc *types.Document) (Operator, error) {
 
 	var args []any
 
-	if arr, ok := expr.(*types.Array); ok {
+	_, objectArgument := objectArgumentOperators[operator]
+	if arr, ok := expr.(*types.Array); ok && !objectArgument {
 		iter := arr.Iterator()
 		defer iter.Close()
 
@@ -136,6 +137,12 @@ func NewOperator(doc *types.Document) (Operator, error) {
 	}
 }
 
+// objectArgumentOperators take a single object argument; an array argument is
+// passed through whole so the operator can reject it.
+var objectArgumentOperators = map[string]struct{}{
+	"$dateFromParts": {},
+}
+
 // Operators maps all standard aggregation operators.
 var Operators = map[string]newOperatorFunc{
 	// sorted alphabetically
@@ -165,6 +172,7 @@ var Operators = map[string]newOperatorFunc{
 	"$cosh":             newCosh,
 	"$dateAdd":          newDateAdd,
 	"$dateDiff":         newDateDiff,
+	"$dateFromParts":    newDateFromParts,
 	"$dateTrunc":        newDateTrunc,
 	"$dateToString":     newDateToString,
 	"$degreesToRadians": newDegreesToRadians,
@@ -284,7 +292,6 @@ var unsupportedOperators = map[string]struct{}{
 	"$binarySize":     {},
 	"$covariancePop":  {},
 	"$covarianceSamp": {},
-	"$dateFromParts":  {},
 	"$dateSubtract":   {},
 	"$dateToParts":    {},
 	"$dateFromString": {},

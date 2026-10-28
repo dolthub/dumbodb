@@ -303,6 +303,19 @@ const (
 	ErrNumericFirstArgument    = ErrorCode(51044)   // Location51044
 	ErrNumericSecondArgument   = ErrorCode(51045)   // Location51045
 
+	// Date expression errors, named for MongoDB's checks.
+	ErrUnrecognizedTimeZone      = ErrorCode(40485) // Location40485
+	ErrTimeZoneNotString         = ErrorCode(40517) // Location40517
+	ErrDateFromPartsMixedNatural = ErrorCode(40489) // Location40489
+	ErrDateFromPartsNotInteger   = ErrorCode(40515) // Location40515
+	ErrDateFromPartsNoYear       = ErrorCode(40516) // Location40516
+	ErrDateFromPartsUnknownField = ErrorCode(40518) // Location40518
+	ErrDateFromPartsNotObject    = ErrorCode(40519) // Location40519
+	ErrDateFromPartsYearRange    = ErrorCode(40523) // Location40523
+	ErrDateFromPartsMixedISO     = ErrorCode(40525) // Location40525
+	ErrDatePartOutOfRange        = ErrorCode(31034) // Location31034
+	ErrDateFromPartsISOYearRange = ErrorCode(31095) // Location31095
+
 	// ErrOpMsgNoBody indicates an OP_MSG without a kind-0 body section.
 	ErrOpMsgNoBody = ErrorCode(40587) // Location40587
 
