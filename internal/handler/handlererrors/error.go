@@ -299,6 +299,7 @@ const (
 	ErrRoundNonNumeric         = ErrorCode(51081)   // Location51081
 	ErrRoundPlaceNotIntegral   = ErrorCode(51082)   // Location51082
 	ErrRoundPlaceOutOfRange    = ErrorCode(51083)   // Location51083
+	ErrTrigOutOfBounds         = ErrorCode(50989)   // Location50989
 
 	// ErrOpMsgNoBody indicates an OP_MSG without a kind-0 body section.
 	ErrOpMsgNoBody = ErrorCode(40587) // Location40587
