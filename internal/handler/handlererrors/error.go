@@ -320,6 +320,13 @@ const (
 	ErrDateToPartsISONotBool     = ErrorCode(40521) // Location40521
 	ErrDateToPartsNoDate         = ErrorCode(40522) // Location40522
 	ErrDateToPartsNotObject      = ErrorCode(40524) // Location40524
+	ErrConversionFailure         = ErrorCode(241)   // ConversionFailure
+	ErrDateFromStringNotObject   = ErrorCode(40540) // Location40540
+	ErrDateFromStringBadField    = ErrorCode(40541) // Location40541
+	ErrDateFromStringNoInput     = ErrorCode(40542) // Location40542
+	ErrDateFormatNotString       = ErrorCode(40684) // Location40684
+	ErrFormatUnmatchedPercent    = ErrorCode(18535) // Location18535
+	ErrFormatInvalidSpecifier    = ErrorCode(18536) // Location18536
 
 	// ErrOpMsgNoBody indicates an OP_MSG without a kind-0 body section.
 	ErrOpMsgNoBody = ErrorCode(40587) // Location40587
