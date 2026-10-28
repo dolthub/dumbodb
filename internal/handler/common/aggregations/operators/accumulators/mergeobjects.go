@@ -15,23 +15,16 @@
 package accumulators
 
 import (
-	"strings"
+	"fmt"
 
-	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
-	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// mergeObjectsAccumulator implements the $mergeObjects accumulator for $group.
-//
-// $mergeObjects in $group combines all documents from the group into a single
-// merged document. Later documents in the group override earlier ones for
-// duplicate keys. Non-document values are ignored.
 type mergeObjectsAccumulator struct {
-	expression *aggregations.Expression
-	operator   operators.Operator
-	isRoot     bool // true when the expression is "$$ROOT"
+	arg operand
 }
 
 func newMergeObjectsAccumulator(args ...any) (Accumulator, error) {
@@ -39,37 +32,12 @@ func newMergeObjectsAccumulator(args ...any) (Accumulator, error) {
 		return nil, nil
 	}
 
-	accumulator := new(mergeObjectsAccumulator)
-
-	switch arg := args[0].(type) {
-	case string:
-		if arg == "$$ROOT" {
-			accumulator.isRoot = true
-			break
-		}
-
-		if strings.HasPrefix(arg, "$") {
-			var err error
-			if accumulator.expression, err = aggregations.NewExpression(arg, nil); err != nil {
-				// treat as literal (non-expression string)
-				accumulator.expression = nil
-			}
-		}
-	case *types.Document:
-		if operators.IsOperator(arg) {
-			op, err := operators.NewOperator(arg)
-			if err != nil {
-				return nil, err
-			}
-
-			accumulator.operator = op
-		}
-		// Non-operator documents (object expressions like {k: "$field"}) are not
-		// yet fully supported in the accumulator context  -- they would require
-		// recursive expression evaluation of each field value.
+	arg, err := newOperand(args[0])
+	if err != nil {
+		return nil, err
 	}
 
-	return accumulator, nil
+	return &mergeObjectsAccumulator{arg: arg}, nil
 }
 
 func (m *mergeObjectsAccumulator) New() Accumulation {
@@ -81,42 +49,27 @@ type mergeObjectsState struct {
 	result *types.Document
 }
 
+// Accumulate merges the operand's fields into the result. Missing and null
+// operands are skipped; anything else that is not an object is an error, with
+// the code MongoDB's $group (evaluated in SBE) reports.
 func (s *mergeObjectsState) Accumulate(doc *types.Document) error {
-	m := s.spec
+	val, missing, err := s.spec.arg.evaluate(doc)
+	if err != nil || missing {
+		return err
+	}
 
-	var val any
-
-	switch {
-	case m.isRoot:
-		val = doc
-	case m.operator != nil:
-		v, opErr := m.operator.Process(doc)
-		if opErr != nil {
-			return nil
+	switch src := val.(type) {
+	case types.NullType, types.UndefinedType:
+		return nil
+	case *types.Document:
+		for _, k := range src.Keys() {
+			s.result.Set(k, must.NotFail(src.Get(k)))
 		}
-
-		val = v
-	case m.expression != nil:
-		v, exprErr := m.expression.Evaluate(doc)
-		if exprErr != nil {
-			return nil
-		}
-
-		val = v
+		return nil
 	default:
-		return nil
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrMergeObjectsNotObject,
+			fmt.Sprintf("$mergeObjects only supports objects, found %s", handlerparams.AliasFromType(val)), "$mergeObjects")
 	}
-
-	src, ok := val.(*types.Document)
-	if !ok {
-		return nil
-	}
-
-	for _, k := range src.Keys() {
-		s.result.Set(k, must.NotFail(src.Get(k)))
-	}
-
-	return nil
 }
 
 func (s *mergeObjectsState) Result() (any, error) {

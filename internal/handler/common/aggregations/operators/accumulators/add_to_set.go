@@ -17,16 +17,13 @@ package accumulators
 import (
 	"errors"
 
-	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 )
 
 type addToSetAccumulator struct {
-	expression *aggregations.Expression
-	constant   any
-	isConst    bool
+	arg operand
 }
 
 func newAddToSet(args ...any) (Accumulator, error) {
@@ -38,21 +35,12 @@ func newAddToSet(args ...any) (Accumulator, error) {
 		)
 	}
 
-	accumulator := new(addToSetAccumulator)
-
-	switch arg := args[0].(type) {
-	case string:
-		var err error
-		if accumulator.expression, err = aggregations.NewExpression(arg, nil); err != nil {
-			accumulator.constant = arg
-			accumulator.isConst = true
-		}
-	default:
-		accumulator.constant = arg
-		accumulator.isConst = true
+	arg, err := newOperand(args[0])
+	if err != nil {
+		return nil, err
 	}
 
-	return accumulator, nil
+	return &addToSetAccumulator{arg: arg}, nil
 }
 
 func (a *addToSetAccumulator) New() Accumulation {
@@ -67,18 +55,9 @@ type addToSetState struct {
 }
 
 func (s *addToSetState) Accumulate(doc *types.Document) error {
-	var val any
-
-	if s.spec.isConst {
-		val = s.spec.constant
-	} else {
-		v, evalErr := s.spec.expression.Evaluate(doc)
-		if evalErr != nil {
-			// missing field: treat as null
-			val = types.Null
-		} else {
-			val = v
-		}
+	val, missing, err := s.spec.arg.evaluate(doc)
+	if err != nil || missing {
+		return err
 	}
 
 	if !containsValue(s.result, val) {

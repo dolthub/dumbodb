@@ -21,8 +21,7 @@ import (
 )
 
 type avg struct {
-	expression *aggregations.Expression
-	number     any
+	arg operand
 }
 
 func newAvg(args ...any) (Accumulator, error) {
@@ -34,21 +33,12 @@ func newAvg(args ...any) (Accumulator, error) {
 		)
 	}
 
-	accumulator := new(avg)
-
-	switch arg := args[0].(type) {
-	case string:
-		var err error
-		if accumulator.expression, err = aggregations.NewExpression(arg, nil); err != nil {
-			accumulator.number = int32(0)
-		}
-	case float64, int32, int64:
-		accumulator.number = arg
-	default:
-		accumulator.number = int32(0)
+	arg, err := newOperand(args[0])
+	if err != nil {
+		return nil, err
 	}
 
-	return accumulator, nil
+	return &avg{arg: arg}, nil
 }
 
 func (a *avg) New() Accumulation {
@@ -61,21 +51,12 @@ type avgState struct {
 }
 
 func (st *avgState) Accumulate(doc *types.Document) error {
-	a := st.spec
-
-	if a.expression != nil {
-		// average fields that exist
-		if value, err := a.expression.Evaluate(doc); err == nil {
-			st.acc.Add(value)
-		}
-
-		return nil
+	value, missing, err := st.spec.arg.evaluate(doc)
+	if err != nil || missing {
+		return err
 	}
 
-	switch a.number.(type) {
-	case float64, int32, int64:
-		st.acc.Add(a.number)
-	}
+	st.acc.Add(value)
 
 	return nil
 }

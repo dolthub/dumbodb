@@ -15,15 +15,12 @@
 package accumulators
 
 import (
-	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
 type firstAccumulator struct {
-	expression *aggregations.Expression
-	constant   any
-	isConst    bool
+	arg operand
 }
 
 func newFirst(args ...any) (Accumulator, error) {
@@ -35,21 +32,12 @@ func newFirst(args ...any) (Accumulator, error) {
 		)
 	}
 
-	accumulator := new(firstAccumulator)
-
-	switch arg := args[0].(type) {
-	case string:
-		var err error
-		if accumulator.expression, err = aggregations.NewExpression(arg, nil); err != nil {
-			accumulator.constant = arg
-			accumulator.isConst = true
-		}
-	default:
-		accumulator.constant = arg
-		accumulator.isConst = true
+	arg, err := newOperand(args[0])
+	if err != nil {
+		return nil, err
 	}
 
-	return accumulator, nil
+	return &firstAccumulator{arg: arg}, nil
 }
 
 func (f *firstAccumulator) New() Accumulation {
@@ -69,15 +57,12 @@ func (s *firstState) Accumulate(doc *types.Document) error {
 
 	s.seen = true
 
-	if s.spec.isConst {
-		s.result = s.spec.constant
-		return nil
+	val, missing, err := s.spec.arg.evaluate(doc)
+	if err != nil {
+		return err
 	}
-
-	val, evalErr := s.spec.expression.Evaluate(doc)
-	if evalErr != nil {
-		s.result = types.Null
-		return nil
+	if missing {
+		val = types.Null
 	}
 
 	s.result = val
@@ -94,9 +79,7 @@ func (s *firstState) Result() (any, error) {
 }
 
 type lastAccumulator struct {
-	expression *aggregations.Expression
-	constant   any
-	isConst    bool
+	arg operand
 }
 
 func newLast(args ...any) (Accumulator, error) {
@@ -108,21 +91,12 @@ func newLast(args ...any) (Accumulator, error) {
 		)
 	}
 
-	accumulator := new(lastAccumulator)
-
-	switch arg := args[0].(type) {
-	case string:
-		var err error
-		if accumulator.expression, err = aggregations.NewExpression(arg, nil); err != nil {
-			accumulator.constant = arg
-			accumulator.isConst = true
-		}
-	default:
-		accumulator.constant = arg
-		accumulator.isConst = true
+	arg, err := newOperand(args[0])
+	if err != nil {
+		return nil, err
 	}
 
-	return accumulator, nil
+	return &lastAccumulator{arg: arg}, nil
 }
 
 func (l *lastAccumulator) New() Accumulation {
@@ -138,17 +112,15 @@ type lastState struct {
 func (s *lastState) Accumulate(doc *types.Document) error {
 	s.seen = true
 
-	if s.spec.isConst {
-		s.result = s.spec.constant
-		return nil
+	val, missing, err := s.spec.arg.evaluate(doc)
+	if err != nil {
+		return err
+	}
+	if missing {
+		val = types.Null
 	}
 
-	val, evalErr := s.spec.expression.Evaluate(doc)
-	if evalErr != nil {
-		s.result = types.Null
-	} else {
-		s.result = val
-	}
+	s.result = val
 
 	return nil
 }

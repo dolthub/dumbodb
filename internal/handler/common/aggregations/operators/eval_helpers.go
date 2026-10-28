@@ -29,6 +29,61 @@ func EvalArgValue(arg any, doc *types.Document) (any, error) {
 	return evalArgValue(arg, doc)
 }
 
+// EvalOperand evaluates any aggregation expression, reporting whether it
+// produced MongoDB's missing value (an absent field or $$REMOVE). As in
+// MongoDB, a document literal omits fields that are missing and an array
+// literal holds null in their place.
+func EvalOperand(expr any, doc *types.Document) (value any, missing bool, err error) {
+	switch v := expr.(type) {
+	case *types.Document:
+		if IsOperator(v) {
+			value, err = evalArgValue(v, doc)
+			if errors.Is(err, aggregations.ErrMissingValue) {
+				return nil, true, nil
+			}
+			return value, false, err
+		}
+		out := types.MakeDocument(v.Len())
+		for _, k := range v.Keys() {
+			fieldValue, fieldMissing, err := EvalOperand(must.NotFail(v.Get(k)), doc)
+			if err != nil {
+				return nil, false, err
+			}
+			if !fieldMissing {
+				out.Set(k, fieldValue)
+			}
+		}
+		return out, false, nil
+
+	case *types.Array:
+		out := types.MakeArray(v.Len())
+		for i := range v.Len() {
+			elem, elemMissing, err := EvalOperand(must.NotFail(v.Get(i)), doc)
+			if err != nil {
+				return nil, false, err
+			}
+			if elemMissing {
+				elem = types.Null
+			}
+			out.Append(elem)
+		}
+		return out, false, nil
+
+	case string:
+		if v == "$$REMOVE" {
+			return nil, true, nil
+		}
+		value, missing, err = evalArgValueOrMissing(v, doc)
+		if errors.Is(err, aggregations.ErrMissingValue) {
+			return nil, true, nil
+		}
+		return value, missing, err
+
+	default:
+		return v, false, nil
+	}
+}
+
 func evalArgValue(arg any, doc *types.Document) (any, error) {
 	switch v := arg.(type) {
 	case *types.Document:
