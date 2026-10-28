@@ -162,6 +162,10 @@ func (h *Handler) MsgBulkWrite(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			entry.Set("ok", float64(0))
 			entry.Set("code", code)
 			entry.Set("errmsg", msg)
+			entry.Set("n", int32(0))
+			if opDoc.Has("update") {
+				entry.Set("nModified", int32(0))
+			}
 			// Errors are always surfaced in firstBatch, even when errorsOnly
 			// is set  -- that's the whole point of errorsOnly.
 			firstBatch.Append(entry)
@@ -542,6 +546,10 @@ func execBulkWriteDelete(ctx context.Context, c backends.Collection, op *types.D
 		if b, ok := v.(bool); ok {
 			multi = b
 		}
+	}
+
+	if err := common.ValidateFilter(filter, nil); err != nil {
+		return bulkWriteOpResult{}, err
 	}
 
 	var qp backends.QueryParams
