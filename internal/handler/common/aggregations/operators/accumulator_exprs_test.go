@@ -47,6 +47,9 @@ func TestAccumulatorExpressions(t *testing.T) {
 		{"$lastN", nOp("$lastN", int64(2), "$a"), arr(types.Null, "s")},
 		{"$median", doc("$median", doc("input", "$a", "method", "approximate")), 3.0},
 		{"$percentile", doc("$percentile", doc("input", arr("$x", "$y", int32(10)), "p", arr(0.0, 0.5, 1.0), "method", "approximate")), arr(2.5, 4.0, 10.0)},
+		{"$stdDevPop decimal", doc("$stdDevPop", arr(types.Decimal128{H: 0x3040000000000000, L: 4}, int32(2))), 1.0},
+		{"$median decimal", doc("$median", doc("input", arr(types.Decimal128{H: 0x3040000000000000, L: 4}, int32(2)), "method", "approximate")), 2.0},
+		{"$maxN decimal n", nOp("$maxN", types.Decimal128{H: 0x3040000000000000, L: 1}, "$a"), arr("s")},
 		{"$percentile empty", doc("$percentile", doc("input", arr(), "p", arr(0.5), "method", "approximate")), arr(types.Null)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

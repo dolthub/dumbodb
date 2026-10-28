@@ -19,6 +19,7 @@ import (
 	"math"
 	"slices"
 
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
@@ -133,6 +134,10 @@ func numericValues(values []any) []float64 {
 			nums = append(nums, float64(n))
 		case float64:
 			nums = append(nums, n)
+		case types.Decimal128:
+			if f, err := aggregations.DecimalToAPD(n).Float64(); err == nil {
+				nums = append(nums, f)
+			}
 		}
 	}
 	return nums
@@ -256,6 +261,16 @@ func integralN(v any, name string) (int64, error) {
 			)
 		}
 		n = int64(x)
+	case types.Decimal128:
+		i, ok := aggregations.Decimal128ToInt64(x)
+		if !ok {
+			return 0, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrNOperatorNFractional,
+				fmt.Sprintf("Value for 'n' must be of integral type, but found %s", types.FormatAnyValue(x)),
+				name,
+			)
+		}
+		n = i
 	default:
 		return 0, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrNOperatorNNotIntegral,
