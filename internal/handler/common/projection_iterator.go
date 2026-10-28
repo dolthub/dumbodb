@@ -39,6 +39,7 @@ func ProjectionIterator(iter types.DocumentsIterator, closer *iterator.MultiClos
 		inclusion:  inclusion,
 	}
 	res.topLevelFields, res.topLevel = topLevelInclusionFields(projectionValidated, inclusion)
+	res.empty = projectionValidated.Len() == 0
 	closer.Add(res)
 
 	return res, nil
@@ -52,6 +53,7 @@ type projectionIterator struct {
 
 	topLevelFields []string
 	topLevel       bool
+	empty          bool
 }
 
 func (iter *projectionIterator) Next() (struct{}, *types.Document, error) {
@@ -60,6 +62,10 @@ func (iter *projectionIterator) Next() (struct{}, *types.Document, error) {
 	_, doc, err := iter.iter.Next()
 	if err != nil {
 		return unused, nil, lazyerrors.Error(err)
+	}
+
+	if iter.empty && idFirstOrAbsent(doc) {
+		return unused, doc, nil
 	}
 
 	var projected *types.Document
@@ -73,6 +79,11 @@ func (iter *projectionIterator) Next() (struct{}, *types.Document, error) {
 	}
 
 	return unused, projected, nil
+}
+
+// idFirstOrAbsent reports whether an empty projection would return doc as is.
+func idFirstOrAbsent(doc *types.Document) bool {
+	return doc.Command() == "_id" || doc.Len() == 0 || !doc.Has("_id")
 }
 
 func (iter *projectionIterator) Close() {

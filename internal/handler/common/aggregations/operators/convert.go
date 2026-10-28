@@ -51,7 +51,7 @@ func (op *toIntOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	if v == types.Null {
+	if isNullish(v) {
 		return types.Null, nil
 	}
 
@@ -117,7 +117,7 @@ func (op *toStringOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	if v == types.Null {
+	if isNullish(v) {
 		return types.Null, nil
 	}
 
@@ -174,7 +174,7 @@ func (op *toDoubleOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	if v == types.Null {
+	if isNullish(v) {
 		return types.Null, nil
 	}
 
@@ -240,7 +240,7 @@ func (op *toDateOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	if v == types.Null {
+	if isNullish(v) {
 		return types.Null, nil
 	}
 
@@ -305,7 +305,7 @@ func (op *toLongOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	if v == types.Null {
+	if isNullish(v) {
 		return types.Null, nil
 	}
 
@@ -356,7 +356,7 @@ func (op *toDecimalOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	if v == types.Null {
+	if isNullish(v) {
 		return types.Null, nil
 	}
 
@@ -406,7 +406,7 @@ func (op *toBoolOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	if v == types.Null {
+	if isNullish(v) {
 		return types.Null, nil
 	}
 
@@ -514,7 +514,7 @@ func (op *convertOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	if v == types.Null {
+	if isNullish(v) {
 		if op.onNullArg != nil {
 			return evalArgValue(op.onNullArg, doc)
 		}

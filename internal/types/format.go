@@ -88,6 +88,7 @@ func FormatAnyValue(value any) string {
 }
 
 func formatDocument(doc *Document) string {
+	doc.load()
 	if len(doc.fields) == 0 {
 		return "{}"
 	}

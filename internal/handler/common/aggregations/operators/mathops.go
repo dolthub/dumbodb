@@ -88,7 +88,7 @@ func (op *absOp) Process(doc *types.Document) (any, error) {
 	}
 
 	switch n := v.(type) {
-	case types.NullType:
+	case types.NullType, types.UndefinedType:
 		return types.Null, nil
 	case float64:
 		return math.Abs(n), nil
@@ -162,7 +162,7 @@ func roundToIntegral(
 	}
 
 	switch n := v.(type) {
-	case types.NullType:
+	case types.NullType, types.UndefinedType:
 		return types.Null, nil
 	case float64:
 		return double(n), nil
@@ -200,7 +200,7 @@ func (op *sqrtOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	if v == types.Null {
+	if isNullish(v) {
 		return types.Null, nil
 	}
 	if !isNumber(v) {
@@ -249,7 +249,7 @@ func (op *expOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	if v == types.Null {
+	if isNullish(v) {
 		return types.Null, nil
 	}
 	if !isNumber(v) {
@@ -279,7 +279,7 @@ func logarithm(
 		return nil, err
 	}
 
-	if v == types.Null {
+	if isNullish(v) {
 		return types.Null, nil
 	}
 	if !isNumber(v) {
@@ -363,7 +363,7 @@ func (op *logOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	if n == types.Null || b == types.Null {
+	if isNullish(n) || isNullish(b) {
 		return types.Null, nil
 	}
 	if !isNumber(n) {
@@ -437,7 +437,7 @@ func (op *powOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	if b == types.Null || e == types.Null {
+	if isNullish(b) || isNullish(e) {
 		return types.Null, nil
 	}
 	if !isNumber(b) {
@@ -589,7 +589,7 @@ func roundToPlace(numberArg, placeArg any, doc *types.Document, name string, hal
 		return nil, err
 	}
 
-	if v == types.Null {
+	if isNullish(v) {
 		return types.Null, nil
 	}
 
@@ -599,7 +599,7 @@ func roundToPlace(numberArg, placeArg any, doc *types.Document, name string, hal
 		if err != nil {
 			return nil, err
 		}
-		if pv == types.Null {
+		if isNullish(pv) {
 			return types.Null, nil
 		}
 
@@ -729,7 +729,7 @@ func (op *modOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	if a == types.Null || b == types.Null {
+	if isNullish(a) || isNullish(b) {
 		return types.Null, nil
 	}
 	if !isNumber(a) || !isNumber(b) {

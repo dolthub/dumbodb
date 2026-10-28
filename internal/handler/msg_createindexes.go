@@ -126,7 +126,12 @@ func (h *Handler) MsgCreateIndexes(connCtx context.Context, msg *wire.OpMsg) (*w
 		)
 	}
 
-	toCreate, err := processIndexesArray(command, idxArr)
+	ignoreUnknownIndexOptions, err := common.GetOptionalBoolOrIntParam(document, "ignoreUnknownIndexOptions", false)
+	if err != nil {
+		return nil, err
+	}
+
+	toCreate, err := processIndexesArray(command, idxArr, ignoreUnknownIndexOptions)
 	if err != nil {
 		return nil, err
 	}
@@ -220,7 +225,7 @@ func (h *Handler) MsgCreateIndexes(connCtx context.Context, msg *wire.OpMsg) (*w
 	)
 }
 
-func processIndexesArray(command string, indexesArray *types.Array) ([]backends.IndexInfo, error) {
+func processIndexesArray(command string, indexesArray *types.Array, ignoreUnknownIndexOptions bool) ([]backends.IndexInfo, error) {
 	iter := indexesArray.Iterator()
 	defer iter.Close()
 
@@ -251,7 +256,7 @@ func processIndexesArray(command string, indexesArray *types.Array) ([]backends.
 			)
 		}
 
-		indexInfo, err := processIndex(command, indexDoc)
+		indexInfo, err := processIndex(command, indexDoc, ignoreUnknownIndexOptions)
 		if err != nil {
 			return nil, err
 		}
@@ -260,7 +265,7 @@ func processIndexesArray(command string, indexesArray *types.Array) ([]backends.
 	}
 }
 
-func processIndex(command string, indexDoc *types.Document) (*backends.IndexInfo, error) {
+func processIndex(command string, indexDoc *types.Document, ignoreUnknownIndexOptions bool) (*backends.IndexInfo, error) {
 	var index backends.IndexInfo
 
 	iter := indexDoc.Iterator()
@@ -460,9 +465,13 @@ func processIndex(command string, indexDoc *types.Document) (*backends.IndexInfo
 			// Accepted but not enforced  -- stored index behaves as a regular index.
 
 		default:
+			if ignoreUnknownIndexOptions {
+				continue
+			}
+
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrBadValue,
-				fmt.Sprintf("Index option %q is unknown", opt),
+				handlererrors.ErrInvalidIndexSpecificationOption,
+				fmt.Sprintf("The field '%s' is not valid for an index specification", opt),
 				command,
 			)
 		}

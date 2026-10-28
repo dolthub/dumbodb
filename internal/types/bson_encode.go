@@ -18,13 +18,18 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 )
 
 // AppendBSON appends the document's BSON encoding to dst. Size dst with BSONSize
 // to encode without reallocating.
 func (d *Document) AppendBSON(dst []byte) []byte {
+	if raw := d.rawBSON(); raw != nil {
+		return append(dst, raw...)
+	}
 	start := len(dst)
 	dst = append(dst, 0, 0, 0, 0)
 	for _, f := range d.fields {
@@ -37,6 +42,62 @@ func (d *Document) AppendBSON(dst []byte) []byte {
 	dst = append(dst, 0)
 	binary.LittleEndian.PutUint32(dst[start:], uint32(len(dst)-start))
 	return dst
+}
+
+// AppendBSONSortedKeys appends the document's BSON encoding with the keys of
+// it and every nested document in byte order, except that the value of an _id
+// field is encoded as is.
+func (d *Document) AppendBSONSortedKeys(dst []byte) []byte {
+	d.load()
+	fields := d.fields
+	if !slices.IsSortedFunc(fields, compareFieldKeys) {
+		fields = slices.Clone(fields)
+		slices.SortStableFunc(fields, compareFieldKeys)
+	}
+	start := len(dst)
+	dst = append(dst, 0, 0, 0, 0)
+	for _, f := range fields {
+		tagAt := len(dst)
+		dst = append(dst, 0)
+		dst = append(dst, f.key...)
+		dst = append(dst, 0)
+		if f.key == "_id" {
+			dst = appendBSONValue(dst, tagAt, f.value)
+		} else {
+			dst = appendSortedKeysValue(dst, tagAt, f.value)
+		}
+	}
+	dst = append(dst, 0)
+	binary.LittleEndian.PutUint32(dst[start:], uint32(len(dst)-start))
+	return dst
+}
+
+func compareFieldKeys(a, b field) int {
+	return strings.Compare(a.key, b.key)
+}
+
+func appendSortedKeysValue(dst []byte, tagAt int, v any) []byte {
+	switch v := v.(type) {
+	case *Document:
+		dst[tagAt] = 0x03
+		return v.AppendBSONSortedKeys(dst)
+	case *Array:
+		dst[tagAt] = 0x04
+		start := len(dst)
+		dst = append(dst, 0, 0, 0, 0)
+		for i, el := range v.s {
+			elTagAt := len(dst)
+			dst = append(dst, 0)
+			dst = strconv.AppendInt(dst, int64(i), 10)
+			dst = append(dst, 0)
+			dst = appendSortedKeysValue(dst, elTagAt, el)
+		}
+		dst = append(dst, 0)
+		binary.LittleEndian.PutUint32(dst[start:], uint32(len(dst)-start))
+		return dst
+	default:
+		return appendBSONValue(dst, tagAt, v)
+	}
 }
 
 func (a *Array) appendBSON(dst []byte) []byte {

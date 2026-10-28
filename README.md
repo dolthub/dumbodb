@@ -39,7 +39,7 @@ cp .runtime/bin/dumbodb /usr/local/bin # or somewhere else in your $PATH
 #### Released Binaries
 We publish pre-built binaries for Linux, MacOS, and Windows on our [GitHub Releases page](https://github.com/dolthub/dumbodb/releases). Download the appropriate binary for your platform, put it somewhere in your `PATH`. The specifics will depend on your operating system, as they have protections against running arbitrary binaries from the internet, so please refer to your OS documentation for how to run downloaded binaries. We are working on getting signed binaries published to make this easier!
 
-When running the binary directly, the main argument is `--data-dir`, which specifies the directory where your data will be stored. The directory must already exist; as with `mongod`, DumboDB refuses to start rather than create it.
+When running the binary directly, the required argument is `--data-dir`, which specifies the directory where your data will be stored. The directory must already exist; as with `mongod`, DumboDB refuses to start rather than create it.
 
 ```bash
 $ mkdir -p /tmp/dumbodb-data

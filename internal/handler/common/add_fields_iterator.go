@@ -37,6 +37,7 @@ func AddFieldsIterator(iter types.DocumentsIterator, closer *iterator.MultiClose
 	res := &addFieldsIterator{
 		iter:     iter,
 		newField: newField,
+		tree:     operators.SpecHasComputedPath(newField, false) || specHasArrayValue(newField),
 	}
 	closer.Add(res)
 
@@ -46,6 +47,18 @@ func AddFieldsIterator(iter types.DocumentsIterator, closer *iterator.MultiClose
 type addFieldsIterator struct {
 	iter     types.DocumentsIterator
 	newField *types.Document
+	// tree is set when a field is computed below the top level or is an array
+	// literal, which operators.AddFieldsTree evaluates.
+	tree bool
+}
+
+func specHasArrayValue(spec *types.Document) bool {
+	for _, v := range spec.Values() {
+		if _, ok := v.(*types.Array); ok {
+			return true
+		}
+	}
+	return false
 }
 
 func (iter *addFieldsIterator) Next() (struct{}, *types.Document, error) {
@@ -54,6 +67,14 @@ func (iter *addFieldsIterator) Next() (struct{}, *types.Document, error) {
 	_, doc, err := iter.iter.Next()
 	if err != nil {
 		return unused, nil, lazyerrors.Error(err)
+	}
+
+	if iter.tree {
+		doc, err = operators.AddFieldsTree(doc, iter.newField)
+		if err = processAddFieldsError(err); err != nil {
+			return unused, nil, err
+		}
+		return unused, doc, nil
 	}
 
 	for _, key := range iter.newField.Keys() {

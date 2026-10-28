@@ -313,3 +313,145 @@ func KeyDescriptor() *val.TupleDesc {
 func ValDescriptor() *val.TupleDesc {
 	return idxValDesc
 }
+
+// RangeIDIter yields the primary ids of the entries in [startKey, stopKey),
+// reading the index only as far as the caller consumes.
+type RangeIDIter struct {
+	m        prolly.Map
+	reverse  bool
+	entries  prolly.MapIter
+	lo, hi   uint64
+	chunk    uint64
+	buffered [][]byte
+}
+
+// NewRangeIDIter iterates [startKey, stopKey) forward, or backward when
+// reverse. A nil or empty bound is open on that side.
+func NewRangeIDIter(ctx context.Context, m prolly.Map, startKey, stopKey []byte, reverse bool) (*RangeIDIter, error) {
+	startTup, err := boundTuple(startKey)
+	if err != nil {
+		return nil, err
+	}
+	stopTup, err := boundTuple(stopKey)
+	if err != nil {
+		return nil, err
+	}
+	it := &RangeIDIter{m: m, reverse: reverse}
+	if !reverse {
+		it.entries, err = m.IterKeyRange(ctx, startTup, stopTup)
+		return it, err
+	}
+	if startTup != nil {
+		if it.lo, err = m.GetOrdinalForKey(ctx, startTup); err != nil {
+			return nil, err
+		}
+	}
+	if stopTup != nil {
+		it.hi, err = m.GetOrdinalForKey(ctx, stopTup)
+	} else {
+		var n int
+		n, err = m.Count()
+		it.hi = uint64(n)
+	}
+	it.chunk = 16
+	return it, err
+}
+
+// Next returns the next primary id, or nil at the end of the range.
+func (it *RangeIDIter) Next(ctx context.Context) ([]byte, error) {
+	for {
+		if it.reverse {
+			if len(it.buffered) > 0 {
+				id := it.buffered[len(it.buffered)-1]
+				it.buffered = it.buffered[:len(it.buffered)-1]
+				return id, nil
+			}
+			if it.hi <= it.lo {
+				return nil, nil
+			}
+			if err := it.fillBackward(ctx); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		k, _, err := it.entries.Next(ctx)
+		if err == io.EOF || (err == nil && k == nil) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("index: reading secondary index: %w", err)
+		}
+		if id, ok := entryPrimaryID(k); ok {
+			return id, nil
+		}
+	}
+}
+
+// fillBackward buffers the ids of the chunk of entries ending at hi, doubling
+// the chunk each time up to 1024.
+func (it *RangeIDIter) fillBackward(ctx context.Context) error {
+	from := it.lo
+	if it.hi-it.lo > it.chunk {
+		from = it.hi - it.chunk
+	}
+	entries, err := it.m.IterOrdinalRange(ctx, from, it.hi)
+	if err != nil {
+		return err
+	}
+	for {
+		k, _, err := entries.Next(ctx)
+		if err == io.EOF || (err == nil && k == nil) {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("index: reading secondary index: %w", err)
+		}
+		if id, ok := entryPrimaryID(k); ok {
+			it.buffered = append(it.buffered, id)
+		}
+	}
+	it.hi = from
+	it.chunk = min(it.chunk*2, 1024)
+	return nil
+}
+
+func entryPrimaryID(k val.Tuple) ([]byte, bool) {
+	const primaryIDLen = 20
+	compositeKey, ok := idxKeyDesc.GetBytes(0, k)
+	if !ok || len(compositeKey) < primaryIDLen+1 {
+		return nil, false
+	}
+	idStart := len(compositeKey) - primaryIDLen
+	if compositeKey[idStart-1] != discriminator {
+		return nil, false
+	}
+	return bytes.Clone(compositeKey[idStart:]), true
+}
+
+// IterKeyRange iterates the entries in [startKey, stopKey); a nil or empty
+// bound is open on that side.
+func IterKeyRange(ctx context.Context, m prolly.Map, startKey, stopKey []byte) (prolly.MapIter, error) {
+	startTup, err := boundTuple(startKey)
+	if err != nil {
+		return nil, err
+	}
+	stopTup, err := boundTuple(stopKey)
+	if err != nil {
+		return nil, err
+	}
+	return m.IterKeyRange(ctx, startTup, stopTup)
+}
+
+// RangeCardinality returns the number of entries in [startKey, stopKey)
+// without reading them; a nil or empty bound is open on that side.
+func RangeCardinality(ctx context.Context, m prolly.Map, startKey, stopKey []byte) (uint64, error) {
+	startTup, err := boundTuple(startKey)
+	if err != nil {
+		return 0, err
+	}
+	stopTup, err := boundTuple(stopKey)
+	if err != nil {
+		return 0, err
+	}
+	return m.GetKeyRangeCardinality(ctx, startTup, stopTup)
+}

@@ -136,6 +136,10 @@ func (h *Handler) MsgDelete(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 func (h *Handler) execDelete(ctx context.Context, c backends.Collection, p *common.Delete) (int32, error) {
 	cmp := collation.Parse(p.Collation).Comparator()
 
+	if err := common.ValidateFilter(p.Filter, cmp); err != nil {
+		return 0, err
+	}
+
 	var qp backends.QueryParams
 	qp.Collated = cmp != nil
 	if !h.DisablePushdown {

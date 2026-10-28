@@ -15,8 +15,11 @@
 package common
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
+	"math"
+	"slices"
 	"sort"
 	"strings"
 
@@ -102,48 +105,84 @@ func SortDocuments(docs []*types.Document, sortDoc *types.Document) error {
 		keys[di] = row
 	}
 
-	sorter := &decoratedSorter{
-		docs:   docs,
-		keys:   keys,
-		types:  sortTypes,
-		isMeta: isMeta,
+	// Sorting positions with ties broken by position is stable, and pdqsort
+	// does far fewer comparisons than sort.Stable's insertion-merge.
+	order := make([]int, len(docs))
+	for i := range order {
+		order[i] = i
 	}
-	sort.Stable(sorter)
+	slices.SortFunc(order, func(i, j int) int {
+		a, b := keys[i], keys[j]
+		for k := 0; k < nKeys; k++ {
+			if isMeta[k] {
+				continue
+			}
+			switch compareSortKeys(a[k], b[k], sortTypes[k]) {
+			case types.Less:
+				return -1
+			case types.Greater:
+				return 1
+			}
+		}
+		return cmp.Compare(i, j)
+	})
+	sorted := make([]*types.Document, len(docs))
+	for i, o := range order {
+		sorted[i] = docs[o]
+	}
+	copy(docs, sorted)
 
 	return nil
 }
 
-// decoratedSorter sorts docs and the parallel keys table in lockstep, using
-// the precomputed keys to avoid GetByPath calls inside Less.
-type decoratedSorter struct {
-	docs   []*types.Document
-	keys   [][]any
-	types  []types.SortType
-	isMeta []bool
-}
-
-func (s *decoratedSorter) Len() int { return len(s.docs) }
-
-func (s *decoratedSorter) Swap(i, j int) {
-	s.docs[i], s.docs[j] = s.docs[j], s.docs[i]
-	s.keys[i], s.keys[j] = s.keys[j], s.keys[i]
-}
-
-func (s *decoratedSorter) Less(i, j int) bool {
-	a, b := s.keys[i], s.keys[j]
-	for k := 0; k < len(s.types); k++ {
-		if s.isMeta[k] {
-			continue
+// compareSortKeys is types.CompareOrderForSort with a fast path for two
+// integers, two non-NaN doubles, or two strings.
+func compareSortKeys(a, b any, order types.SortType) types.CompareResult {
+	var c int
+	switch x := a.(type) {
+	case int32:
+		switch y := b.(type) {
+		case int32:
+			c = cmp.Compare(x, y)
+		case int64:
+			c = cmp.Compare(int64(x), y)
+		default:
+			return types.CompareOrderForSort(a, b, order)
 		}
-		switch types.CompareOrderForSort(a[k], b[k], s.types[k]) {
-		case types.Less:
-			return true
-		case types.Greater:
-			return false
+	case int64:
+		switch y := b.(type) {
+		case int32:
+			c = cmp.Compare(x, int64(y))
+		case int64:
+			c = cmp.Compare(x, y)
+		default:
+			return types.CompareOrderForSort(a, b, order)
 		}
-		// Equal: fall through to the next key.
+	case float64:
+		y, ok := b.(float64)
+		if !ok || math.IsNaN(x) || math.IsNaN(y) {
+			return types.CompareOrderForSort(a, b, order)
+		}
+		c = cmp.Compare(x, y)
+	case string:
+		y, ok := b.(string)
+		if !ok {
+			return types.CompareOrderForSort(a, b, order)
+		}
+		c = strings.Compare(x, y)
+	default:
+		return types.CompareOrderForSort(a, b, order)
 	}
-	return false
+	if order == types.Descending {
+		c = -c
+	}
+	switch {
+	case c < 0:
+		return types.Less
+	case c > 0:
+		return types.Greater
+	}
+	return types.Equal
 }
 
 // SortDocumentsWithCollation sorts documents like SortDocuments but uses

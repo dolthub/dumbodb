@@ -89,7 +89,8 @@ func (t *typeOp) Process(doc *types.Document) (any, error) {
 			paramEvaluated = false
 
 		case *types.Array, float64, types.Binary, types.ObjectID, bool, time.Time,
-			types.NullType, types.Regex, int32, types.Timestamp, int64:
+			types.NullType, types.Regex, int32, types.Timestamp, int64,
+			types.Decimal128, types.MinKeyType, types.MaxKeyType, types.UndefinedType:
 			res = param
 
 		case string:

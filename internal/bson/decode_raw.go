@@ -25,6 +25,10 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
+func init() {
+	types.RegisterRawDecoder(DecodeRawDocument)
+}
+
 // DecodeRawDocument decodes a BSON document directly into [*types.Document],
 // following the same validation rules as [ToDocument] without building an
 // intermediate wirebson document. MinKey and MaxKey decode at any depth.
@@ -287,6 +291,9 @@ func decodeRawValue(b []byte, t byte, depth int) (any, int, error) {
 			return nil, 0, err
 		}
 		return types.Decimal128{L: binary.LittleEndian.Uint64(b), H: binary.LittleEndian.Uint64(b[8:])}, 16, nil
+
+	case bsonTagUndefined:
+		return types.Undefined, 0, nil
 
 	case bsonTagMinKey:
 		return types.MinKey, 0, nil

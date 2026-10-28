@@ -17,7 +17,6 @@ package dolt
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -153,6 +152,11 @@ func TestRemotesCannotShareABackupURL(t *testing.T) {
 	if _, err := b.DumboDBBackup(ctx, backupParams("orders", "add", "nightly", url)); err != nil {
 		t.Fatalf("backup add: %v", err)
 	}
+	// Sync so the URL holds a real store, as clone reads it.
+	commitDB(t, b, "orders", "c1")
+	if _, err := b.DumboDBBackup(ctx, backupParams("orders", "sync", "nightly", "")); err != nil {
+		t.Fatalf("backup sync: %v", err)
+	}
 
 	for _, db := range []string{"mydb", "orders"} {
 		if _, err := b.DumboDBRemote(ctx, &backends.RemoteParams{DBName: db, Action: "add", Name: "origin", URL: url}); err == nil {
@@ -167,11 +171,24 @@ func TestRemotesCannotShareABackupURL(t *testing.T) {
 		}
 	}
 
-	if _, err := b.DumboDBClone(ctx, &backends.CloneParams{From: url, As: "loot"}); err == nil {
-		t.Error("clone from a backup url: want error, got nil")
+	// A clone from a backup URL is allowed but registers nothing: the URL
+	// stays owned by the backup.
+	if _, err := b.DumboDBClone(ctx, &backends.CloneParams{From: url, As: "loot"}); err != nil {
+		t.Fatalf("clone from a backup url: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(b.dataDir, "loot")); !os.IsNotExist(err) {
-		t.Errorf("a refused clone created the database: %v", err)
+	res, err := b.DumboDBRemote(ctx, &backends.RemoteParams{DBName: "loot", Action: "list"})
+	if err != nil {
+		t.Fatalf("remote list on backup clone: %v", err)
+	}
+	if len(res.Remotes) != 0 {
+		t.Errorf("backup clone registered remotes: %+v", res.Remotes)
+	}
+	pull, err := b.getBranchPull(ctx, "loot", defaultBranch)
+	if err != nil {
+		t.Fatalf("branch pull config: %v", err)
+	}
+	if !pull.empty() {
+		t.Errorf("backup clone configured upstream: %+v", pull)
 	}
 
 	other := "file://" + filepath.Join(t.TempDir(), "shared-remote")

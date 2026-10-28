@@ -193,6 +193,12 @@ func TestSortWalkDeclines(t *testing.T) {
 		{"hint names another index", backends.IndexInfo{Name: "k", Key: k}, nil, &backends.QueryParams{Sort: sortOn("k", 1), Hint: "_id_"}},
 		{"natural hint", backends.IndexInfo{Name: "k", Key: k}, nil, &backends.QueryParams{Sort: sortOn("k", 1), Hint: must.NotFail(types.NewDocument("$natural", int32(1)))}},
 		{"sort on unindexed field", backends.IndexInfo{Name: "k", Key: k}, nil, &backends.QueryParams{Sort: sortOn("other", 1)}},
+		{"collated query, binary index", backends.IndexInfo{Name: "k", Key: k}, nil, &backends.QueryParams{Sort: sortOn("k", 1), Collated: true, Collation: enCollation()}},
+		{"binary query, collated index", backends.IndexInfo{Name: "k", Key: k, Collation: enCollation()}, nil, &backends.QueryParams{Sort: sortOn("k", 1)}},
+		{"collated query without its collation", backends.IndexInfo{Name: "k", Key: k}, nil, &backends.QueryParams{Sort: sortOn("k", 1), Collated: true}},
+		{"other collation", backends.IndexInfo{Name: "k", Key: k, Collation: enCollation()}, nil, &backends.QueryParams{Sort: sortOn("k", 1), Collated: true, Collation: must.NotFail(types.NewDocument("locale", "fr_CA"))}},
+		{"collated multikey index", backends.IndexInfo{Name: "k", Key: k, Collation: enCollation()},
+			[]*types.Document{kDoc(1, must.NotFail(types.NewArray("b", "A")))}, &backends.QueryParams{Sort: sortOn("k", 1), Collated: true, Collation: enCollation()}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := newSortWalkCollection(t, tc.idx, tc.docs...)
@@ -200,6 +206,27 @@ func TestSortWalkDeclines(t *testing.T) {
 				t.Fatal("query must not report a sorted index walk")
 			}
 		})
+	}
+}
+
+func enCollation() *types.Document {
+	return must.NotFail(types.NewDocument("locale", "en"))
+}
+
+func TestSortWalkCollatedIndex(t *testing.T) {
+	c := newSortWalkCollection(t, backends.IndexInfo{Name: "k", Key: []backends.IndexKeyPair{{Field: "k"}}, Collation: enCollation()},
+		kDoc(1, "cherry"), kDoc(2, "Banana"), kDoc(3, "apple"), kDoc(4, int32(5)),
+	)
+	ids, sorted := sortWalkQuery(t, c, &backends.QueryParams{Sort: sortOn("k", 1), Collated: true, Collation: enCollation()})
+	if !sorted {
+		t.Fatal("a sort under the index's collation must be served by the index walk")
+	}
+	if want := []int32{0, 4, 3, 2, 1}; !slices.Equal(ids, want) {
+		t.Fatalf("ascending walk = %v, want %v", ids, want)
+	}
+	ids, _ = sortWalkQuery(t, c, &backends.QueryParams{Sort: sortOn("k", -1), Collated: true, Collation: enCollation()})
+	if want := []int32{1, 2, 3, 4, 0}; !slices.Equal(ids, want) {
+		t.Fatalf("descending walk = %v, want %v", ids, want)
 	}
 }
 
@@ -443,5 +470,46 @@ func TestIndexKeysSortedBeforeFetch(t *testing.T) {
 	residual := must.NotFail(types.NewDocument("grp", must.NotFail(types.NewDocument("$gte", int32(2))), "other", int32(1)))
 	if _, sorted := sortWalkQuery(t, c, &backends.QueryParams{Filter: residual, Sort: sortOn("k", 1)}); sorted {
 		t.Fatal("a filter field outside the index is decided after the fetch; the keys cannot be sorted first")
+	}
+}
+
+func TestStreamSortedRangeCapsOtherPredicates(t *testing.T) {
+	var docs []*types.Document
+	for i := int32(1); i <= 100; i++ {
+		grp := int32(0)
+		if i%4 == 0 {
+			grp = 1
+		}
+		docs = append(docs, must.NotFail(types.NewDocument("_id", i, "grp", grp, "k", i, "odd", i%2 == 1)))
+	}
+	c := newSortWalkCollection(t, backends.IndexInfo{Name: "grp_k", Key: []backends.IndexKeyPair{{Field: "grp"}, {Field: "k"}}}, docs...)
+	query := func(filter *types.Document) ([]int32, bool) {
+		return sortWalkQuery(t, c, &backends.QueryParams{Filter: filter, Sort: sortOn("k", -1), LimitHint: 3})
+	}
+	ids, sorted := query(must.NotFail(types.NewDocument("grp", int32(0))))
+	if !sorted || !slices.Equal(ids[:3], []int32{99, 98, 97}) {
+		t.Fatalf("index-bound filter: ids %v sorted %v, want a sorted stream from 99", ids, sorted)
+	}
+	if _, sorted := query(must.NotFail(types.NewDocument("grp", int32(0), "odd", true))); sorted {
+		t.Fatal("a predicate outside the index over most of the collection must not stream")
+	}
+	if ids, sorted := query(must.NotFail(types.NewDocument("grp", int32(1), "odd", false))); !sorted || !slices.Equal(ids[:3], []int32{100, 96, 92}) {
+		t.Fatalf("narrow range with another predicate: ids %v sorted %v, want a sorted stream from 100", ids, sorted)
+	}
+}
+
+func TestSortWalkSkipsFilteredSortWithoutLimit(t *testing.T) {
+	c := newSortWalkCollection(t, backends.IndexInfo{Name: "k", Key: []backends.IndexKeyPair{{Field: "k"}}},
+		kDoc(1, int32(30)), kDoc(2, int32(10)), kDoc(3, int32(20)),
+	)
+	other := must.NotFail(types.NewDocument("z", int32(1)))
+	if _, sorted := sortWalkQuery(t, c, &backends.QueryParams{Filter: other, Sort: sortOn("k", 1)}); sorted {
+		t.Fatal("a filtered sort without a limit must scan and sort, not walk the index")
+	}
+	if _, sorted := sortWalkQuery(t, c, &backends.QueryParams{Filter: other, Sort: sortOn("k", 1), LimitHint: 2}); !sorted {
+		t.Fatal("a filtered sort with a limit must walk the index")
+	}
+	if _, sorted := sortWalkQuery(t, c, &backends.QueryParams{Sort: sortOn("k", 1)}); !sorted {
+		t.Fatal("an unfiltered sort must walk the index")
 	}
 }

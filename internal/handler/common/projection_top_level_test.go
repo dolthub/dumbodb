@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
@@ -94,4 +95,28 @@ func TestProjectTopLevelInclusionCopiesComposites(t *testing.T) {
 	v, _ := got.Get("c")
 	x, _ := v.(*types.Document).Get("x")
 	require.Equal(t, int32(1), x)
+}
+
+func TestEmptyProjectionMatchesProjectDocument(t *testing.T) {
+	doc := func(pairs ...any) *types.Document { return must.NotFail(types.NewDocument(pairs...)) }
+	docs := []*types.Document{
+		doc("_id", int32(1), "a", "x", "c", doc("d", int32(3))),
+		doc("b", int64(2), "_id", "s", "a", types.Null),
+		doc("c", 1.5),
+		doc(),
+	}
+	empty, inclusion, err := ValidateProjection(nil)
+	require.NoError(t, err)
+	for _, d := range docs {
+		d.SetRecordID(42)
+		want, err := ProjectDocument(d, empty, nil, inclusion)
+		require.NoError(t, err)
+		iter, err := ProjectionIterator(iterator.Values(iterator.ForSlice([]*types.Document{d})), iterator.NewMultiCloser(), nil, nil)
+		require.NoError(t, err)
+		_, got, err := iter.Next()
+		require.NoError(t, err)
+		require.Equal(t, want.Keys(), got.Keys(), "doc %v", d)
+		require.Equal(t, types.Equal, types.Compare(want, got), "doc %v", d)
+		require.Equal(t, want.RecordID(), got.RecordID())
+	}
 }

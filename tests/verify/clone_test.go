@@ -29,6 +29,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
 )
 
 func TestCloneVerify(t *testing.T) {
@@ -289,5 +290,106 @@ func TestCloneVerify(t *testing.T) {
 		assert.Contains(t, names, "origin/feature")
 		pull := names["main"]["config"].(bson.M)["pull"].(bson.M)
 		assert.Equal(t, "feature", pull["branch"], "main tracks origin/feature, not origin/main")
+	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 10: A registered backup URL may be cloned, but no origin is
+	// registered and main tracks nothing; the URL stays owned by the backup.
+	// -------------------------------------------------------------------------
+	t.Run("Scenario10_CloneFromBackupURL", func(t *testing.T) {
+		bkURL := "file://" + t.TempDir()
+		require.NoError(t, admin.RunCommand(ctx, bson.D{
+			{Key: "dumboBackup", Value: int32(1)}, {Key: "action", Value: "add"},
+			{Key: "db", Value: srcName}, {Key: "name", Value: "snap"}, {Key: "url", Value: bkURL},
+		}).Err())
+		require.NoError(t, admin.RunCommand(ctx, bson.D{
+			{Key: "dumboBackup", Value: int32(1)},
+			{Key: "action", Value: "sync"}, {Key: "db", Value: srcName}, {Key: "name", Value: "snap"},
+		}).Err())
+
+		bkClone := fmt.Sprintf("bkclone%d", rand.Int64N(1_000_000))
+		var res bson.M
+		require.NoError(t, admin.RunCommand(ctx, bson.D{
+			{Key: "dumboClone", Value: int32(1)}, {Key: "from", Value: bkURL}, {Key: "as", Value: bkClone},
+		}).Decode(&res))
+		assert.EqualValues(t, 1, res["ok"])
+		assert.Equal(t, bkClone, res["db"])
+
+		// Cloned data is readable.
+		var doc bson.M
+		require.NoError(t, env.Client.Database(bkClone).Collection("items").FindOne(ctx, bson.D{{Key: "_id", Value: int32(1)}}).Decode(&doc))
+		assert.Equal(t, "alpha", doc["label"])
+
+		// No origin remote was registered and main has no upstream.
+		var remotes bson.M
+		require.NoError(t, env.Client.Database(bkClone).RunCommand(ctx, bson.D{
+			{Key: "dumboRemote", Value: int32(1)}, {Key: "action", Value: "list"},
+		}).Decode(&remotes))
+		assert.Empty(t, remotes["remotes"], "a backup-sourced clone registers no origin")
+		assert.Nil(t, pullEntry(branchEntry(t, env, bkClone, "main")), "cloned main must not track a backup URL")
+
+		names := map[string]bson.M{}
+		var list bson.M
+		require.NoError(t, env.Client.Database(bkClone+"@main").RunCommand(ctx, bson.D{
+			{Key: "dumboBranch", Value: int32(1)}, {Key: "action", Value: "list"},
+		}).Decode(&list))
+		for _, e := range list["branches"].(bson.A) {
+			names[e.(bson.M)["name"].(string)] = e.(bson.M)
+		}
+		assert.Contains(t, names, "main")
+		assert.Contains(t, names, "feature")
+		assert.NotContains(t, names, "origin/main", "a backup clone gets no tracking refs")
+		assert.NotContains(t, names, "origin/feature", "a backup clone gets no tracking refs")
+
+		err := env.Client.Database(bkClone).RunCommand(ctx, bson.D{
+			{Key: "dumboRemote", Value: int32(1)}, {Key: "action", Value: "add"},
+			{Key: "name", Value: "origin"}, {Key: "url", Value: bkURL},
+		}).Err()
+		require.ErrorContains(t, err, `dumboRemote add: url "`+bkURL+`" is already used by backup "`+srcName+`.snap"`)
+	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 11: A backup store this server does not list as a backup clones
+	// like any remote: origin is registered and main tracks it.
+	// -------------------------------------------------------------------------
+	t.Run("Scenario11_CloneFromUnregisteredBackupStore", func(t *testing.T) {
+		bkURL := "file://" + t.TempDir()
+		srcItems := env.Client.Database(srcName).Collection("items")
+		_, err := srcItems.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(99)}, {Key: "label", Value: "uncommitted"}})
+		require.NoError(t, err)
+		t.Cleanup(func() { _, _ = srcItems.DeleteOne(ctx, bson.D{{Key: "_id", Value: int32(99)}}) })
+		for _, cmd := range []bson.D{
+			{{Key: "dumboBackup", Value: int32(1)}, {Key: "action", Value: "add"}, {Key: "db", Value: srcName}, {Key: "name", Value: "snap2"}, {Key: "url", Value: bkURL}},
+			{{Key: "dumboBackup", Value: int32(1)}, {Key: "action", Value: "sync"}, {Key: "db", Value: srcName}, {Key: "name", Value: "snap2"}},
+			{{Key: "dumboBackup", Value: int32(1)}, {Key: "action", Value: "remove"}, {Key: "db", Value: srcName}, {Key: "name", Value: "snap2"}},
+		} {
+			require.NoError(t, admin.RunCommand(ctx, cmd).Err())
+		}
+
+		bkClone := fmt.Sprintf("bkclone2%d", rand.Int64N(1_000_000))
+		require.NoError(t, admin.RunCommand(ctx, bson.D{
+			{Key: "dumboClone", Value: int32(1)}, {Key: "from", Value: bkURL}, {Key: "as", Value: bkClone},
+		}).Err())
+
+		var doc bson.M
+		require.NoError(t, env.Client.Database(bkClone).Collection("items").FindOne(ctx, bson.D{{Key: "_id", Value: int32(1)}}).Decode(&doc))
+		assert.Equal(t, "alpha", doc["label"])
+		err = env.Client.Database(bkClone).Collection("items").FindOne(ctx, bson.D{{Key: "_id", Value: int32(99)}}).Err()
+		assert.ErrorIs(t, err, mongo.ErrNoDocuments, "the backup's uncommitted doc must not be cloned")
+
+		var res bson.M
+		require.NoError(t, env.Client.Database(bkClone).RunCommand(ctx, bson.D{
+			{Key: "dumboRemote", Value: int32(1)}, {Key: "action", Value: "list"},
+		}).Decode(&res))
+		remotes := res["remotes"].(bson.A)
+		require.Len(t, remotes, 1)
+		origin := remotes[0].(bson.M)
+		assert.Equal(t, "origin", origin["name"])
+		assert.Equal(t, bkURL, origin["url"])
+
+		pull := pullEntry(branchEntry(t, env, bkClone, "main"))
+		require.NotNil(t, pull, "main must track origin")
+		assert.Equal(t, "origin", pull["remote"])
+		assert.Equal(t, "main", pull["branch"])
 	})
 }

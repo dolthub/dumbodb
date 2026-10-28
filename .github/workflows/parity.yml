@@ -14,7 +14,9 @@ env:
 
 jobs:
   parity:
-    runs-on: ubuntu-latest
+    # MongoDB 8.0.x will not start on Linux 6.19 and newer (SERVER-121912),
+    # which newer ubuntu-24.04 runner images ship; 22.04 keeps an older kernel.
+    runs-on: ubuntu-22.04
 
     env:
       MONGO_URI: mongodb://localhost:27017

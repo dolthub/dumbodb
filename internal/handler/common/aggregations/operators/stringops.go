@@ -43,7 +43,7 @@ func (c *concatOp) Process(doc *types.Document) (any, error) {
 			return nil, err
 		}
 
-		if v == types.Null {
+		if isNullish(v) {
 			return types.Null, nil
 		}
 
@@ -91,7 +91,7 @@ func (op *toLowerOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	if v == types.Null {
+	if isNullish(v) {
 		return types.Null, nil
 	}
 
@@ -133,7 +133,7 @@ func (op *toUpperOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	if v == types.Null {
+	if isNullish(v) {
 		return types.Null, nil
 	}
 

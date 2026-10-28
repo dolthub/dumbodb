@@ -48,6 +48,10 @@ import (
 //   - `ErrNotImplemented` when there is unimplemented projection operators and expressions.
 func ValidateProjection(projection *types.Document) (*types.Document, bool, error) {
 	validated := types.MakeDocument(0)
+	if err := CheckPathCollisions(projection, "Invalid $project :: caused by :: ", "$project (stage)"); err != nil {
+		return nil, false, err
+	}
+	projection = FlattenProjection(projection)
 
 	if projection.Len() == 0 {
 		return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
@@ -253,6 +257,10 @@ func ValidateProjection(projection *types.Document) (*types.Document, bool, erro
 
 // ProjectDocument applies projection to the copy of the document.
 func ProjectDocument(doc, projection *types.Document, inclusion bool) (*types.Document, error) {
+	if inclusion && operators.SpecHasComputedPath(projection, true) {
+		return operators.ProjectInclusionTree(doc, projection)
+	}
+
 	projected, err := projectID(doc, projection)
 	if err != nil {
 		return nil, err
@@ -357,7 +365,16 @@ func projectID(doc, projection *types.Document) (*types.Document, error) {
 			set = true
 			projected.Set("_id", value)
 
-		case *types.Array, string, types.Binary, types.ObjectID,
+		case *types.Array:
+			arr, err := operators.EvalArrayExpression(idValue, doc)
+			if err != nil {
+				return nil, err
+			}
+			projected.Set("_id", arr)
+
+			set = true
+
+		case string, types.Binary, types.ObjectID,
 			time.Time, types.NullType, types.Regex, types.Timestamp: // all this types are treated as new fields value
 			projected.Set("_id", idValue)
 
@@ -463,7 +480,14 @@ func projectDocumentWithoutID(doc *types.Document, projection *types.Document, i
 				projected.Set(key, value)
 			}
 
-		case *types.Array, types.Binary, types.ObjectID,
+		case *types.Array:
+			arr, err := operators.EvalArrayExpression(value, doc)
+			if err != nil {
+				return nil, err
+			}
+			projected.Set(key, arr)
+
+		case types.Binary, types.ObjectID,
 			time.Time, types.NullType, types.Regex, types.Timestamp: // all these types are treated as new fields value
 			projected.Set(key, value)
 
@@ -825,4 +849,72 @@ func processOperatorError(err error) error {
 	}
 
 	return lazyerrors.Error(err)
+}
+
+// CheckPathCollisions returns MongoDB's error for a projection with one path
+// inside another or repeated, such as "a" and "a.b", counting the paths of
+// nested specification objects; msgPrefix and argument shape it for the
+// command.
+func CheckPathCollisions(projection *types.Document, msgPrefix, argument string) error {
+	var visited []types.Path
+	for _, key := range specPaths(projection, "") {
+		path, err := types.NewPathFromString(key)
+		if err != nil {
+			continue
+		}
+		var pathErr *types.PathError
+		if errors.As(types.IsConflictPath(visited, path), &pathErr) {
+			switch pathErr.Code() {
+			case types.ErrPathConflictOverwrite:
+				return handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrUnsetPathOverwrite,
+					fmt.Sprintf("%sPath collision at %s", msgPrefix, key),
+					argument,
+				)
+			case types.ErrPathConflictCollision:
+				return handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrUnsetPathCollision,
+					fmt.Sprintf("%sPath collision at %s remaining portion %s", msgPrefix, key, pathErr.Error()),
+					argument,
+				)
+			}
+		}
+		visited = append(visited, path)
+	}
+	return nil
+}
+
+// specPaths returns the dotted path of every field projection specifies,
+// expanding nested specification objects.
+func specPaths(projection *types.Document, prefix string) []string {
+	var paths []string
+	for _, key := range projection.Keys() {
+		value := must.NotFail(projection.Get(key))
+		if nested, ok := value.(*types.Document); ok && nested.Len() > 0 && !strings.HasPrefix(nested.Keys()[0], "$") {
+			paths = append(paths, specPaths(nested, prefix+key+".")...)
+			continue
+		}
+		paths = append(paths, prefix+key)
+	}
+	return paths
+}
+
+// FlattenProjection rewrites nested specification objects as dotted keys, so
+// {a: {b: 1, c: "$x"}} reads as {"a.b": 1, "a.c": "$x"}. Operator objects and
+// empty objects are kept as values.
+func FlattenProjection(projection *types.Document) *types.Document {
+	out := types.MakeDocument(projection.Len())
+	for _, key := range projection.Keys() {
+		value := must.NotFail(projection.Get(key))
+		nested, ok := value.(*types.Document)
+		if !ok || nested.Len() == 0 || strings.HasPrefix(nested.Keys()[0], "$") {
+			out.Set(key, value)
+			continue
+		}
+		flat := FlattenProjection(nested)
+		for _, sub := range flat.Keys() {
+			out.Set(key+"."+sub, must.NotFail(flat.Get(sub)))
+		}
+	}
+	return out
 }

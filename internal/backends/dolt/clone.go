@@ -64,11 +64,14 @@ func (b *Backend) DumboDBClone(ctx context.Context, params *backends.CloneParams
 		return nil, fmt.Errorf("dumboClone: unsupported remote scheme %q; supported schemes: file, http(s), s3, gs, az, oss, oci, git+file/http/https/ssh", ru.Scheme)
 	}
 
-	// The clone registers its source as the origin remote, which a backup URL
-	// may not be; refuse before anything is created.
-	if err = b.checkURLConflict(ctx, "dumboClone", ru.Raw, "", backupsCollection); err != nil {
-		return nil, err
+	// A URL that is one of this server's backups may be cloned, but it never
+	// becomes a remote (a backup sync would replace whatever a remote pushed),
+	// so such a clone gets no origin, tracking refs or upstream.
+	backups, err := b.configDocsWithURL(ctx, backupsCollection, ru.Raw)
+	if err != nil {
+		return nil, fmt.Errorf("dumboClone: %w", err)
 	}
+	withOrigin := len(backups) == 0
 
 	remoteParams, err := b.remoteDBParams(ru.Scheme)
 	if err != nil {
@@ -165,8 +168,10 @@ func (b *Backend) DumboDBClone(ctx context.Context, params *backends.CloneParams
 		}
 
 		// git clone records refs/remotes/origin/<branch> for every remote branch.
-		if err := state.doltDB.SetHead(ctx, ref.NewRemoteRef("origin", name), ch); err != nil {
-			return nil, fmt.Errorf("dumboClone: setting tracking ref for %q: %w", name, err)
+		if withOrigin {
+			if err := state.doltDB.SetHead(ctx, ref.NewRemoteRef("origin", name), ch); err != nil {
+				return nil, fmt.Errorf("dumboClone: setting tracking ref for %q: %w", name, err)
+			}
 		}
 
 		// Map to a local branch: the mainSource branch becomes local main; a
@@ -184,15 +189,17 @@ func (b *Backend) DumboDBClone(ctx context.Context, params *backends.CloneParams
 
 	// git clone parity: register an origin remote for the source and make main
 	// track the source branch, so push/fetch with no target work on the clone.
-	if _, err := b.DumboDBRemote(ctx, &backends.RemoteParams{DBName: params.As, Action: "add", Name: "origin", URL: ru.Raw}); err != nil {
-		return nil, fmt.Errorf("dumboClone: registering origin remote: %w", err)
-	}
-	originName, upstreamBranch := "origin", mainSource
-	if _, err := b.applyBranchConfig(ctx, params.As, defaultBranch, &backends.BranchConfigUpdate{
-		PullRemote: &originName,
-		PullBranch: &upstreamBranch,
-	}); err != nil {
-		return nil, fmt.Errorf("dumboClone: setting upstream for %q: %w", defaultBranch, err)
+	if withOrigin {
+		if _, err := b.DumboDBRemote(ctx, &backends.RemoteParams{DBName: params.As, Action: "add", Name: "origin", URL: ru.Raw}); err != nil {
+			return nil, fmt.Errorf("dumboClone: registering origin remote: %w", err)
+		}
+		originName, upstreamBranch := "origin", mainSource
+		if _, err := b.applyBranchConfig(ctx, params.As, defaultBranch, &backends.BranchConfigUpdate{
+			PullRemote: &originName,
+			PullBranch: &upstreamBranch,
+		}); err != nil {
+			return nil, fmt.Errorf("dumboClone: setting upstream for %q: %w", defaultBranch, err)
+		}
 	}
 
 	return &backends.CloneResult{

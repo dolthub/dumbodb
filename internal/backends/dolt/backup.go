@@ -143,18 +143,11 @@ func (b *Backend) backupAdd(ctx context.Context, coll backends.Collection, param
 // database's backup would destroy one of them.
 func (b *Backend) checkURLConflict(ctx context.Context, command, url, ownerDB string, collNames ...string) error {
 	for _, collName := range collNames {
-		coll, err := b.adminCollection(collName)
-		if err != nil {
-			return err
-		}
-		docs, err := queryConfigDocs(ctx, coll, nil)
+		docs, err := b.configDocsWithURL(ctx, collName, url)
 		if err != nil {
 			return err
 		}
 		for _, doc := range docs {
-			if u, _ := doc.Get("url"); u != url {
-				continue
-			}
 			if db, _ := doc.Get("db"); collName == backupsCollection && ownerDB != "" && db == ownerDB {
 				continue
 			}
@@ -163,6 +156,27 @@ func (b *Backend) checkURLConflict(ctx context.Context, command, url, ownerDB st
 		}
 	}
 	return nil
+}
+
+// configDocsWithURL returns the admin config docs in collName whose stored url
+// equals url exactly. Stored urls are parseRemoteURL output, so callers must
+// pass that same normalized form.
+func (b *Backend) configDocsWithURL(ctx context.Context, collName, url string) ([]*types.Document, error) {
+	coll, err := b.adminCollection(collName)
+	if err != nil {
+		return nil, err
+	}
+	docs, err := queryConfigDocs(ctx, coll, nil)
+	if err != nil {
+		return nil, err
+	}
+	var out []*types.Document
+	for _, doc := range docs {
+		if u, _ := doc.Get("url"); u == url {
+			out = append(out, doc)
+		}
+	}
+	return out, nil
 }
 
 func configKind(collName string) string {

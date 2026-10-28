@@ -149,13 +149,19 @@ func evalDocumentExpressions(expr *types.Document, doc *types.Document) (*types.
 	return result, nil
 }
 
+// isNullish reports whether v is null or undefined, which expressions treat
+// alike.
+func isNullish(v any) bool {
+	return v == types.Null || v == types.Undefined
+}
+
 // isFalsy returns true when v is MongoDB-falsy for $cond purposes:
 // false (bool), null, or missing.
 func isFalsy(v any) bool {
 	switch val := v.(type) {
 	case bool:
 		return !val
-	case types.NullType:
+	case types.NullType, types.UndefinedType:
 		return true
 	default:
 		_ = val

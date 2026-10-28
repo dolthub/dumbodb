@@ -15,9 +15,9 @@
 package dolt
 
 import (
+	"errors"
 	"context"
 	"fmt"
-	"sort"
 
 	"github.com/FerretDB/wire/wirebson"
 	"github.com/dolthub/dolt/go/store/hash"
@@ -35,10 +35,9 @@ const bsonFormatVersion byte = 0x01
 // docToBSON encodes doc with keys lex-sorted at every level (canonical
 // form for diff and merge), prepended with bsonFormatVersion.
 func docToBSON(doc *types.Document) ([]byte, error) {
-	sorted := sortDocumentKeys(doc)
-	stored := make([]byte, 1, 1+sorted.BSONSize())
+	stored := make([]byte, 1, 1+doc.BSONSize())
 	stored[0] = bsonFormatVersion
-	return sorted.AppendBSON(stored), nil
+	return doc.AppendBSONSortedKeys(stored), nil
 }
 
 func bsonToDocFields(stored []byte, fields []string) (*types.Document, error) {
@@ -78,41 +77,6 @@ func stripVersion(stored []byte) ([]byte, error) {
 		return nil, fmt.Errorf("unknown bson storage format version 0x%02x", stored[0])
 	}
 	return stored[1:], nil
-}
-
-// sortDocumentKeys deep-copies doc with object keys lex-sorted at every
-// level. Top-level _id is preserved verbatim: MongoDB treats {a:1,b:2}
-// and {b:2,a:1} as distinct _ids, and hashID hashes the original byte
-// order; sorting would break post-lookup filter equality.
-func sortDocumentKeys(doc *types.Document) *types.Document {
-	keys := append([]string(nil), doc.Keys()...)
-	sort.Strings(keys)
-	out := types.MakeDocument(len(keys))
-	for _, k := range keys {
-		v, _ := doc.Get(k)
-		if k == "_id" {
-			out.Set(k, v)
-			continue
-		}
-		out.Set(k, sortAnyKeys(v))
-	}
-	return out
-}
-
-func sortAnyKeys(v any) any {
-	switch t := v.(type) {
-	case *types.Document:
-		return sortDocumentKeys(t)
-	case *types.Array:
-		out := types.MakeArray(t.Len())
-		for i := 0; i < t.Len(); i++ {
-			el, _ := t.Get(i)
-			out.Append(sortAnyKeys(el))
-		}
-		return out
-	default:
-		return v
-	}
 }
 
 func writeBSONDocToValue(ctx context.Context, ns tree.NodeStore, doc *types.Document) (val.Tuple, error) {
@@ -156,6 +120,60 @@ func readStoredBytesReusing(ctx context.Context, ns tree.NodeStore, v val.Tuple,
 	default:
 		return nil, buf, fmt.Errorf("unexpected BytesAdaptiveValue type %T", result)
 	}
+}
+
+var errStopWalk = errors.New("stop walk")
+
+// readStoredBytesUnlessRejected is readStoredBytesReusing, except that for a
+// value stored out of band it first passes the first leaf to reject, when
+// non-nil, and returns rejected without reading the rest when it returns true.
+func readStoredBytesUnlessRejected(ctx context.Context, ns tree.NodeStore, v val.Tuple, buf []byte, reject func([]byte) bool) (stored, grown []byte, rejected bool, err error) {
+	result, ok, err := storedValueReadDesc.GetBytesAdaptiveValue(ctx, 0, ns, v)
+	if err != nil {
+		return nil, buf, false, fmt.Errorf("reading bytes value from tuple: %w", err)
+	}
+	if !ok {
+		return nil, buf, false, fmt.Errorf("value tuple missing bytes field")
+	}
+	switch existing := result.(type) {
+	case []byte:
+		return existing, buf, false, nil
+	case *val.ByteArray:
+		if reject != nil {
+			first, err := firstBlobLeaf(ctx, ns, existing.Addr)
+			if err != nil {
+				return nil, buf, false, err
+			}
+			if first != nil && reject(first) {
+				return nil, buf, true, nil
+			}
+		}
+		buf, err = appendBlobBytes(ctx, ns, existing.Addr, buf[:0])
+		return buf, buf, false, err
+	default:
+		return nil, buf, false, fmt.Errorf("unexpected BytesAdaptiveValue type %T", result)
+	}
+}
+
+// firstBlobLeaf returns the first leaf of the blob at addr, or nil when the
+// blob is a single leaf.
+func firstBlobLeaf(ctx context.Context, ns tree.NodeStore, addr hash.Hash) ([]byte, error) {
+	root, err := ns.Read(ctx, addr)
+	if err != nil || root.IsLeaf() {
+		return nil, err
+	}
+	var first []byte
+	err = tree.WalkNodes(ctx, root, ns, func(_ context.Context, n *tree.Node) error {
+		if n.IsLeaf() {
+			first = n.GetValue(0)
+			return errStopWalk
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, errStopWalk) {
+		return nil, err
+	}
+	return first, nil
 }
 
 func appendBlobBytes(ctx context.Context, ns tree.NodeStore, addr hash.Hash, dst []byte) ([]byte, error) {

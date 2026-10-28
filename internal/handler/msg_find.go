@@ -347,6 +347,9 @@ func (h *Handler) makeFindQueryParams(ctx context.Context, params *common.FindPa
 			qp.Fields = fields
 		}
 	}
+	// With no projection find only reads documents and returns them as
+	// stored. A filter decodes every scanned document anyway.
+	qp.LazyDocuments = params.Projection.Len() == 0 && !params.ReturnKey && params.Filter.Len() == 0
 
 	if params.Limit != 0 {
 		qp.LimitHint = params.Skip + max(params.Limit, -params.Limit)

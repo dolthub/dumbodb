@@ -37,11 +37,15 @@ import (
 // sortWalkIndex returns the position in infos of an index whose in-order walk
 // yields sort's order: its leading field is the single sort field, and it is
 // complete (not sparse, partial, or hidden), exact (not lossy, hashed, text, or
-// geo), and binary-collated like the query. sort must hold one non-$natural key.
+// geo), and collated like the query. A collated index must not be multikey: its
+// in-order walk yields a document at its collation-least element, which the
+// in-memory sort does not pick. sort must hold one non-$natural key.
 func sortWalkIndex(infos []backends.IndexInfo, sortDoc *types.Document, queryCollation *types.Document) (int, bool) {
-	if !sortIsSingleField(sortDoc) || !collation.Parse(queryCollation).IsSimple() {
+	if !sortIsSingleField(sortDoc) {
 		return 0, false
 	}
+	queryColl := collation.Parse(queryCollation)
+	queryIdentity := queryColl.Identity()
 	switch must.NotFail(sortDoc.Get(sortDoc.Keys()[0])).(type) {
 	case int32, int64, float64:
 	default:
@@ -59,7 +63,10 @@ func sortWalkIndex(infos []backends.IndexInfo, sortDoc *types.Document, queryCol
 		if idx.Lossy || idx.Sparse || idx.Hidden || idx.PartialFilterExpression != nil {
 			continue
 		}
-		if !collation.Parse(idx.Collation).IsSimple() {
+		if collation.Parse(idx.Collation).Identity() != queryIdentity {
+			continue
+		}
+		if !queryColl.IsSimple() && idx.Multikey {
 			continue
 		}
 		return i, true
@@ -72,7 +79,7 @@ func sortWalkIndex(infos []backends.IndexInfo, sortDoc *types.Document, queryCol
 // the walk. It declines (false) when no index qualifies or when the query is
 // hinted onto another index.
 func (c *collection) trySortWalk(ctx context.Context, state *dbState, primary prolly.Map, params *backends.QueryParams) (*sortWalkIter, bool, error) {
-	if params.Collated || params.OnlyRecordIDs {
+	if (params.Collated && params.Collation == nil) || params.OnlyRecordIDs {
 		return nil, false, nil
 	}
 	state.mu.RLock()
@@ -173,7 +180,7 @@ const (
 // documents it examined are replayed ahead of the rest of the walk, returned
 // with trialWalkWon.
 func (c *collection) trySortWalkTrial(ctx context.Context, state *dbState, primary prolly.Map, params *backends.QueryParams, plan *indexLookupPlan) (*replayIter, trialOutcome, error) {
-	if params.Hint != nil {
+	if params.Hint != nil || plan.union {
 		return nil, trialNotRun, nil
 	}
 	target := trialTarget(params)
@@ -425,6 +432,64 @@ func (it *sortWalkIter) Close() {
 	}
 }
 
+// tryStreamSortedRange serves a limited single-field sort from the range of
+// the index chosen for the filter when that range is already in sort order,
+// reading index entries and documents only as the limit consumes them.
+func tryStreamSortedRange(ctx context.Context, state *dbState, primary prolly.Map, idxInfos []backends.IndexInfo, idxMaps []prolly.Map, params *backends.QueryParams) (types.DocumentsIterator, bool, error) {
+	if params.LimitHint <= 0 || params.Filter == nil || params.Filter.Has("$or") {
+		return nil, false, nil
+	}
+	choice, ok := chooseIndexRange(idxInfos, params.Filter, params.Hint, params.Collation)
+	if !ok || choice.pointRanges != nil {
+		return nil, false, nil
+	}
+	info := idxInfos[choice.mapIdx]
+	reverse, ok := indexScanSortOrder(info, params.Filter, params.Sort, params.Collation)
+	if !ok {
+		return nil, false, nil
+	}
+	// A filter field outside the index may reject most of the range, which
+	// the stream would then fetch document by document; past half the
+	// collection the sequential scan is cheaper.
+	if !filterFieldsAreIndexKeys(params.Filter, info) {
+		entries, err := idxpkg.RangeCardinality(ctx, idxMaps[choice.mapIdx], choice.startKey, choice.stopKey)
+		if err != nil {
+			return nil, false, err
+		}
+		docs, err := primary.Count()
+		if err != nil {
+			return nil, false, err
+		}
+		if entries > uint64(docs)/2 {
+			return nil, false, nil
+		}
+	}
+	stream, err := idxpkg.NewRangeIDIter(ctx, idxMaps[choice.mapIdx], choice.startKey, choice.stopKey, reverse)
+	if err != nil {
+		return nil, false, err
+	}
+	it := newPlanSortedIter(ctx, state, primary, nil, params.Sort, false, params.Fields).(*planSortedIter)
+	it.stream = stream
+	if it.release != nil {
+		releasePrimary := it.release
+		releaseIndex := state.backend.backgroundRP.pinRoot(state.name, idxMaps[choice.mapIdx].HashOf())
+		it.release = func() {
+			releasePrimary()
+			releaseIndex()
+		}
+	}
+	return it, true, nil
+}
+
+func filterFieldsAreIndexKeys(filter *types.Document, idx backends.IndexInfo) bool {
+	for _, f := range filter.Keys() {
+		if !slices.ContainsFunc(idx.Key, func(k backends.IndexKeyPair) bool { return k.Field == f }) {
+			return false
+		}
+	}
+	return true
+}
+
 // sortedIter fetches the plan's documents lazily in index order, or reversed,
 // for a scan indexScanSortOrder found to yield sort order, so a downstream
 // limit stops the fetches.
@@ -496,6 +561,7 @@ type planSortedIter struct {
 	ns      tree.NodeStore
 	primary prolly.Map
 	ids     [][]byte
+	stream  *idxpkg.RangeIDIter
 	path    types.Path
 	order   types.SortType
 	fields  []string
@@ -510,9 +576,11 @@ func (it *planSortedIter) nextFetched() (*types.Document, error) {
 		it.peeked = nil
 		return doc, nil
 	}
-	for len(it.ids) > 0 {
-		id := it.ids[0]
-		it.ids = it.ids[1:]
+	for {
+		id, err := it.nextID()
+		if err != nil || id == nil {
+			return nil, err
+		}
 		doc, err := lookupDocFromPrimary(it.ctx, it.primary, it.ns, id, it.fields)
 		if err != nil {
 			return nil, err
@@ -522,7 +590,22 @@ func (it *planSortedIter) nextFetched() (*types.Document, error) {
 			return doc, nil
 		}
 	}
-	return nil, nil
+}
+
+func (it *planSortedIter) nextID() ([]byte, error) {
+	if it.stream != nil {
+		id, err := it.stream.Next(it.ctx)
+		if id != nil {
+			countKeysExamined(1)
+		}
+		return id, err
+	}
+	if len(it.ids) == 0 {
+		return nil, nil
+	}
+	id := it.ids[0]
+	it.ids = it.ids[1:]
+	return id, nil
 }
 
 func (it *planSortedIter) isSubdocument(doc *types.Document) bool {

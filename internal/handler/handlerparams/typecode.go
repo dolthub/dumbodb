@@ -38,6 +38,7 @@ const (
 	TypeCodeObject    = TypeCode(3)  // object
 	TypeCodeArray     = TypeCode(4)  // array
 	TypeCodeBinData   = TypeCode(5)  // binData
+	TypeCodeUndefined = TypeCode(6)  // undefined
 	TypeCodeObjectID  = TypeCode(7)  // objectId
 	TypeCodeBool      = TypeCode(8)  // bool
 	TypeCodeDate      = TypeCode(9)  // date
@@ -60,7 +61,7 @@ func NewTypeCode(code int32) (TypeCode, error) {
 	c := TypeCode(code)
 	switch c {
 	case TypeCodeDouble, TypeCodeString, TypeCodeObject, TypeCodeArray,
-		TypeCodeBinData, TypeCodeObjectID, TypeCodeBool, TypeCodeDate,
+		TypeCodeBinData, TypeCodeUndefined, TypeCodeObjectID, TypeCodeBool, TypeCodeDate,
 		TypeCodeNull, TypeCodeRegex, TypeCodeInt, TypeCodeTimestamp, TypeCodeLong, TypeCodeNumber:
 		return c, nil
 	case TypeCodeDecimal:
@@ -111,7 +112,7 @@ var aliasToTypeCode = map[string]TypeCode{}
 func init() {
 	for _, i := range []TypeCode{
 		TypeCodeDouble, TypeCodeString, TypeCodeObject, TypeCodeArray,
-		TypeCodeBinData, TypeCodeObjectID, TypeCodeBool, TypeCodeDate, TypeCodeNull,
+		TypeCodeBinData, TypeCodeUndefined, TypeCodeObjectID, TypeCodeBool, TypeCodeDate, TypeCodeNull,
 		TypeCodeRegex, TypeCodeInt, TypeCodeTimestamp, TypeCodeLong, TypeCodeDecimal, TypeCodeNumber,
 		TypeCodeMinKey, TypeCodeMaxKey,
 	} {
@@ -154,6 +155,8 @@ func AliasFromType(v any) string {
 		return TypeCodeMinKey.String()
 	case types.MaxKeyType:
 		return TypeCodeMaxKey.String()
+	case types.UndefinedType:
+		return TypeCodeUndefined.String()
 	default:
 		panic(fmt.Sprintf("not supported type %T", v))
 	}

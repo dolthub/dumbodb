@@ -50,6 +50,7 @@
 package types
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"time"
@@ -126,6 +127,11 @@ func isScalar(value any) bool {
 func deepCopy(value any) any {
 	switch value := value.(type) {
 	case *Document:
+		if value.lazy() {
+			copied := NewLazyDocument(bytes.Clone(value.extra.raw))
+			copied.recordID = value.recordID
+			return copied
+		}
 		fields := make([]field, len(value.fields))
 		for i, f := range value.fields {
 			fields[i] = field{

@@ -168,6 +168,22 @@ func TestSessionIsolationFlagDisabled(t *testing.T) {
 		"the disabled flag must be rejected as undefined; got: %s", out)
 }
 
+// TestRequireDataDirFlag verifies that omitting --data-dir is an error;
+// there is no default data directory.
+func TestRequireDataDirFlag(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "dumbodb")
+	build := exec.Command("go", "build", "-o", binary, "./cmd/dumbodb/")
+	build.Dir = repoRoot()
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("building binary: %v\n%s", err, out)
+	}
+
+	cmd := exec.Command(binary, "--addr", "127.0.0.1:0")
+	out, err := cmd.CombinedOutput()
+	require.Error(t, err, "server must exit non-zero when --data-dir is omitted")
+	assert.Contains(t, string(out), "--data-dir is required", "got: %s", out)
+}
+
 // TestMissingDataDirRefusesToStart verifies that, as with mongod, a
 // nonexistent --data-dir is an error and is not created.
 func TestMissingDataDirRefusesToStart(t *testing.T) {

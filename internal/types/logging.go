@@ -40,6 +40,7 @@ func slogValue(v any, depth int) slog.Value {
 
 		var attrs []slog.Attr
 
+		v.load()
 		for _, f := range v.fields {
 			attrs = append(attrs, slog.Attr{Key: f.key, Value: slogValue(f.value, depth+1)})
 		}

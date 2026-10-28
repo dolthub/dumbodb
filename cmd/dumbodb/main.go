@@ -93,7 +93,7 @@ func run(logger *slog.Logger) error {
 	// Use a custom FlagSet to avoid mysql-related flags registered
 	// globally by the vitess dependency.
 	fs := flag.NewFlagSet("dumbodb", flag.ExitOnError)
-	dataDir := fs.String("data-dir", "data", "directory for storing Dolt data")
+	dataDir := fs.String("data-dir", "", "directory for storing Dolt data (required)")
 	addr := fs.String("addr", "127.0.0.1:27017", "listen address")
 	port := fs.Int("port", 0, "listen port (overrides port in --addr if set)")
 	tlsMode := fs.String("tlsMode", "disabled", "TLS mode (disabled, allowTLS, preferTLS, or requireTLS)")
@@ -126,6 +126,10 @@ func run(logger *slog.Logger) error {
 	clusterAuthModeValue := fs.String("clusterAuthMode", string(membership.AuthModeKeyFile), "replica-set authentication mode")
 	maxConns := fs.Int("maxConns", 0, "maximum concurrent client connections (default: 1000000 or 80% of the open-file limit, whichever is lower)")
 	fs.Parse(os.Args[1:])
+
+	if *dataDir == "" {
+		return fmt.Errorf("--data-dir is required")
+	}
 
 	if err := rejectUnsupportedTLSFlags(fs); err != nil {
 		return err

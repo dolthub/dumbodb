@@ -49,6 +49,10 @@ func (h *Handler) MsgCount(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMs
 		return nil, err
 	}
 
+	if err := common.ValidateFilter(params.Filter, nil); err != nil {
+		return nil, err
+	}
+
 	db, err := h.b.Database(params.DB)
 	if err != nil {
 		if backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseNameIsInvalid) {

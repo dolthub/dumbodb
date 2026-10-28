@@ -122,6 +122,11 @@ type QueryParams struct {
 	// Collation is the effective operation collation, nil when simple/binary.
 	Collation *types.Document
 
+	// LazyDocuments lets a full-document scan return documents decoded only on
+	// first access and encoded from their stored bytes until changed. Set it
+	// only when the caller changes no document it reads, at any depth.
+	LazyDocuments bool
+
 	// Fields, if non-nil, names the only top-level fields the caller reads.
 	// Returned documents may omit any other field.
 	Fields []string

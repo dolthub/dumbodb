@@ -13,6 +13,7 @@ func _() {
 	_ = x[TypeCodeObject-3]
 	_ = x[TypeCodeArray-4]
 	_ = x[TypeCodeBinData-5]
+	_ = x[TypeCodeUndefined-6]
 	_ = x[TypeCodeObjectID-7]
 	_ = x[TypeCodeBool-8]
 	_ = x[TypeCodeDate-9]
@@ -30,16 +31,14 @@ func _() {
 const (
 	_TypeCode_name_0 = "number"
 	_TypeCode_name_1 = "minKey"
-	_TypeCode_name_2 = "doublestringobjectarraybinData"
-	_TypeCode_name_3 = "objectIdbooldatenullregex"
-	_TypeCode_name_4 = "inttimestamplongdecimal"
-	_TypeCode_name_5 = "maxKey"
+	_TypeCode_name_2 = "doublestringobjectarraybinDataundefinedobjectIdbooldatenullregex"
+	_TypeCode_name_3 = "inttimestamplongdecimal"
+	_TypeCode_name_4 = "maxKey"
 )
 
 var (
-	_TypeCode_index_2 = [...]uint8{0, 6, 12, 18, 23, 30}
-	_TypeCode_index_3 = [...]uint8{0, 8, 12, 16, 20, 25}
-	_TypeCode_index_4 = [...]uint8{0, 3, 12, 16, 23}
+	_TypeCode_index_2 = [...]uint8{0, 6, 12, 18, 23, 30, 39, 47, 51, 55, 59, 64}
+	_TypeCode_index_3 = [...]uint8{0, 3, 12, 16, 23}
 )
 
 func (i TypeCode) String() string {
@@ -48,17 +47,14 @@ func (i TypeCode) String() string {
 		return _TypeCode_name_0
 	case i == -1:
 		return _TypeCode_name_1
-	case 1 <= i && i <= 5:
+	case 1 <= i && i <= 11:
 		i -= 1
 		return _TypeCode_name_2[_TypeCode_index_2[i]:_TypeCode_index_2[i+1]]
-	case 7 <= i && i <= 11:
-		i -= 7
-		return _TypeCode_name_3[_TypeCode_index_3[i]:_TypeCode_index_3[i+1]]
 	case 16 <= i && i <= 19:
 		i -= 16
-		return _TypeCode_name_4[_TypeCode_index_4[i]:_TypeCode_index_4[i+1]]
+		return _TypeCode_name_3[_TypeCode_index_3[i]:_TypeCode_index_3[i+1]]
 	case i == 127:
-		return _TypeCode_name_5
+		return _TypeCode_name_4
 	default:
 		return "TypeCode(" + strconv.FormatInt(int64(i), 10) + ")"
 	}

@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -590,8 +591,13 @@ func appendGroupKey(b *strings.Builder, v any) bool {
 // appendNumericKey writes a numeric marker plus the exact float64 bit pattern
 // so int32(1)/int64(1)/float64(1.0) share one bucket.
 func appendNumericKey(b *strings.Builder, f float64) {
+	bits := math.Float64bits(f)
+	if math.IsNaN(f) {
+		bits = math.Float64bits(math.NaN())
+	}
+	var buf [17]byte
 	b.WriteByte('#')
-	b.WriteString(strconv.FormatFloat(f, 'b', -1, 64))
+	b.Write(strconv.AppendUint(buf[:0], bits, 16))
 	b.WriteByte(';')
 }
 

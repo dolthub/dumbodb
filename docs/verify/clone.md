@@ -10,7 +10,8 @@ scenario top to bottom; the setup below is shared by all of them.
 remote, brings over every branch, and -- like git -- leaves the clone ready to
 sync: it registers an `origin` remote pointing at the source and makes the
 default branch track `origin/<default>`. After a clone, `dumboPush` /
-`dumboFetch` with no target work against `origin`.
+`dumboFetch` with no target work against `origin`. Cloning one of this server's
+backup URLs is the one exception: see Scenario 10.
 
 `dumboClone` is an admin command: run it against the `admin` database. This
 guide uses `file://` remotes -- local directories the server can read and write
@@ -251,6 +252,71 @@ db.getSiblingDB("ovclone@main").runCommand({ dumboBranch: 1, action: "list" })
 
 ---
 
+## Scenario 10: One of this server's backup URLs clones as a plain database
+
+A backup URL (one in `admin.system.backups`, any database's backup) can be a
+clone source. The clone brings every branch, but no `origin` remote, tracking
+refs or upstream: the next `dumboBackup sync` would replace the backup's root,
+and the URL must never become a remote.
+
+```js
+// Back up the source database and sync it.
+var admin = db.getSiblingDB("admin")
+admin.runCommand({ dumboBackup: 1, action: "add", db: "srcdb", name: "snap", url: "file:///tmp/dumbo-bk-src" })
+admin.runCommand({ dumboBackup: 1, action: "sync", db: "srcdb", name: "snap" })
+
+admin.runCommand({ dumboClone: 1, from: "file:///tmp/dumbo-bk-src", as: "bkclone" })
+// Expected: { db: "bkclone", from: "file:///tmp/dumbo-bk-src", ok: 1 }
+
+db.getSiblingDB("bkclone").items.findOne({ _id: 1 })
+// Expected: { _id: 1, label: "alpha" } -- the cloned data is readable.
+
+db.getSiblingDB("bkclone").runCommand({ dumboRemote: 1, action: "list" })
+// Expected: { remotes: [], ok: 1 } -- no origin was registered.
+
+db.getSiblingDB("bkclone@main").runCommand({ dumboBranch: 1, action: "list" })
+// Expected: "main" and "feature"; no origin/* tracking refs; "main" carries
+//   NO config.pull.
+
+// The protection still holds: the backup URL cannot become a remote, even on
+// the clone itself.
+db.getSiblingDB("bkclone").runCommand({ dumboRemote: 1, action: "add", name: "origin", url: "file:///tmp/dumbo-bk-src" })
+// Expected: ok: 0; errmsg: ... is already used by backup "srcdb.snap"
+```
+
+---
+
+## Scenario 11: A backup store this server does not list clones like any remote
+
+A backup store this server does not list -- one written by another server, or
+one whose backup was removed -- clones like any remote: `origin` is registered
+and `main` tracks it. Only branch heads come across; the backup's uncommitted
+changes do not.
+
+```js
+var admin = db.getSiblingDB("admin")
+db.getSiblingDB("srcdb").items.insertOne({ _id: 99, label: "uncommitted" })
+admin.runCommand({ dumboBackup: 1, action: "add", db: "srcdb", name: "snap2", url: "file:///tmp/dumbo-bk-src2" })
+admin.runCommand({ dumboBackup: 1, action: "sync", db: "srcdb", name: "snap2" })
+admin.runCommand({ dumboBackup: 1, action: "remove", db: "srcdb", name: "snap2" })
+
+admin.runCommand({ dumboClone: 1, from: "file:///tmp/dumbo-bk-src2", as: "bkclone2" })
+// Expected: { db: "bkclone2", from: "file:///tmp/dumbo-bk-src2", ok: 1 }
+
+db.getSiblingDB("bkclone2").items.findOne({ _id: 1 })
+// Expected: { _id: 1, label: "alpha" }
+db.getSiblingDB("bkclone2").items.findOne({ _id: 99 })
+// Expected: null -- the backup holds this uncommitted doc, but a clone copies only branch heads.
+
+db.getSiblingDB("bkclone2").runCommand({ dumboRemote: 1, action: "list" })
+// Expected: { remotes: [ { name: "origin", url: "file:///tmp/dumbo-bk-src2" } ], ok: 1 }
+
+db.getSiblingDB("bkclone2@main").runCommand({ dumboBranch: 1, action: "list" })
+// Expected: "main" carries config.pull { remote: "origin", branch: "main" }
+```
+
+---
+
 ## Quick Reference
 
 | Command                                                                            | Effect                                        |
@@ -261,7 +327,8 @@ db.getSiblingDB("ovclone@main").runCommand({ dumboBranch: 1, action: "list" })
 - `dumboClone` is an admin command; run it against the `admin` database.
 - The clone brings every branch and registers an `origin` remote; local `main`
   tracks `origin/main` (or `origin/<trackAsMain>`), so `push`/`fetch` with no
-  target work afterward.
+  target work afterward. A clone of one of this server's backup URLs
+  (Scenario 10) is a plain database: no origin, tracking refs or upstream.
 - Every database must have a `main`: cloning a remote with no `main` is rejected
   unless `trackAsMain` maps another branch onto it. `trackAsMain` becomes local
   `main` (no separate local copy) and overrides the remote's own `main` if present.

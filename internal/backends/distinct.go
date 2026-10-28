@@ -14,7 +14,11 @@
 
 package backends
 
-import "context"
+import (
+	"context"
+
+	"github.com/dolthub/dumbodb/internal/types"
+)
 
 // DistinctParams configures DistinctScanner.DistinctScan.
 type DistinctParams struct {
@@ -22,6 +26,8 @@ type DistinctParams struct {
 	// not supported via this fast path; the handler falls back to a full
 	// Query scan in that case.
 	Key string
+	// Filter, when set, must bind only Key; only documents matching it count.
+	Filter *types.Document
 }
 
 // DistinctResult carries the distinct values returned by DistinctScanner.

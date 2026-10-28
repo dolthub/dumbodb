@@ -1889,7 +1889,9 @@ Creates a new server-side database by cloning a remote. Must be run against the
 | `ok` | number | `1` on success |
 
 The clone brings every branch and sets the default branch (`main`) to track
-`origin`; inspect it with `dumboBranch`, not the clone response.
+`origin`; inspect it with `dumboBranch`, not the clone response. When `from` is
+one of this server's backup URLs, the clone is a plain database with no `origin`
+(see Notes).
 
 ### Example
 
@@ -1912,12 +1914,15 @@ admin.runCommand({ dumboClone: 1, from: "myorg/orders", as: "orders" })
 | `as` is a reserved name (`admin`, `config`, `local`) | `OperationFailed: dumboClone: "<name>" is a reserved database name` |
 | A database named `as` already exists | `OperationFailed: dumboClone: database "<name>" already exists` |
 | Remote scheme not cloneable | `OperationFailed: dumboClone: unsupported remote scheme "<scheme>"` |
-| `from` is a backup's URL (restore it with `dumboBackup` instead) | `OperationFailed: dumboClone: url "<url>" is already used by backup "<db>.<name>"` |
 
 ### Notes
 
-- The clone registers an `origin` remote pointing at `from` and sets the default branch to track `origin/<default>`, matching `git clone`. After a clone, a bare `dumboPush` / `dumboPull` needs no target.
-- Every remote branch is materialized as a local branch and a tracking ref `refs/remotes/origin/<branch>`.
+- `from` may be a backup's URL (a URL in `admin.system.backups`, any database's backup). Such a clone brings the backup's branches but no `origin` remote, tracking refs or upstream -- the URL must never become a remote, since the next `dumboBackup sync` would replace its root. `dumboBackup restore` still recreates the whole database, working sets included.
+
+- Otherwise, the clone registers an `origin` remote pointing at `from` and sets the default branch to track `origin/<default>`, matching `git clone`. After a clone, a bare `dumboPush` / `dumboPull` needs no target.
+- Every remote branch is materialized as a local branch. Except for a backup URL, each also gets a tracking ref `refs/remotes/origin/<branch>`.
+- Only branch heads are cloned; working sets are not, so a source with uncommitted changes (such as a backup) clones clean.
+- The backup-URL check only sees this server's backups. A URL used as a backup by another server clones with an `origin`, and pushes to it are replaced by that server's next `dumboBackup sync`.
 
 ---
 

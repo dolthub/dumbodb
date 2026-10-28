@@ -217,9 +217,15 @@ func TestBackupVerify(t *testing.T) {
 			{Key: "name", Value: "origin"}, {Key: "url", Value: nightly}}).Err()
 		requireBackupErr(t, err, codeOperationFailed, `dumboRemote add: url "`+nightly+`" is already used by backup "orders.nightly"`)
 
-		err = a.Database("admin").RunCommand(ctx, bson.D{{Key: "dumboClone", Value: 1}, {Key: "from", Value: nightly}, {Key: "as", Value: "loot"}}).Err()
-		requireBackupErr(t, err, codeOperationFailed, `dumboClone: url "`+nightly+`" is already used by backup "orders.nightly"`)
-		require.NotContains(t, databaseNames(t, a), "loot")
+		// A clone from a backup URL is allowed but registers nothing: the
+		// URL stays owned by the backup.
+		require.NoError(t, a.Database("admin").RunCommand(ctx, bson.D{{Key: "dumboClone", Value: 1}, {Key: "from", Value: nightly}, {Key: "as", Value: "loot"}}).Err())
+		var lootRemotes bson.M
+		require.NoError(t, a.Database("loot").RunCommand(ctx, bson.D{{Key: "dumboRemote", Value: 1}, {Key: "action", Value: "list"}}).Decode(&lootRemotes))
+		require.Empty(t, lootRemotes["remotes"], "a backup-found clone registers no origin")
+		err = a.Database("loot").RunCommand(ctx, bson.D{{Key: "dumboRemote", Value: 1}, {Key: "action", Value: "add"},
+			{Key: "name", Value: "origin"}, {Key: "url", Value: nightly}}).Err()
+		requireBackupErr(t, err, codeOperationFailed, `dumboRemote add: url "`+nightly+`" is already used by backup "orders.nightly"`)
 
 		res := runBackup(t, a, e("action", "sync-url"), e("db", "orders"), e("url", nightly))
 		require.Equal(t, true, res["upToDate"])

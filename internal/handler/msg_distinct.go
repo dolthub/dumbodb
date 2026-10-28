@@ -128,6 +128,27 @@ func (h *Handler) MsgDistinct(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 		}
 	}
 
+	if cmp == nil && params.Filter.Len() == 1 && params.Filter.Keys()[0] == params.Key && !h.DisablePushdown {
+		if ds, ok := c.(backends.DistinctScanner); ok {
+			res, err := ds.DistinctScan(connCtx, &backends.DistinctParams{Key: params.Key, Filter: params.Filter})
+			if err != nil {
+				return nil, lazyerrors.Error(err)
+			}
+			if res != nil {
+				distinct, err := common.DedupDistinctValues(res.Values)
+				if err != nil {
+					return nil, lazyerrors.Error(err)
+				}
+				return documentOpMsg(
+					must.NotFail(types.NewDocument(
+						"values", distinct,
+						"ok", float64(1),
+					)),
+				)
+			}
+		}
+	}
+
 	closer := iterator.NewMultiCloser()
 	defer closer.Close()
 

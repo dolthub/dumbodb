@@ -113,6 +113,11 @@ func filterDocumentPair(doc *types.Document, filterKey string, filterValue any, 
 
 	switch filterValue := filterValue.(type) {
 	case *types.Document:
+		if filterSuffix == filterKey {
+			// A top-level key has one branch, which reads the same value from
+			// doc as from a {filterKey: value} copy.
+			return filterFieldExpr(doc, filterKey, filterSuffix, filterValue, cmp)
+		}
 		branches := make([]*types.Document, 0, len(vals)+1)
 		for _, val := range vals {
 			branches = append(branches, must.NotFail(types.NewDocument(filterSuffix, val)))
@@ -140,6 +145,8 @@ func filterDocumentPair(doc *types.Document, filterKey string, filterValue any, 
 				return true, nil
 			}
 		}
+	case types.UndefinedType:
+		return false, errCompareToUndefined(filterKey)
 	case types.Regex:
 		for _, val := range vals {
 			ok, err := filterFieldRegex(val, filterValue)
@@ -477,6 +484,9 @@ func filterFieldExpr(doc *types.Document, filterKey, filterSuffix string, expr *
 		return false, nil
 	}
 
+	// ValidateFilter raises an undefined operand before any document is read,
+	// even behind an operator that does not match; checking each operator as
+	// it is reached keeps the same error for other callers.
 	for _, exprKey := range expr.Keys() {
 		if exprKey == "$options" {
 			// handled by $regex
@@ -484,6 +494,9 @@ func filterFieldExpr(doc *types.Document, filterKey, filterSuffix string, expr *
 		}
 
 		exprValue := must.NotFail(expr.Get(exprKey))
+		if err := checkUndefinedOperand(exprKey, exprValue); err != nil {
+			return false, err
+		}
 
 		fieldValue, err := doc.Get(filterSuffix)
 		if err != nil {
@@ -1021,13 +1034,15 @@ func filterFieldRegex(fieldValue any, regex types.Regex) (bool, error) {
 	switch fieldValue := fieldValue.(type) {
 	case *types.Array:
 		for i := 0; i < fieldValue.Len(); i++ {
-			arrValue := must.NotFail(fieldValue.Get(i))
-			s, isString := arrValue.(string)
-			if !isString {
-				continue
-			}
-			if re.MatchString(s) {
-				return true, nil
+			switch arrValue := must.NotFail(fieldValue.Get(i)).(type) {
+			case string:
+				if re.MatchString(arrValue) {
+					return true, nil
+				}
+			case types.Regex:
+				if types.Compare(arrValue, regex) == types.Equal {
+					return true, nil
+				}
 			}
 		}
 
@@ -1195,26 +1210,33 @@ func filterFieldExprAll(doc *types.Document, filterKey, filterSuffix string, fie
 		return true, nil
 	}
 
-	switch value := fieldValue.(type) {
-	case *types.Document:
+	if _, ok := fieldValue.(*types.Document); ok {
 		// For documents we return false as $all doesn't work on documents.
 		return false, nil
+	}
 
-	case *types.Array:
-		// For arrays we check that the array contains all the elements of the query.
-		return value.ContainsAll(query), nil
-
-	default:
-		// For other types (scalars) we check that the value is equal to each scalar in the query.
-		// Example: value: 42, query: [42, 42] should give us `true`
-		for i := 0; i < query.Len(); i++ {
-			res := types.Compare(value, must.NotFail(query.Get(i)))
-			if res != types.Equal {
+	// Each query element must match on its own: a regex as a regex query
+	// does, any other value as an array element or an equal scalar.
+	for i := 0; i < query.Len(); i++ {
+		q := must.NotFail(query.Get(i))
+		if re, ok := q.(types.Regex); ok {
+			matched, err := filterFieldRegex(fieldValue, re)
+			if err != nil || !matched {
+				return false, err
+			}
+			continue
+		}
+		if arr, ok := fieldValue.(*types.Array); ok {
+			if !arr.Contains(q) {
 				return false, nil
 			}
+			continue
 		}
-		return true, nil
+		if types.Compare(fieldValue, q) != types.Equal {
+			return false, nil
+		}
 	}
+	return true, nil
 }
 
 // filterFieldExprBitsAllClear handles {field: {$bitsAllClear: value}} filter.
@@ -1571,11 +1593,7 @@ func filterFieldMod(fieldValue, exprValue any) (bool, error) {
 
 // filterFieldExprExists handles {field: {$exists: value}} filter.
 func filterFieldExprExists(fieldExist bool, exprValue any) (bool, error) {
-	expr, ok := exprValue.(bool)
-	// return all documents if filter value is not bool type
-	if !ok {
-		return true, nil
-	}
+	expr := existsOperandTrue(exprValue)
 
 	switch {
 	case fieldExist && expr:
@@ -1585,6 +1603,83 @@ func filterFieldExprExists(fieldExist bool, exprValue any) (bool, error) {
 	default:
 		return false, nil
 	}
+}
+
+// checkUndefinedOperand returns the error MongoDB gives for undefined as the
+// operand of a comparison operator, or as an element of $in, $nin or $all,
+// including inside $not and an operator-form $elemMatch.
+func checkUndefinedOperand(op string, operand any) error {
+	switch op {
+	case "$not", "$elemMatch":
+		inner, ok := operand.(*types.Document)
+		if !ok {
+			return nil
+		}
+		for _, k := range inner.Keys() {
+			if !strings.HasPrefix(k, "$") {
+				continue
+			}
+			if err := checkUndefinedOperand(k, must.NotFail(inner.Get(k))); err != nil {
+				return err
+			}
+		}
+	case "$eq", "$ne", "$gt", "$gte", "$lt", "$lte":
+		if operand == types.Undefined {
+			return errCompareToUndefined(op)
+		}
+	case "$in", "$nin", "$all":
+		arr, ok := operand.(*types.Array)
+		if !ok || !arrayHasUndefined(arr) {
+			return nil
+		}
+		if op == "$all" {
+			return errCompareToUndefined(op)
+		}
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue, "Cannot insert undefined into InListData", op)
+	}
+	return nil
+}
+
+func arrayHasUndefined(arr *types.Array) bool {
+	for i := 0; i < arr.Len(); i++ {
+		if must.NotFail(arr.Get(i)) == types.Undefined {
+			return true
+		}
+	}
+	return false
+}
+
+func errCompareToUndefined(argument string) error {
+	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue, "cannot compare to undefined", argument)
+}
+
+// existsOperandTrue reports whether $exists's operand asks for the field to
+// exist: false, zero numbers and null mean no, any other value yes.
+func existsOperandTrue(v any) bool {
+	switch v := v.(type) {
+	case bool:
+		return v
+	case int32:
+		return v != 0
+	case int64:
+		return v != 0
+	case float64:
+		return v != 0
+	case types.Decimal128:
+		return !decimal128IsZero(v)
+	case types.NullType, types.UndefinedType:
+		return false
+	}
+	return true
+}
+
+// decimal128IsZero reports whether d, an IEEE 754 BID decimal, is a zero of
+// any sign and exponent; a non-canonical coefficient counts as zero.
+func decimal128IsZero(d types.Decimal128) bool {
+	if (d.H>>61)&3 == 3 {
+		return (d.H>>58)&0x1f < 0x1e
+	}
+	return d.H&(1<<49-1) == 0 && d.L == 0
 }
 
 // filterFieldExprType handles {field: {$type: value}} filter.
@@ -1805,6 +1900,10 @@ func filterFieldValueByTypeCode(fieldValue any, code handlerparams.TypeCode) (bo
 		if _, ok := fieldValue.(types.Decimal128); !ok {
 			return false, nil
 		}
+	case handlerparams.TypeCodeUndefined:
+		if _, ok := fieldValue.(types.UndefinedType); !ok {
+			return false, nil
+		}
 	case handlerparams.TypeCodeMinKey:
 		if _, ok := fieldValue.(types.MinKeyType); !ok {
 			return false, nil
@@ -1897,8 +1996,12 @@ func filterFieldExprElemMatch(doc *types.Document, filterKey, filterSuffix strin
 			// against each individual element. This ensures multi-condition $elemMatch
 			// correctly requires ALL conditions to be satisfied by the SAME element,
 			// rather than allowing different elements to satisfy different conditions.
-			tempDoc := must.NotFail(types.NewDocument(filterSuffix, elem))
-			matches, err = filterFieldExpr(tempDoc, filterKey, filterSuffix, expr, cmp)
+			if elemArr, isArray := elem.(*types.Array); isArray {
+				matches, err = elemMatchArrayElement(elemArr, filterKey, filterSuffix, expr, cmp)
+			} else {
+				tempDoc := must.NotFail(types.NewDocument(filterSuffix, elem))
+				matches, err = filterFieldExpr(tempDoc, filterKey, filterSuffix, expr, cmp)
+			}
 		} else {
 			// Logical operators ($and/$or/$nor) or field conditions: the element must be
 			// a document and satisfy the expression as a document filter.
@@ -1919,6 +2022,104 @@ func filterFieldExprElemMatch(doc *types.Document, filterKey, filterSuffix strin
 	}
 
 	return false, nil
+}
+
+// elemMatchArrayElement applies the operators of an $elemMatch to an element
+// that is itself an array. As in MongoDB they test the element as a whole
+// value and do not look inside it, except $size and a nested $elemMatch,
+// which apply to arrays.
+func elemMatchArrayElement(elem *types.Array, filterKey, filterSuffix string, expr *types.Document, cmp *collation.Comparator) (bool, error) {
+	equalsElem := func(v any) bool {
+		if _, isRegex := v.(types.Regex); isRegex {
+			return false
+		}
+		return types.CompareOrder(elem, v, types.Ascending) == types.Equal
+	}
+	for _, op := range expr.Keys() {
+		v := must.NotFail(expr.Get(op))
+		var ok bool
+		switch op {
+		case "$options":
+			continue
+		case "$eq":
+			ok = equalsElem(v)
+		case "$ne":
+			ok = !equalsElem(v)
+		case "$gt", "$gte", "$lt", "$lte":
+			if other, isArray := v.(*types.Array); isArray {
+				c := types.CompareOrder(elem, other, types.Ascending)
+				switch op {
+				case "$gt":
+					ok = c == types.Greater
+				case "$gte":
+					ok = c != types.Less
+				case "$lt":
+					ok = c == types.Less
+				default:
+					ok = c != types.Greater
+				}
+			}
+		case "$in", "$nin", "$all":
+			values, isArray := v.(*types.Array)
+			if !isArray {
+				return filterFieldExpr(must.NotFail(types.NewDocument(filterSuffix, elem)), filterKey, filterSuffix, expr, cmp)
+			}
+			someEqual, allEqual := false, values.Len() > 0
+			for i := 0; i < values.Len(); i++ {
+				if equalsElem(must.NotFail(values.Get(i))) {
+					someEqual = true
+				} else {
+					allEqual = false
+				}
+			}
+			switch op {
+			case "$in":
+				ok = someEqual
+			case "$nin":
+				ok = !someEqual
+			default:
+				ok = allEqual
+			}
+		case "$regex":
+			ok = false
+		case "$not":
+			if inner, isDoc := v.(*types.Document); isDoc {
+				matched, err := elemMatchArrayElement(elem, filterKey, filterSuffix, inner, cmp)
+				if err != nil {
+					return false, err
+				}
+				ok = !matched
+			} else {
+				ok = true
+			}
+		case "$exists":
+			ok = existsOperandTrue(v)
+		case "$type":
+			codes := []any{v}
+			if list, isArray := v.(*types.Array); isArray {
+				codes = codes[:0]
+				for i := 0; i < list.Len(); i++ {
+					codes = append(codes, must.NotFail(list.Get(i)))
+				}
+			}
+			for _, code := range codes {
+				if code == handlerparams.TypeCodeArray.String() || types.Compare(code, int32(handlerparams.TypeCodeArray)) == types.Equal {
+					ok = true
+				}
+			}
+		default:
+			single := must.NotFail(types.NewDocument(op, v))
+			matched, err := filterFieldExpr(must.NotFail(types.NewDocument(filterSuffix, elem)), filterKey, filterSuffix, single, cmp)
+			if err != nil {
+				return false, err
+			}
+			ok = matched
+		}
+		if !ok {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // filterTextSearch implements the $text query operator.

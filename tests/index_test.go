@@ -1126,3 +1126,79 @@ func TestSecondaryIndex_NoBuildOnInsertBeforeCreate(t *testing.T) {
 		t.Errorf("expected 2 alpha docs (from index build scan), got %d", len(got))
 	}
 }
+
+// dolthub/dumbodb#153: mongorestore sends legacy "ns" in index specs along
+// with ignoreUnknownIndexOptions: true.
+func TestIndex_CreateIndexes_IgnoreUnknownIndexOptions(t *testing.T) {
+	env := startDumboDB(t)
+	ctx := context.Background()
+
+	createIndexes := func(t *testing.T, coll *mongo.Collection, flag any) error {
+		t.Helper()
+		cmd := bson.D{
+			{Key: "createIndexes", Value: coll.Name()},
+			{Key: "indexes", Value: bson.A{bson.D{
+				{Key: "key", Value: bson.D{{Key: "a", Value: 1}}},
+				{Key: "name", Value: "a_1"},
+				{Key: "ns", Value: "restored.elsewhere"},
+				{Key: "bogus", Value: true},
+			}}},
+		}
+		if flag != nil {
+			cmd = append(cmd, bson.E{Key: "ignoreUnknownIndexOptions", Value: flag})
+		}
+		return coll.Database().RunCommand(ctx, cmd).Err()
+	}
+
+	requireCode := func(t *testing.T, err error, code int32) {
+		t.Helper()
+		var cmdErr mongo.CommandError
+		require.ErrorAs(t, err, &cmdErr)
+		require.Equalf(t, code, cmdErr.Code, "%v", err)
+	}
+
+	for name, flag := range map[string]any{"bool": true, "int": int32(1), "long": int64(1)} {
+		t.Run("ignored_"+name, func(t *testing.T) {
+			coll := env.Collection(t)
+			require.NoError(t, createIndexes(t, coll, flag))
+
+			cur, err := coll.Indexes().List(ctx)
+			require.NoError(t, err)
+			var specs []bson.M
+			require.NoError(t, cur.All(ctx, &specs))
+			var created bson.M
+			for _, s := range specs {
+				if s["name"] == "a_1" {
+					created = s
+				}
+			}
+			require.NotNil(t, created, "a_1 not listed: %v", specs)
+			require.NotContains(t, created, "ns")
+			require.NotContains(t, created, "bogus")
+		})
+	}
+
+	for name, flag := range map[string]any{"omitted": nil, "false": false, "zero": int32(0)} {
+		t.Run("rejected_"+name, func(t *testing.T) {
+			requireCode(t, createIndexes(t, env.Collection(t), flag), 197)
+		})
+	}
+
+	t.Run("wrong_type", func(t *testing.T) {
+		requireCode(t, createIndexes(t, env.Collection(t), "yes"), 14)
+	})
+
+	t.Run("known_options_still_validated", func(t *testing.T) {
+		coll := env.Collection(t)
+		err := coll.Database().RunCommand(ctx, bson.D{
+			{Key: "createIndexes", Value: coll.Name()},
+			{Key: "indexes", Value: bson.A{bson.D{
+				{Key: "key", Value: bson.D{{Key: "a", Value: 1}}},
+				{Key: "name", Value: "a_1"},
+				{Key: "expireAfterSeconds", Value: int32(60)},
+			}}},
+			{Key: "ignoreUnknownIndexOptions", Value: true},
+		}).Err()
+		requireTTLRejected(t, err)
+	})
+}

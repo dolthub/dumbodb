@@ -52,7 +52,11 @@ const (
 // $in/$nin/$ne, NaN/Inf, decimal128, ...). Supported: scalar equality on
 // numeric/string/bool/time/ObjectID, numeric range via $gt/$gte/$lt/$lte,
 // and top-level array containment of a scalar.
-func buildBSONFieldPredicate(field string, value any) func([]byte) bool {
+// scanPredicate reports whether a stored document may match, given all of it
+// or, when not complete, a prefix of it.
+type scanPredicate func(stored []byte, complete bool) bool
+
+func buildBSONFieldPredicate(field string, value any) scanPredicate {
 	if opDoc, ok := value.(*types.Document); ok {
 		return buildBSONNumericRangePredicate(field, opDoc)
 	}
@@ -66,16 +70,16 @@ func buildBSONFieldPredicate(field string, value any) func([]byte) bool {
 		return nil
 	}
 	fieldBytes := []byte(field)
-	return func(storedBytes []byte) bool {
+	return func(storedBytes []byte, complete bool) bool {
 		bsonBytes, ok := stripVersionPermissive(storedBytes)
 		if !ok {
 			return true
 		}
-		return walkTopLevelEquality(bsonBytes, fieldBytes, target)
+		return walkTopLevelEqualityIn(bsonBytes, fieldBytes, target, complete)
 	}
 }
 
-func buildBSONNumericRangePredicate(field string, opDoc *types.Document) func([]byte) bool {
+func buildBSONNumericRangePredicate(field string, opDoc *types.Document) scanPredicate {
 	keys := opDoc.Keys()
 	if len(keys) == 0 {
 		return nil
@@ -112,12 +116,12 @@ func buildBSONNumericRangePredicate(field string, opDoc *types.Document) func([]
 		return nil
 	}
 	fieldBytes := []byte(field)
-	return func(storedBytes []byte) bool {
+	return func(storedBytes []byte, complete bool) bool {
 		bsonBytes, ok := stripVersionPermissive(storedBytes)
 		if !ok {
 			return true
 		}
-		v, status := scanTopLevelBSONNumeric(bsonBytes, fieldBytes)
+		v, status := scanTopLevelBSONNumericIn(bsonBytes, fieldBytes, complete)
 		switch status {
 		case rangeProbeBail:
 			return true
@@ -178,14 +182,20 @@ func normaliseFilterValue(v any) any {
 // array-typed stored values every element is tested so {tags: "go"}
 // matches a stored ["go", "rust"].
 func walkTopLevelEquality(doc []byte, field []byte, target any) bool {
+	return walkTopLevelEqualityIn(doc, field, target, true)
+}
+
+// walkTopLevelEqualityIn is walkTopLevelEquality over doc, or, when not
+// complete, over a prefix of it: a field not found in the prefix may follow.
+func walkTopLevelEqualityIn(doc []byte, field []byte, target any, complete bool) bool {
 	if len(doc) < 5 {
 		return true
 	}
 	docLen := int(binary.LittleEndian.Uint32(doc))
-	if docLen > len(doc) {
+	end, ok := walkEnd(docLen, len(doc), complete)
+	if !ok {
 		return true
 	}
-	end := docLen - 1
 	pos := 4
 	for pos < end {
 		typeByte := doc[pos]
@@ -210,7 +220,20 @@ func walkTopLevelEquality(doc []byte, field []byte, target any) bool {
 		}
 		pos = valueEnd
 	}
-	return false
+	return !complete
+}
+
+// walkEnd returns where a top-level walk of a docLen-byte document stops when
+// only have bytes of it are at hand.
+func walkEnd(docLen, have int, complete bool) (int, bool) {
+	switch {
+	case docLen <= have:
+		return docLen - 1, true
+	case complete:
+		return 0, false
+	default:
+		return have, true
+	}
 }
 
 func bsonValueEqualsOrContains(typeByte byte, valueBytes []byte, target any) bool {
@@ -395,14 +418,20 @@ func bsonValueEnd(buf []byte, valueStart int, typeByte byte, hardEnd int) (int, 
 // float64 value. The status return distinguishes found, missing (range
 // can prove no match), and bail (force permissive).
 func scanTopLevelBSONNumeric(doc []byte, field []byte) (float64, rangeProbeStatus) {
+	return scanTopLevelBSONNumericIn(doc, field, true)
+}
+
+// scanTopLevelBSONNumericIn is scanTopLevelBSONNumeric over doc, or, when not
+// complete, over a prefix of it, where a field not found may follow.
+func scanTopLevelBSONNumericIn(doc []byte, field []byte, complete bool) (float64, rangeProbeStatus) {
 	if len(doc) < 5 {
 		return 0, rangeProbeBail
 	}
 	docLen := int(binary.LittleEndian.Uint32(doc))
-	if docLen > len(doc) {
+	end, ok := walkEnd(docLen, len(doc), complete)
+	if !ok {
 		return 0, rangeProbeBail
 	}
-	end := docLen - 1
 	pos := 4
 	for pos < end {
 		typeByte := doc[pos]
@@ -433,6 +462,9 @@ func scanTopLevelBSONNumeric(doc []byte, field []byte) (float64, rangeProbeStatu
 			return f, rangeProbeFound
 		}
 		pos = valueEnd
+	}
+	if !complete {
+		return 0, rangeProbeBail
 	}
 	return 0, rangeProbeMissing
 }

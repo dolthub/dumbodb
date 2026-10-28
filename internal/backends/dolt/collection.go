@@ -116,6 +116,13 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 	if err != nil {
 		return nil, err
 	}
+	if sparseHint != nil && !sparseHint.Lossy {
+		docs, err := c.sparseMembers(ctx, state, m, *sparseHint, params.Fields)
+		if err != nil {
+			return nil, err
+		}
+		return &backends.QueryResult{Iter: newSliceIter(docs)}, nil
+	}
 	if sparseHint != nil {
 		res, err := c.queryUnhintedSparse(ctx, params)
 		if err != nil {
@@ -163,12 +170,22 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 			hit = false
 		}
 
+		if fieldSort {
+			iter, ok, err := tryStreamSortedRange(ctx, state, m, idxInfos, idxMaps, params)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				return &backends.QueryResult{Iter: iter, Sorted: true}, nil
+			}
+		}
+
 		plan, err := planIndexLookupIn(ctx, m, idxInfos, idxMaps, params.Filter, params.Hint, params.Collation, fieldSort)
 		if err != nil {
 			return nil, err
 		}
 		if plan != nil {
-			if reverse, ok := indexScanSortOrder(plan.info, params.Filter, params.Sort, params.Collation); fieldSort && ok {
+			if reverse, ok := indexScanSortOrder(plan.info, params.Filter, params.Sort, params.Collation); fieldSort && !plan.union && ok {
 				return &backends.QueryResult{Iter: plan.sortedIter(ctx, state, m, params.Sort, reverse, params.Fields), Sorted: true}, nil
 			}
 			if hit && filterPlanWorks(plan, params) > cached.budget(params) {
@@ -188,7 +205,7 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 					c.db.backend.planCache.put(cacheKey, newPlanCacheEntry(idxInfos, params, "", plan.index, filterPlanWorks(plan, params)))
 				}
 			}
-			if pos, ok := indexKeySortPosition(plan.info, params.Filter, params.Sort, params.Collation); fieldSort && ok {
+			if pos, ok := indexKeySortPosition(plan.info, params.Filter, params.Sort, params.Collation); fieldSort && !plan.union && ok {
 				iter, err := plan.keySortedIter(ctx, state, m, params.Sort, pos, params.Fields)
 				if err != nil {
 					return nil, err
@@ -205,7 +222,9 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 		}
 	}
 
-	if !naturalHint && fieldSort {
+	// Without a limit a filtered walk fetches every document by point lookup
+	// to return a fraction of them; the sequential scan and sort is cheaper.
+	if !naturalHint && fieldSort && (params.LimitHint > 0 || params.Filter.Len() == 0) {
 		iter, ok, err := c.trySortWalk(ctx, state, m, params)
 		if err != nil {
 			return nil, err
@@ -252,16 +271,19 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 	// Under a non-simple collation the handler re-checks matches through the
 	// against a regex substitution of the filter, so byte-level equality is
 	// not a sound lower bound  -- skip the prefilter.
-	var pf func([]byte) bool
+	var pf, prefixReject func([]byte) bool
 	if params != nil && !onlyRecordIDs && !params.Collated {
 		pf = buildScanPrefilter(params.Filter)
+		prefixReject = buildScanPrefixRejecter(params.Filter)
 	}
 
 	iter := newMapIter(ctx, state.ns, m, reverse, limit, onlyRecordIDs, pf)
 	if mi, ok := iter.(*mapIter); ok {
 		if params != nil {
 			mi.fields = params.Fields
+			mi.lazy = params.LazyDocuments && params.Fields == nil
 		}
+		mi.prefixReject = prefixReject
 		if state.backend != nil && state.backend.backgroundRP != nil {
 			mi.release = state.backend.backgroundRP.pinRoot(state.name, m.HashOf())
 		}
@@ -287,6 +309,35 @@ func (c *collection) hintedSparseIndex(ctx context.Context, state *dbState, para
 		}
 	}
 	return nil, nil
+}
+
+// sparseMembers reads the documents a sparse index holds, keeping only fields
+// when it is non-nil.
+func (c *collection) sparseMembers(ctx context.Context, state *dbState, primary prolly.Map, idx backends.IndexInfo, fields []string) ([]*types.Document, error) {
+	state.mu.RLock()
+	infos, maps, err := resolveIndexes(ctx, c, state)
+	state.mu.RUnlock()
+	if err != nil {
+		return nil, err
+	}
+	i := slices.IndexFunc(infos, func(info backends.IndexInfo) bool { return info.Name == idx.Name })
+	if i < 0 {
+		return nil, fmt.Errorf("sparse index %q not found", idx.Name)
+	}
+	entries, err := idxpkg.RangeLookup(ctx, maps[i], nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	countKeysExamined(len(entries))
+	plan := &indexLookupPlan{info: idx, index: idx.Name, keys: len(entries)}
+	seen := make(map[string]struct{}, len(entries))
+	for _, id := range entries {
+		if _, dup := seen[string(id)]; !dup {
+			seen[string(id)] = struct{}{}
+			plan.ids = append(plan.ids, id)
+		}
+	}
+	return plan.fetch(ctx, state, primary, fields)
 }
 
 // queryUnhintedSparse runs params with its sparse-index hint removed; the
@@ -325,12 +376,25 @@ func (it *sparseMemberIter) Next() (struct{}, *types.Document, error) {
 // value, unsupported type, ambiguous numeric, etc.); in that case the scan
 // falls back to decoding every document.
 func buildScanPrefilter(filter *types.Document) func([]byte) bool {
+	preds := scanPredicates(filter)
+	if len(preds) == 0 {
+		return nil
+	}
+
+	return func(jsonBytes []byte) bool {
+		return matchScanPredicates(preds, jsonBytes, true)
+	}
+}
+
+// scanPredicates returns one predicate per filter field, or nil when some
+// field has none.
+func scanPredicates(filter *types.Document) []scanPredicate {
 	if filter == nil {
 		return nil
 	}
 
 	keys := filter.Keys()
-	preds := make([]func([]byte) bool, 0, len(keys))
+	preds := make([]scanPredicate, 0, len(keys))
 	for _, field := range keys {
 		// $and/$or/$comment/etc.  -- bail out and let the handler filter.
 		if strings.HasPrefix(field, "$") {
@@ -351,21 +415,32 @@ func buildScanPrefilter(filter *types.Document) func([]byte) bool {
 		}
 		preds = append(preds, pred)
 	}
+	return preds
+}
+
+// buildScanPrefixRejecter returns a predicate that rejects a stored document
+// from a prefix of it alone when the prefix proves the filter cannot match,
+// or nil under the conditions buildScanPrefilter returns nil.
+func buildScanPrefixRejecter(filter *types.Document) func([]byte) bool {
+	preds := scanPredicates(filter)
 	if len(preds) == 0 {
 		return nil
 	}
-
-	return func(jsonBytes []byte) bool {
-		for _, pred := range preds {
-			if !pred(jsonBytes) {
-				return false
-			}
-		}
-		return true
+	return func(prefix []byte) bool {
+		return !matchScanPredicates(preds, prefix, false)
 	}
 }
 
-func buildFieldPredicate(field string, value any) func([]byte) bool {
+func matchScanPredicates(preds []scanPredicate, stored []byte, complete bool) bool {
+	for _, pred := range preds {
+		if !pred(stored, complete) {
+			return false
+		}
+	}
+	return true
+}
+
+func buildFieldPredicate(field string, value any) scanPredicate {
 	return buildBSONFieldPredicate(field, value)
 }
 
@@ -504,6 +579,9 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 type indexLookupPlan struct {
 	info  backends.IndexInfo
 	index string
+	// union is set when ids are the union of one index scan per $or branch;
+	// info and index are then empty, and ids are not in any index order.
+	union bool
 	// keys is the number of index entries scanned; ids holds each matched
 	// document once and, when kept, values its entry's encoded index values.
 	keys   int
@@ -532,119 +610,18 @@ func planIndexLookupIn(ctx context.Context, primary prolly.Map, idxInfos []backe
 	if filter == nil || filter.Len() == 0 || len(idxInfos) == 0 {
 		return nil, nil
 	}
-
-	queryColl := collation.Parse(queryCollation)
-	queryIdentity := queryColl.Identity()
-	queryCmp := queryColl.Comparator()
-
-	// A hint naming a specific index forces selection: only that index is a
-	// candidate, matching what Explain reports (and MongoDB). When the hinted
-	// index does not cover the filter with a usable range, selection falls
-	// through to a collection scan -- results are unaffected either way.
-	hintedName := backends.MatchHintedIndex(hint, idxInfos)
-
-	// Single-field indexes are preferred (tighter scan range); compound
-	// indexes are used when no single-field index covers the leading filter
-	// field. The handler re-filters every returned doc, so a compound index's
-	// suffix-field constraints are applied post-scan.
-	type indexedFieldEntry struct {
-		idxName  string
-		mapIdx   int
-		compound bool
-		rank     int
-	}
-	indexedField := make(map[string]indexedFieldEntry, len(idxInfos))
-	for i, idx := range idxInfos {
-		if hintedName != "" && idx.Name != hintedName {
-			continue
-		}
-		// Lossy entries sit at wrong byte positions; never usable. A partial
-		// index is usable only when the filter implies its partial condition,
-		// so every matching doc lies within it; otherwise it drops non-member
-		// matches. (Sparse is fine: no admitted operator matches a missing field.)
-		if idx.Lossy || len(idx.Key) == 0 || idx.Key[0].Field == "" {
-			continue
-		}
-		if collation.Parse(idx.Collation).Identity() != queryIdentity {
-			continue
-		}
-		partial := idx.PartialFilterExpression != nil
-		if partial && !filterImpliesPartial(filter, idx.PartialFilterExpression) {
-			continue
-		}
-		leading := idx.Key[0].Field
-		isCompound := len(idx.Key) > 1
-		rank := indexRank(isCompound, partial)
-		if cur, have := indexedField[leading]; !have || rank < cur.rank {
-			indexedField[leading] = indexedFieldEntry{
-				idxName: idx.Name, mapIdx: i, compound: isCompound, rank: rank,
-			}
-		}
-	}
-	if len(indexedField) == 0 {
-		return nil, nil
-	}
-
-	var (
-		chosenMapIdx int
-		startKey     []byte
-		stopKey      []byte
-		usable       bool
-		// pointRanges, when set, replaces [startKey, stopKey) with one range
-		// per $in value.
-		pointRanges [][2][]byte
-	)
-
-	for _, k := range filter.Keys() {
-		// Top-level $-operators ($and/$or/$nor/$comment/...) make the
-		// per-field analysis below unsound  -- bail.
-		if strings.HasPrefix(k, "$") {
+	if filter.Len() == 1 && filter.Keys()[0] == "$or" {
+		if hint != nil {
 			return nil, nil
 		}
-		entry, ok := indexedField[k]
-		if !ok {
-			continue
-		}
-		v, err := filter.Get(k)
-		if err != nil {
-			continue
-		}
-		if queryCmp == nil && !entry.compound {
-			if ranges, ok := indexPointRangesForIn(v); ok {
-				chosenMapIdx = entry.mapIdx
-				// Scan the points in key order so ids come back in index order.
-				slices.SortFunc(ranges, func(a, b [2][]byte) int { return bytes.Compare(a[0], b[0]) })
-				pointRanges = ranges
-				usable = true
-				break
-			}
-		}
-		if queryCmp != nil {
-			v = collateFilterValue(v, queryCmp)
-		}
-		if idxInfos[entry.mapIdx].Multikey {
-			v = multikeyScanBound(v)
-		}
-		s, e, ok := indexBoundsForFilterValue(v)
-		if !ok {
-			continue
-		}
-		if entry.compound {
-			if cs, ce, cok := compoundIndexBounds(idxInfos[entry.mapIdx], filter, queryCmp); cok {
-				s, e = cs, ce
-			} else {
-				s, e = compoundLeadingBounds(s, e)
-			}
-		}
-		chosenMapIdx = entry.mapIdx
-		startKey, stopKey = s, e
-		usable = true
-		break
+		return planOrUnion(ctx, primary, idxInfos, idxMaps, must.NotFail(filter.Get("$or")), queryCollation)
 	}
 
-	if !usable {
+	choice, ok := chooseIndexRange(idxInfos, filter, hint, queryCollation)
+	if !ok {
 		return nil, nil
 	}
+	chosenMapIdx, startKey, stopKey, pointRanges := choice.mapIdx, choice.startKey, choice.stopKey, choice.pointRanges
 
 	idxMap := idxMaps[chosenMapIdx]
 
@@ -715,6 +692,185 @@ func planIndexLookupIn(ctx context.Context, primary prolly.Map, idxInfos []backe
 		}
 	}
 	return plan, nil
+}
+
+// indexRangeChoice is the index chooseIndexRange picked for a filter and the
+// key range, or point ranges, to scan in it.
+type indexRangeChoice struct {
+	mapIdx      int
+	startKey    []byte
+	stopKey     []byte
+	pointRanges [][2][]byte
+}
+
+// chooseIndexRange picks the index serving filter's first indexable field and
+// the range to scan in it, without scanning.
+func chooseIndexRange(idxInfos []backends.IndexInfo, filter *types.Document, hint any, queryCollation *types.Document) (indexRangeChoice, bool) {
+	queryColl := collation.Parse(queryCollation)
+	queryIdentity := queryColl.Identity()
+	queryCmp := queryColl.Comparator()
+
+	// A hint naming a specific index forces selection: only that index is a
+	// candidate, matching what Explain reports (and MongoDB). When the hinted
+	// index does not cover the filter with a usable range, selection falls
+	// through to a collection scan -- results are unaffected either way.
+	hintedName := backends.MatchHintedIndex(hint, idxInfos)
+
+	// Single-field indexes are preferred (tighter scan range); compound
+	// indexes are used when no single-field index covers the leading filter
+	// field. The handler re-filters every returned doc, so a compound index's
+	// suffix-field constraints are applied post-scan.
+	type indexedFieldEntry struct {
+		idxName  string
+		mapIdx   int
+		compound bool
+		rank     int
+	}
+	indexedField := make(map[string]indexedFieldEntry, len(idxInfos))
+	for i, idx := range idxInfos {
+		if hintedName != "" && idx.Name != hintedName {
+			continue
+		}
+		// Lossy entries sit at wrong byte positions; never usable. A partial
+		// index is usable only when the filter implies its partial condition,
+		// so every matching doc lies within it; otherwise it drops non-member
+		// matches. (Sparse is fine: no admitted operator matches a missing field.)
+		if idx.Lossy || len(idx.Key) == 0 || idx.Key[0].Field == "" {
+			continue
+		}
+		if collation.Parse(idx.Collation).Identity() != queryIdentity {
+			continue
+		}
+		partial := idx.PartialFilterExpression != nil
+		if partial && !filterImpliesPartial(filter, idx.PartialFilterExpression, collation.Parse(idx.Collation).IsSimple()) {
+			continue
+		}
+		leading := idx.Key[0].Field
+		isCompound := len(idx.Key) > 1
+		rank := indexRank(isCompound, partial)
+		if cur, have := indexedField[leading]; !have || rank < cur.rank {
+			indexedField[leading] = indexedFieldEntry{
+				idxName: idx.Name, mapIdx: i, compound: isCompound, rank: rank,
+			}
+		}
+	}
+	if len(indexedField) == 0 {
+		return indexRangeChoice{}, false
+	}
+
+	var (
+		chosenMapIdx int
+		startKey     []byte
+		stopKey      []byte
+		usable       bool
+		// pointRanges, when set, replaces [startKey, stopKey) with one range
+		// per $in value, or the ranges a prefix regex can match.
+		pointRanges [][2][]byte
+	)
+
+	for _, k := range filter.Keys() {
+		// Top-level $-operators ($and/$or/$nor/$comment/...) make the
+		// per-field analysis below unsound  -- bail.
+		if strings.HasPrefix(k, "$") {
+			return indexRangeChoice{}, false
+		}
+		entry, ok := indexedField[k]
+		if !ok {
+			continue
+		}
+		v, err := filter.Get(k)
+		if err != nil {
+			continue
+		}
+		if queryCmp == nil && !entry.compound {
+			if ranges, ok := indexPointRangesForIn(v); ok {
+				chosenMapIdx = entry.mapIdx
+				// Scan the points in key order so ids come back in index order.
+				slices.SortFunc(ranges, func(a, b [2][]byte) int { return bytes.Compare(a[0], b[0]) })
+				pointRanges = ranges
+				usable = true
+				break
+			}
+		}
+		if queryCmp == nil {
+			if ranges, ok := regexPrefixRanges(v); ok {
+				chosenMapIdx = entry.mapIdx
+				pointRanges = ranges
+				usable = true
+				break
+			}
+		}
+		if queryCmp != nil {
+			v = collateFilterValue(v, queryCmp)
+		}
+		if idxInfos[entry.mapIdx].Multikey {
+			v = multikeyScanBound(v)
+		}
+		s, e, ok := indexBoundsForFilterValue(v)
+		if !ok && isNullEquality(v) && nullEqualityIndexable(idxInfos[entry.mapIdx]) {
+			s, e, ok = idxpkg.LowerBoundInclusive(types.Null), idxpkg.UpperBoundInclusive(types.Null), true
+		}
+		if !ok && isExistsTrue(v) && existsIndexable(idxInfos[entry.mapIdx]) {
+			s, e, ok = nil, nil, true
+		}
+		if !ok {
+			continue
+		}
+		if entry.compound {
+			if cs, ce, cok := compoundIndexBounds(idxInfos[entry.mapIdx], filter, queryCmp); cok {
+				s, e = cs, ce
+			} else {
+				s, e = compoundLeadingBounds(s, e)
+			}
+		}
+		chosenMapIdx = entry.mapIdx
+		startKey, stopKey = s, e
+		usable = true
+		break
+	}
+
+	if !usable {
+		return indexRangeChoice{}, false
+	}
+	return indexRangeChoice{mapIdx: chosenMapIdx, startKey: startKey, stopKey: stopKey, pointRanges: pointRanges}, true
+}
+
+// planOrUnion plans each $or branch on its own index and unions the matched
+// ids, or returns nil when any branch has no index plan or the union exceeds
+// half the collection.
+func planOrUnion(ctx context.Context, primary prolly.Map, idxInfos []backends.IndexInfo, idxMaps []prolly.Map, branches any, queryCollation *types.Document) (*indexLookupPlan, error) {
+	arr, ok := branches.(*types.Array)
+	if !ok || arr.Len() == 0 {
+		return nil, nil
+	}
+	union := &indexLookupPlan{union: true}
+	seen := make(map[string]struct{})
+	for i := 0; i < arr.Len(); i++ {
+		branch, ok := must.NotFail(arr.Get(i)).(*types.Document)
+		if !ok {
+			return nil, nil
+		}
+		plan, err := planIndexLookupIn(ctx, primary, idxInfos, idxMaps, branch, nil, queryCollation, false)
+		if err != nil || plan == nil {
+			return nil, err
+		}
+		union.keys += plan.keys
+		for _, id := range plan.ids {
+			if _, dup := seen[string(id)]; dup {
+				continue
+			}
+			seen[string(id)] = struct{}{}
+			union.ids = append(union.ids, id)
+		}
+	}
+	primaryCount, err := primary.Count()
+	if err != nil {
+		return nil, fmt.Errorf("index lookup counting primary: %w", err)
+	}
+	if len(union.ids) > int(primaryCount)/2 {
+		return nil, nil
+	}
+	return union, nil
 }
 
 // fetch reads the plan's documents from the primary map, keeping only fields
@@ -808,6 +964,147 @@ func multikeyScanBound(v any) any {
 		}
 	}
 	return lower
+}
+
+// regexPrefixRanges returns the key ranges a regex given bare or as
+// {$regex, $options} can match: every string starting with the literal prefix
+// the anchored pattern requires, and the stored regex equal to it. It declines
+// when the pattern has no such prefix, does not compile, or has options other
+// than s. The ranges are a superset; the handler applies the regex itself.
+func regexPrefixRanges(v any) ([][2][]byte, bool) {
+	var re types.Regex
+	switch t := v.(type) {
+	case types.Regex:
+		re = t
+	case *types.Document:
+		raw, err := t.Get("$regex")
+		if err != nil {
+			return nil, false
+		}
+		for _, k := range t.Keys() {
+			if k != "$regex" && k != "$options" {
+				return nil, false
+			}
+		}
+		switch r := raw.(type) {
+		case string:
+			re.Pattern = r
+		case types.Regex:
+			re = r
+		default:
+			return nil, false
+		}
+		if opts, err := t.Get("$options"); err == nil {
+			str, isStr := opts.(string)
+			if !isStr || (re.Options != "" && str != "") {
+				return nil, false
+			}
+			re.Options += str
+		}
+	default:
+		return nil, false
+	}
+	if strings.Trim(re.Options, "s") != "" {
+		return nil, false
+	}
+	if _, err := re.Compile(); err != nil {
+		return nil, false
+	}
+	prefix, ok := regexLiteralPrefix(re.Pattern)
+	if !ok {
+		return nil, false
+	}
+	encoded := idxpkg.EncodeValue(prefix)
+	strStart := encoded[:len(encoded)-1]
+	strStop := append(append([]byte(nil), strStart...), 0xFF)
+	return [][2][]byte{
+		{strStart, strStop},
+		{bracketSuffix(idxpkg.LowerBoundInclusive(re)), bracketSuffix(idxpkg.UpperBoundInclusive(re))},
+	}, true
+}
+
+// regexLiteralPrefix returns the non-empty literal text every match of
+// pattern starts with, when pattern is anchored by ^ and has no alternation.
+func regexLiteralPrefix(pattern string) (string, bool) {
+	if !strings.HasPrefix(pattern, "^") || strings.Contains(pattern, "|") {
+		return "", false
+	}
+	runes := []rune(pattern[1:])
+	var lit []rune
+	stop := rune(0)
+	for i := 0; i < len(runes); i++ {
+		c := runes[i]
+		if c == '\\' {
+			if i+1 < len(runes) && strings.ContainsRune(`.^$|?*+()[]{}\/-`, runes[i+1]) {
+				i++
+				lit = append(lit, runes[i])
+				continue
+			}
+			break
+		}
+		if strings.ContainsRune(`.^$?*+()[]{}`, c) {
+			stop = c
+			break
+		}
+		lit = append(lit, c)
+	}
+	if (stop == '?' || stop == '*' || stop == '{') && len(lit) > 0 {
+		lit = lit[:len(lit)-1]
+	}
+	if len(lit) == 0 {
+		return "", false
+	}
+	return string(lit), true
+}
+
+// isNullEquality reports whether v, a filter field's condition, is null
+// equality, which matches null and missing values.
+func isNullEquality(v any) bool {
+	if doc, ok := v.(*types.Document); ok {
+		if doc.Len() != 1 || doc.Keys()[0] != "$eq" {
+			return false
+		}
+		v = must.NotFail(doc.Get("$eq"))
+	}
+	switch v.(type) {
+	case nil, types.NullType:
+		return true
+	}
+	return false
+}
+
+// nullEqualityIndexable reports whether idx's null entries are exactly the
+// documents a null equality on its leading field matches: missing values are
+// indexed as null, and no array element or dotted path can match null without
+// a null entry.
+func nullEqualityIndexable(idx backends.IndexInfo) bool {
+	return !idx.Sparse && !idx.Multikey && !strings.Contains(idx.Key[0].Field, ".")
+}
+
+// isExistsTrue reports whether v, a filter field's condition, is
+// {$exists: true} or another truthy $exists.
+func isExistsTrue(v any) bool {
+	doc, ok := v.(*types.Document)
+	if !ok || doc.Len() != 1 || doc.Keys()[0] != "$exists" {
+		return false
+	}
+	switch e := must.NotFail(doc.Get("$exists")).(type) {
+	case bool:
+		return e
+	case int32:
+		return e != 0
+	case int64:
+		return e != 0
+	case float64:
+		return e != 0
+	}
+	return false
+}
+
+// existsIndexable reports whether idx holds exactly the documents in which
+// its one top-level field exists: a sparse single-field index.
+func existsIndexable(idx backends.IndexInfo) bool {
+	return idx.Sparse && len(idx.Key) == 1 && !strings.Contains(idx.Key[0].Field, ".")
 }
 
 func indexBoundsForFilterValue(v any) (startKey, stopKey []byte, ok bool) {
@@ -1224,14 +1521,16 @@ func partialFilterScalar(v any) (any, bool) {
 }
 
 // filterImpliesPartial reports whether filter guarantees every
-// condition in a partial index's filter expression pfe: each
-// {field: scalar} (or {field: {$eq: scalar}}) in pfe must appear as the
-// identical scalar equality in filter. Only scalar-equality partial
-// conditions are recognized; any other shape yields false, leaving the
-// index unused (a sound collection scan). When true, every document
-// matching filter lies within the partial index, so scanning the index
-// and re-filtering is sound.
-func filterImpliesPartial(filter, pfe *types.Document) bool {
+// condition in a partial index's filter expression pfe. A scalar equality in
+// pfe must appear as the identical equality in filter; a numeric range in pfe
+// ($gt, $gte, $lt, $lte), or a string range when stringRanges (the index is
+// binary-collated, so bounds compare bytewise), must have each bound implied
+// by a bound in the same direction, or an equality, on the same field in
+// filter. Any
+// other shape yields false, leaving the index unused (a sound collection
+// scan). When true, every document matching filter lies within the partial
+// index, so scanning the index and re-filtering is sound.
+func filterImpliesPartial(filter, pfe *types.Document, stringRanges bool) bool {
 	if pfe == nil || pfe.Len() == 0 {
 		return true
 	}
@@ -1243,16 +1542,138 @@ func filterImpliesPartial(filter, pfe *types.Document) bool {
 		if err != nil {
 			return false
 		}
-		ps, ok := partialFilterScalar(pv)
-		if !ok {
-			return false
-		}
 		fv, err := filter.Get(pk)
 		if err != nil {
 			return false
 		}
-		fs, ok := partialFilterScalar(fv)
-		if !ok || compareScalars(ps, fs) != 0 {
+		if ps, ok := partialFilterScalar(pv); ok {
+			fs, ok := partialFilterScalar(fv)
+			if !ok || compareScalars(ps, fs) != 0 {
+				return false
+			}
+			continue
+		}
+		pr, ok := parseScalarRange(pv)
+		if !ok || (!stringRanges && pr.hasString()) {
+			return false
+		}
+		fr, ok := parseScalarRange(fv)
+		if !ok || !fr.within(pr) {
+			return false
+		}
+	}
+	return true
+}
+
+// scalarRange is a condition's bounds on one field; an equality has both,
+// inclusive and equal.
+type scalarRange struct {
+	lo, hi                   any
+	hasLo, hasHi             bool
+	loInclusive, hiInclusive bool
+}
+
+// parseScalarRange reads a bare number or string, or an operator document of
+// $eq, $gt, $gte, $lt and $lte over numbers or strings, as bounds.
+func parseScalarRange(v any) (scalarRange, bool) {
+	var r scalarRange
+	if !rangeComparable(v) {
+		doc, ok := v.(*types.Document)
+		if !ok || doc.Len() == 0 {
+			return r, false
+		}
+		first := must.NotFail(doc.Get(doc.Keys()[0]))
+		for _, op := range doc.Keys() {
+			ov := must.NotFail(doc.Get(op))
+			if !rangeComparable(ov) || !sameRangeBracket(ov, first) {
+				return r, false
+			}
+			switch op {
+			case "$eq":
+				r.setLo(ov, true)
+				r.setHi(ov, true)
+			case "$gt":
+				r.setLo(ov, false)
+			case "$gte":
+				r.setLo(ov, true)
+			case "$lt":
+				r.setHi(ov, false)
+			case "$lte":
+				r.setHi(ov, true)
+			default:
+				return r, false
+			}
+		}
+		return r, true
+	}
+	r.setLo(v, true)
+	r.setHi(v, true)
+	return r, true
+}
+
+func (r scalarRange) hasString() bool {
+	_, lo := r.lo.(string)
+	_, hi := r.hi.(string)
+	return lo || hi
+}
+
+func rangeComparable(v any) bool {
+	switch t := v.(type) {
+	case int32, int64, string:
+		return true
+	case float64:
+		return !math.IsNaN(t)
+	}
+	return false
+}
+
+func sameRangeBracket(a, b any) bool {
+	_, aStr := a.(string)
+	_, bStr := b.(string)
+	return aStr == bStr
+}
+
+// setLo keeps the tighter of the current and the given lower bound.
+func (r *scalarRange) setLo(v any, inclusive bool) {
+	if r.hasLo {
+		c := compareScalars(v, r.lo)
+		if c < 0 || (c == 0 && inclusive) {
+			return
+		}
+	}
+	r.lo, r.loInclusive, r.hasLo = v, inclusive, true
+}
+
+// setHi keeps the tighter of the current and the given upper bound.
+func (r *scalarRange) setHi(v any, inclusive bool) {
+	if r.hasHi {
+		c := compareScalars(v, r.hi)
+		if c > 0 || (c == 0 && inclusive) {
+			return
+		}
+	}
+	r.hi, r.hiInclusive, r.hasHi = v, inclusive, true
+}
+
+// within reports whether every value r admits is admitted by outer. Each bound
+// is checked on its own, which also holds for array fields, where each bound
+// may be met by a different element.
+func (r scalarRange) within(outer scalarRange) bool {
+	if outer.hasLo {
+		if !r.hasLo || !sameRangeBracket(r.lo, outer.lo) {
+			return false
+		}
+		c := compareScalars(r.lo, outer.lo)
+		if c < 0 || (c == 0 && r.loInclusive && !outer.loInclusive) {
+			return false
+		}
+	}
+	if outer.hasHi {
+		if !r.hasHi || !sameRangeBracket(r.hi, outer.hi) {
+			return false
+		}
+		c := compareScalars(r.hi, outer.hi)
+		if c > 0 || (c == 0 && r.hiInclusive && !outer.hiInclusive) {
 			return false
 		}
 	}
@@ -1285,8 +1706,12 @@ func pickIndexForFilter(filter *types.Document, idxInfos []backends.IndexInfo, q
 		if err != nil {
 			continue
 		}
+		nullEq, exists := false, false
 		if _, _, ok := indexBoundsForFilterValue(v); !ok {
-			if _, inOK := indexPointRangesForIn(v); !inOK {
+			_, inOK := indexPointRangesForIn(v)
+			_, regexOK := regexPrefixRanges(v)
+			nullEq, exists = isNullEquality(v), isExistsTrue(v)
+			if !inOK && !(regexOK && queryIdentity == "") && !nullEq && !exists {
 				continue
 			}
 		}
@@ -1299,11 +1724,14 @@ func pickIndexForFilter(filter *types.Document, idxInfos []backends.IndexInfo, q
 			if idx.Lossy || len(idx.Key) == 0 || idx.Key[0].Field != k {
 				continue
 			}
+			if (nullEq && !nullEqualityIndexable(idx)) || (exists && !existsIndexable(idx)) {
+				continue
+			}
 			if collation.Parse(idx.Collation).Identity() != queryIdentity {
 				continue
 			}
 			partial := idx.PartialFilterExpression != nil
-			if partial && !filterImpliesPartial(filter, idx.PartialFilterExpression) {
+			if partial && !filterImpliesPartial(filter, idx.PartialFilterExpression, collation.Parse(idx.Collation).IsSimple()) {
 				continue
 			}
 			rank := indexRank(len(idx.Key) > 1, partial)
@@ -2758,7 +3186,7 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 		if idx.Lossy {
 			continue
 		}
-		if idx.PartialFilterExpression != nil && !filterImpliesPartial(filter, idx.PartialFilterExpression) {
+		if idx.PartialFilterExpression != nil && !filterImpliesPartial(filter, idx.PartialFilterExpression, collation.Parse(idx.Collation).IsSimple()) {
 			continue
 		}
 		if collation.Parse(idx.Collation).Identity() != queryIdentity {
@@ -2906,12 +3334,29 @@ func (c *collection) DistinctScan(ctx context.Context, params *backends.Distinct
 		return nil, err
 	}
 
+	var start, stop []byte
+	if params.Filter != nil {
+		if params.Filter.Len() != 1 || params.Filter.Keys()[0] != params.Key || strings.Contains(params.Key, ".") {
+			return nil, nil
+		}
+		var ok bool
+		if start, stop, ok = indexBoundsForFilterValue(must.NotFail(params.Filter.Get(params.Key))); !ok {
+			return nil, nil
+		}
+	}
+
 	var (
 		idxMap prolly.Map
 		found  bool
 	)
 	for i, idx := range idxInfos {
 		if len(idx.Key) != 1 {
+			continue
+		}
+		// A filtered scan bounds array elements one at a time, while a matched
+		// document contributes all of its elements; a hidden index serves no
+		// query.
+		if params.Filter != nil && (idx.Multikey || idx.Hidden) {
 			continue
 		}
 		// Lossy indexes hold entries at wrong byte positions (and the
@@ -2947,7 +3392,7 @@ func (c *collection) DistinctScan(ctx context.Context, params *backends.Distinct
 		return nil, nil
 	}
 
-	values, err := scanDistinctFromIndex(ctx, idxMap, m, state.ns, params.Key)
+	values, err := scanDistinctFromIndex(ctx, idxMap, m, state.ns, params.Key, start, stop, params.Filter)
 	if err != nil {
 		return nil, err
 	}
@@ -2961,13 +3406,17 @@ func (c *collection) DistinctScan(ctx context.Context, params *backends.Distinct
 // KeyString prefix share a distinct value, so a single doc fetch per group
 // suffices to recover the original typed value. Each fetched doc contributes
 // its MongoDB index keys, including null for a missing field and undefined for
-// an empty array, as MongoDB's DISTINCT_SCAN does.
+// an empty array, as MongoDB's DISTINCT_SCAN does. Only entries in
+// [start, stop) are read, and a group counts only when its fetched document
+// matches filter, when set.
 func scanDistinctFromIndex(
 	ctx context.Context,
 	idxMap prolly.Map,
 	primary prolly.Map,
 	ns tree.NodeStore,
 	field string,
+	start, stop []byte,
+	filter *types.Document,
 ) ([]any, error) {
 	const primaryIDLen = 20
 
@@ -2976,7 +3425,7 @@ func scanDistinctFromIndex(
 		return nil, err
 	}
 
-	iter, err := idxMap.IterAll(ctx)
+	iter, err := idxpkg.IterKeyRange(ctx, idxMap, start, stop)
 	if err != nil {
 		return nil, fmt.Errorf("distinct scan iterating index: %w", err)
 	}
@@ -3027,6 +3476,15 @@ func scanDistinctFromIndex(
 		doc, err := lookupDocFromPrimary(ctx, primary, ns, idBytes, nil)
 		if err != nil {
 			return nil, err
+		}
+		if doc != nil && filter != nil {
+			match, err := backends.MatchPartialFilter(doc, filter)
+			if err != nil {
+				return nil, err
+			}
+			if !match {
+				doc = nil
+			}
 		}
 		if doc != nil {
 			out = append(out, commonpath.IndexKeyValues(doc, path)...)
@@ -3835,8 +4293,12 @@ type mapIter struct {
 	// true means "may match  -- run the full filter downstream." A nil
 	// prefilter keeps the unconditional full-scan behavior.
 	prefilter func([]byte) bool
-	fields    []string
-	buf       []byte
+	// prefixReject, if non-nil, rejects a document stored out of band from
+	// its first chunk when that alone proves the filter cannot match.
+	prefixReject func([]byte) bool
+	fields       []string
+	lazy         bool
+	buf          []byte
 	// release, if set, unpins the iterated map's root from GC on Close.
 	release func()
 }
@@ -3905,8 +4367,9 @@ func (it *mapIter) Next() (struct{}, *types.Document, error) {
 		}
 
 		var jsonBytes []byte
-		jsonBytes, it.buf, err = readStoredBytesReusing(it.ctx, it.ns, v, it.buf)
-		if err != nil {
+		var rejected bool
+		jsonBytes, it.buf, rejected, err = readStoredBytesUnlessRejected(it.ctx, it.ns, v, it.buf, it.prefixReject)
+		if err != nil || rejected {
 			continue
 		}
 
@@ -3916,8 +4379,13 @@ func (it *mapIter) Next() (struct{}, *types.Document, error) {
 				continue
 			}
 		}
-		doc, err = bsonToDocFields(jsonBytes, it.fields)
-		if err != nil {
+		if it.lazy {
+			raw, err := stripVersion(jsonBytes)
+			if err != nil {
+				return struct{}{}, nil, err
+			}
+			doc = types.NewLazyDocument(bytes.Clone(raw))
+		} else if doc, err = bsonToDocFields(jsonBytes, it.fields); err != nil {
 			return struct{}{}, nil, err
 		}
 

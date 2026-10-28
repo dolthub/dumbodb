@@ -258,10 +258,14 @@ adminA.runCommand({ dumboBackup: 1, action: "sync-url", db: "inventory", url: "f
 db.getSiblingDB("inventory").runCommand({ dumboRemote: 1, action: "add", name: "origin", url: "file:///tmp/dumbo-backup-nightly" })
 // Expected: ok: 0; errmsg: dumboRemote add: url "file:///tmp/dumbo-backup-nightly" is already used by backup "orders.nightly"
 
-// Clone would register the backup as its origin remote, so it is refused too
+// A backup's URL can be cloned as a plain database: no origin remote,
+// tracking refs or upstream, and the URL still cannot become a remote
 adminA.runCommand({ dumboClone: 1, from: "file:///tmp/dumbo-backup-nightly", as: "loot" })
-// Expected: ok: 0; errmsg: dumboClone: url "file:///tmp/dumbo-backup-nightly" is already used by backup "orders.nightly"
-// and no database named "loot" exists
+// Expected: { db: "loot", from: "file:///tmp/dumbo-backup-nightly", ok: 1 }
+db.getSiblingDB("loot").runCommand({ dumboRemote: 1, action: "list" })
+// Expected: { remotes: [], ok: 1 }
+db.getSiblingDB("loot").runCommand({ dumboRemote: 1, action: "add", name: "origin", url: "file:///tmp/dumbo-backup-nightly" })
+// Expected: ok: 0; errmsg: dumboRemote add: url "file:///tmp/dumbo-backup-nightly" is already used by backup "orders.nightly"
 ```
 
 A database may sync to its own backup's URL with `sync-url`:
@@ -364,6 +368,6 @@ Repeat for `add`, `remove`, `sync`, `sync-url` and `restore`: all return
 - A backup carries every branch, tag and working set, so uncommitted changes are restored.
 - Remotes, backups, users and branch config live in `admin` and are not carried.
 - `restore` refuses an existing database unless `force` is set; `force` drops it first, so it can be undropped.
-- A backup URL cannot be a remote's or another database's backup URL, and cannot be cloned from.
+- A backup URL cannot be a remote's or another database's backup URL. It may be cloned with `dumboClone`, which gives the clone no origin remote, tracking refs or upstream.
 - `list`, `sync` and `sync-url` may run on a replica-set secondary; `add`, `remove` and `restore` may not.
 - Every action is refused under `--auth`.
