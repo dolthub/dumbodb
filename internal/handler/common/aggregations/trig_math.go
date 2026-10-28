@@ -680,3 +680,44 @@ func binary128ToDecimal(y *big.Float) types.Decimal128 {
 	}
 	return APDToDecimal128(x)
 }
+
+var (
+	// doublePi and the factors derived from it are computed in float64, as
+	// MongoDB's kDoublePiOver180 and kDouble180OverPi are; a Go constant
+	// expression would be evaluated exactly instead.
+	doublePi        = 3.141592653589793
+	doublePiOver180 = doublePi / 180.0
+	double180OverPi = 180.0 / doublePi
+	decimalRadianPi = func() *apd.Decimal {
+		d, _, _ := apd.NewFromString("3.14159265358979323846264338327950288419716939937510")
+		return DecimalToAPD(APDToDecimal128(d))
+	}()
+	decimalPiOver180 = decimalQuo(decimalRadianPi, apd.New(180, 0))
+	decimal180OverPi = decimalQuo(apd.New(180, 0), decimalRadianPi)
+)
+
+// DegreesToRadiansDouble is MongoDB's double $degreesToRadians.
+func DegreesToRadiansDouble(x float64) float64 { return x * doublePiOver180 }
+
+// RadiansToDegreesDouble is MongoDB's double $radiansToDegrees.
+func RadiansToDegreesDouble(x float64) float64 { return x * double180OverPi }
+
+// DegreesToRadiansDecimal is MongoDB's Decimal128 $degreesToRadians.
+func DegreesToRadiansDecimal(d types.Decimal128) types.Decimal128 {
+	return decimalMultiply(d, decimalPiOver180)
+}
+
+// RadiansToDegreesDecimal is MongoDB's Decimal128 $radiansToDegrees.
+func RadiansToDegreesDecimal(d types.Decimal128) types.Decimal128 {
+	return decimalMultiply(d, decimal180OverPi)
+}
+
+func decimalMultiply(d types.Decimal128, factor *apd.Decimal) types.Decimal128 {
+	x := SignedDecimalToAPD(d)
+	if x.Form == apd.NaN {
+		return decimalNaN
+	}
+	product := new(apd.Decimal)
+	_, _ = decimal128Context.Mul(product, x, factor)
+	return signedAPDToDecimal128(product)
+}

@@ -173,6 +173,11 @@ var (
 	newAsinh = newTrigOperator("$asinh", nil, trigDouble(aggregations.Asinh), trigDecimal(aggregations.Asinh))
 	newAcosh = newTrigOperator("$acosh", acoshTrigBounds, trigDouble(aggregations.Acosh), trigDecimal(aggregations.Acosh))
 	newAtanh = newTrigOperator("$atanh", unitTrigBounds, trigDouble(aggregations.Atanh), trigDecimal(aggregations.Atanh))
+
+	newDegreesToRadians = newTrigOperator("$degreesToRadians", nil,
+		aggregations.DegreesToRadiansDouble, aggregations.DegreesToRadiansDecimal)
+	newRadiansToDegrees = newTrigOperator("$radiansToDegrees", nil,
+		aggregations.RadiansToDegreesDouble, aggregations.RadiansToDegreesDecimal)
 )
 
 // atan2Op represents { $atan2: [ <y>, <x> ] }. Like MongoDB's
