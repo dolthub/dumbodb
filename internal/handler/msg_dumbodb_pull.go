@@ -39,7 +39,7 @@ import (
 func (h *Handler) MsgDumboDBPull(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
-		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
+		return nil, versioningError(connCtx, err)
 	}
 
 	if err = h.rejectClientIdentityFields(document); err != nil {
@@ -153,7 +153,7 @@ func (h *Handler) MsgDumboDBPull(connCtx context.Context, msg *wire.OpMsg) (*wir
 				"errmsg", err.Error(),
 			)))
 		}
-		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
+		return nil, versioningError(connCtx, err)
 	}
 
 	out := must.NotFail(types.NewDocument(

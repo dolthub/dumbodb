@@ -69,7 +69,7 @@ func versioningReplyError(err error) error {
 func (h *Handler) MsgDumboDBDiff(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
-		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
+		return nil, versioningError(connCtx, err)
 	}
 
 	if err = common.RejectUnknownFields(document, "from", "to"); err != nil {
@@ -670,6 +670,23 @@ func (h *Handler) versioningBackend() backends.VersioningBackend {
 	return vb
 }
 
+// versioningError reports a version-control command's backend failure. A lost
+// race and a refusal over uncommitted changes each get a code of their own, so
+// a client can tell "run it again" and "commit or reset first" from a failure
+// without reading the message.
+func versioningError(ctx context.Context, err error) error {
+	switch {
+	case errors.Is(err, backends.ErrWriteRaced):
+		if ci := conninfo.GetIfPresent(ctx); ci != nil && ci.InTransaction() {
+			return handlererrors.NewCommandErrorWithLabels(handlererrors.ErrWriteConflict, err, handlererrors.TransientTransactionErrorLabel)
+		}
+		return handlererrors.NewCommandError(handlererrors.ErrWriteConflict, err)
+	case errors.Is(err, backends.ErrUncommittedChanges):
+		return handlererrors.NewCommandErrorMsg(handlererrors.ErrConflictingOperationInProgress, err.Error())
+	}
+	return handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
+}
+
 // MsgDumboDBCommit implements the `dumboDBCommit` command.
 //
 // It commits the current working set on the branch encoded in $db (format: "dbname@branch").
@@ -677,7 +694,7 @@ func (h *Handler) versioningBackend() backends.VersioningBackend {
 func (h *Handler) MsgDumboDBCommit(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
-		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
+		return nil, versioningError(connCtx, err)
 	}
 
 	if err = h.rejectClientIdentityFields(document); err != nil {
@@ -765,7 +782,7 @@ func (h *Handler) MsgDumboDBCommit(connCtx context.Context, msg *wire.OpMsg) (*w
 				"dumboCommit: "+err.Error(),
 			)
 		}
-		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
+		return nil, versioningError(connCtx, err)
 	}
 
 	return documentOpMsg(
@@ -991,7 +1008,7 @@ func setUpdateLeaf(up *backends.BranchConfigUpdate, path, val string) {
 func (h *Handler) MsgDumboDBBranch(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
-		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
+		return nil, versioningError(connCtx, err)
 	}
 
 	if err = common.RejectUnknownFields(document, "action", "branch", "setConfig", "force"); err != nil {
@@ -1093,7 +1110,7 @@ func (h *Handler) MsgDumboDBBranch(connCtx context.Context, msg *wire.OpMsg) (*w
 		ConfigUpdate: configUpdate,
 	})
 	if err != nil {
-		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
+		return nil, versioningError(connCtx, err)
 	}
 
 	if res.Configured {
@@ -1170,7 +1187,7 @@ func (h *Handler) MsgDumboDBBranch(connCtx context.Context, msg *wire.OpMsg) (*w
 func (h *Handler) MsgDumboDBMerge(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
-		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
+		return nil, versioningError(connCtx, err)
 	}
 
 	if err = h.rejectClientIdentityFields(document); err != nil {
@@ -1216,7 +1233,7 @@ func (h *Handler) MsgDumboDBMerge(connCtx context.Context, msg *wire.OpMsg) (*wi
 			Abort:  true,
 		})
 		if mergeErr != nil {
-			return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, mergeErr.Error())
+			return nil, versioningError(connCtx, mergeErr)
 		}
 		return documentOpMsg(
 			must.NotFail(types.NewDocument(
@@ -1264,7 +1281,7 @@ func (h *Handler) MsgDumboDBMerge(connCtx context.Context, msg *wire.OpMsg) (*wi
 					"errmsg", conflictErr.Error(),
 				)))
 			}
-			return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, mergeErr.Error())
+			return nil, versioningError(connCtx, mergeErr)
 		}
 		contDoc := must.NotFail(types.NewDocument(
 			"commitId", res.CommitID,
@@ -1366,7 +1383,7 @@ func (h *Handler) MsgDumboDBMerge(connCtx context.Context, msg *wire.OpMsg) (*wi
 				)),
 			)
 		}
-		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, mergeErr.Error())
+		return nil, versioningError(connCtx, mergeErr)
 	}
 
 	mergeDoc := must.NotFail(types.NewDocument(
@@ -1393,7 +1410,7 @@ func (h *Handler) MsgDumboDBMerge(connCtx context.Context, msg *wire.OpMsg) (*wi
 func (h *Handler) MsgDumboDBConflicts(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
-		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
+		return nil, versioningError(connCtx, err)
 	}
 
 	if err = common.RejectUnknownFields(document); err != nil {
@@ -1423,7 +1440,7 @@ func (h *Handler) MsgDumboDBConflicts(connCtx context.Context, msg *wire.OpMsg) 
 		Branch: branch,
 	})
 	if err != nil {
-		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
+		return nil, versioningError(connCtx, err)
 	}
 
 	type conflictOut struct {
@@ -1618,7 +1635,7 @@ func (h *Handler) MsgDumboDBConflicts(connCtx context.Context, msg *wire.OpMsg) 
 func (h *Handler) MsgDumboDBResolveConflict(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
-		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
+		return nil, versioningError(connCtx, err)
 	}
 
 	if err = common.RejectUnknownFields(document, "collection", "conflictId", "resolution", "value"); err != nil {
@@ -1686,7 +1703,7 @@ func (h *Handler) MsgDumboDBResolveConflict(connCtx context.Context, msg *wire.O
 		Value:      value,
 	})
 	if err != nil {
-		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
+		return nil, versioningError(connCtx, err)
 	}
 
 	return documentOpMsg(
@@ -1716,7 +1733,7 @@ func docHasOperatorKey(d *types.Document) bool {
 func (h *Handler) MsgDumboDBLog(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
-		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
+		return nil, versioningError(connCtx, err)
 	}
 
 	if err = common.RejectUnknownFields(document, "limit", "stat", "patch", "all", "from", "filters"); err != nil {
@@ -2012,7 +2029,7 @@ func (h *Handler) MsgDumboDBLog(connCtx context.Context, msg *wire.OpMsg) (*wire
 func (h *Handler) MsgDumboDBBranchStatus(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
-		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
+		return nil, versioningError(connCtx, err)
 	}
 
 	if err = common.RejectUnknownFields(document, "base", "targets"); err != nil {
@@ -2102,7 +2119,7 @@ func (h *Handler) MsgDumboDBBranchStatus(connCtx context.Context, msg *wire.OpMs
 		Targets: resolvedTargets,
 	})
 	if err != nil {
-		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
+		return nil, versioningError(connCtx, err)
 	}
 
 	targetsArr := types.MakeArray(len(res.Entries))
@@ -2146,7 +2163,7 @@ func (h *Handler) MsgDumboDBBranchStatus(connCtx context.Context, msg *wire.OpMs
 func (h *Handler) MsgDumboDBReset(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
-		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
+		return nil, versioningError(connCtx, err)
 	}
 
 	if err = common.RejectUnknownFields(document, "to", "hard"); err != nil {
@@ -2203,7 +2220,7 @@ func (h *Handler) MsgDumboDBReset(connCtx context.Context, msg *wire.OpMsg) (*wi
 		Hard:     hard,
 	})
 	if err != nil {
-		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
+		return nil, versioningError(connCtx, err)
 	}
 
 	return documentOpMsg(
@@ -2221,7 +2238,7 @@ func (h *Handler) MsgDumboDBReset(connCtx context.Context, msg *wire.OpMsg) (*wi
 func (h *Handler) MsgDumboDBStatus(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
-		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
+		return nil, versioningError(connCtx, err)
 	}
 
 	if err = common.RejectUnknownFields(document); err != nil {
@@ -2251,7 +2268,7 @@ func (h *Handler) MsgDumboDBStatus(connCtx context.Context, msg *wire.OpMsg) (*w
 		Branch: branch,
 	})
 	if err != nil {
-		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
+		return nil, versioningError(connCtx, err)
 	}
 
 	dirty := len(res.Tables) > 0 || res.MergeOp != "" || len(res.Views) > 0
@@ -2307,7 +2324,7 @@ func (h *Handler) MsgDumboDBStatus(connCtx context.Context, msg *wire.OpMsg) (*w
 func (h *Handler) MsgDumboDBCherryPick(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
-		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
+		return nil, versioningError(connCtx, err)
 	}
 
 	if err = h.rejectClientIdentityFields(document); err != nil {
@@ -2353,7 +2370,7 @@ func (h *Handler) MsgDumboDBCherryPick(connCtx context.Context, msg *wire.OpMsg)
 			Abort:  true,
 		})
 		if pickErr != nil {
-			return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, pickErr.Error())
+			return nil, versioningError(connCtx, pickErr)
 		}
 		return documentOpMsg(
 			must.NotFail(types.NewDocument(
@@ -2391,7 +2408,7 @@ func (h *Handler) MsgDumboDBCherryPick(connCtx context.Context, msg *wire.OpMsg)
 			Committer: committerParam,
 		})
 		if pickErr != nil {
-			return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, pickErr.Error())
+			return nil, versioningError(connCtx, pickErr)
 		}
 		return documentOpMsg(
 			must.NotFail(types.NewDocument(
@@ -2471,7 +2488,7 @@ func (h *Handler) MsgDumboDBCherryPick(connCtx context.Context, msg *wire.OpMsg)
 				)),
 			)
 		}
-		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, pickErr.Error())
+		return nil, versioningError(connCtx, pickErr)
 	}
 
 	return documentOpMsg(
@@ -2505,7 +2522,7 @@ func (h *Handler) MsgDumboDBCherryPick(connCtx context.Context, msg *wire.OpMsg)
 func (h *Handler) MsgDumboDBRebase(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
-		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
+		return nil, versioningError(connCtx, err)
 	}
 
 	if err = h.rejectClientIdentityFields(document); err != nil {
@@ -2569,7 +2586,7 @@ func (h *Handler) MsgDumboDBRebase(connCtx context.Context, msg *wire.OpMsg) (*w
 			Abort:  true,
 		})
 		if rebaseErr != nil {
-			return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, rebaseErr.Error())
+			return nil, versioningError(connCtx, rebaseErr)
 		}
 		return documentOpMsg(
 			must.NotFail(types.NewDocument(
@@ -2607,7 +2624,7 @@ func (h *Handler) MsgDumboDBRebase(connCtx context.Context, msg *wire.OpMsg) (*w
 					)),
 				)
 			}
-			return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, rebaseErr.Error())
+			return nil, versioningError(connCtx, rebaseErr)
 		}
 		return documentOpMsg(
 			must.NotFail(types.NewDocument(
@@ -2660,7 +2677,7 @@ func (h *Handler) MsgDumboDBRebase(connCtx context.Context, msg *wire.OpMsg) (*w
 				)),
 			)
 		}
-		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, rebaseErr.Error())
+		return nil, versioningError(connCtx, rebaseErr)
 	}
 
 	return documentOpMsg(
@@ -2691,7 +2708,7 @@ func (h *Handler) MsgDumboDBRebase(connCtx context.Context, msg *wire.OpMsg) (*w
 func (h *Handler) MsgDumboDBRevert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
-		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
+		return nil, versioningError(connCtx, err)
 	}
 
 	if err = h.rejectClientIdentityFields(document); err != nil {
@@ -2737,7 +2754,7 @@ func (h *Handler) MsgDumboDBRevert(connCtx context.Context, msg *wire.OpMsg) (*w
 			Abort:  true,
 		})
 		if revertErr != nil {
-			return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, revertErr.Error())
+			return nil, versioningError(connCtx, revertErr)
 		}
 		return documentOpMsg(
 			must.NotFail(types.NewDocument(
@@ -2768,7 +2785,7 @@ func (h *Handler) MsgDumboDBRevert(connCtx context.Context, msg *wire.OpMsg) (*w
 			Author:   author,
 		})
 		if revertErr != nil {
-			return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, revertErr.Error())
+			return nil, versioningError(connCtx, revertErr)
 		}
 		return documentOpMsg(
 			must.NotFail(types.NewDocument(
@@ -2840,7 +2857,7 @@ func (h *Handler) MsgDumboDBRevert(connCtx context.Context, msg *wire.OpMsg) (*w
 				)),
 			)
 		}
-		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, revertErr.Error())
+		return nil, versioningError(connCtx, revertErr)
 	}
 
 	return documentOpMsg(
@@ -2876,7 +2893,7 @@ func (h *Handler) MsgDumboDBRevert(connCtx context.Context, msg *wire.OpMsg) (*w
 func (h *Handler) MsgDumboDBTag(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
-		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
+		return nil, versioningError(connCtx, err)
 	}
 
 	if err = h.rejectClientIdentityFields(document); err != nil {
@@ -2974,7 +2991,7 @@ func (h *Handler) MsgDumboDBTag(connCtx context.Context, msg *wire.OpMsg) (*wire
 		Author:  author,
 	})
 	if err != nil {
-		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
+		return nil, versioningError(connCtx, err)
 	}
 
 	// For create/delete (name was provided), return a single tag object.
@@ -3038,7 +3055,7 @@ func (h *Handler) MsgDumboDBTag(connCtx context.Context, msg *wire.OpMsg) (*wire
 func (h *Handler) MsgDumboDBGC(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
-		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
+		return nil, versioningError(connCtx, err)
 	}
 
 	if err = common.RejectUnknownFields(document, "mode"); err != nil {
@@ -3073,7 +3090,7 @@ func (h *Handler) MsgDumboDBGC(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		Mode:   mode,
 	})
 	if err != nil {
-		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
+		return nil, versioningError(connCtx, err)
 	}
 
 	// Encode numeric fields as float64 (BSON Double). Int64s

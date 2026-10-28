@@ -96,6 +96,7 @@ func TestVCOpsInATransactionCountItsUnpublishedWrites(t *testing.T) {
 
 			err = client.Database(f.dbName).RunCommand(sc, op(f)).Err()
 			require.ErrorContains(t, err, "uncommitted", "the operation must count the transaction's writes")
+			require.EqualValues(t, 117, mongoCommandCode(err), "a refusal over uncommitted changes is ConflictingOperationInProgress")
 			require.NoError(t, sess.CommitTransaction(ctx))
 
 			n, err := env.Client.Database(f.dbName).Collection("items").CountDocuments(ctx, bson.D{{Key: "_id", Value: "in-txn"}})

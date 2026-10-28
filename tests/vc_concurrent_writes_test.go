@@ -159,10 +159,7 @@ func TestVCOpsUnderConcurrentWritesKeepEveryAcknowledgedWrite(t *testing.T) {
 	// the branch had uncommitted changes, or a write landed while it ran.
 	refused := func(err error) bool {
 		var cmdErr mongo.CommandError
-		if errors.As(err, &cmdErr) && cmdErr.Code == 112 {
-			return true
-		}
-		return err != nil && (strings.Contains(err.Error(), "uncommitted changes") || strings.Contains(err.Error(), "write raced"))
+		return errors.As(err, &cmdErr) && (cmdErr.Code == 112 || cmdErr.Code == 117)
 	}
 	attempts := map[string]int{}
 	// races counts attempts that started on a clean branch and lost to a write
@@ -176,7 +173,7 @@ func TestVCOpsUnderConcurrentWritesKeepEveryAcknowledgedWrite(t *testing.T) {
 				attempts[strings.Fields(what)[0]] += attempt
 				return res
 			}
-			if strings.Contains(err.Error(), "write raced") {
+			if mongoCommandCode(err) == 112 {
 				races++
 			}
 			require.True(t, refused(err), "%s failed: %v", what, err)

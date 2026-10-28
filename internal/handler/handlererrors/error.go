@@ -129,6 +129,11 @@ const (
 
 	ErrCommandNotSupported = ErrorCode(115) // CommandNotSupported
 
+	// ErrConflictingOperationInProgress refuses an operation that something
+	// else on its target -- uncommitted changes on a branch -- keeps from
+	// starting until it is dealt with.
+	ErrConflictingOperationInProgress = ErrorCode(117) // ConflictingOperationInProgress
+
 	ErrDocumentValidationFailure = ErrorCode(121) // DocumentValidationFailure
 
 	ErrInvalidIndexSpecificationOption = ErrorCode(197) // InvalidIndexSpecificationOption
