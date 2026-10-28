@@ -68,6 +68,7 @@ func GetDistinctParams(document *types.Document, l *slog.Logger) (*DistinctParam
 
 	switch filter := dp.Query.(type) {
 	case *types.Document:
+		CanonicalizeFilter(filter)
 		dp.Filter = filter
 	case types.NullType, nil:
 		dp.Filter = types.MakeDocument(0)

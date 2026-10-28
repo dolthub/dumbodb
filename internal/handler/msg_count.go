@@ -49,6 +49,7 @@ func (h *Handler) MsgCount(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMs
 		return nil, err
 	}
 
+	common.CanonicalizeFilter(params.Filter)
 	if err := common.ValidateFilter(params.Filter, nil); err != nil {
 		return nil, err
 	}

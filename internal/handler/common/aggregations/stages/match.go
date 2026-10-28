@@ -53,7 +53,7 @@ func NewMatchStage(stage *types.Document, cmp *collation.Comparator) (aggregatio
 	}
 
 	return &match{
-		filter: filter,
+		filter: canonicalMatchFilter(filter),
 		cmp:    cmp,
 	}, nil
 }
@@ -94,3 +94,10 @@ func validateMatch(filter *types.Document) error {
 var (
 	_ aggregations.Stage = (*match)(nil)
 )
+
+// canonicalMatchFilter puts the document values $match compares against in
+// the sorted-key form documents are stored in.
+func canonicalMatchFilter(filter *types.Document) *types.Document {
+	common.CanonicalizeFilter(filter)
+	return filter
+}

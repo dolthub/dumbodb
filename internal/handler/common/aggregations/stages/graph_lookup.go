@@ -159,6 +159,7 @@ func NewGraphLookupStage(stage *types.Document, fetcher CollectionFetcher) (aggr
 			)
 		}
 
+		common.CanonicalizeFilter(rswmDoc)
 		gl.restrictSearchWithMatch = rswmDoc
 	}
 

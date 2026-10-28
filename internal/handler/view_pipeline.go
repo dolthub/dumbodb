@@ -412,6 +412,7 @@ func viewSourceIterator(ctx context.Context, db backends.Database, viewName, vie
 	// rename or compute fields, making that unsound).
 	qp := &backends.QueryParams{Collated: cmp != nil}
 	filter, _ := aggregations.GetPushdownQuery(rawStages)
+	common.CanonicalizeFilter(filter)
 
 	if !disablePushdown {
 		qp.Filter = filter

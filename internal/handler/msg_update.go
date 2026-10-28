@@ -152,6 +152,7 @@ func (h *Handler) updateDocument(ctx context.Context, params *common.UpdateParam
 
 		cmp := collation.Parse(u.Collation).Comparator()
 
+		common.CanonicalizeFilter(u.Filter)
 		if err := common.ValidateFilter(u.Filter, cmp); err != nil {
 			// MongoDB reports an update's invalid filter as a write error.
 			var ce *handlererrors.CommandError

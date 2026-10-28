@@ -133,5 +133,7 @@ func GetFindAndModifyParams(doc *types.Document, l *slog.Logger) (*FindAndModify
 
 	params.HasUpdateOperators = hasUpdateOperators
 
+	CanonicalizeFilter(params.Query)
+
 	return &params, nil
 }

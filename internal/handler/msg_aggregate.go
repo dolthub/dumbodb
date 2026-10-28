@@ -381,6 +381,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 
 	if len(collStatsDocuments) == len(stagesDocuments) {
 		filter, sort := aggregations.GetPushdownQuery(aggregationStages)
+		common.CanonicalizeFilter(filter)
 
 		// only documents stages or no stages - fetch documents from the DB and apply stages to them
 		qp := new(backends.QueryParams)
