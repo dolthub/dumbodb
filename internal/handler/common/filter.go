@@ -484,12 +484,9 @@ func filterFieldExpr(doc *types.Document, filterKey, filterSuffix string, expr *
 		return false, nil
 	}
 
-	for _, exprKey := range expr.Keys() {
-		if err := checkUndefinedOperand(exprKey, must.NotFail(expr.Get(exprKey))); err != nil {
-			return false, err
-		}
-	}
-
+	// ValidateFilter raises an undefined operand before any document is read,
+	// even behind an operator that does not match; checking each operator as
+	// it is reached keeps the same error for other callers.
 	for _, exprKey := range expr.Keys() {
 		if exprKey == "$options" {
 			// handled by $regex
@@ -497,6 +494,9 @@ func filterFieldExpr(doc *types.Document, filterKey, filterSuffix string, expr *
 		}
 
 		exprValue := must.NotFail(expr.Get(exprKey))
+		if err := checkUndefinedOperand(exprKey, exprValue); err != nil {
+			return false, err
+		}
 
 		fieldValue, err := doc.Get(filterSuffix)
 		if err != nil {

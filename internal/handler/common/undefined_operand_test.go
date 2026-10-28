@@ -27,6 +27,8 @@ func TestFilterRejectsUndefinedOperands(t *testing.T) {
 	doc := func(pairs ...any) *types.Document { return must.NotFail(types.NewDocument(pairs...)) }
 	arr := func(values ...any) *types.Array { return must.NotFail(types.NewArray(values...)) }
 	target := doc("_id", int32(1), "f", int32(1))
+	_, err := FilterDocument(target, doc("f", doc("$eq", types.Undefined)))
+	require.ErrorContains(t, err, "cannot compare to undefined")
 	for _, tc := range []struct {
 		name   string
 		filter *types.Document
@@ -44,8 +46,7 @@ func TestFilterRejectsUndefinedOperands(t *testing.T) {
 		{"$elemMatch", doc("f", doc("$elemMatch", doc("$gte", types.Undefined))), "cannot compare to undefined"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := FilterDocument(target, tc.filter)
-			require.ErrorContains(t, err, tc.msg)
+			require.ErrorContains(t, ValidateFilter(tc.filter, nil), tc.msg)
 		})
 	}
 	for _, filter := range []*types.Document{
@@ -53,6 +54,7 @@ func TestFilterRejectsUndefinedOperands(t *testing.T) {
 		doc("f", arr(types.Undefined)),
 		doc("f", doc("x", types.Undefined)),
 	} {
+		require.NoError(t, ValidateFilter(filter, nil), "filter %v", filter)
 		_, err := FilterDocument(target, filter)
 		require.NoError(t, err, "filter %v", filter)
 	}
