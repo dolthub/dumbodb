@@ -631,6 +631,11 @@ func (c *conn) route(connCtx context.Context, reqHeader *wire.MsgHeader, reqBody
 
 	// set body for error
 	if err != nil {
+		// A write refused because its branch is paused on conflicts can reach
+		// here wrapped by any handler; it is a refusal, not an internal error.
+		if backends.ErrorCodeIs(err, backends.ErrorCodeBranchInConflict) {
+			err = common.TranslateBackendWriteError(connCtx, err)
+		}
 		switch resHeader.OpCode {
 		case wire.OpCodeMsg:
 			protoErr := handlererrors.ProtocolError(err)

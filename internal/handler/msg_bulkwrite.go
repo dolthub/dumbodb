@@ -664,6 +664,9 @@ func getInt64Value(v any) (int64, error) {
 // ErrOperationFailed when the error shape is opaque to avoid leaking raw Go
 // error strings as if they were MongoDB codes.
 func extractCommandError(err error) (int32, string) {
+	if backends.ErrorCodeIs(err, backends.ErrorCodeBranchInConflict) {
+		err = common.TranslateBackendWriteError(context.Background(), err)
+	}
 	var ce *handlererrors.CommandError
 	if errors.As(err, &ce) {
 		return int32(ce.Code()), ce.Err().Error()

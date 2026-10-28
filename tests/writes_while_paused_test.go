@@ -63,6 +63,7 @@ func TestWritesRefusedWhileAnOperationIsPausedOnConflicts(t *testing.T) {
 		t.Helper()
 		require.ErrorContains(t, err, "conflicting state", "%s must be refused while the merge is paused", what)
 		require.ErrorContains(t, err, "dumboResolveConflict", what)
+		require.NotContains(t, err.Error(), ".go:", "%s must carry the refusal, not an internal error", what)
 	}
 	_, err = items.InsertOne(ctx, bson.D{{Key: "_id", Value: "during"}})
 	refused("an insert", err)
@@ -71,6 +72,24 @@ func TestWritesRefusedWhileAnOperationIsPausedOnConflicts(t *testing.T) {
 	_, err = items.DeleteOne(ctx, bson.D{{Key: "_id", Value: "base"}})
 	refused("a delete", err)
 	refused("creating a collection", main.CreateCollection(ctx, "another"))
+	for name, err := range map[string]error{
+		"findOneAndUpdate": items.FindOneAndUpdate(ctx, bson.D{{Key: "_id", Value: "base"}}, bson.D{{Key: "$set", Value: bson.D{{Key: "t", Value: 1}}}}).Err(),
+		"findOneAndDelete": items.FindOneAndDelete(ctx, bson.D{{Key: "_id", Value: "base"}}).Err(),
+	} {
+		refused(name, err)
+		require.EqualValues(t, 96, mongoCommandCode(err), "%s must be refused as OperationFailed: %v", name, err)
+		require.NotContains(t, err.Error(), ".go:", "%s must carry the refusal, not an internal error", name)
+	}
+	var bulk bson.M
+	require.NoError(t, env.Client.Database("admin").RunCommand(ctx, bson.D{
+		{Key: "bulkWrite", Value: int32(1)},
+		{Key: "ops", Value: bson.A{bson.D{{Key: "insert", Value: int32(0)}, {Key: "document", Value: bson.D{{Key: "_id", Value: "bulk"}}}}}},
+		{Key: "nsInfo", Value: bson.A{bson.D{{Key: "ns", Value: dbName + ".items"}}}},
+	}).Decode(&bulk))
+	op := bulk["cursor"].(bson.M)["firstBatch"].(bson.A)[0].(bson.M)
+	require.EqualValues(t, 96, op["code"], "bulkWrite: %v", op)
+	require.Contains(t, op["errmsg"], "conflicting state")
+	require.NotContains(t, op["errmsg"], ".go:", "bulkWrite must carry the refusal, not a trace")
 	refused("committing a transaction begun before the pause", sess.CommitTransaction(ctx))
 
 	var conflicts bson.M
