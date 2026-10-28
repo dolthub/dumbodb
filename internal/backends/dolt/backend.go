@@ -1450,26 +1450,26 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 	if db.mergeState != nil && db.mergeState.intoBranch == branch {
 		if db.mergeState.hasUnresolvedConflicts() {
 			if db.mergeState.isRebase {
-				return nil, fmt.Errorf("dumboCommit: unresolved rebase conflicts remain")
+				return nil, refusePaused("dumboCommit: unresolved rebase conflicts remain")
 			}
 			if db.mergeState.isCherryPick {
-				return nil, fmt.Errorf("dumboCommit: unresolved cherry-pick conflicts remain")
+				return nil, refusePaused("dumboCommit: unresolved cherry-pick conflicts remain")
 			}
 			if db.mergeState.isRevert {
-				return nil, fmt.Errorf("dumboCommit: unresolved revert conflicts remain")
+				return nil, refusePaused("dumboCommit: unresolved revert conflicts remain")
 			}
-			return nil, fmt.Errorf("dumboCommit: unresolved merge conflicts remain")
+			return nil, refusePaused("dumboCommit: unresolved merge conflicts remain")
 		}
 		if db.mergeState.isRebase {
-			return nil, fmt.Errorf("dumboCommit: rebase in progress: use dumboRebase continue")
+			return nil, refusePaused("dumboCommit: rebase in progress: use dumboRebase continue")
 		}
 		if db.mergeState.isCherryPick {
-			return nil, fmt.Errorf("dumboCommit: cherry-pick in progress: use dumboCherryPick continue")
+			return nil, refusePaused("dumboCommit: cherry-pick in progress: use dumboCherryPick continue")
 		}
 		if db.mergeState.isRevert {
-			return nil, fmt.Errorf("dumboCommit: revert in progress: use dumboRevert continue")
+			return nil, refusePaused("dumboCommit: revert in progress: use dumboRevert continue")
 		}
-		return nil, fmt.Errorf("dumboCommit: merge in progress: use dumboMerge continue")
+		return nil, refusePaused("dumboCommit: merge in progress: use dumboMerge continue")
 	}
 
 	// The commit and the working set it leaves -- staged at the committed
@@ -1914,7 +1914,7 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 			return nil, err
 		}
 		if db.mergeState.hasUnresolvedConflicts() {
-			return nil, fmt.Errorf("dumboMerge: unresolved merge conflicts remain")
+			return nil, refusePaused("dumboMerge: unresolved merge conflicts remain")
 		}
 		ms := db.mergeState
 		var tip *branchTip
@@ -1954,13 +1954,13 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 	if db.mergeState != nil {
 		switch {
 		case db.mergeState.isRebase:
-			return nil, fmt.Errorf("DumboDBMerge: rebase in progress on branch %q; resolve conflicts or abort first", params.Into)
+			return nil, refusePaused("DumboDBMerge: rebase in progress on branch %q; resolve conflicts or abort first", params.Into)
 		case db.mergeState.isCherryPick:
-			return nil, fmt.Errorf("DumboDBMerge: cherry-pick in progress on branch %q; resolve conflicts or abort first", params.Into)
+			return nil, refusePaused("DumboDBMerge: cherry-pick in progress on branch %q; resolve conflicts or abort first", params.Into)
 		case db.mergeState.isRevert:
-			return nil, fmt.Errorf("DumboDBMerge: revert in progress on branch %q; resolve conflicts or abort first", params.Into)
+			return nil, refusePaused("DumboDBMerge: revert in progress on branch %q; resolve conflicts or abort first", params.Into)
 		default:
-			return nil, fmt.Errorf("DumboDBMerge: merge already in progress on branch %q; resolve conflicts or abort first", params.Into)
+			return nil, refusePaused("DumboDBMerge: merge already in progress on branch %q; resolve conflicts or abort first", params.Into)
 		}
 	}
 
@@ -2203,7 +2203,7 @@ func (b *Backend) DumboDBCherryPick(ctx context.Context, params *backends.Cherry
 			return nil, fmt.Errorf("DumboDBCherryPick: no cherry-pick in progress on branch %q", branch)
 		}
 		if db.mergeState.hasUnresolvedConflicts() {
-			return nil, fmt.Errorf("DumboDBCherryPick: unresolved cherry-pick conflicts remain")
+			return nil, refusePaused("DumboDBCherryPick: unresolved cherry-pick conflicts remain")
 		}
 		ms := db.mergeState
 		var tip *branchTip
@@ -2243,13 +2243,13 @@ func (b *Backend) DumboDBCherryPick(ctx context.Context, params *backends.Cherry
 	if db.mergeState != nil {
 		switch {
 		case db.mergeState.isRebase:
-			return nil, fmt.Errorf("DumboDBCherryPick: rebase in progress on branch %q; resolve conflicts or abort first", branch)
+			return nil, refusePaused("DumboDBCherryPick: rebase in progress on branch %q; resolve conflicts or abort first", branch)
 		case db.mergeState.isCherryPick:
-			return nil, fmt.Errorf("DumboDBCherryPick: cherry-pick already in progress on branch %q; resolve conflicts or abort first", branch)
+			return nil, refusePaused("DumboDBCherryPick: cherry-pick already in progress on branch %q; resolve conflicts or abort first", branch)
 		case db.mergeState.isRevert:
-			return nil, fmt.Errorf("DumboDBCherryPick: revert in progress on branch %q; resolve conflicts or abort first", branch)
+			return nil, refusePaused("DumboDBCherryPick: revert in progress on branch %q; resolve conflicts or abort first", branch)
 		default:
-			return nil, fmt.Errorf("DumboDBCherryPick: merge in progress on branch %q; resolve conflicts or abort first", branch)
+			return nil, refusePaused("DumboDBCherryPick: merge in progress on branch %q; resolve conflicts or abort first", branch)
 		}
 	}
 
@@ -3037,7 +3037,7 @@ func (b *Backend) dumboDBReset(
 	commitID = targetHash.String()
 
 	if db.mergeState != nil && db.mergeState.intoBranch == branch {
-		return nil, fmt.Errorf("DumboDBReset: an operation is paused on branch %q; continue or abort it first", branch)
+		return nil, refusePaused("DumboDBReset: an operation is paused on branch %q; continue or abort it first", branch)
 	}
 	tip, err := db.readCommandTip(ctx, branch)
 	if err != nil {
@@ -3352,7 +3352,7 @@ func (b *Backend) DumboDBRebase(ctx context.Context, params *backends.RebasePara
 			return nil, fmt.Errorf("DumboDBRebase: no rebase in progress on branch %q", branch)
 		}
 		if db.mergeState.hasUnresolvedConflicts() {
-			return nil, fmt.Errorf("DumboDBRebase: unresolved rebase conflicts remain")
+			return nil, refusePaused("DumboDBRebase: unresolved rebase conflicts remain")
 		}
 		ms := db.mergeState
 		var tip *branchTip
@@ -3406,13 +3406,13 @@ func (b *Backend) DumboDBRebase(ctx context.Context, params *backends.RebasePara
 	if db.mergeState != nil {
 		switch {
 		case db.mergeState.isRebase:
-			return nil, fmt.Errorf("DumboDBRebase: rebase already in progress on branch %q; resolve conflicts or abort first", branch)
+			return nil, refusePaused("DumboDBRebase: rebase already in progress on branch %q; resolve conflicts or abort first", branch)
 		case db.mergeState.isCherryPick:
-			return nil, fmt.Errorf("DumboDBRebase: cherry-pick in progress on branch %q; resolve conflicts or abort first", branch)
+			return nil, refusePaused("DumboDBRebase: cherry-pick in progress on branch %q; resolve conflicts or abort first", branch)
 		case db.mergeState.isRevert:
-			return nil, fmt.Errorf("DumboDBRebase: revert in progress on branch %q; resolve conflicts or abort first", branch)
+			return nil, refusePaused("DumboDBRebase: revert in progress on branch %q; resolve conflicts or abort first", branch)
 		default:
-			return nil, fmt.Errorf("DumboDBRebase: merge in progress on branch %q; resolve conflicts or abort first", branch)
+			return nil, refusePaused("DumboDBRebase: merge in progress on branch %q; resolve conflicts or abort first", branch)
 		}
 	}
 
@@ -3648,7 +3648,7 @@ func notAMerge(ms *mergeInProgress, step string) error {
 		return nil
 	}
 	cmd := map[string]string{"cherry-pick": "dumboCherryPick", "revert": "dumboRevert", "rebase": "dumboRebase"}[op]
-	return fmt.Errorf("DumboDBMerge: %s in progress on branch %q; use %s %s instead", op, ms.intoBranch, cmd, step)
+	return refusePaused("DumboDBMerge: %s in progress on branch %q; use %s %s instead", op, ms.intoBranch, cmd, step)
 }
 
 // prepareContinue settles ms.resolvedAM to the root a continue commits: the
@@ -3864,7 +3864,7 @@ func (b *Backend) DumboDBRevert(ctx context.Context, params *backends.RevertPara
 			return nil, fmt.Errorf("DumboDBRevert: no revert in progress on branch %q", branch)
 		}
 		if db.mergeState.hasUnresolvedConflicts() {
-			return nil, fmt.Errorf("DumboDBRevert: unresolved revert conflicts remain")
+			return nil, refusePaused("DumboDBRevert: unresolved revert conflicts remain")
 		}
 		ms := db.mergeState
 		var tip *branchTip
@@ -3895,13 +3895,13 @@ func (b *Backend) DumboDBRevert(ctx context.Context, params *backends.RevertPara
 	if db.mergeState != nil {
 		switch {
 		case db.mergeState.isRebase:
-			return nil, fmt.Errorf("DumboDBRevert: rebase in progress on branch %q; resolve conflicts or abort first", branch)
+			return nil, refusePaused("DumboDBRevert: rebase in progress on branch %q; resolve conflicts or abort first", branch)
 		case db.mergeState.isCherryPick:
-			return nil, fmt.Errorf("DumboDBRevert: cherry-pick in progress on branch %q; resolve conflicts or abort first", branch)
+			return nil, refusePaused("DumboDBRevert: cherry-pick in progress on branch %q; resolve conflicts or abort first", branch)
 		case db.mergeState.isRevert:
-			return nil, fmt.Errorf("DumboDBRevert: revert already in progress on branch %q; resolve conflicts or abort first", branch)
+			return nil, refusePaused("DumboDBRevert: revert already in progress on branch %q; resolve conflicts or abort first", branch)
 		default:
-			return nil, fmt.Errorf("DumboDBRevert: merge in progress on branch %q; resolve conflicts or abort first", branch)
+			return nil, refusePaused("DumboDBRevert: merge in progress on branch %q; resolve conflicts or abort first", branch)
 		}
 	}
 

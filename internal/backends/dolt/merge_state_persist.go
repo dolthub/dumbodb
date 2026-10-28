@@ -545,9 +545,21 @@ func refuseWritesWhilePaused(branch string, ws *doltdb.WorkingSet) error {
 	case ws.MergeState().IsRevert():
 		op, cmd = "revert", "dumboRevert"
 	}
-	return backends.NewError(backends.ErrorCodeBranchInConflict, fmt.Errorf(
+	return backends.NewError(backends.ErrorCodeBranchInConflict, refusePaused(
 		"branch %q is in a conflicting state: a %s is paused on conflicts, and no writes are accepted until it is finished. "+
 			"Resolve the conflicts with dumboResolveConflict, then run %s with continue (or abort)", branch, op, cmd))
+}
+
+// pausedRefusal is a refusal made because an operation is paused on
+// conflicts. It reads as its message and matches backends.ErrOperationPaused.
+type pausedRefusal struct{ msg string }
+
+func (e pausedRefusal) Error() string { return e.msg }
+
+func (e pausedRefusal) Is(target error) bool { return target == backends.ErrOperationPaused }
+
+func refusePaused(format string, args ...any) error {
+	return pausedRefusal{msg: fmt.Sprintf(format, args...)}
 }
 
 // loadNamespaceConflicts rebuilds the view and collection-metadata conflicts

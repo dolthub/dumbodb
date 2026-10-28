@@ -42,6 +42,7 @@ func TestVersioningErrorCodes(t *testing.T) {
 		{"lost race", conninfo.Ctx(context.Background(), conninfo.New()), fmt.Errorf("x: %w", backends.ErrWriteRaced), handlererrors.ErrWriteConflict, false},
 		{"lost race in a transaction", conninfo.Ctx(context.Background(), inTxn), fmt.Errorf("x: %w", backends.ErrWriteRaced), handlererrors.ErrWriteConflict, true},
 		{"uncommitted changes", conninfo.Ctx(context.Background(), conninfo.New()), fmt.Errorf("x: %w", backends.ErrUncommittedChanges), handlererrors.ErrConflictingOperationInProgress, false},
+		{"an operation paused on conflicts", conninfo.Ctx(context.Background(), conninfo.New()), refusal{}, handlererrors.ErrConflictResolutionRequired, false},
 		{"anything else", conninfo.Ctx(context.Background(), conninfo.New()), errors.New("boom"), handlererrors.ErrOperationFailed, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -52,3 +53,8 @@ func TestVersioningErrorCodes(t *testing.T) {
 		})
 	}
 }
+
+type refusal struct{}
+
+func (refusal) Error() string        { return "merge in progress" }
+func (refusal) Is(target error) bool { return target == backends.ErrOperationPaused }

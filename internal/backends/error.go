@@ -155,6 +155,11 @@ var ErrWriteRaced = errors.New("write raced another publish on this branch")
 // first. Callers match it with errors.Is.
 var ErrUncommittedChanges = errors.New("the branch has uncommitted changes")
 
+// ErrOperationPaused reports a command or write refused because a merge,
+// cherry-pick, revert or rebase is paused on conflicts on its branch. Callers
+// match it with errors.Is.
+var ErrOperationPaused = errors.New("an operation is paused on conflicts")
+
 // ErrorCodeIs reports whether err (or any error it wraps) is *Error with one
 // of the given error codes. Uses errors.As, so callers that wrap with
 // lazyerrors / fmt.Errorf still match.

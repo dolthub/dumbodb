@@ -134,6 +134,12 @@ const (
 	// starting until it is dealt with.
 	ErrConflictingOperationInProgress = ErrorCode(117) // ConflictingOperationInProgress
 
+	// ErrConflictResolutionRequired is dumbodb's own: a merge, cherry-pick,
+	// revert or rebase is paused on conflicts on the branch, and nothing else
+	// may change it until they are resolved and the operation is continued or
+	// aborted. Its number lies outside MongoDB's codes.
+	ErrConflictResolutionRequired = ErrorCode(2000000001) // ConflictResolutionRequired
+
 	ErrDocumentValidationFailure = ErrorCode(121) // DocumentValidationFailure
 
 	ErrInvalidIndexSpecificationOption = ErrorCode(197) // InvalidIndexSpecificationOption

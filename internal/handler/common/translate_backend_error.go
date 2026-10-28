@@ -35,7 +35,7 @@ func TranslateBackendWriteError(ctx context.Context, err error) error {
 	}
 	var branchInConflict *backends.Error
 	if errors.As(err, &branchInConflict) && branchInConflict.Code() == backends.ErrorCodeBranchInConflict {
-		return handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, branchInConflict.Message())
+		return handlererrors.NewCommandErrorMsg(handlererrors.ErrConflictResolutionRequired, branchInConflict.Message())
 	}
 	if backends.ErrorCodeIs(err, backends.ErrorCodeReadOnlyCollection) {
 		return handlererrors.NewCommandErrorMsg(

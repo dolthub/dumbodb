@@ -26,6 +26,9 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
+// conflictResolutionRequired is dumbodb's ConflictResolutionRequired code.
+const conflictResolutionRequired = 2000000001
+
 // While a merge is paused on conflicts the branch accepts no writes: every
 // kind is refused with an error saying so, including a transaction begun
 // before the pause, until the conflicts are resolved and the merge continued.
@@ -64,6 +67,7 @@ func TestWritesRefusedWhileAnOperationIsPausedOnConflicts(t *testing.T) {
 		require.ErrorContains(t, err, "conflicting state", "%s must be refused while the merge is paused", what)
 		require.ErrorContains(t, err, "dumboResolveConflict", what)
 		require.NotContains(t, err.Error(), ".go:", "%s must carry the refusal, not an internal error", what)
+		require.EqualValues(t, conflictResolutionRequired, mongoCommandCode(err), "%s must be refused as ConflictResolutionRequired", what)
 	}
 	_, err = items.InsertOne(ctx, bson.D{{Key: "_id", Value: "during"}})
 	refused("an insert", err)
@@ -77,8 +81,6 @@ func TestWritesRefusedWhileAnOperationIsPausedOnConflicts(t *testing.T) {
 		"findOneAndDelete": items.FindOneAndDelete(ctx, bson.D{{Key: "_id", Value: "base"}}).Err(),
 	} {
 		refused(name, err)
-		require.EqualValues(t, 96, mongoCommandCode(err), "%s must be refused as OperationFailed: %v", name, err)
-		require.NotContains(t, err.Error(), ".go:", "%s must carry the refusal, not an internal error", name)
 	}
 	var bulk bson.M
 	require.NoError(t, env.Client.Database("admin").RunCommand(ctx, bson.D{
@@ -87,10 +89,22 @@ func TestWritesRefusedWhileAnOperationIsPausedOnConflicts(t *testing.T) {
 		{Key: "nsInfo", Value: bson.A{bson.D{{Key: "ns", Value: dbName + ".items"}}}},
 	}).Decode(&bulk))
 	op := bulk["cursor"].(bson.M)["firstBatch"].(bson.A)[0].(bson.M)
-	require.EqualValues(t, 96, op["code"], "bulkWrite: %v", op)
+	require.EqualValues(t, conflictResolutionRequired, op["code"], "bulkWrite: %v", op)
 	require.Contains(t, op["errmsg"], "conflicting state")
 	require.NotContains(t, op["errmsg"], ".go:", "bulkWrite must carry the refusal, not a trace")
 	refused("committing a transaction begun before the pause", sess.CommitTransaction(ctx))
+
+	// Version-control commands that the paused merge stands in the way of are
+	// refused with the same code.
+	for name, cmd := range map[string]bson.D{
+		"dumboCommit":                     {{Key: "dumboCommit", Value: int32(1)}, {Key: "message", Value: "m"}},
+		"dumboReset":                      {{Key: "dumboReset", Value: int32(1)}},
+		"another merge":                   {{Key: "dumboMerge", Value: int32(1)}, {Key: "mergeIn", Value: "feature"}},
+		"continue with conflicts pending": {{Key: "dumboMerge", Value: int32(1)}, {Key: "continue", Value: int32(1)}},
+	} {
+		err := main.RunCommand(ctx, cmd).Err()
+		require.EqualValues(t, conflictResolutionRequired, mongoCommandCode(err), "%s while the merge is paused: %v", name, err)
+	}
 
 	var conflicts bson.M
 	require.NoError(t, main.RunCommand(ctx, bson.D{{Key: "dumboConflicts", Value: int32(1)}}).Decode(&conflicts))

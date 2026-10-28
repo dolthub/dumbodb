@@ -671,9 +671,9 @@ func (h *Handler) versioningBackend() backends.VersioningBackend {
 }
 
 // versioningError reports a version-control command's backend failure. A lost
-// race and a refusal over uncommitted changes each get a code of their own, so
-// a client can tell "run it again" and "commit or reset first" from a failure
-// without reading the message.
+// race gets a code of its own, and so does a refusal over uncommitted changes
+// or a paused operation, so a client can tell "run it again" and "finish
+// something first" from a failure without reading the message.
 func versioningError(ctx context.Context, err error) error {
 	switch {
 	case errors.Is(err, backends.ErrWriteRaced):
@@ -683,6 +683,8 @@ func versioningError(ctx context.Context, err error) error {
 		return handlererrors.NewCommandError(handlererrors.ErrWriteConflict, err)
 	case errors.Is(err, backends.ErrUncommittedChanges):
 		return handlererrors.NewCommandErrorMsg(handlererrors.ErrConflictingOperationInProgress, err.Error())
+	case errors.Is(err, backends.ErrOperationPaused):
+		return handlererrors.NewCommandErrorMsg(handlererrors.ErrConflictResolutionRequired, err.Error())
 	}
 	return handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 }

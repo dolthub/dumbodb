@@ -98,16 +98,17 @@ From the moment a merge, cherry-pick, revert or rebase pauses on conflicts
 until it is continued or aborted, the branch accepts no writes. Inserts,
 updates, deletes, `findAndModify`, `bulkWrite`, collection, index and view
 changes, and a transaction committing onto the branch are all refused with
-`OperationFailed (96)`:
+`ConflictResolutionRequired (2000000001)`, a dumbodb code:
 
 ```
 branch "main" is in a conflicting state: a merge is paused on conflicts, and no writes are accepted until it is finished. Resolve the conflicts with dumboResolveConflict, then run dumboMerge with continue (or abort)
 ```
 
-Reads, and writes to other branches, are unaffected. `dumboCommit` and
-`dumboReset` are refused while the operation is paused. Resolve each conflict
-with `dumboResolveConflict`, then finish with `continue`, or undo the operation
-with `abort`.
+Reads, and writes to other branches, are unaffected. `dumboCommit`,
+`dumboReset`, starting another merge, cherry-pick, revert or rebase, and
+`continue` while conflicts remain unresolved are refused with the same code.
+Resolve each conflict with `dumboResolveConflict`, then finish with
+`continue`, or undo the operation with `abort`.
 
 ### Transactions
 
@@ -206,7 +207,7 @@ db.runCommand({ dumboCommit: 1, message: "add order #1", author: "alice <alice@a
 | Condition | Error |
 |-----------|-------|
 | Connection is a read-only rootish (hash or ancestor expression) | writes are rejected before reaching commit |
-| An operation is paused on the branch | `OperationFailed: dumboCommit: merge in progress: use dumboMerge continue` (or the paused operation's command) |
+| An operation is paused on the branch | `ConflictResolutionRequired (2000000001): dumboCommit: merge in progress: use dumboMerge continue` (or the paused operation's command) |
 | Inside a transaction whose writes conflict with the branch | `WriteConflict (112)` labelled `TransientTransactionError`; the transaction is aborted |
 | The branch kept moving through every retry | `WriteConflict (112)` |
 
@@ -486,7 +487,8 @@ main.runCommand({ dumboMerge: 1, abort: 1 })
 | `noFF` and `ffOnly` both set | `BadValue: dumboMerge: noFF and ffOnly are mutually exclusive` |
 | The branch has uncommitted changes | `ConflictingOperationInProgress (117)`; see [Operations start only on a clean branch](#operations-start-only-on-a-clean-branch) |
 | A client write landed while the merge ran | `WriteConflict (112)`; nothing was merged |
-| `abort` or `continue` while a cherry-pick, revert or rebase is paused | `OperationFailed: DumboDBMerge: rebase in progress on branch "main"; use dumboRebase continue instead` (or `abort`) |
+| `abort` or `continue` while a cherry-pick, revert or rebase is paused | `ConflictResolutionRequired (2000000001): DumboDBMerge: rebase in progress on branch "main"; use dumboRebase continue instead` (or `abort`) |
+| `continue` while conflicts remain unresolved, or a new merge while an operation is paused | `ConflictResolutionRequired (2000000001)` |
 | Merge produces conflicts | `ok: 0` response with `conflicts` array |
 
 ### Notes
@@ -1219,7 +1221,7 @@ db.runCommand({ dumboReset: 1, hard: true })
 | Condition | Error |
 |-----------|-------|
 | `to` is not a valid commit hash | `OperationFailed: ...` |
-| An operation is paused on the branch | `OperationFailed: DumboDBReset: an operation is paused on branch "main"; continue or abort it first` |
+| An operation is paused on the branch | `ConflictResolutionRequired (2000000001): DumboDBReset: an operation is paused on branch "main"; continue or abort it first` |
 | Inside a transaction that has written to the branch | `ConflictingOperationInProgress (117)` |
 | A client write landed before the working set moved | `WriteConflict (112)`; nothing was reset |
 
