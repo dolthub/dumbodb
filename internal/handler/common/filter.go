@@ -516,9 +516,10 @@ func filterFieldExpr(doc *types.Document, filterKey, filterSuffix string, expr *
 		}
 
 		if !strings.HasPrefix(exprKey, "$") {
-			if documentValue, ok := fieldValue.(*types.Document); ok {
-				result := types.Compare(documentValue, expr)
-				return result == types.Equal, nil
+			// An array matches if it, or one of its elements, equals expr.
+			switch fieldValue.(type) {
+			case *types.Document, *types.Array:
+				return types.Compare(fieldValue, expr) == types.Equal, nil
 			}
 			return false, nil
 		}
@@ -528,9 +529,9 @@ func filterFieldExpr(doc *types.Document, filterKey, filterSuffix string, expr *
 			// {field: {$eq: exprValue}}
 			switch exprValue := exprValue.(type) {
 			case *types.Document:
-				if fieldValue, ok := fieldValue.(*types.Document); ok {
-					result := types.Compare(exprValue, fieldValue)
-					return result == types.Equal, nil
+				switch fieldValue.(type) {
+				case *types.Document, *types.Array:
+					return types.Compare(fieldValue, exprValue) == types.Equal, nil
 				}
 				return false, nil
 			default:
@@ -544,9 +545,9 @@ func filterFieldExpr(doc *types.Document, filterKey, filterSuffix string, expr *
 			// {field: {$ne: exprValue}}
 			switch exprValue := exprValue.(type) {
 			case *types.Document:
-				if fieldValue, ok := fieldValue.(*types.Document); ok {
-					result := types.Compare(exprValue, fieldValue)
-					return result != types.Equal, nil
+				switch fieldValue.(type) {
+				case *types.Document, *types.Array:
+					return types.Compare(fieldValue, exprValue) != types.Equal, nil
 				}
 
 				return true, nil
