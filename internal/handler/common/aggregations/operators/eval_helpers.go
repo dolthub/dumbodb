@@ -98,6 +98,22 @@ func evalArgValue(arg any, doc *types.Document) (any, error) {
 
 		return evalDocumentExpressions(v, doc)
 
+	case *types.Array:
+		// An array literal is an expression: each element is evaluated, and a
+		// missing element becomes null.
+		out := types.MakeArray(v.Len())
+		for i := range v.Len() {
+			elem, err := evalArgValue(must.NotFail(v.Get(i)), doc)
+			if errors.Is(err, aggregations.ErrMissingValue) {
+				elem, err = types.Null, nil
+			}
+			if err != nil {
+				return nil, err
+			}
+			out.Append(elem)
+		}
+		return out, nil
+
 	case string:
 		if strings.HasPrefix(v, "$$") {
 			withoutPrefix := strings.TrimPrefix(v, "$$")

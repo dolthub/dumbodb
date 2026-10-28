@@ -16,122 +16,142 @@ package operators
 
 import (
 	"errors"
+	"fmt"
+	"math"
+
+	"github.com/cockroachdb/apd/v3"
 
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
-	"github.com/dolthub/dumbodb/internal/util/iterator"
-	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 )
 
+// multiply represents { $multiply: [ <expression>, ... ] }.
 type multiply struct {
-	expressions []*aggregations.Expression
-	operators   []*types.Document
-	numbers     []any
-	rawArgs     []string // variable references ($$var) or other raw strings for evalArgValue
+	args []any
 }
 
-// newMultiply creates a new $multiply operator.
-// It accepts an array of numeric arguments (literals or field paths).
 func newMultiply(args ...any) (Operator, error) {
-	op := new(multiply)
-
-	for _, arg := range args {
-		switch arg := arg.(type) {
-		case *types.Document:
-			if IsOperator(arg) {
-				op.operators = append(op.operators, arg)
-			}
-		case string:
-			ex, err := aggregations.NewExpression(arg, nil)
-
-			var exErr *aggregations.ExpressionError
-			if errors.As(err, &exErr) {
-				if exErr.Code() == aggregations.ErrUndefinedVariable {
-					// Variable reference ($$var)  -- evaluate at process time via evalArgValue.
-					op.rawArgs = append(op.rawArgs, arg)
-				}
-
-				// ErrNotExpression and other codes: skip this arg.
-				continue
-			}
-
-			if err != nil {
-				return nil, err
-			}
-
-			op.expressions = append(op.expressions, ex)
-		case float64, int32, int64, types.Decimal128:
-			op.numbers = append(op.numbers, arg)
-		}
-	}
-
-	return op, nil
+	return &multiply{args: args}, nil
 }
 
-// Process implements Operator interface.
-// It evaluates all expressions, computes nested operators, and multiplies
-// all resulting numeric values together.
+// Process follows ExpressionMultiply::evaluate: arguments are checked left to
+// right, and the first nullish one makes the product null and the first
+// non-number is an error.
 func (m *multiply) Process(doc *types.Document) (any, error) {
-	var values []any
-
-	for _, expression := range m.expressions {
-		value, err := expression.Evaluate(doc)
-		if err != nil {
-			continue
+	var product multiplyState
+	for _, arg := range m.args {
+		v, err := evalArgValue(arg, doc)
+		if errors.Is(err, aggregations.ErrMissingValue) {
+			return types.Null, nil
 		}
-
-		switch v := value.(type) {
-		case *types.Array:
-			iter := v.Iterator()
-			defer iter.Close()
-
-			for {
-				_, elem, err := iter.Next()
-				if errors.Is(err, iterator.ErrIteratorDone) {
-					break
-				}
-
-				if err != nil {
-					return nil, lazyerrors.Error(err)
-				}
-
-				values = append(values, elem)
-			}
-		default:
-			values = append(values, value)
-		}
-	}
-
-	for _, operatorExpr := range m.operators {
-		op, err := NewOperator(operatorExpr)
 		if err != nil {
 			return nil, err
 		}
-
-		v, err := op.Process(doc)
-		if err != nil {
-			return nil, err
+		if isNullish(v) {
+			return types.Null, nil
 		}
-
-		values = append(values, v)
-	}
-
-	for _, rawArg := range m.rawArgs {
-		v, err := evalArgValue(rawArg, doc)
-		if err != nil {
-			continue
+		if !isNumber(v) {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrTypeMismatch,
+				fmt.Sprintf("$multiply only supports numeric types, not %s", handlerparams.AliasFromType(v)), "$multiply")
 		}
-
-		values = append(values, v)
+		product.multiply(v)
 	}
-
-	for _, n := range m.numbers {
-		values = append(values, n)
-	}
-
-	return aggregations.MultiplyNumbers(values...), nil
+	return product.value(), nil
 }
 
-var (
-	_ Operator = (*multiply)(nil)
+// Numeric widths in MongoDB's widening order.
+const (
+	widthInt = iota
+	widthLong
+	widthDouble
+	widthDecimal
 )
+
+func numericWidth(v any) int {
+	switch v.(type) {
+	case int64:
+		return widthLong
+	case float64:
+		return widthDouble
+	case types.Decimal128:
+		return widthDecimal
+	default:
+		return widthInt
+	}
+}
+
+// multiplyState is MongoDB's MultiplyState: double and integral products are
+// kept in parallel so the result has the narrowest type, and the running
+// product turns into Decimal128 at the first decimal factor.
+type multiplyState struct {
+	doubleProduct  float64
+	longProduct    int64
+	decimalProduct *apd.Decimal
+	width          int
+	started        bool
+}
+
+func (s *multiplyState) multiply(v any) {
+	if !s.started {
+		s.doubleProduct, s.longProduct, s.started = 1, 1, true
+	}
+
+	old := s.width
+	s.width = max(s.width, numericWidth(v))
+	if s.width == widthDecimal {
+		if old != widthDecimal {
+			if old == widthDouble {
+				s.decimalProduct = aggregations.DoubleToAPD(s.doubleProduct)
+			} else {
+				s.decimalProduct = apd.New(s.longProduct, 0)
+			}
+		}
+		factor, _ := aggregations.NumberToAPD(v)
+		s.decimalProduct = aggregations.DecimalMultiply(s.decimalProduct, factor)
+		return
+	}
+
+	f := toFloat64(v)
+	s.doubleProduct *= f
+	if s.width != widthDouble {
+		n := toInt64(v)
+		if math.IsInf(f, 0) || math.IsNaN(f) || mulOverflows(s.longProduct, n) {
+			s.width = widthDouble
+		} else {
+			s.longProduct *= n
+		}
+	}
+}
+
+func (s *multiplyState) value() any {
+	if !s.started {
+		return int32(1)
+	}
+	switch s.width {
+	case widthDouble:
+		return s.doubleProduct
+	case widthLong:
+		return s.longProduct
+	case widthDecimal:
+		return aggregations.APDToDecimal128(s.decimalProduct)
+	default:
+		if s.longProduct >= math.MinInt32 && s.longProduct <= math.MaxInt32 {
+			return int32(s.longProduct)
+		}
+		return s.longProduct
+	}
+}
+
+func mulOverflows(a, b int64) bool {
+	if a == 0 || b == 0 {
+		return false
+	}
+	if (a == -1 && b == math.MinInt64) || (b == -1 && a == math.MinInt64) {
+		return true
+	}
+	return a*b/b != a
+}
+
+var _ Operator = (*multiply)(nil)

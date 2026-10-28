@@ -337,6 +337,7 @@ const (
 	ErrDateArithmeticNotInteger  = ErrorCode(5166405) // Location5166405
 	ErrDateSubtractMinAmount     = ErrorCode(6045000) // Location6045000
 	ErrMergeObjectsNotObject     = ErrorCode(5911200) // Location5911200
+	ErrConcatArraysNotArray      = ErrorCode(28664)   // Location28664
 
 	// ErrOpMsgNoBody indicates an OP_MSG without a kind-0 body section.
 	ErrOpMsgNoBody = ErrorCode(40587) // Location40587

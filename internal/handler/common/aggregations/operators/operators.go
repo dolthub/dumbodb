@@ -101,8 +101,8 @@ func NewOperator(doc *types.Document) (Operator, error) {
 
 	var args []any
 
-	_, objectArgument := objectArgumentOperators[operator]
-	if arr, ok := expr.(*types.Array); ok && !objectArgument {
+	_, wholeArgument := wholeArgumentOperators[operator]
+	if arr, ok := expr.(*types.Array); ok && !wholeArgument {
 		iter := arr.Iterator()
 		defer iter.Close()
 
@@ -137,13 +137,15 @@ func NewOperator(doc *types.Document) (Operator, error) {
 	}
 }
 
-// objectArgumentOperators take a single object argument; an array argument is
-// passed through whole so the operator can reject it.
-var objectArgumentOperators = map[string]struct{}{
+// wholeArgumentOperators take a single argument as written: an array is
+// passed through whole, not as a list of arguments, so $literal keeps it and
+// the object-argument operators can reject it.
+var wholeArgumentOperators = map[string]struct{}{
 	"$dateFromParts":  {},
 	"$dateFromString": {},
 	"$dateSubtract":   {},
 	"$dateToParts":    {},
+	"$literal":        {},
 }
 
 // Operators maps all standard aggregation operators.

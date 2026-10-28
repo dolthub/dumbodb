@@ -191,17 +191,27 @@ func newConcatArrays(args ...any) (Operator, error) {
 	return &concatArraysOp{args: args}, nil
 }
 
+// Process follows ExpressionConcatArrays::evaluate: arguments are checked
+// left to right, and the first nullish one makes the result null and the
+// first non-array is an error.
 func (op *concatArraysOp) Process(doc *types.Document) (any, error) {
 	var result []any
 
 	for _, arg := range op.args {
-		arr, isNull, err := collectArray(arg, doc, "$concatArrays")
+		v, err := evalArgValue(arg, doc)
+		if errors.Is(err, aggregations.ErrMissingValue) {
+			return types.Null, nil
+		}
 		if err != nil {
 			return nil, err
 		}
-
-		if isNull {
+		if isNullish(v) {
 			return types.Null, nil
+		}
+		arr, ok := v.(*types.Array)
+		if !ok {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrConcatArraysNotArray,
+				fmt.Sprintf("$concatArrays only supports arrays, not %s", handlerparams.AliasFromType(v)), "$concatArrays")
 		}
 
 		items, err := arrayToSlice(arr)
