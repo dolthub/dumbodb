@@ -14,12 +14,6 @@
 
 package dolt
 
-// Regression for issue #130: an operator-form filter on a collated-index field
-// panicked with "types: unexpected type index.PreEncoded" and closed the
-// connection. The issue's reproduction (100 docs s000..s099, an index on s
-// under fr_CA, queries under the same collation): $gt returns 9 docs, $eq
-// returns 1, and the bounded $gte/$lt range returns 10.
-
 import (
 	"context"
 	"fmt"
@@ -34,6 +28,9 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
+// TestCollatedIndexOperatorFilters is the issue #130 reproduction: operator
+// filters on a collated index field panicked with "unexpected type
+// index.PreEncoded".
 func TestCollatedIndexOperatorFilters(t *testing.T) {
 	t.Parallel()
 
@@ -72,13 +69,7 @@ func TestCollatedIndexOperatorFilters(t *testing.T) {
 		t.Fatalf("CreateIndexes: %v", err)
 	}
 
-	// lookup runs the query at the backend level and returns the _ids the
-	// backend yields. These are index candidates -- plan.fetch does not
-	// evaluate the filter (collection.go planIndexLookupIn/fetch), and the
-	// handler's FilterIteratorColl re-checks candidates against the full
-	// filter. Exact-id assertions are candidate-level: for single-type
-	// operand bounds the candidate set equals the final match set; for
-	// mixed-type bounds it is a strict superset of the final matches.
+	// lookup returns the backend's candidate _ids; the handler re-filters them.
 	lookup := func(t *testing.T, filter *types.Document) []int32 {
 		t.Helper()
 		got := drainQuery(t, ctx, coll, &backends.QueryParams{
@@ -123,26 +114,9 @@ func TestCollatedIndexOperatorFilters(t *testing.T) {
 		}
 	})
 
-	// Non-string operator values must pass through the collation conversion
-	// unchanged (collateFilterValue only rewrites string operands). Two
-	// consequences, both asserted at the candidate level drainQuery observes:
-	//
-	// (a) A numeric comparison against the collated field reaches the
-	//     s_idx as a numeric type bracket: every stored s key is a string
-	//     (leading ctype 0x3C) and the numeric bracket lies entirely below
-	//     it, so the candidate set is empty -- and so is the final match
-	//     set under MongoDB's type-bracketed range semantics. Exact at
-	//     both layers.
-	//
-	// (b) Numeric bounds against the binary-indexed field i cannot consult
-	//     i_idx: the identity rule (planIndexLookupIn, collection.go) keeps a
-	//     collated query off collation-mismatched indexes, so the plan is a
-	//     collated scan, which returns the whole collection as candidates
-	//     (no byte prefilter under collation) for the handler re-filter to
-	//     narrow. A full-collection candidate set fails if the planner ever
-	//     regresses into serving a collated query from the binary index:
-	//     byte-range bounds on collation-mismatched indexes are unsound,
-	//     which is why the identity rule exists.
+	// Non-string operands are not collated. On s they bracket below every
+	// string key; on the binary-indexed i the collated query must not use
+	// i_idx, so it scans the whole collection.
 	t.Run("nonstring_operator_values", func(t *testing.T) {
 		op := must.NotFail(types.NewDocument("$gt", int32(90)))
 		sIDs := lookup(t, must.NotFail(types.NewDocument("s", op)))
@@ -166,21 +140,8 @@ func TestCollatedIndexOperatorFilters(t *testing.T) {
 		}
 	})
 
-	// Mixed operand types on one side of a collated operator filter. The
-	// lower-bound merge in indexBoundsForFilterValue keeps one operand by
-	// BSON type order (types.Compare orders strings after numbers), so both
-	// insertion orders leave the collated string bound ($gt, exclusive) as
-	// the surviving lower bound and bracket the byte range by the string
-	// ctype only. Whether a document can simultaneously satisfy
-	// {compare-operator: number} and {compare-operator: string} is decided at
-	// the handler re-filter (MongoDB type-brackets range operators, so the
-	// final filtered result is 0 docs; the backend cannot express that with
-	// one contiguous byte range and is documented to return a sound
-	// superset). drainQuery observes backend candidates, not final results,
-	// so what these cases pin is the merge itself: order-independence, no
-	// panic on the collated operand (the pre-fix code panicked here), and
-	// the identical candidate set [91..99] -- exactly the docs whose s sort
-	// key survives the merged bound -- for both orders.
+	// A numeric and a string lower bound merge by BSON type order in either
+	// insertion order, leaving the collated string bound.
 	t.Run("mixed_type_lower_bounds", func(t *testing.T) {
 		op := must.NotFail(types.NewDocument("$gte", int32(5), "$gt", "s090"))
 		ids := lookup(t, must.NotFail(types.NewDocument("s", op)))

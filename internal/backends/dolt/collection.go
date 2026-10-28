@@ -1344,19 +1344,11 @@ func compoundIndexBounds(idx backends.IndexInfo, filter *types.Document, queryCm
 	return nil, nil, false
 }
 
-// compareScalars returns -1 / 0 / 1 used to merge multiple bounds on the
-// same side ($gte:1, $gte:5 -> keep the tighter 5). Two collated operands
-// compare by their sort-key bytes: the keys are defined to sort bytewise
-// exactly like the index orders them (collation.Comparator.Key).
-//
-// A mixed pair can occur legitimately: collateFilterValue rewrites only the
-// string operands of an operator document, so {$gte: 5, $gt: "s090"} under a
-// collated query reaches the lower-bound merge as (PreEncoded, int32) or
-// vice versa. Sort keys carry string type order, so compare the collated
-// side against an empty-string surrogate: types.Compare orders by BSON type
-// order before value, reproducing the un-collated cross-type merge exactly.
-// Two strings in a mixed pair are impossible (strings are always collated
-// together), and a string surrogate would still order deterministically.
+// compareScalars returns -1 / 0 / 1 using types.Compare. Used to merge
+// multiple bounds on the same side ($gte:1, $gte:5 -> keep the tighter 5).
+// Collated sort keys (idxpkg.PreEncoded) compare bytewise; against a
+// non-string operand ({$gte: 5, $gt: "b"}) a key stands in as "" so BSON
+// type order decides.
 func compareScalars(a, b any) int {
 	pa, aKey := a.(idxpkg.PreEncoded)
 	pb, bKey := b.(idxpkg.PreEncoded)
@@ -1364,23 +1356,9 @@ func compareScalars(a, b any) int {
 	case aKey && bKey:
 		return bytes.Compare(pa, pb)
 	case aKey:
-		switch types.Compare("", b) {
-		case types.Less:
-			return -1
-		case types.Greater:
-			return 1
-		default:
-			return 0
-		}
+		a = ""
 	case bKey:
-		switch types.Compare(a, "") {
-		case types.Less:
-			return -1
-		case types.Greater:
-			return 1
-		default:
-			return 0
-		}
+		b = ""
 	}
 	switch types.Compare(a, b) {
 	case types.Less:
@@ -2350,9 +2328,7 @@ func collateFilterValue(v any, cmp *collation.Comparator) any {
 			if str, ok := ov.(string); ok {
 				ov = idxpkg.PreEncoded(cmp.Key(str))
 			}
-			// AppendDecoded: a collated filter's operand is an internal
-			// planner artifact (idxpkg.PreEncoded) that never enters
-			// user-visible BSON, and only trusted values reach this copy.
+			// AppendDecoded: Set rejects idxpkg.PreEncoded.
 			out.AppendDecoded(k, ov)
 		}
 		return out
