@@ -108,13 +108,27 @@ func TestDecodeRawDocumentRejectsMalformed(t *testing.T) {
 		"missing terminator": append(append([]byte(nil), valid[:len(valid)-1]...), 1),
 		"bad bool":           {9, 0, 0, 0, 0x08, 'b', 0, 2, 0},
 		"bad array index":    {20, 0, 0, 0, 0x04, 'a', 0, 12, 0, 0, 0, 0x10, '5', 0, 1, 0, 0, 0, 0, 0},
-		"unsupported tag":    {8, 0, 0, 0, 0x06, 'u', 0, 0},
+		"unsupported tag":    {8, 0, 0, 0, 0x0E, 'u', 0, 0},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := DecodeRawDocument(raw)
 			require.Error(t, err)
 		})
 	}
+}
+
+func TestDecodeRawDocumentUndefined(t *testing.T) {
+	want := must.NotFail(types.NewDocument(
+		"u", types.Undefined,
+		"a", must.NotFail(types.NewArray(types.Undefined, int32(1))),
+		"d", must.NotFail(types.NewDocument("u", types.Undefined)),
+	))
+	raw := want.AppendBSON(nil)
+	require.Equal(t, byte(0x06), raw[4])
+	got, err := DecodeRawDocument(raw)
+	require.NoError(t, err)
+	require.True(t, types.Identical(want, got), "got %v", got)
+	require.Equal(t, raw, got.AppendBSON(nil))
 }
 
 func decodeViaWirebson(raw []byte) (*types.Document, error) {

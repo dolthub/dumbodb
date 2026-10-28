@@ -92,6 +92,11 @@ func appendProjectStageRootFields(projection *types.Document, roots *[]string, t
 	keys := projection.Keys()
 	for i, v := range projection.Values() {
 		key := keys[i]
+		// A field computed at a dotted path is shaped by the value already at
+		// its root: an array there is mapped element by element.
+		if strings.Contains(key, ".") {
+			*roots = appendRoot(*roots, key)
+		}
 		switch v := v.(type) {
 		case bool, int32, int64, float64:
 			if !isTruthy(v) {

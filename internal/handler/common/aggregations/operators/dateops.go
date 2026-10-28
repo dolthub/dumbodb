@@ -61,7 +61,7 @@ func (op *datePartOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	if v == types.Null {
+	if isNullish(v) {
 		return types.Null, nil
 	}
 
@@ -168,7 +168,7 @@ func (op *dateToStringOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	if v == types.Null {
+	if isNullish(v) {
 		if op.onNullArg != nil {
 			return evalArgValue(op.onNullArg, doc)
 		}
@@ -264,7 +264,7 @@ func (op *dateAddOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	if sv == types.Null {
+	if isNullish(sv) {
 		return types.Null, nil
 	}
 
@@ -387,7 +387,7 @@ func (op *dateDiffOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	if sv == types.Null || ev == types.Null {
+	if isNullish(sv) || isNullish(ev) {
 		return types.Null, nil
 	}
 
@@ -525,7 +525,7 @@ func (op *dateTruncOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	if dv == types.Null {
+	if isNullish(dv) {
 		return types.Null, nil
 	}
 
@@ -553,7 +553,7 @@ func (op *dateTruncOp) Process(doc *types.Document) (any, error) {
 			return nil, err
 		}
 
-		if bsv != types.Null {
+		if !isNullish(bsv) {
 			binSize = int64(toFloat64(bsv))
 		}
 	}

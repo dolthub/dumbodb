@@ -292,6 +292,9 @@ func decodeRawValue(b []byte, t byte, depth int) (any, int, error) {
 		}
 		return types.Decimal128{L: binary.LittleEndian.Uint64(b), H: binary.LittleEndian.Uint64(b[8:])}, 16, nil
 
+	case bsonTagUndefined:
+		return types.Undefined, 0, nil
+
 	case bsonTagMinKey:
 		return types.MinKey, 0, nil
 

@@ -23,6 +23,7 @@ import (
 
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
+	stageProjection "github.com/dolthub/dumbodb/internal/handler/common/aggregations/stages/projection"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
@@ -120,6 +121,11 @@ func ValidateProjection(projection *types.Document) (*types.Document, bool, erro
 		// empty projection is exclusion project.
 		return types.MakeDocument(0), false, nil
 	}
+
+	if err := stageProjection.CheckPathCollisions(projection, "", "projection"); err != nil {
+		return nil, false, err
+	}
+	projection = stageProjection.FlattenProjection(projection)
 
 	var inclusion *bool
 
@@ -378,6 +384,10 @@ func ValidateProjection(projection *types.Document) (*types.Document, bool, erro
 // - ErrOperatorWrongLenOfArgs when the operator has an invalid number of arguments.
 // - ErrInvalidPipelineOperator when an the operator does not exist.
 func ProjectDocument(doc, projection, filter *types.Document, inclusion bool) (*types.Document, error) {
+	if inclusion && !hasFindProjectionOperator(projection) && operators.SpecHasComputedPath(projection, true) {
+		return operators.ProjectInclusionTree(doc, projection)
+	}
+
 	projected, err := projectID(doc, projection)
 	if err != nil {
 		return nil, err
@@ -1170,3 +1180,19 @@ func setBySourceOrder(key string, val any, source, projected *types.Document) {
 	}
 }
 
+// hasFindProjectionOperator reports whether projection uses a projection
+// operator only find supports: $elemMatch, $slice, $meta or a positional path.
+func hasFindProjectionOperator(projection *types.Document) bool {
+	for _, key := range projection.Keys() {
+		if strings.HasSuffix(key, "$") {
+			return true
+		}
+		if v, ok := must.NotFail(projection.Get(key)).(*types.Document); ok && v.Len() > 0 {
+			switch v.Keys()[0] {
+			case "$elemMatch", "$slice", "$meta":
+				return true
+			}
+		}
+	}
+	return false
+}

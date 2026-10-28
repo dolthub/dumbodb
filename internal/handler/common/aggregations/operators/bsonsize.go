@@ -45,7 +45,7 @@ func (b *bsonSizeOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	if v == nil || v == types.Null {
+	if v == nil || isNullish(v) {
 		return types.Null, nil
 	}
 

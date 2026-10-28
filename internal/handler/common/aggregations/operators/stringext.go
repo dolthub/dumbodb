@@ -56,13 +56,13 @@ func (op *strcasecmpOp) Process(doc *types.Document) (any, error) {
 	a := ""
 	b := ""
 
-	if av != types.Null {
+	if !isNullish(av) {
 		if s, ok := av.(string); ok {
 			a = s
 		}
 	}
 
-	if bv != types.Null {
+	if !isNullish(bv) {
 		if s, ok := bv.(string); ok {
 			b = s
 		}
@@ -111,7 +111,7 @@ func (op *substrBytesOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	if sv == types.Null {
+	if isNullish(sv) {
 		return "", nil
 	}
 

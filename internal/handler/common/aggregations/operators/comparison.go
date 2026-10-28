@@ -16,6 +16,7 @@ package operators
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/dolthub/dumbodb/internal/types"
 )
@@ -63,17 +64,10 @@ func newCmpOperator(name string, op compOp) newOperatorFunc {
 
 // Process implements Operator. Evaluates both args and performs the comparison.
 func (c *cmpOperator) Process(doc *types.Document) (any, error) {
-	lv, err := evalArgValue(c.left, doc)
+	cmp, err := compareArgs(c.left, c.right, doc)
 	if err != nil {
 		return nil, err
 	}
-
-	rv, err := evalArgValue(c.right, doc)
-	if err != nil {
-		return nil, err
-	}
-
-	cmp := types.Compare(lv, rv)
 
 	switch c.op {
 	case compEq:
@@ -115,17 +109,12 @@ func newCmp(args ...any) (Operator, error) {
 }
 
 func (c *cmpOp) Process(doc *types.Document) (any, error) {
-	lv, err := evalArgValue(c.left, doc)
+	cmp, err := compareArgs(c.left, c.right, doc)
 	if err != nil {
 		return nil, err
 	}
 
-	rv, err := evalArgValue(c.right, doc)
-	if err != nil {
-		return nil, err
-	}
-
-	switch types.Compare(lv, rv) {
+	switch cmp {
 	case types.Less:
 		return int32(-1), nil
 	case types.Equal:
@@ -136,3 +125,46 @@ func (c *cmpOp) Process(doc *types.Document) (any, error) {
 }
 
 var _ Operator = (*cmpOp)(nil)
+
+// compareArgs evaluates and compares two operator arguments. As in MongoDB,
+// a missing field equals another missing value or undefined and sorts below
+// every other value except MinKey.
+func compareArgs(left, right any, doc *types.Document) (types.CompareResult, error) {
+	lv, lMissing, err := evalArgValueOrMissing(left, doc)
+	if err != nil {
+		return 0, err
+	}
+	rv, rMissing, err := evalArgValueOrMissing(right, doc)
+	if err != nil {
+		return 0, err
+	}
+	if lMissing || rMissing {
+		lLow := lMissing || lv == types.Undefined
+		rLow := rMissing || rv == types.Undefined
+		switch {
+		case lLow && rLow:
+			return types.Equal, nil
+		case lLow && rv == types.MinKey, rLow && lv != types.MinKey:
+			return types.Greater, nil
+		default:
+			return types.Less, nil
+		}
+	}
+	return types.Compare(lv, rv), nil
+}
+
+// evalArgValueOrMissing is evalArgValue, also reporting whether arg is a
+// field path the document lacks, which evaluates to null.
+func evalArgValueOrMissing(arg any, doc *types.Document) (any, bool, error) {
+	if path, ok := arg.(string); ok && strings.HasPrefix(path, "$") && !strings.HasPrefix(path, "$$") {
+		if expr, err := fieldExpression(path); err == nil {
+			v, err := expr.Evaluate(doc)
+			if err != nil {
+				return types.Null, true, nil
+			}
+			return v, false, nil
+		}
+	}
+	v, err := evalArgValue(arg, doc)
+	return v, false, err
+}

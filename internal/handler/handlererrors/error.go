@@ -466,6 +466,18 @@ const (
 	// ErrOpQueryCollectionSuffixMissing indicates that op query collection does not contain .$cmd suffix.
 	ErrOpQueryCollectionSuffixMissing = ErrorCode(5739101) // Location5739101
 
+	// ErrNOperatorNNotIntegral indicates a non-numeric 'n' for $maxN, $minN, $firstN or $lastN.
+	ErrNOperatorNNotIntegral = ErrorCode(5787902) // Location5787902
+
+	// ErrNOperatorNFractional indicates a numeric but non-integral 'n'.
+	ErrNOperatorNFractional = ErrorCode(5787903) // Location5787903
+
+	// ErrNOperatorNNotPositive indicates an 'n' below 1.
+	ErrNOperatorNNotPositive = ErrorCode(5787908) // Location5787908
+
+	// ErrNOperatorInputNotArray indicates that the input of an N operator is not an array.
+	ErrNOperatorInputNotArray = ErrorCode(5788200) // Location5788200
+
 	// ErrStageIndexedStringVectorDuplicate indicates that input to IndexedStringVector contained duplicate values.
 	ErrStageIndexedStringVectorDuplicate = ErrorCode(7582300) // Location7582300
 
