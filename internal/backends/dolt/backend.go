@@ -159,47 +159,6 @@ func (s *dbState) getOrInitBranchAM(ctx context.Context, branch string) (prolly.
 	return amFromWorkingRoot(ctx, ws.WorkingRoot(), s.ns)
 }
 
-func amToRootValue(ctx context.Context, db *dbState, am prolly.AddressMap) (doltdb.RootValue, error) {
-	rtvlMsg := buildRootValueFlatbuffer(am)
-	return doltdb.NewRootValue(ctx, db.doltDB.ValueReadWriter(), db.doltDB.NodeStore(), dolttypes.SerialMessage(rtvlMsg))
-}
-
-// maxStagedAdvanceRetries bounds advanceStagedAfterCommit's reloads. Each pass
-// is one reload and one compare-and-swap, so it only runs out if writers keep
-// publishing faster than that; it is a livelock brake, not a policy.
-const maxStagedAdvanceRetries = 32
-
-// advanceStagedAfterCommit sets branch's staged root to committedAM, the root
-// a commit just recorded, and keeps the working root as it is now: a client
-// write published after the commit read the working set is in it, and stays
-// there uncommitted. Replacing the working root would discard such a write.
-// The cached working set can lag a lock-free publish, so a
-// failed optimistic lock reloads it from disk and retries. The caller must
-// hold s.mu (write lock).
-func (s *dbState) advanceStagedAfterCommit(ctx context.Context, branch string, committedAM prolly.AddressMap) error {
-	committedRV, err := amToRootValue(ctx, s, committedAM)
-	if err != nil {
-		return err
-	}
-	for attempt := 0; ; attempt++ {
-		var newWS *doltdb.WorkingSet
-		err := s.updateBranchWS(ctx, branch, func(cur *doltdb.WorkingSet) (*doltdb.WorkingSet, error) {
-			newWS = cur.WithStagedRoot(committedRV)
-			return newWS, nil
-		})
-		if err == nil {
-			s.pushWSToSession(ctx, branch, newWS)
-			return nil
-		}
-		if !errors.Is(err, datas.ErrOptimisticLockFailed) || attempt >= maxStagedAdvanceRetries {
-			return err
-		}
-		if err := s.reloadBranchWSFromDisk(ctx, branch); err != nil {
-			return err
-		}
-	}
-}
-
 // pushWSToSession mirrors a side-channel WS update onto the calling
 // session's branchState so VisitGCRoots sees the post-op state.
 //
@@ -219,6 +178,11 @@ func (s *dbState) pushWSToSession(ctx context.Context, branch string, newWS *dol
 	sqlCtx := sqlctx.Wrap(ctx, sess)
 	qualified := qualifiedDbName(s.name, branch)
 	_ = sess.SetWorkingSet(sqlCtx, qualified, newWS)
+}
+
+func amToRootValue(ctx context.Context, db *dbState, am prolly.AddressMap) (doltdb.RootValue, error) {
+	rtvlMsg := buildRootValueFlatbuffer(am)
+	return doltdb.NewRootValue(ctx, db.doltDB.ValueReadWriter(), db.doltDB.NodeStore(), dolttypes.SerialMessage(rtvlMsg))
 }
 
 // Backend implements backends.Backend using Dolt storage.
@@ -1214,32 +1178,6 @@ func (b *Backend) AutoCommit(ctx context.Context, dbName, branch, message, autho
 	return state.commitBranchWS(ctx, branch, message, author)
 }
 
-// commitCollectionsAMAs creates a new dolt commit with the given collections
-// AddressMap as its root value, using the provided author name and timestamp.
-// opts.Meta is overwritten. Returns the updated dataset and the (unchanged) AM.
-func commitCollectionsAMAs(ctx context.Context, datasDB datas.Database, ds datas.Dataset, am prolly.AddressMap, desc, authorName, committerName string, ts time.Time, opts datas.CommitOptions) (datas.Dataset, prolly.AddressMap, error) {
-	var err error
-	if ds.ID() == "" {
-		ds, err = datasDB.GetDataset(ctx, mainDataset)
-		if err != nil {
-			return datas.Dataset{}, am, err
-		}
-	}
-
-	opts.Meta, err = commitMetaAC(authorName, committerName, desc, ts)
-	if err != nil {
-		return datas.Dataset{}, am, err
-	}
-
-	rtvlMsg := buildRootValueFlatbuffer(am)
-	newDS, err := datasDB.Commit(ctx, ds, dolttypes.SerialMessage(rtvlMsg), opts)
-	if err != nil {
-		return datas.Dataset{}, am, err
-	}
-
-	return newDS, am, nil
-}
-
 // commitOptionsFor returns the commit options, less Meta, and the message for
 // a commit on ds. As with dolt commit --amend, an amend takes the head's
 // parents, and its message when params.Message is empty.
@@ -1534,125 +1472,65 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 		return nil, fmt.Errorf("dumboCommit: merge in progress: use dumboMerge continue")
 	}
 
-	if branch == defaultBranch {
-		sess := sessionFromContext(ctx)
-		fallbackWS, fbErr := db.loadBranchWS(ctx, defaultBranch)
-		if fbErr != nil {
-			return nil, fmt.Errorf("DumboDBCommit: loading WS for db %q: %w", params.DBName, fbErr)
+	// The commit and the working set it leaves -- staged at the committed
+	// root, working root as it is -- land in one compare-and-swap against the
+	// branch as read here. A write published in between fails the swap with
+	// nothing committed, so the commit is simply made again from the new tip.
+	for attempt := 0; ; attempt++ {
+		res, err := db.commitBranchOnce(ctx, branch, params, ts)
+		if !errors.Is(err, backends.ErrWriteRaced) || attempt >= maxCommitRetries {
+			return res, err
 		}
-		if !params.AllowEmpty && !params.Amend {
-			headAM, err := db.headRootAM(ctx)
-			if err != nil {
-				return nil, fmt.Errorf("DumboDBCommit: reading HEAD AM for db %q: %w", params.DBName, err)
-			}
-			workingRV, rvErr := workingRootViaSession(ctx, sess, fallbackWS, params.DBName, defaultBranch)
-			if rvErr != nil {
-				return nil, fmt.Errorf("DumboDBCommit: reading working root for db %q: %w", params.DBName, rvErr)
-			}
-			workingAM, amErr := amFromWorkingRoot(ctx, workingRV, db.ns)
-			if amErr != nil {
-				return nil, fmt.Errorf("DumboDBCommit: reading working AM for db %q: %w", params.DBName, amErr)
-			}
-			if workingAM.HashOf() == headAM.HashOf() {
-				return nil, backends.ErrEmptyCommit
-			}
-		}
+	}
+}
 
-		mainDS, dsErr := db.datasDB.GetDataset(ctx, mainDataset)
-		if dsErr != nil {
-			return nil, fmt.Errorf("DumboDBCommit: resolving main dataset for db %q: %w", params.DBName, dsErr)
-		}
-		opts, message, err := commitOptionsFor(ctx, db.vs, mainDS, params)
+// maxCommitRetries bounds dumboCommit's re-reads. Each attempt either commits
+// or finds the branch moved by a write that landed in its window; it is a
+// livelock brake, not a policy.
+const maxCommitRetries = 32
+
+func (db *dbState) commitBranchOnce(ctx context.Context, branch string, params *backends.CommitParams, ts time.Time) (*backends.CommitResult, error) {
+	tip, err := db.readBranchTip(ctx, branch)
+	if err != nil {
+		return nil, fmt.Errorf("DumboDBCommit: %w", err)
+	}
+	if !params.AllowEmpty && !params.Amend {
+		headAM, err := headRootAMForBranch(ctx, db, branch)
 		if err != nil {
-			return nil, fmt.Errorf("DumboDBCommit: %w", err)
+			return nil, fmt.Errorf("DumboDBCommit: reading HEAD of %q: %w", branch, err)
 		}
-		workingRV, rvErr := workingRootViaSession(ctx, sess, fallbackWS, params.DBName, defaultBranch)
-		if rvErr != nil {
-			return nil, fmt.Errorf("DumboDBCommit: reading working root for db %q: %w", params.DBName, rvErr)
-		}
-		workingAM, amErr := amFromWorkingRoot(ctx, workingRV, db.ns)
-		if amErr != nil {
-			return nil, fmt.Errorf("DumboDBCommit: reading working AM for db %q: %w", params.DBName, amErr)
-		}
-		newDS, _, err := commitCollectionsAMAs(ctx, db.datasDB, mainDS, workingAM, message, params.Author, params.Committer, ts, opts)
+		workingAM, err := tip.workingAM(ctx, db)
 		if err != nil {
-			return nil, fmt.Errorf("DumboDBCommit: committing db %q: %w", params.DBName, err)
+			return nil, fmt.Errorf("DumboDBCommit: reading the working root of %q: %w", branch, err)
 		}
-
-		runCommitPersistHook(ctx)
-		if err := db.advanceStagedAfterCommit(ctx, defaultBranch, workingAM); err != nil {
-			return nil, fmt.Errorf("DumboDBCommit: updating working set for %q: %w", params.DBName, err)
+		if workingAM.HashOf() == headAM.HashOf() {
+			return nil, backends.ErrEmptyCommit
 		}
-
-		headHash, ok := newDS.MaybeHeadAddr()
-		if !ok {
-			return nil, fmt.Errorf("DumboDBCommit: no head after commit for db %q", params.DBName)
-		}
-
-		return &backends.CommitResult{
-			CommitID:           headHash.String(),
-			Branch:             branch,
-			Message:            message,
-			Author:             params.Author,
-			Timestamp:          ts.UnixMilli(),
-			Committer:          committerOrAuthor(params.Author, params.Committer),
-			CommitterTimestamp: ts.UnixMilli(),
-		}, nil
 	}
 
-	branchDS, err := db.datasDB.GetDataset(ctx, "refs/heads/"+branch)
+	branchDS, err := db.datasDB.GetDataset(ctx, branchRefPrefix+branch)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBCommit: resolving branch %q: %w", branch, err)
 	}
 	if !branchDS.HasHead() {
 		return nil, fmt.Errorf("DumboDBCommit: branch %q has no commits", branch)
 	}
-
-	branchAM, err := db.getOrInitBranchAM(ctx, branch)
-	if err != nil {
-		return nil, fmt.Errorf("DumboDBCommit: loading branch AM for %q: %w", branch, err)
-	}
-
-	if !params.AllowEmpty && !params.Amend {
-		branchHeadAM, err := headRootAMForBranch(ctx, db, branch)
-		if err != nil {
-			return nil, fmt.Errorf("DumboDBCommit: reading HEAD AM for branch %q: %w", branch, err)
-		}
-		if branchAM.HashOf() == branchHeadAM.HashOf() {
-			return nil, backends.ErrEmptyCommit
-		}
-	}
-
 	opts, message, err := commitOptionsFor(ctx, db.vs, branchDS, params)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBCommit: %w", err)
 	}
-	opts.Meta, err = commitMetaAC(params.Author, params.Committer, message, ts)
+	if opts.Meta, err = commitMetaAC(params.Author, params.Committer, message, ts); err != nil {
+		return nil, fmt.Errorf("DumboDBCommit: building commit meta for %q: %w", branch, err)
+	}
+
+	commitHash, err := db.commitOverTipWith(ctx, tip, tip.ws.WorkingRoot(), opts, func(ws *doltdb.WorkingSet) (*doltdb.WorkingSet, error) {
+		return ws, nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("DumboDBCommit: building commit meta for branch %q: %w", branch, err)
+		return nil, fmt.Errorf("DumboDBCommit: committing %q: %w", branch, err)
 	}
-
-	rtvlMsg := buildRootValueFlatbuffer(branchAM)
-	newDS, err := db.datasDB.Commit(ctx, branchDS, dolttypes.SerialMessage(rtvlMsg), opts)
-	if err != nil {
-		return nil, fmt.Errorf("DumboDBCommit: committing branch %q: %w", branch, err)
-	}
-
-	runCommitPersistHook(ctx)
-	if err := db.advanceStagedAfterCommit(ctx, branch, branchAM); err != nil {
-		return nil, fmt.Errorf("DumboDBCommit: updating working set for branch %q: %w", branch, err)
-	}
-
-	// Clear the cached branch WS so the next access reloads from the new HEAD.
-	db.clearBranchWS(branch)
-
-	headHash, ok := newDS.MaybeHeadAddr()
-	if !ok {
-		return nil, fmt.Errorf("DumboDBCommit: no head after commit for branch %q", branch)
-	}
-
 	return &backends.CommitResult{
-		CommitID:           headHash.String(),
+		CommitID:           commitHash.String(),
 		Branch:             branch,
 		Message:            message,
 		Author:             params.Author,
@@ -1660,17 +1538,6 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 		Committer:          committerOrAuthor(params.Author, params.Committer),
 		CommitterTimestamp: ts.UnixMilli(),
 	}, nil
-}
-
-// commitPersistHookKey makes dumboCommit's race with a concurrent publish,
-// between reading the working set and writing it back, deterministic in
-// backend tests.
-type commitPersistHookKey struct{}
-
-func runCommitPersistHook(ctx context.Context) {
-	if hook, ok := ctx.Value(commitPersistHookKey{}).(func()); ok {
-		hook()
-	}
 }
 
 // DumboDBBranch implements backends.VersioningBackend, dispatching on
@@ -3216,9 +3083,8 @@ func (b *Backend) dumboDBReset(
 
 	// Every write below is a compare-and-swap against the working set read
 	// above, so a client write published since makes the reset fail with
-	// ErrWriteRaced. Where it takes two writes, the working set goes first: a
-	// reset that loses the race on the second has moved the working set but
-	// not HEAD, nothing is lost, and the retry finishes it.
+	// ErrWriteRaced. Where it takes two writes, the working set goes first
+	// and HEAD follows it.
 	if params.Hard && targetAM.HashOf() == commitAM.HashOf() {
 		// Working tree and staged root both point at the target commit: one
 		// swap moves HEAD and resets the working set with it.
@@ -3238,8 +3104,20 @@ func (b *Backend) dumboDBReset(
 	if err := db.publishOverTip(ctx, tip, newWS); err != nil {
 		return nil, fmt.Errorf("DumboDBReset: updating working set for branch %q: %w", branch, err)
 	}
-	if err := db.setHeadOverTip(ctx, tip, targetHash, false); err != nil {
-		return nil, fmt.Errorf("DumboDBReset: setting HEAD for branch %q to %q: %w", branch, commitID, err)
+	// A write published between the two swaps fails the HEAD move. The
+	// working set it left is the one this reset wrote plus that write, which
+	// is still what HEAD should move under, so the move is made again.
+	for attempt := 0; ; attempt++ {
+		err := db.setHeadOverTip(ctx, tip, targetHash, false)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, backends.ErrWriteRaced) || attempt >= maxCommitRetries {
+			return nil, fmt.Errorf("DumboDBReset: setting HEAD for branch %q to %q: %w", branch, commitID, err)
+		}
+		if tip, err = db.readBranchTip(ctx, branch); err != nil {
+			return nil, fmt.Errorf("DumboDBReset: %w", err)
+		}
 	}
 
 	return &backends.ResetResult{CommitID: commitID}, nil

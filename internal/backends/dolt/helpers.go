@@ -717,8 +717,7 @@ func (state *dbState) reconcileBranchForSession(
 	if err := sess.SetWorkingSet(sqlCtx, qualified, merged); err != nil {
 		return nil, nil, fmt.Errorf("updating sess WS for %q: %w", qualified, err)
 	}
-	// Refresh the singleton entry so non-session readers see the merged WS and
-	// the next updateBranchWS's optimistic lock uses the post-merge wsHash.
+	// Refresh the singleton entry so non-session readers see the merged WS.
 	if err := state.reloadBranchWSFromDisk(sqlCtx, branch); err != nil {
 		return nil, nil, fmt.Errorf("refreshing cache for %q: %w", qualified, err)
 	}
@@ -947,12 +946,4 @@ func (state *dbState) updateAddressMap(ctx context.Context, branch, commitMsg st
 		rtvlMsg := buildRootValueFlatbuffer(newAM)
 		return doltdb.NewRootValue(ctx, state.doltDB.ValueReadWriter(), state.doltDB.NodeStore(), dolttypes.SerialMessage(rtvlMsg))
 	})
-}
-
-// headRootAM returns the collections AddressMap from HEAD's rootValue.
-// This is the correct staged root: staged stays equal to HEAD until an
-// explicit stage operation advances it.
-// The caller must hold state.mu (read or write lock).
-func (state *dbState) headRootAM(ctx context.Context) (prolly.AddressMap, error) {
-	return headRootAMForBranch(ctx, state, defaultBranch)
 }

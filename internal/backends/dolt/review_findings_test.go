@@ -263,3 +263,28 @@ func TestPausedOpStepsCountTheTransactionsUnpublishedWrites(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, f.ids()["in-txn"])
 }
+
+// A soft reset moves the working set and then HEAD. A write published between
+// the two swaps makes the HEAD move fail; the reset makes it again against the
+// branch as the write left it, rather than returning with HEAD behind the
+// working set.
+func TestSoftResetFinishesWhenAWriteLandsBetweenItsSwaps(t *testing.T) {
+	f := newRaceFixture(t)
+	f.commitDoc(defaultBranch, "main", must.NotFail(types.NewDocument("_id", "main")))
+	insertInTransaction(t, f.be, f.writer, f.db, "between-swaps")
+	swaps := 0
+	hook := func() {
+		swaps++
+		if swaps == 2 {
+			commitTransaction(t, f.be, f.writer)
+		}
+	}
+	_, err := f.be.DumboDBReset(context.WithValue(f.op, branchOpHookKey{}, hook), &backends.ResetParams{
+		DBName: f.db, Branch: defaultBranch, CommitID: f.commitID["base"],
+	})
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, swaps, 3, "the HEAD move must have been made again")
+	require.Equal(t, f.commitID["base"], f.head())
+	ids := f.ids()
+	require.True(t, ids["between-swaps"] && ids["main"], "a soft reset keeps the working root: %v", ids)
+}

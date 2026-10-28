@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"testing"
 
+	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/stretchr/testify/require"
 
@@ -30,72 +31,60 @@ import (
 )
 
 // A client write that publishes while dumboCommit is between reading the
-// working set and writing it back must survive the commit
-// (dolthub/dumbodb#167). It used to be overwritten when the publish had
-// already refreshed the cached working set, and dumboCommit failed with an
-// optimistic lock error when it had not.
+// working set and committing it must survive the commit (dolthub/dumbodb#167).
+// It used to be overwritten, or dumboCommit failed with an optimistic lock
+// error. The commit and its working set now land in one compare-and-swap, so
+// the publish makes the swap fail with nothing committed, and dumboCommit
+// commits again from the branch as the write left it: the write is in the
+// commit, and nothing was committed twice.
 func TestDumboCommitKeepsWritesPublishedDuringIt(t *testing.T) {
 	for _, branch := range []string{defaultBranch, "feature"} {
-		for _, staleCache := range []bool{false, true} {
-			name := branch + "/cache refreshed"
-			if staleCache {
-				name = branch + "/cache stale"
+		t.Run(branch, func(t *testing.T) {
+			be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, false, 0, 0)
+			require.NoError(t, err)
+			t.Cleanup(be.Close)
+
+			const dbName = "commitrace"
+			writerCtx, _ := ctxWithSessionAs(t, be, "writer-lsid", "")
+			committerCtx, _ := ctxWithSessionAs(t, be, "committer-lsid", "")
+			db, err := be.Database(dbName)
+			require.NoError(t, err)
+			require.NoError(t, db.CreateCollection(writerCtx, &backends.CreateCollectionParams{Name: "items"}))
+			target := dbName
+			if branch != defaultBranch {
+				_, err := be.DumboDBBranch(writerCtx, &backends.BranchParams{DBName: dbName, Action: "add", From: defaultBranch, Name: branch})
+				require.NoError(t, err)
+				target = dbName + "@" + branch
 			}
-			t.Run(name, func(t *testing.T) {
-				be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, false, 0, 0)
-				require.NoError(t, err)
-				t.Cleanup(be.Close)
+			insertInTransaction(t, be, writerCtx, target, "before-commit")
+			commitTransaction(t, be, writerCtx)
+			state, err := be.getOrOpenDB(context.Background(), dbName, false)
+			require.NoError(t, err)
+			headBefore, err := branchHeadHash(context.Background(), state, branch)
+			require.NoError(t, err)
 
-				const dbName = "commitrace"
-				writerCtx, _ := ctxWithSessionAs(t, be, "writer-lsid", "")
-				committerCtx, _ := ctxWithSessionAs(t, be, "committer-lsid", "")
-				db, err := be.Database(dbName)
-				require.NoError(t, err)
-				require.NoError(t, db.CreateCollection(writerCtx, &backends.CreateCollectionParams{Name: "items"}))
-				target := dbName
-				if branch != defaultBranch {
-					_, err := be.DumboDBBranch(writerCtx, &backends.BranchParams{DBName: dbName, Action: "add", From: defaultBranch, Name: branch})
-					require.NoError(t, err)
-					target = dbName + "@" + branch
-				}
-				insertInTransaction(t, be, writerCtx, target, "before-commit")
-				commitTransaction(t, be, writerCtx)
-
-				// The writer's insert completes before dumboCommit takes the
-				// database lock; only its transaction commit, which publishes
-				// lock-free, overlaps the commit.
-				insertInTransaction(t, be, writerCtx, target, "during-commit")
-				state, err := be.getOrOpenDB(context.Background(), dbName, false)
-				require.NoError(t, err)
-				hook := func() {
-					entry := state.branchEntry(branch)
-					entry.mu.RLock()
-					cachedWS, cachedHash := entry.ws, entry.wsHash
-					entry.mu.RUnlock()
+			insertInTransaction(t, be, writerCtx, target, "during-commit")
+			fired := false
+			hook := func() {
+				if !fired {
+					fired = true
 					commitTransaction(t, be, writerCtx)
-					if staleCache {
-						entry.mu.Lock()
-						entry.ws, entry.wsHash = cachedWS, cachedHash
-						entry.mu.Unlock()
-					}
 				}
-				_, err = be.DumboDBCommit(context.WithValue(committerCtx, commitPersistHookKey{}, hook), &backends.CommitParams{
-					DBName: dbName, Branch: branch, Message: "c", Author: "a", AllowEmpty: true,
-				})
-				require.NoError(t, err)
-
-				readerCtx, _ := ctxWithSessionAs(t, be, "reader-lsid", "")
-				require.Equal(t, 2, countDocsCtx(t, readerCtx, be, target, "items"),
-					"an insert acknowledged while dumboCommit ran was lost")
-
-				// The commit recorded the working set it read; the racing
-				// insert stays uncommitted, so the next commit is not empty.
-				_, err = be.DumboDBCommit(committerCtx, &backends.CommitParams{
-					DBName: dbName, Branch: branch, Message: "after", Author: "a",
-				})
-				require.NoError(t, err, "the insert published during the first commit must remain to be committed")
+			}
+			res, err := be.DumboDBCommit(context.WithValue(committerCtx, branchOpHookKey{}, hook), &backends.CommitParams{
+				DBName: dbName, Branch: branch, Message: "c", Author: "a",
 			})
-		}
+			require.NoError(t, err)
+
+			readerCtx, _ := ctxWithSessionAs(t, be, "reader-lsid", "")
+			require.Equal(t, 2, countDocsCtx(t, readerCtx, be, target, "items"),
+				"an insert acknowledged while dumboCommit ran was lost")
+			parent, err := firstParentHash(context.Background(), state, hash.Parse(res.CommitID))
+			require.NoError(t, err)
+			require.Equal(t, headBefore, parent, "the commit must sit directly on the HEAD it started from: one commit, not two")
+			_, err = be.DumboDBCommit(committerCtx, &backends.CommitParams{DBName: dbName, Branch: branch, Message: "after", Author: "a"})
+			require.ErrorIs(t, err, backends.ErrEmptyCommit, "the write published during the commit must be in it")
+		})
 	}
 }
 

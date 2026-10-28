@@ -16,13 +16,10 @@ package dolt
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"log/slog"
 	"sync"
-	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	doltref "github.com/dolthub/dolt/go/libraries/doltcore/ref"
@@ -126,122 +123,6 @@ func TestLoadBranchWS_LazyLoad(t *testing.T) {
 	ws2, err := state.loadBranchWS(ctx, defaultBranch)
 	require.NoError(t, err)
 	assert.Same(t, ws1, ws2, "second call must hit the cache and return the same WS pointer")
-}
-
-// TestUpdateBranchWS_HappyPath: the callback's newWS is persisted to
-// disk; entry.ws and entry.wsHash are refreshed to the new on-disk
-// values; ResolveWorkingSet reports the new state.
-func TestUpdateBranchWS_HappyPath(t *testing.T) {
-	ctx := context.Background()
-	state := newTestDbState(t)
-
-	// Warm up: load and capture the original hash.
-	ws0, err := state.loadBranchWS(ctx, defaultBranch)
-	require.NoError(t, err)
-	origHash, err := ws0.HashOf()
-	require.NoError(t, err)
-
-	err = state.updateBranchWS(ctx, defaultBranch, func(cur *doltdb.WorkingSet) (*doltdb.WorkingSet, error) {
-		require.Same(t, ws0, cur, "fn must receive the cached WS")
-		return mutateWS(t, state, cur, "happy-path"), nil
-	})
-	require.NoError(t, err)
-
-	e := state.branchEntry(defaultBranch)
-	e.mu.RLock()
-	newCached := e.ws
-	newHash := e.wsHash
-	e.mu.RUnlock()
-
-	require.NotNil(t, newCached)
-	assert.NotEqual(t, origHash, newHash, "wsHash must advance after a successful update")
-
-	// Disk-side confirmation.
-	wsRef := doltref.NewWorkingSetRef("heads/" + defaultBranch)
-	onDisk, err := state.doltDB.ResolveWorkingSet(ctx, wsRef)
-	require.NoError(t, err)
-	onDiskHash, err := onDisk.HashOf()
-	require.NoError(t, err)
-	assert.Equal(t, newHash, onDiskHash, "cached wsHash must match disk after update")
-}
-
-// TestUpdateBranchWS_OptimisticLockFailure: if the on-disk WS moves
-// out from under us between cache warm-up and update, the
-// optimistic-lock check inside ddb.UpdateWorkingSet rejects the
-// write and we surface the error.
-func TestUpdateBranchWS_OptimisticLockFailure(t *testing.T) {
-	ctx := context.Background()
-	state := newTestDbState(t)
-
-	// Warm the entry.
-	_, err := state.loadBranchWS(ctx, defaultBranch)
-	require.NoError(t, err)
-
-	// Race the disk: write a different WS through the legacy helper
-	// so the entry's wsHash is stale.
-	wsRef := doltref.NewWorkingSetRef("heads/" + defaultBranch)
-	current, err := state.doltDB.ResolveWorkingSet(ctx, wsRef)
-	require.NoError(t, err)
-	currentHash, err := current.HashOf()
-	require.NoError(t, err)
-	// A legitimate concurrent writer: it publishes against the fork point it
-	// read, which is the current state, so its publish lands.
-	require.NoError(t, publishWorkingSet(ctx, state.doltDB, mutateWS(t, state, current, "race"), defaultBranch, currentHash))
-
-	// Now updateBranchWS should fail its optimistic-lock check.
-	err = state.updateBranchWS(ctx, defaultBranch, func(cur *doltdb.WorkingSet) (*doltdb.WorkingSet, error) {
-		return mutateWS(t, state, cur, "loser"), nil
-	})
-	require.Error(t, err, "stale wsHash must surface as an error")
-}
-
-// TestBranchEntry_ConcurrentDifferentBranchesNoContention: writers
-// on distinct branches do not serialize on a shared lock. Measured
-// indirectly by counting how many entry.mu.Lock() calls happen
-// concurrently across goroutines.
-func TestBranchEntry_ConcurrentDifferentBranchesNoContention(t *testing.T) {
-	ctx := context.Background()
-	state := newTestDbState(t)
-
-	// Pre-warm both branches so cold-load doesn't dominate.
-	require.NoError(t, makeBranch(ctx, state, "alpha"))
-	require.NoError(t, makeBranch(ctx, state, "beta"))
-	_, err := state.loadBranchWS(ctx, "alpha")
-	require.NoError(t, err)
-	_, err = state.loadBranchWS(ctx, "beta")
-	require.NoError(t, err)
-
-	const iterations = 50
-	var wg sync.WaitGroup
-	var inFlight, maxInFlight atomic.Int64
-
-	worker := func(branch string) {
-		defer wg.Done()
-		for i := 0; i < iterations; i++ {
-			err := state.updateBranchWS(ctx, branch, func(cur *doltdb.WorkingSet) (*doltdb.WorkingSet, error) {
-				// Brief hold inside the entry lock; instrument peak concurrency.
-				cur2 := inFlight.Add(1)
-				for {
-					prev := maxInFlight.Load()
-					if cur2 <= prev || maxInFlight.CompareAndSwap(prev, cur2) {
-						break
-					}
-				}
-				time.Sleep(time.Millisecond)
-				inFlight.Add(-1)
-				return mutateWS(t, state, cur, fmt.Sprintf("%s-%d", branch, i)), nil
-			})
-			require.NoError(t, err)
-		}
-	}
-
-	wg.Add(2)
-	go worker("alpha")
-	go worker("beta")
-	wg.Wait()
-
-	assert.GreaterOrEqual(t, maxInFlight.Load(), int64(2),
-		"distinct-branch updateBranchWS calls must be able to overlap; saw peak in-flight=%d", maxInFlight.Load())
 }
 
 // makeBranch creates a branch named name from the current HEAD of

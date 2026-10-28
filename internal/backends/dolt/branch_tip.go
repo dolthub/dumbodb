@@ -179,16 +179,30 @@ func (s *dbState) commitOverTip(
 	cm *datas.CommitMeta,
 	fn func(*doltdb.WorkingSet) (*doltdb.WorkingSet, error),
 ) (hash.Hash, error) {
+	// The parents are the operation's own; HEAD need not be among them, as
+	// for a rebase, which leaves HEAD where it was until it finishes.
+	return s.commitOverTipWith(ctx, tip, commitRV, datas.CommitOptions{Parents: parents, Meta: cm, Force: true}, fn)
+}
+
+// commitOverTipWith is commitOverTip for a commit described by opts: with no
+// parents it goes on top of HEAD, and an amend replaces HEAD, which must
+// still be the commit it names.
+func (s *dbState) commitOverTipWith(
+	ctx context.Context,
+	tip *branchTip,
+	commitRV doltdb.RootValue,
+	opts datas.CommitOptions,
+	fn func(*doltdb.WorkingSet) (*doltdb.WorkingSet, error),
+) (hash.Hash, error) {
 	if tip.lost {
 		return hash.Hash{}, tip.raced()
 	}
-	pending, err := s.pendingCommit(ctx, tip.branch, commitRV, parents, cm)
+	pending, err := s.pendingCommit(ctx, tip.branch, commitRV, opts.Parents, opts.Meta)
 	if err != nil {
 		return hash.Hash{}, err
 	}
-	// The parents are the operation's own; HEAD need not be among them, as
-	// for a rebase, which leaves HEAD where it was until it finishes.
-	pending.CommitOptions.Force = true
+	pending.CommitOptions.Force = opts.Force
+	pending.CommitOptions.AmendedCommit = opts.AmendedCommit
 	newWS, err := fn(tip.ws.WithWorkingRoot(commitRV).WithStagedRoot(commitRV))
 	if err != nil {
 		return hash.Hash{}, err
