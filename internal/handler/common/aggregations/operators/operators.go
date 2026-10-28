@@ -140,10 +140,14 @@ func NewOperator(doc *types.Document) (Operator, error) {
 var Operators = map[string]newOperatorFunc{
 	// sorted alphabetically
 	"$abs":             newAbs,
+	"$acos":            newAcos,
 	"$add":             newAdd,
 	"$allElementsTrue": newAllElementsTrue,
 	"$and":             newAnd,
 	"$arrayToObject":   newArrayToObject,
+	"$asin":            newAsin,
+	"$atan":            newAtan,
+	"$atan2":           newAtan2,
 	"$avg":             newAvgOp,
 	"$anyElementTrue":  newAnyElementTrue,
 	"$arrayElemAt":     newArrayElemAt,
@@ -269,12 +273,8 @@ var Operators = map[string]newOperatorFunc{
 // unsupportedOperators maps all unsupported yet operators.
 var unsupportedOperators = map[string]struct{}{
 	// sorted alphabetically
-	"$acos":             {},
 	"$acosh":            {},
-	"$asin":             {},
 	"$asinh":            {},
-	"$atan":             {},
-	"$atan2":            {},
 	"$atanh":            {},
 	"$binarySize":       {},
 	"$cosh":             {},

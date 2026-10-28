@@ -33,7 +33,10 @@ type trigBounds struct {
 	inclusive    bool
 }
 
-var unboundedTrig = trigBounds{lower: math.Inf(-1), upper: math.Inf(1)}
+var (
+	finiteTrigBounds = &trigBounds{lower: math.Inf(-1), upper: math.Inf(1)}
+	unitTrigBounds   = &trigBounds{lower: -1, upper: 1, inclusive: true}
+)
 
 func (b trigBounds) containsDouble(x float64) bool {
 	if b.inclusive {
@@ -77,16 +80,19 @@ func formatBound(f float64) string {
 	}
 }
 
+// trigOp evaluates a single-argument trigonometric operator. Without bounds
+// NaN and infinities reach the function, as in MongoDB's unbounded
+// trigonometric expressions.
 type trigOp struct {
 	name    string
 	arg     any
-	bounds  trigBounds
+	bounds  *trigBounds
 	double  func(float64) float64
 	decimal func(types.Decimal128) types.Decimal128
 }
 
 func newTrigOperator(
-	name string, bounds trigBounds, double func(float64) float64, decimal func(types.Decimal128) types.Decimal128,
+	name string, bounds *trigBounds, double func(float64) float64, decimal func(types.Decimal128) types.Decimal128,
 ) newOperatorFunc {
 	return func(args ...any) (Operator, error) {
 		if len(args) != 1 {
@@ -112,6 +118,9 @@ func (op *trigOp) Process(doc *types.Document) (any, error) {
 	}
 
 	if d, ok := v.(types.Decimal128); ok {
+		if op.bounds == nil {
+			return op.decimal(d), nil
+		}
 		x := aggregations.DecimalToAPD(d)
 		if x.Form == apd.NaN {
 			return d, nil
@@ -123,6 +132,9 @@ func (op *trigOp) Process(doc *types.Document) (any, error) {
 	}
 
 	f := toFloat64(v)
+	if op.bounds == nil {
+		return op.double(f), nil
+	}
 	if math.IsNaN(f) {
 		return v, nil
 	}
@@ -148,7 +160,66 @@ func trigDecimal(fn aggregations.TrigFunc) func(types.Decimal128) types.Decimal1
 }
 
 var (
-	newSin = newTrigOperator("$sin", unboundedTrig, trigDouble(aggregations.Sin), trigDecimal(aggregations.Sin))
-	newCos = newTrigOperator("$cos", unboundedTrig, trigDouble(aggregations.Cos), trigDecimal(aggregations.Cos))
-	newTan = newTrigOperator("$tan", unboundedTrig, trigDouble(aggregations.Tan), trigDecimal(aggregations.Tan))
+	newSin  = newTrigOperator("$sin", finiteTrigBounds, trigDouble(aggregations.Sin), trigDecimal(aggregations.Sin))
+	newCos  = newTrigOperator("$cos", finiteTrigBounds, trigDouble(aggregations.Cos), trigDecimal(aggregations.Cos))
+	newTan  = newTrigOperator("$tan", finiteTrigBounds, trigDouble(aggregations.Tan), trigDecimal(aggregations.Tan))
+	newAsin = newTrigOperator("$asin", unitTrigBounds, trigDouble(aggregations.Asin), trigDecimal(aggregations.Asin))
+	newAcos = newTrigOperator("$acos", unitTrigBounds, trigDouble(aggregations.Acos), trigDecimal(aggregations.Acos))
+	newAtan = newTrigOperator("$atan", nil, trigDouble(aggregations.Atan), trigDecimal(aggregations.Atan))
 )
+
+// atan2Op represents { $atan2: [ <y>, <x> ] }. Like MongoDB's
+// ExpressionTwoNumericArgs, y is checked before x is evaluated.
+type atan2Op struct {
+	y, x any
+}
+
+func newAtan2(args ...any) (Operator, error) {
+	if len(args) != 2 {
+		return nil, newOperatorError(ErrArgsInvalidLen, "$atan2",
+			fmt.Sprintf("Expression $atan2 takes exactly 2 arguments. %d were passed in.", len(args)))
+	}
+
+	return &atan2Op{y: args[0], x: args[1]}, nil
+}
+
+func (op *atan2Op) Process(doc *types.Document) (any, error) {
+	y, err := evalArgValue(op.y, doc)
+	if err != nil {
+		return nil, err
+	}
+	if isNullish(y) {
+		return types.Null, nil
+	}
+	if !isNumber(y) {
+		return nil, nonNumericError(handlererrors.ErrNumericFirstArgument, "$atan2", y)
+	}
+
+	x, err := evalArgValue(op.x, doc)
+	if err != nil {
+		return nil, err
+	}
+	if isNullish(x) {
+		return types.Null, nil
+	}
+	if !isNumber(x) {
+		return nil, nonNumericError(handlererrors.ErrNumericSecondArgument, "$atan2", x)
+	}
+
+	_, yDec := y.(types.Decimal128)
+	_, xDec := x.(types.Decimal128)
+	if yDec || xDec {
+		return aggregations.DecimalAtan2(signedNumberToAPD(y), signedNumberToAPD(x)), nil
+	}
+	return aggregations.TrigAtan2Double(toFloat64(y), toFloat64(x)), nil
+}
+
+var _ Operator = (*atan2Op)(nil)
+
+func signedNumberToAPD(v any) *apd.Decimal {
+	if d, ok := v.(types.Decimal128); ok {
+		return aggregations.SignedDecimalToAPD(d)
+	}
+	x, _ := aggregations.NumberToAPD(v)
+	return x
+}
