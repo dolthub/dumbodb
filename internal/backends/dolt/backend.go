@@ -3774,7 +3774,7 @@ func notAMerge(ms *mergeInProgress, step string) error {
 }
 
 // prepareContinue settles ms.resolvedAM to the root a continue commits: the
-// branch as tip read it -- writes made during the pause included -- with the
+// branch as tip read it -- the resolutions made during the pause -- with the
 // collections the pause deferred merged into it and the conflict markers swept
 // off. When merging the deferred collections turns up new conflicts it
 // publishes the operation paused on them instead and reports true; nothing is

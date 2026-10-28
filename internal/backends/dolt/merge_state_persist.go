@@ -31,6 +31,8 @@ import (
 	dolttypes "github.com/dolthub/dolt/go/store/types"
 	"github.com/dolthub/dolt/go/store/val"
 	"github.com/dolthub/go-mysql-server/sql"
+
+	"github.com/dolthub/dumbodb/internal/backends"
 )
 
 const deferredCollectionStatePrefix = "__dumbo_deferred_collection__"
@@ -526,84 +528,26 @@ func collectionsWithArtifacts(ctx context.Context, state *dbState, am prolly.Add
 	return names, nil
 }
 
-// carryConflictArtifacts keeps a paused operation's conflict markers through a
-// write. A write rebuilds the tables of the collections it changes with no
-// markers, so every collection whose table differs between before and after,
-// and had markers in before but has none in after, gets before's markers back.
-// Only resolving a conflict removes its marker, and that does not come through
-// here. Callers run it only while an operation is paused, the only time a
-// table carries markers.
-func carryConflictArtifacts(ctx context.Context, state *dbState, before, after prolly.AddressMap) (prolly.AddressMap, error) {
-	names, err := collectionsWithArtifacts(ctx, state, before)
-	if err != nil || len(names) == 0 {
-		return after, err
+// refuseWritesWhilePaused refuses a write to branch while ws records an
+// operation paused on conflicts. Nothing may land on the branch between the
+// pause and its continue or abort: an abort would discard it, and a continue
+// would commit it as part of the operation.
+func refuseWritesWhilePaused(branch string, ws *doltdb.WorkingSet) error {
+	if !ws.MergeActive() {
+		return nil
 	}
-	ed := after.Editor()
-	for _, name := range names {
-		beforeH, err := before.Get(ctx, name)
-		if err != nil {
-			return prolly.AddressMap{}, err
-		}
-		afterH, err := after.Get(ctx, name)
-		if err != nil {
-			return prolly.AddressMap{}, err
-		}
-		if afterH.IsEmpty() || afterH == beforeH {
-			continue
-		}
-		beforeTbl, err := readTable(ctx, state, beforeH)
-		if err != nil {
-			return prolly.AddressMap{}, fmt.Errorf("reading %q before the write: %w", name, err)
-		}
-		afterTbl, err := readTable(ctx, state, afterH)
-		if err != nil {
-			return prolly.AddressMap{}, fmt.Errorf("reading %q after the write: %w", name, err)
-		}
-		if afterTbl == nil || !hash.New(afterTbl.ArtifactsBytes()).IsEmpty() {
-			continue
-		}
-		msg := buildDoltTableFlatbufferBytes(afterTbl.PrimaryIndexBytes(), hash.New(afterTbl.SchemaBytes()),
-			afterTbl.SecondaryIndexesBytes(), hash.New(beforeTbl.ArtifactsBytes()))
-		ref, err := state.vs.WriteValue(ctx, dolttypes.SerialMessage(msg))
-		if err != nil {
-			return prolly.AddressMap{}, fmt.Errorf("writing %q with its conflict markers: %w", name, err)
-		}
-		if err := ed.Update(ctx, name, ref.TargetHash()); err != nil {
-			return prolly.AddressMap{}, err
-		}
+	op, cmd := "merge", "dumboMerge"
+	switch {
+	case ws.RebaseActive():
+		op, cmd = "rebase", "dumboRebase"
+	case ws.MergeState().IsCherryPick():
+		op, cmd = "cherry-pick", "dumboCherryPick"
+	case ws.MergeState().IsRevert():
+		op, cmd = "revert", "dumboRevert"
 	}
-	return ed.Flush(ctx)
-}
-
-func carryConflictArtifactsToRoot(ctx context.Context, state *dbState, before, after doltdb.RootValue) (doltdb.RootValue, error) {
-	beforeAM, err := amFromWorkingRoot(ctx, before, state.ns)
-	if err != nil {
-		return nil, err
-	}
-	afterAM, err := amFromWorkingRoot(ctx, after, state.ns)
-	if err != nil {
-		return nil, err
-	}
-	carried, err := carryConflictArtifacts(ctx, state, beforeAM, afterAM)
-	if err != nil {
-		return nil, err
-	}
-	if carried.HashOf() == afterAM.HashOf() {
-		return after, nil
-	}
-	return rootValueFromAM(ctx, state, carried)
-}
-
-// readTable parses the DTBL at h, or returns nil when h is not one.
-func readTable(ctx context.Context, state *dbState, h hash.Hash) (*serial.Table, error) {
-	chunk, err := state.cs.Get(ctx, h)
-	if err != nil {
-		return nil, err
-	}
-	if serial.GetFileID(chunk.Data()) != serial.TableFileID {
-		return nil, nil
-	}
-	return serial.TryGetRootAsTable(chunk.Data(), serial.MessagePrefixSz)
+	return backends.NewError(backends.ErrorCodeBranchInConflict, fmt.Errorf(
+		"branch %q is in a conflicting state: a %s is paused on conflicts, and no writes are accepted until it is finished. "+
+			"Resolve the conflicts with dumboResolveConflict, then run %s with continue (or abort)", branch, op, cmd))
 }
 
 // loadNamespaceConflicts rebuilds the view and collection-metadata conflicts

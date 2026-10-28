@@ -122,6 +122,11 @@ func handleTransactionCommitError(
 			handlererrors.TransientTransactionErrorLabel,
 		)
 	}
+	if backends.ErrorCodeIs(err, backends.ErrorCodeBranchInConflict) {
+		sab.OnTransactionAbort(ci.Owner())
+		ci.SetInTransaction(false)
+		return common.TranslateBackendWriteError(context.Background(), err)
+	}
 	return lazyerrors.Error(err)
 }
 

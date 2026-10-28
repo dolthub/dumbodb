@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
@@ -74,32 +75,36 @@ func (f *raceFixture) resolveAll(resolution string) {
 	}
 }
 
-// A write published while a merge is paused must survive the continue that
-// merges the collections the pause deferred.
-func TestContinueWithDeferredCollectionsKeepsWritesFromThePause(t *testing.T) {
+// A continue that merges the collections a pause deferred commits the
+// resolutions made during the pause. The deferred collection, like the rest of
+// the branch, accepts no client writes meanwhile.
+func TestContinueWithDeferredCollectionsKeepsTheResolutions(t *testing.T) {
 	f := pauseWithDeferredCollection(t)
-	f.resolveAll("theirs")
-	insertInTransaction(t, f.be, f.writer, f.db, "during-pause")
-	commitTransaction(t, f.be, f.writer)
-
-	_, err := f.be.DumboDBMerge(f.op, &backends.MergeParams{DBName: f.db, Into: defaultBranch, Continue: true, Author: "a"})
-	require.NoError(t, err)
-	require.True(t, f.ids()["during-pause"], "the continue overwrote a write published during the pause")
-}
-
-// The same holds for a write to the deferred collection itself: its merge
-// must build on the collection as the pause left it, not as it was committed.
-func TestContinueWithDeferredCollectionsKeepsWritesToThem(t *testing.T) {
-	f := pauseWithDeferredCollection(t)
-	f.resolveAll("theirs")
 	gov := must.NotFail(must.NotFail(f.be.Database(f.db)).Collection("gov"))
 	_, err := gov.InsertAll(context.Background(), &backends.InsertAllParams{Docs: []*types.Document{must.NotFail(types.NewDocument("_id", "into-gov"))}})
-	require.NoError(t, err)
+	require.True(t, backends.ErrorCodeIs(err, backends.ErrorCodeBranchInConflict), "%v", err)
 
+	f.resolveAll("theirs")
 	_, err = f.be.DumboDBMerge(f.op, &backends.MergeParams{DBName: f.db, Into: defaultBranch, Continue: true, Author: "a"})
 	require.NoError(t, err)
+
 	readerCtx, _ := ctxWithSessionAs(t, f.be, "reader-lsid", "")
-	require.True(t, docIDs(t, f.be, readerCtx, f.db, "gov")["into-gov"], "the continue overwrote a write to the deferred collection")
+	items := must.NotFail(must.NotFail(f.be.Database(f.db)).Collection("items"))
+	res, err := items.Query(readerCtx, &backends.QueryParams{})
+	require.NoError(t, err)
+	defer res.Iter.Close()
+	var x *types.Document
+	for {
+		_, doc, iterErr := res.Iter.Next()
+		if iterErr != nil {
+			break
+		}
+		if id, _ := doc.Get("_id"); id == "x" {
+			x = doc
+		}
+	}
+	require.NotNil(t, x)
+	require.EqualValues(t, 1, must.NotFail(x.Get("v")), "the continue dropped the resolution taking theirs")
 }
 
 // A hard reset that loses the race to a client write changes nothing: HEAD
@@ -126,36 +131,6 @@ func TestResetRefusedWhileAnOperationIsPaused(t *testing.T) {
 		require.ErrorContains(t, err, "paused")
 	}
 	require.Equal(t, f.commitID["main"], f.head())
-}
-
-// A rebase abort that loses the race leaves the rebase paused exactly as it
-// was, on disk too: reloading it, as a restart does, finds the same tip and
-// the abort then succeeds.
-func TestRaceLostRebaseAbortLeavesTheRebasePaused(t *testing.T) {
-	f := newRaceFixture(t)
-	f.commitDoc("feature", "feat", must.NotFail(types.NewDocument("_id", "x", "v", int32(1))))
-	f.commitDoc(defaultBranch, "m1", must.NotFail(types.NewDocument("_id", "m1")))
-	f.commitDoc(defaultBranch, "m2", must.NotFail(types.NewDocument("_id", "x", "v", int32(2))))
-	require.Error(t, f.rebaseOntoFeature(f.op))
-	pausedHead := f.head()
-	require.NotEqual(t, f.commitID["m2"], pausedHead, "the fixture must pause after replaying a pick")
-
-	abort := func(ctx context.Context) error {
-		_, err := f.be.DumboDBRebase(ctx, &backends.RebaseParams{DBName: f.db, Branch: defaultBranch, Abort: true})
-		return err
-	}
-	require.ErrorIs(t, abort(f.racing("during-abort")), backends.ErrWriteRaced)
-	require.Equal(t, pausedHead, f.head(), "an abort that lost the race moved HEAD")
-
-	state := must.NotFail(f.be.getOrOpenDB(context.Background(), f.db, false))
-	reloaded, err := loadMergeState(context.Background(), state)
-	require.NoError(t, err)
-	require.NotNil(t, reloaded)
-	require.Equal(t, state.mergeState.intoHash, reloaded.intoHash, "a reload must find the rebase where memory has it")
-
-	require.NoError(t, abort(f.op))
-	require.Equal(t, f.commitID["m2"], f.head())
-	require.Empty(t, f.mergeOp())
 }
 
 // requireOperationStateMatchesDisk fails unless the paused operation held in
@@ -249,14 +224,16 @@ func TestMergeAbortRefusesOtherOperations(t *testing.T) {
 	}
 }
 
-// Resolving, continuing and aborting a paused merge inside a client
-// transaction that has written to the branch would overwrite those writes, so
-// each is refused like any other operation over uncommitted changes, and the
-// transaction's write survives its commit.
+// A client transaction that wrote before a merge paused holds writes the
+// branch does not have yet. Resolving, continuing or aborting the merge inside
+// that transaction would overwrite them, so each is refused like any other
+// operation over uncommitted changes; the transaction itself cannot commit
+// onto the paused branch, and once the merge is finished nothing of it landed.
 func TestPausedOpStepsCountTheTransactionsUnpublishedWrites(t *testing.T) {
 	f := newRaceFixture(t)
 	f.commitDoc("feature", "feat", must.NotFail(types.NewDocument("_id", "x", "v", int32(1))))
 	f.commitDoc(defaultBranch, "main", must.NotFail(types.NewDocument("_id", "x", "v", int32(2))))
+	insertInTransaction(t, f.be, f.writer, f.db, "in-txn")
 	require.Error(t, f.mergeFeature(f.op))
 	conflicts, err := f.be.DumboDBConflicts(f.op, &backends.ConflictsParams{DBName: f.db, Branch: defaultBranch})
 	require.NoError(t, err)
@@ -268,7 +245,6 @@ func TestPausedOpStepsCountTheTransactionsUnpublishedWrites(t *testing.T) {
 		})
 		return err
 	}
-	insertInTransaction(t, f.be, f.writer, f.db, "in-txn")
 	require.ErrorIs(t, resolve(f.writer), backends.ErrUncommittedChanges)
 	require.NoError(t, resolve(f.op))
 	for name, params := range map[string]*backends.MergeParams{
@@ -279,6 +255,11 @@ func TestPausedOpStepsCountTheTransactionsUnpublishedWrites(t *testing.T) {
 		require.ErrorIs(t, err, backends.ErrUncommittedChanges, name)
 		require.Equal(t, "merge", f.mergeOp(), name)
 	}
-	commitTransaction(t, f.be, f.writer)
-	require.True(t, f.ids()["in-txn"])
+	err = f.be.OnTransactionCommit(f.writer, conninfo.Get(f.writer).Owner())
+	require.True(t, backends.ErrorCodeIs(err, backends.ErrorCodeBranchInConflict), "%v", err)
+	f.be.OnTransactionAbort(conninfo.Get(f.writer).Owner())
+
+	_, err = f.be.DumboDBMerge(f.op, &backends.MergeParams{DBName: f.db, Into: defaultBranch, Continue: true})
+	require.NoError(t, err)
+	require.False(t, f.ids()["in-txn"])
 }

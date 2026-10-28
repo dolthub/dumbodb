@@ -45,6 +45,10 @@ const (
 	ErrorCodeWriteConflict
 
 	ErrorCodeReadOnlyCollection
+
+	// ErrorCodeBranchInConflict refuses a write to a branch that has an
+	// operation paused on conflicts.
+	ErrorCodeBranchInConflict
 )
 
 // Error represents a backend error returned by all Backend, Database and Collection methods.
@@ -125,6 +129,14 @@ func (err *Error) DupKey() *types.Document {
 }
 
 // There is intentionally no method to return the internal error.
+
+// Message is the error's description without its code.
+func (err *Error) Message() string {
+	if err.err == nil {
+		return err.code.String()
+	}
+	return err.err.Error()
+}
 
 func (err *Error) Error() string {
 	return fmt.Sprintf("%s: %v", err.code, err.err)

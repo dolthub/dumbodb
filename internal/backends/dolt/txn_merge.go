@@ -115,11 +115,6 @@ func (state *dbState) reconcileWorkingSets(ctx context.Context, branch string, b
 		return nil, unresolved, &backends.MergeConflictError{Conflicts: unresolved.summaries()}
 	}
 
-	if theirs.MergeActive() {
-		if mergedAM, err = carryConflictArtifacts(ctx, state, theirsAM, mergedAM); err != nil {
-			return nil, nil, fmt.Errorf("keeping the paused operation's conflicts: %w", err)
-		}
-	}
 	mergedRV, err := rootValueFromAM(ctx, state, mergedAM)
 	if err != nil {
 		return nil, nil, fmt.Errorf("building merged root: %w", err)

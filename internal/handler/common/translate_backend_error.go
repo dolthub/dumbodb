@@ -16,6 +16,7 @@ package common
 
 import (
 	"context"
+	"errors"
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
@@ -31,6 +32,10 @@ func TranslateBackendWriteError(ctx context.Context, err error) error {
 			handlererrors.ErrOperationFailed,
 			"cannot write to a read-only database snapshot",
 		)
+	}
+	var branchInConflict *backends.Error
+	if errors.As(err, &branchInConflict) && branchInConflict.Code() == backends.ErrorCodeBranchInConflict {
+		return handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, branchInConflict.Message())
 	}
 	if backends.ErrorCodeIs(err, backends.ErrorCodeReadOnlyCollection) {
 		return handlererrors.NewCommandErrorMsg(

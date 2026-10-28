@@ -283,10 +283,12 @@ func TestVCOpsFailWhenAWriteLandsWhileTheyRun(t *testing.T) {
 	}
 }
 
-// Resolving a conflict, continuing and aborting a paused operation each read
-// the branch and write it back; a write published in between makes the step
-// fail with ErrWriteRaced and leaves the operation paused where it was.
-func TestPausedOpStepsFailWhenAWriteLandsWhileTheyRun(t *testing.T) {
+// A paused operation's own steps cannot be raced by a client write: the
+// branch accepts none while it is paused. The only write that could still
+// reach it -- a transaction begun before the pause -- is refused when it tries
+// to commit in the middle of a resolve, continue or abort, and the step goes
+// ahead as if it had not tried.
+func TestPausedOpStepsCannotBeRacedByAWrite(t *testing.T) {
 	x := func(v int32) *types.Document { return must.NotFail(types.NewDocument("_id", "x", "v", v)) }
 	for _, tc := range []struct {
 		name  string
@@ -310,14 +312,29 @@ func TestPausedOpStepsFailWhenAWriteLandsWhileTheyRun(t *testing.T) {
 			return err
 		}, "rebase"},
 	} {
+		// setup pauses the operation with a client transaction that wrote
+		// before the pause and has not committed.
 		setup := func(t *testing.T) *raceFixture {
 			f := newRaceFixture(t)
 			f.commitDoc("feature", "feat", x(1))
 			f.commitDoc(defaultBranch, "m1", must.NotFail(types.NewDocument("_id", "m1")))
 			f.commitDoc(defaultBranch, "m2", x(2))
+			insertInTransaction(t, f.be, f.writer, f.db, "early")
 			require.Error(t, tc.start(f))
 			require.Equal(t, tc.op, f.mergeOp())
 			return f
+		}
+		// committing returns a context whose step tries to commit that
+		// transaction before each of its writes, and the result of the try.
+		committing := func(f *raceFixture) (context.Context, *error) {
+			commitErr := new(error)
+			fired := false
+			return context.WithValue(f.op, branchOpHookKey{}, func() {
+				if !fired {
+					fired = true
+					*commitErr = f.be.OnTransactionCommit(f.writer, conninfo.Get(f.writer).Owner())
+				}
+			}), commitErr
 		}
 		resolve := func(f *raceFixture, ctx context.Context) error {
 			conflicts, err := f.be.DumboDBConflicts(f.op, &backends.ConflictsParams{DBName: f.db, Branch: defaultBranch})
@@ -328,28 +345,35 @@ func TestPausedOpStepsFailWhenAWriteLandsWhileTheyRun(t *testing.T) {
 			})
 			return err
 		}
+		refusedAsInConflict := func(t *testing.T, err *error) {
+			t.Helper()
+			require.True(t, backends.ErrorCodeIs(*err, backends.ErrorCodeBranchInConflict), "the commit was not refused: %v", *err)
+		}
 
 		t.Run(tc.name+"/resolve and continue", func(t *testing.T) {
 			f := setup(t)
-			require.ErrorIs(t, resolve(f, f.racing("during-resolve")), backends.ErrWriteRaced)
-			require.Equal(t, tc.op, f.mergeOp(), "a resolve that lost the race ended the operation")
-			require.NoError(t, resolve(f, f.op))
-
-			headBefore := f.head()
-			require.ErrorIs(t, tc.cont(f, f.racing("during-continue")), backends.ErrWriteRaced)
-			require.Equal(t, tc.op, f.mergeOp(), "a continue that lost the race ended the operation")
-			require.Equal(t, headBefore, f.head(), "a continue that lost the race moved the branch")
+			ctx, commitErr := committing(f)
+			require.NoError(t, resolve(f, ctx))
+			refusedAsInConflict(t, commitErr)
 			require.NoError(t, tc.cont(f, f.op))
+			require.Empty(t, f.mergeOp())
+			require.False(t, f.ids()["early"], "a refused commit landed")
+		})
 
-			ids := f.ids()
-			require.True(t, ids["during-resolve"] && ids["during-continue"], "a write published during the operation was lost: %v", ids)
+		t.Run(tc.name+"/continue", func(t *testing.T) {
+			f := setup(t)
+			require.NoError(t, resolve(f, f.op))
+			ctx, commitErr := committing(f)
+			require.NoError(t, tc.cont(f, ctx))
+			refusedAsInConflict(t, commitErr)
+			require.Empty(t, f.mergeOp())
 		})
 
 		t.Run(tc.name+"/abort", func(t *testing.T) {
 			f := setup(t)
-			require.ErrorIs(t, tc.abort(f, f.racing("during-abort")), backends.ErrWriteRaced)
-			require.Equal(t, tc.op, f.mergeOp(), "an abort that lost the race ended the operation")
-			require.NoError(t, tc.abort(f, f.op))
+			ctx, commitErr := committing(f)
+			require.NoError(t, tc.abort(f, ctx))
+			refusedAsInConflict(t, commitErr)
 			require.Empty(t, f.mergeOp())
 			require.Equal(t, f.commitID["m2"], f.head())
 		})

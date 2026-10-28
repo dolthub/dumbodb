@@ -191,7 +191,7 @@ func (h *Handler) execDelete(ctx context.Context, c backends.Collection, p *comm
 
 	d, err := c.DeleteAll(ctx, &backends.DeleteAllParams{IDs: ids})
 	if err != nil {
-		if backends.ErrorCodeIs(err, backends.ErrorCodeReadOnlyDatabase, backends.ErrorCodeReadOnlyCollection) {
+		if backends.ErrorCodeIs(err, backends.ErrorCodeReadOnlyDatabase, backends.ErrorCodeReadOnlyCollection, backends.ErrorCodeBranchInConflict) {
 			return 0, common.TranslateBackendWriteError(ctx, err)
 		}
 		if backends.ErrorCodeIs(err, backends.ErrorCodeWriteConflict) {

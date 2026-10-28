@@ -545,9 +545,8 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 		return nil, fmt.Errorf("DumboDBResolveConflict: %w", err)
 	}
 
-	// Build on whatever has been written to the branch since the operation
-	// paused, so resolving one conflict does not stamp the staged root back
-	// over unrelated writes made during the conflict window.
+	// Build on the branch as it is now, so resolving one conflict does not
+	// stamp the root back over the conflicts resolved before it.
 	if err := b.adoptBranchWrites(ctx, db, tip, ms); err != nil {
 		return nil, err
 	}
