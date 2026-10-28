@@ -18,7 +18,6 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
@@ -133,21 +132,11 @@ func evalComputed(expr any, root *types.Document) (any, bool, error) {
 		if !strings.HasPrefix(v, "$") {
 			return v, false, nil
 		}
-		res, err := evalArgValue(v, root)
+		res, missing, err := evalArgValueOrMissing(v, root)
 		if errors.Is(err, ErrMissingValue) {
 			return nil, true, nil
 		}
-		if err != nil {
-			return nil, false, err
-		}
-		if !strings.HasPrefix(v, "$$") {
-			if e, err := aggregations.NewExpression(v, nil); err == nil {
-				if _, err := e.Evaluate(root); err != nil {
-					return nil, true, nil
-				}
-			}
-		}
-		return res, false, nil
+		return res, missing, err
 	default:
 		return v, false, nil
 	}
@@ -291,7 +280,7 @@ func (n *fieldSpecNode) projectDocument(v, root *types.Document) (any, bool, err
 // them where a path holds no document. A missing value removes the field.
 func AddFieldsTree(doc, spec *types.Document) (*types.Document, error) {
 	root := buildFieldSpec(spec, false)
-	res, err := root.addFields(doc, root, doc)
+	res, err := root.addFields(doc, doc)
 	if err != nil {
 		return nil, err
 	}
@@ -299,7 +288,7 @@ func AddFieldsTree(doc, spec *types.Document) (*types.Document, error) {
 	return res, nil
 }
 
-func (n *fieldSpecNode) addFields(v *types.Document, _ *fieldSpecNode, root *types.Document) (*types.Document, error) {
+func (n *fieldSpecNode) addFields(v, root *types.Document) (*types.Document, error) {
 	for _, key := range n.keys {
 		child := n.children[key]
 		if child.leaf == fieldSpecExpr {
@@ -328,7 +317,7 @@ func (n *fieldSpecNode) addFieldsValue(val any, present bool, root *types.Docume
 	if present {
 		switch v := val.(type) {
 		case *types.Document:
-			return n.addFields(v.DeepCopy(), n, root)
+			return n.addFields(v.DeepCopy(), root)
 		case *types.Array:
 			out := types.MakeArray(v.Len())
 			for i := 0; i < v.Len(); i++ {
@@ -341,5 +330,5 @@ func (n *fieldSpecNode) addFieldsValue(val any, present bool, root *types.Docume
 			return out, nil
 		}
 	}
-	return n.addFields(types.MakeDocument(0), n, root)
+	return n.addFields(types.MakeDocument(0), root)
 }

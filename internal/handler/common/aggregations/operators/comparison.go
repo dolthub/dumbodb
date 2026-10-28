@@ -126,9 +126,9 @@ func (c *cmpOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*cmpOp)(nil)
 
-// compareArgs evaluates and compares two operator arguments. A missing field
-// evaluates to null, except that it equals undefined, as MongoDB orders the
-// two together.
+// compareArgs evaluates and compares two operator arguments. As in MongoDB,
+// a missing field equals another missing value or undefined and sorts below
+// every other value except MinKey.
 func compareArgs(left, right any, doc *types.Document) (types.CompareResult, error) {
 	lv, lMissing, err := evalArgValueOrMissing(left, doc)
 	if err != nil {
@@ -138,20 +138,31 @@ func compareArgs(left, right any, doc *types.Document) (types.CompareResult, err
 	if err != nil {
 		return 0, err
 	}
-	if (lMissing && rv == types.Undefined) || (rMissing && lv == types.Undefined) {
-		return types.Equal, nil
+	if lMissing || rMissing {
+		lLow := lMissing || lv == types.Undefined
+		rLow := rMissing || rv == types.Undefined
+		switch {
+		case lLow && rLow:
+			return types.Equal, nil
+		case lLow && rv == types.MinKey, rLow && lv != types.MinKey:
+			return types.Greater, nil
+		default:
+			return types.Less, nil
+		}
 	}
 	return types.Compare(lv, rv), nil
 }
 
 // evalArgValueOrMissing is evalArgValue, also reporting whether arg is a
-// field path the document lacks.
+// field path the document lacks, which evaluates to null.
 func evalArgValueOrMissing(arg any, doc *types.Document) (any, bool, error) {
 	if path, ok := arg.(string); ok && strings.HasPrefix(path, "$") && !strings.HasPrefix(path, "$$") {
 		if expr, err := fieldExpression(path); err == nil {
-			if _, err := expr.Evaluate(doc); err != nil {
+			v, err := expr.Evaluate(doc)
+			if err != nil {
 				return types.Null, true, nil
 			}
+			return v, false, nil
 		}
 	}
 	v, err := evalArgValue(arg, doc)
