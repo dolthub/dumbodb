@@ -122,6 +122,9 @@ func ValidateProjection(projection *types.Document) (*types.Document, bool, erro
 		return types.MakeDocument(0), false, nil
 	}
 
+	if err := stageProjection.CheckPathCollisions(projection, "", "projection"); err != nil {
+		return nil, false, err
+	}
 	projection = stageProjection.FlattenProjection(projection)
 
 	var inclusion *bool

@@ -48,6 +48,9 @@ import (
 //   - `ErrNotImplemented` when there is unimplemented projection operators and expressions.
 func ValidateProjection(projection *types.Document) (*types.Document, bool, error) {
 	validated := types.MakeDocument(0)
+	if err := CheckPathCollisions(projection, "Invalid $project :: caused by :: ", "$project (stage)"); err != nil {
+		return nil, false, err
+	}
 	projection = FlattenProjection(projection)
 
 	if projection.Len() == 0 {
@@ -846,6 +849,54 @@ func processOperatorError(err error) error {
 	}
 
 	return lazyerrors.Error(err)
+}
+
+// CheckPathCollisions returns MongoDB's error for a projection with one path
+// inside another or repeated, such as "a" and "a.b", counting the paths of
+// nested specification objects; msgPrefix and argument shape it for the
+// command.
+func CheckPathCollisions(projection *types.Document, msgPrefix, argument string) error {
+	var visited []types.Path
+	for _, key := range specPaths(projection, "") {
+		path, err := types.NewPathFromString(key)
+		if err != nil {
+			continue
+		}
+		var pathErr *types.PathError
+		if errors.As(types.IsConflictPath(visited, path), &pathErr) {
+			switch pathErr.Code() {
+			case types.ErrPathConflictOverwrite:
+				return handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrUnsetPathOverwrite,
+					fmt.Sprintf("%sPath collision at %s", msgPrefix, key),
+					argument,
+				)
+			case types.ErrPathConflictCollision:
+				return handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrUnsetPathCollision,
+					fmt.Sprintf("%sPath collision at %s remaining portion %s", msgPrefix, key, pathErr.Error()),
+					argument,
+				)
+			}
+		}
+		visited = append(visited, path)
+	}
+	return nil
+}
+
+// specPaths returns the dotted path of every field projection specifies,
+// expanding nested specification objects.
+func specPaths(projection *types.Document, prefix string) []string {
+	var paths []string
+	for _, key := range projection.Keys() {
+		value := must.NotFail(projection.Get(key))
+		if nested, ok := value.(*types.Document); ok && nested.Len() > 0 && !strings.HasPrefix(nested.Keys()[0], "$") {
+			paths = append(paths, specPaths(nested, prefix+key+".")...)
+			continue
+		}
+		paths = append(paths, prefix+key)
+	}
+	return paths
 }
 
 // FlattenProjection rewrites nested specification objects as dotted keys, so
