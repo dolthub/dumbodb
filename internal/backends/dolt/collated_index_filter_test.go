@@ -28,6 +28,8 @@ import (
 	"testing"
 
 	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/collation"
+	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
@@ -274,5 +276,123 @@ func TestCollatedIndexOperatorSeeksFewerNodes(t *testing.T) {
 	if seek.Nodes() >= scan.Nodes() {
 		t.Fatalf("collated operator seek not served by the index: seek nodes=%d >= scan nodes=%d",
 			seek.Nodes(), scan.Nodes())
+	}
+}
+
+// TestCollatedIndexOperatorFiltersCollationOrder uses case and accent variants,
+// whose collated order differs from their binary order, so a bound built from
+// the wrong key space drops or admits documents. Numeric fillers keep string
+// ranges selective enough that the planner does not fall back to a scan.
+func TestCollatedIndexOperatorFiltersCollationOrder(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	vals := []any{
+		"a", "A", "ab", "aB", "Ab", "b", "B", "c", "C", "cote", "cot\u00e9", "c\u00f4te", "c\u00f4t\u00e9",
+		"e", "E", "\u00e9", "z", "Z", "", int32(5), int32(50), true,
+	}
+	const fillers = 200
+	op := func(kv ...any) *types.Document {
+		return must.NotFail(types.NewDocument("s", must.NotFail(types.NewDocument(kv...))))
+	}
+	arr := func(v ...any) *types.Array { return must.NotFail(types.NewArray(v...)) }
+
+	// exact: single-type string bounds, where the index range is the match set.
+	type filterCase struct {
+		name   string
+		filter *types.Document
+		exact  bool
+	}
+	cases := []filterCase{
+		{"eq_B", op("$eq", "B"), true},
+		{"gt_b", op("$gt", "b"), true},
+		{"gte_B", op("$gte", "B"), true},
+		{"lt_c", op("$lt", "c"), true},
+		{"lte_C", op("$lte", "C"), true},
+		{"range_b_d", op("$gte", "b", "$lt", "d"), true},
+		{"range_cote", op("$gt", "cote", "$lte", "c\u00f4t\u00e9"), true},
+		{"range_E_f", op("$gte", "E", "$lt", "f"), true},
+		{"in_B_z", op("$in", arr("B", "z")), false},
+		{"in_mixed", op("$in", arr("A", int32(5))), false},
+		{"ne_B", op("$ne", "B"), false},
+		{"not_gt_b", op("$not", must.NotFail(types.NewDocument("$gt", "b"))), false},
+		{"mixed_lower", op("$gte", int32(5), "$gt", "b"), false},
+		{"mixed_upper", op("$lt", int32(60), "$lte", "c"), false},
+		{"eq_and_gte", op("$eq", "b", "$gte", "B"), false},
+	}
+
+	for _, spec := range [][]any{
+		{"locale", "en", "strength", int32(1)},
+		{"locale", "en", "strength", int32(2)},
+		{"locale", "fr_CA"},
+	} {
+		collDoc := must.NotFail(types.NewDocument(spec...))
+		t.Run(fmt.Sprint(spec), func(t *testing.T) {
+			t.Parallel()
+
+			b := newTestBackend(t)
+			db := must.NotFail(b.Database("collorder"))
+			coll := must.NotFail(db.Collection("c"))
+			docs := make([]*types.Document, 0, len(vals)+fillers)
+			for i, v := range vals {
+				docs = append(docs, must.NotFail(types.NewDocument("_id", int32(i), "s", v)))
+			}
+			for i := len(vals); i < len(vals)+fillers; i++ {
+				docs = append(docs, must.NotFail(types.NewDocument("_id", int32(i), "s", int32(1000+i))))
+			}
+			if _, err := coll.InsertAll(ctx, &backends.InsertAllParams{Docs: docs}); err != nil {
+				t.Fatalf("InsertAll: %v", err)
+			}
+			if _, err := coll.CreateIndexes(ctx, &backends.CreateIndexesParams{
+				Indexes: []backends.IndexInfo{{
+					Name:      "s_idx",
+					Key:       []backends.IndexKeyPair{{Field: "s"}},
+					Collation: collDoc,
+				}},
+			}); err != nil {
+				t.Fatalf("CreateIndexes: %v", err)
+			}
+			cmp := collation.Parse(collDoc).Comparator()
+
+			for _, tc := range cases {
+				t.Run(tc.name, func(t *testing.T) {
+					var want []int32
+					for _, d := range docs {
+						if must.NotFail(common.FilterDocumentColl(d, tc.filter, cmp)) {
+							want = append(want, must.NotFail(d.Get("_id")).(int32))
+						}
+					}
+					got := idsInDocs(t, drainQuery(t, ctx, coll, &backends.QueryParams{
+						Filter:    tc.filter,
+						Collated:  true,
+						Collation: collDoc,
+					}))
+					sort.Slice(got, func(i, j int) bool { return got[i] < got[j] })
+
+					candidates := make(map[int32]bool, len(got))
+					for _, id := range got {
+						candidates[id] = true
+					}
+					for _, id := range want {
+						if !candidates[id] {
+							t.Errorf("candidates %v miss match _id %d", got, id)
+						}
+					}
+					if !tc.exact {
+						return
+					}
+					if !reflect.DeepEqual(got, want) && !(len(got) == 0 && len(want) == 0) {
+						t.Errorf("candidates = %v, want %v", got, want)
+					}
+					res, err := coll.Count(ctx, &backends.CountParams{Filter: tc.filter, Collation: collDoc})
+					if err != nil {
+						t.Fatalf("Count: %v", err)
+					}
+					if res.Filtered && res.Count != int64(len(want)) {
+						t.Errorf("indexed count = %d, want %d", res.Count, len(want))
+					}
+				})
+			}
+		})
 	}
 }
