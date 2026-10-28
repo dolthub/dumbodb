@@ -23,11 +23,13 @@ import (
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	doltref "github.com/dolthub/dolt/go/libraries/doltcore/ref"
+	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/dsess"
 	"github.com/dolthub/dolt/go/store/datas"
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/prolly"
 
 	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/sqlctx"
 )
 
 // branchTip is a branch's working set as one command read it from disk, and
@@ -68,6 +70,73 @@ func (s *dbState) readBranchTip(ctx context.Context, branch string) (*branchTip,
 		return nil, fmt.Errorf("hashing the working set of %q: %w", branch, err)
 	}
 	return &branchTip{branch: branch, ws: ws, hash: h}, nil
+}
+
+// readCommandTip is readBranchTip for a version-control command. A command
+// writes over the working set it read and mirrors the result into the
+// caller's session, so writes the caller has made to the branch and not yet
+// published would be lost under it. They count as uncommitted changes, as
+// published ones do, and the command is refused.
+func (s *dbState) readCommandTip(ctx context.Context, branch string) (*branchTip, error) {
+	pending, err := s.unpublishedSessionWrites(ctx, branch)
+	if err != nil {
+		return nil, err
+	}
+	if pending {
+		return nil, fmt.Errorf("%w on %q: the transaction has written to it and not committed; commit or abort the transaction first",
+			backends.ErrUncommittedChanges, branch)
+	}
+	return s.readBranchTip(ctx, branch)
+}
+
+// unpublishedSessionWrites reports whether the calling session holds writes to
+// branch that are not on the branch yet. This is the one place that answers
+// it. A client transaction's writes live in the session's copy of the working
+// set until commitTransaction reconciles them onto the branch, so the working
+// set on disk does not show them; the copy is compared with the working set
+// the transaction started from.
+func (s *dbState) unpublishedSessionWrites(ctx context.Context, branch string) (bool, error) {
+	sess := sessionFromContext(ctx)
+	if sess == nil {
+		return false, nil
+	}
+	dtx, ok := sess.GetTransaction().(*dsess.DoltTransaction)
+	if !ok {
+		return false, nil
+	}
+	sqlCtx := sqlctx.Wrap(ctx, sess)
+	sessState, ok, err := sess.LookupDbState(sqlCtx, qualifiedDbName(s.name, branch))
+	if err != nil {
+		return false, fmt.Errorf("reading the session's state of %q: %w", branch, err)
+	}
+	if !ok || sessState.WorkingSet() == nil {
+		return false, nil
+	}
+	startRoot, ok := dtx.GetInitialRoot(s.name)
+	if !ok {
+		return false, nil
+	}
+	var baseRoot doltdb.RootValue
+	base, err := s.doltDB.ResolveWorkingSetAtRoot(sqlCtx, doltref.NewWorkingSetRef("heads/"+branch), startRoot)
+	switch {
+	case errors.Is(err, doltdb.ErrWorkingSetNotFound):
+		if baseRoot, err = headRootValueForBranch(ctx, s, branch); err != nil {
+			return false, fmt.Errorf("reading HEAD of %q: %w", branch, err)
+		}
+	case err != nil:
+		return false, fmt.Errorf("reading the working set the transaction started from: %w", err)
+	default:
+		baseRoot = base.WorkingRoot()
+	}
+	oursHash, err := sessState.WorkingSet().WorkingRoot().HashOf()
+	if err != nil {
+		return false, err
+	}
+	baseHash, err := baseRoot.HashOf()
+	if err != nil {
+		return false, err
+	}
+	return oursHash != baseHash, nil
 }
 
 func (t *branchTip) workingAM(ctx context.Context, s *dbState) (prolly.AddressMap, error) {

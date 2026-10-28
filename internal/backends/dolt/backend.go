@@ -2027,7 +2027,7 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 		ms := db.mergeState
 		var tip *branchTip
 		defer db.keepOperationStateConsistent(db.mergeState.clone(), &tip, &err)
-		tip, err = db.readBranchTip(ctx, ms.intoBranch)
+		tip, err = db.readCommandTip(ctx, ms.intoBranch)
 		if err != nil {
 			return nil, fmt.Errorf("DumboDBMerge: abort: %w", err)
 		}
@@ -2052,7 +2052,7 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 		ms := db.mergeState
 		var tip *branchTip
 		defer db.keepOperationStateConsistent(db.mergeState.clone(), &tip, &err)
-		tip, err = db.readBranchTip(ctx, ms.intoBranch)
+		tip, err = db.readCommandTip(ctx, ms.intoBranch)
 		if err != nil {
 			return nil, fmt.Errorf("DumboDBMerge: continue: %w", err)
 		}
@@ -2141,7 +2141,7 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 
 	var tip *branchTip
 	defer db.keepOperationStateConsistent(db.mergeState.clone(), &tip, &err)
-	tip, err = db.readBranchTip(ctx, params.Into)
+	tip, err = db.readCommandTip(ctx, params.Into)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBMerge: %w", err)
 	}
@@ -2319,7 +2319,7 @@ func (b *Backend) DumboDBCherryPick(ctx context.Context, params *backends.Cherry
 		ms := db.mergeState
 		var tip *branchTip
 		defer db.keepOperationStateConsistent(db.mergeState.clone(), &tip, &err)
-		tip, err = db.readBranchTip(ctx, ms.intoBranch)
+		tip, err = db.readCommandTip(ctx, ms.intoBranch)
 		if err != nil {
 			return nil, fmt.Errorf("DumboDBCherryPick: abort: %w", err)
 		}
@@ -2341,7 +2341,7 @@ func (b *Backend) DumboDBCherryPick(ctx context.Context, params *backends.Cherry
 		ms := db.mergeState
 		var tip *branchTip
 		defer db.keepOperationStateConsistent(db.mergeState.clone(), &tip, &err)
-		tip, err = db.readBranchTip(ctx, ms.intoBranch)
+		tip, err = db.readCommandTip(ctx, ms.intoBranch)
 		if err != nil {
 			return nil, fmt.Errorf("DumboDBCherryPick: continue: %w", err)
 		}
@@ -2450,7 +2450,7 @@ func (b *Backend) DumboDBCherryPick(ctx context.Context, params *backends.Cherry
 
 	var tip *branchTip
 	defer db.keepOperationStateConsistent(db.mergeState.clone(), &tip, &err)
-	tip, err = db.readBranchTip(ctx, branch)
+	tip, err = db.readCommandTip(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBCherryPick: %w", err)
 	}
@@ -3172,7 +3172,7 @@ func (b *Backend) dumboDBReset(
 	if db.mergeState != nil && db.mergeState.intoBranch == branch {
 		return nil, fmt.Errorf("DumboDBReset: an operation is paused on branch %q; continue or abort it first", branch)
 	}
-	tip, err := db.readBranchTip(ctx, branch)
+	tip, err := db.readCommandTip(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBReset: %w", err)
 	}
@@ -3454,7 +3454,7 @@ func (b *Backend) DumboDBRebase(ctx context.Context, params *backends.RebasePara
 		ms := db.mergeState
 		var tip *branchTip
 		defer db.keepOperationStateConsistent(db.mergeState.clone(), &tip, &err)
-		tip, err = db.readBranchTip(ctx, ms.intoBranch)
+		tip, err = db.readCommandTip(ctx, ms.intoBranch)
 		if err != nil {
 			return nil, fmt.Errorf("DumboDBRebase: abort: %w", err)
 		}
@@ -3479,7 +3479,7 @@ func (b *Backend) DumboDBRebase(ctx context.Context, params *backends.RebasePara
 		ms := db.mergeState
 		var tip *branchTip
 		defer db.keepOperationStateConsistent(db.mergeState.clone(), &tip, &err)
-		tip, err = db.readBranchTip(ctx, ms.intoBranch)
+		tip, err = db.readCommandTip(ctx, ms.intoBranch)
 		if err != nil {
 			return nil, fmt.Errorf("DumboDBRebase: continue: %w", err)
 		}
@@ -3591,7 +3591,7 @@ func (b *Backend) DumboDBRebase(ctx context.Context, params *backends.RebasePara
 
 	var tip *branchTip
 	defer db.keepOperationStateConsistent(db.mergeState.clone(), &tip, &err)
-	tip, err = db.readBranchTip(ctx, branch)
+	tip, err = db.readCommandTip(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBRebase: %w", err)
 	}
@@ -3969,7 +3969,7 @@ func (b *Backend) DumboDBRevert(ctx context.Context, params *backends.RevertPara
 		ms := db.mergeState
 		var tip *branchTip
 		defer db.keepOperationStateConsistent(db.mergeState.clone(), &tip, &err)
-		tip, err = db.readBranchTip(ctx, ms.intoBranch)
+		tip, err = db.readCommandTip(ctx, ms.intoBranch)
 		if err != nil {
 			return nil, fmt.Errorf("DumboDBRevert: abort: %w", err)
 		}
@@ -3991,7 +3991,7 @@ func (b *Backend) DumboDBRevert(ctx context.Context, params *backends.RevertPara
 		ms := db.mergeState
 		var tip *branchTip
 		defer db.keepOperationStateConsistent(db.mergeState.clone(), &tip, &err)
-		tip, err = db.readBranchTip(ctx, ms.intoBranch)
+		tip, err = db.readCommandTip(ctx, ms.intoBranch)
 		if err != nil {
 			return nil, fmt.Errorf("DumboDBRevert: continue: %w", err)
 		}
@@ -4091,7 +4091,7 @@ func (b *Backend) DumboDBRevert(ctx context.Context, params *backends.RevertPara
 
 	var tip *branchTip
 	defer db.keepOperationStateConsistent(db.mergeState.clone(), &tip, &err)
-	tip, err = db.readBranchTip(ctx, branch)
+	tip, err = db.readCommandTip(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBRevert: %w", err)
 	}

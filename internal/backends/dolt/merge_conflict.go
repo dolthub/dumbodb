@@ -540,7 +540,7 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 	}
 	var tip *branchTip
 	defer db.keepOperationStateConsistent(db.mergeState.clone(), &tip, &err)
-	tip, err = db.readBranchTip(ctx, ms.intoBranch)
+	tip, err = db.readCommandTip(ctx, ms.intoBranch)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBResolveConflict: %w", err)
 	}

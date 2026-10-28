@@ -248,3 +248,37 @@ func TestMergeAbortRefusesOtherOperations(t *testing.T) {
 		require.Equal(t, pausedHead, f.head())
 	}
 }
+
+// Resolving, continuing and aborting a paused merge inside a client
+// transaction that has written to the branch would overwrite those writes, so
+// each is refused like any other operation over uncommitted changes, and the
+// transaction's write survives its commit.
+func TestPausedOpStepsCountTheTransactionsUnpublishedWrites(t *testing.T) {
+	f := newRaceFixture(t)
+	f.commitDoc("feature", "feat", must.NotFail(types.NewDocument("_id", "x", "v", int32(1))))
+	f.commitDoc(defaultBranch, "main", must.NotFail(types.NewDocument("_id", "x", "v", int32(2))))
+	require.Error(t, f.mergeFeature(f.op))
+	conflicts, err := f.be.DumboDBConflicts(f.op, &backends.ConflictsParams{DBName: f.db, Branch: defaultBranch})
+	require.NoError(t, err)
+	conflictID := conflicts.Collections[0].Conflicts[0].ConflictID
+
+	resolve := func(ctx context.Context) error {
+		_, err := f.be.DumboDBResolveConflict(ctx, &backends.ResolveConflictParams{
+			DBName: f.db, Branch: defaultBranch, Collection: "items", ConflictID: conflictID, Resolution: "theirs",
+		})
+		return err
+	}
+	insertInTransaction(t, f.be, f.writer, f.db, "in-txn")
+	require.ErrorIs(t, resolve(f.writer), backends.ErrUncommittedChanges)
+	require.NoError(t, resolve(f.op))
+	for name, params := range map[string]*backends.MergeParams{
+		"continue": {DBName: f.db, Into: defaultBranch, Continue: true},
+		"abort":    {DBName: f.db, Into: defaultBranch, Abort: true},
+	} {
+		_, err := f.be.DumboDBMerge(f.writer, params)
+		require.ErrorIs(t, err, backends.ErrUncommittedChanges, name)
+		require.Equal(t, "merge", f.mergeOp(), name)
+	}
+	commitTransaction(t, f.be, f.writer)
+	require.True(t, f.ids()["in-txn"])
+}
