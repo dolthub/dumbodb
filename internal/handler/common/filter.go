@@ -1996,14 +1996,12 @@ func filterFieldExprElemMatch(doc *types.Document, filterKey, filterSuffix strin
 			// against each individual element. This ensures multi-condition $elemMatch
 			// correctly requires ALL conditions to be satisfied by the SAME element,
 			// rather than allowing different elements to satisfy different conditions.
-			//
-			// A regex tests the element itself; it does not reach into an element
-			// that is an array.
-			if _, isArray := elem.(*types.Array); isArray && expr.Has("$regex") {
-				continue
+			if elemArr, isArray := elem.(*types.Array); isArray {
+				matches, err = elemMatchArrayElement(elemArr, filterKey, filterSuffix, expr, cmp)
+			} else {
+				tempDoc := must.NotFail(types.NewDocument(filterSuffix, elem))
+				matches, err = filterFieldExpr(tempDoc, filterKey, filterSuffix, expr, cmp)
 			}
-			tempDoc := must.NotFail(types.NewDocument(filterSuffix, elem))
-			matches, err = filterFieldExpr(tempDoc, filterKey, filterSuffix, expr, cmp)
 		} else {
 			// Logical operators ($and/$or/$nor) or field conditions: the element must be
 			// a document and satisfy the expression as a document filter.
@@ -2024,6 +2022,104 @@ func filterFieldExprElemMatch(doc *types.Document, filterKey, filterSuffix strin
 	}
 
 	return false, nil
+}
+
+// elemMatchArrayElement applies the operators of an $elemMatch to an element
+// that is itself an array. As in MongoDB they test the element as a whole
+// value and do not look inside it, except $size and a nested $elemMatch,
+// which apply to arrays.
+func elemMatchArrayElement(elem *types.Array, filterKey, filterSuffix string, expr *types.Document, cmp *collation.Comparator) (bool, error) {
+	equalsElem := func(v any) bool {
+		if _, isRegex := v.(types.Regex); isRegex {
+			return false
+		}
+		return types.CompareOrder(elem, v, types.Ascending) == types.Equal
+	}
+	for _, op := range expr.Keys() {
+		v := must.NotFail(expr.Get(op))
+		var ok bool
+		switch op {
+		case "$options":
+			continue
+		case "$eq":
+			ok = equalsElem(v)
+		case "$ne":
+			ok = !equalsElem(v)
+		case "$gt", "$gte", "$lt", "$lte":
+			if other, isArray := v.(*types.Array); isArray {
+				c := types.CompareOrder(elem, other, types.Ascending)
+				switch op {
+				case "$gt":
+					ok = c == types.Greater
+				case "$gte":
+					ok = c != types.Less
+				case "$lt":
+					ok = c == types.Less
+				default:
+					ok = c != types.Greater
+				}
+			}
+		case "$in", "$nin", "$all":
+			values, isArray := v.(*types.Array)
+			if !isArray {
+				return filterFieldExpr(must.NotFail(types.NewDocument(filterSuffix, elem)), filterKey, filterSuffix, expr, cmp)
+			}
+			someEqual, allEqual := false, values.Len() > 0
+			for i := 0; i < values.Len(); i++ {
+				if equalsElem(must.NotFail(values.Get(i))) {
+					someEqual = true
+				} else {
+					allEqual = false
+				}
+			}
+			switch op {
+			case "$in":
+				ok = someEqual
+			case "$nin":
+				ok = !someEqual
+			default:
+				ok = allEqual
+			}
+		case "$regex":
+			ok = false
+		case "$not":
+			if inner, isDoc := v.(*types.Document); isDoc {
+				matched, err := elemMatchArrayElement(elem, filterKey, filterSuffix, inner, cmp)
+				if err != nil {
+					return false, err
+				}
+				ok = !matched
+			} else {
+				ok = true
+			}
+		case "$exists":
+			ok = existsOperandTrue(v)
+		case "$type":
+			codes := []any{v}
+			if list, isArray := v.(*types.Array); isArray {
+				codes = codes[:0]
+				for i := 0; i < list.Len(); i++ {
+					codes = append(codes, must.NotFail(list.Get(i)))
+				}
+			}
+			for _, code := range codes {
+				if code == handlerparams.TypeCodeArray.String() || types.Compare(code, int32(handlerparams.TypeCodeArray)) == types.Equal {
+					ok = true
+				}
+			}
+		default:
+			single := must.NotFail(types.NewDocument(op, v))
+			matched, err := filterFieldExpr(must.NotFail(types.NewDocument(filterSuffix, elem)), filterKey, filterSuffix, single, cmp)
+			if err != nil {
+				return false, err
+			}
+			ok = matched
+		}
+		if !ok {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // filterTextSearch implements the $text query operator.

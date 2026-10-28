@@ -44,7 +44,12 @@ func TestRegexFilterMatchesStoredRegex(t *testing.T) {
 		{"$all regex not matched", arr("x"), doc("s", doc("$all", arr(re, "x"))), false},
 		{"$all regex against a stored regex", arr(re), doc("s", doc("$all", arr(re))), true},
 		{"$elemMatch regex skips a nested array", arr(arr("abc")), doc("s", doc("$elemMatch", doc("$regex", "^ab"))), false},
-		{"$elemMatch regex on an element", arr("x", "abc"), doc("s", doc("$elemMatch", doc("$regex", "^ab"))), true},
+		{"$elemMatch $in regex skips a nested array", arr(arr("abc")), doc("s", doc("$elemMatch", doc("$in", arr(types.Regex{Pattern: "ab"})))), false},
+		{"$elemMatch $not regex on a nested array", arr(arr("abc")), doc("s", doc("$elemMatch", doc("$not", types.Regex{Pattern: "ab"}))), true},
+		{"$elemMatch $in compares a nested array whole", arr(arr("abc")), doc("s", doc("$elemMatch", doc("$in", arr("abc")))), false},
+		{"$elemMatch $eq an equal array", arr(arr("abc")), doc("s", doc("$elemMatch", doc("$eq", arr("abc")))), true},
+		{"$elemMatch $size of a nested array", arr(arr("abc")), doc("s", doc("$elemMatch", doc("$size", int32(1)))), true},
+		{"$elemMatch $regex on an element", arr("x", "abc"), doc("s", doc("$elemMatch", doc("$regex", "^ab"))), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := FilterDocument(doc("_id", int32(1), "s", tc.value), tc.filter)
