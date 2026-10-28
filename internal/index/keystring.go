@@ -489,7 +489,7 @@ func BracketRange(v any) (start, stop []byte, ok bool) {
 	case int32, int64, float64:
 		// [-Inf .. +Inf], excluding NaN below it.
 		return []byte{ctypeNegInf}, []byte{ctypePosInf + 1}, true
-	case string:
+	case string, PreEncoded:
 		return []byte{ctypeString}, []byte{ctypeString + 1}, true
 	case time.Time:
 		return []byte{ctypeDate}, []byte{ctypeDate + 1}, true

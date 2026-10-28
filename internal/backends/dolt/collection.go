@@ -957,7 +957,10 @@ func multikeyScanBound(v any) any {
 	lower := types.MakeDocument(2)
 	for _, op := range opDoc.Keys() {
 		if op == "$gt" || op == "$gte" {
-			lower.Set(op, must.NotFail(opDoc.Get(op)))
+			// AppendDecoded: the operand may be a collated sort key
+			// (idxpkg.PreEncoded), an internal planner value.
+			v, _ := opDoc.Get(op)
+			lower.AppendDecoded(op, v)
 		}
 	}
 	return lower
@@ -1343,7 +1346,20 @@ func compoundIndexBounds(idx backends.IndexInfo, filter *types.Document, queryCm
 
 // compareScalars returns -1 / 0 / 1 using types.Compare. Used to merge
 // multiple bounds on the same side ($gte:1, $gte:5 -> keep the tighter 5).
+// Collated sort keys (idxpkg.PreEncoded) compare bytewise; against a
+// non-string operand ({$gte: 5, $gt: "b"}) a key stands in as "" so BSON
+// type order decides.
 func compareScalars(a, b any) int {
+	pa, aKey := a.(idxpkg.PreEncoded)
+	pb, bKey := b.(idxpkg.PreEncoded)
+	switch {
+	case aKey && bKey:
+		return bytes.Compare(pa, pb)
+	case aKey:
+		a = ""
+	case bKey:
+		b = ""
+	}
 	switch types.Compare(a, b) {
 	case types.Less:
 		return -1
@@ -2310,10 +2326,10 @@ func collateFilterValue(v any, cmp *collation.Comparator) any {
 		for _, k := range t.Keys() {
 			ov, _ := t.Get(k)
 			if str, ok := ov.(string); ok {
-				out.Set(k, idxpkg.PreEncoded(cmp.Key(str)))
-			} else {
-				out.Set(k, ov)
+				ov = idxpkg.PreEncoded(cmp.Key(str))
 			}
+			// AppendDecoded: Set rejects idxpkg.PreEncoded.
+			out.AppendDecoded(k, ov)
 		}
 		return out
 	default:
