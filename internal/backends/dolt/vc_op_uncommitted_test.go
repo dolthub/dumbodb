@@ -311,6 +311,27 @@ func TestPausedOpStepsCannotBeRacedByAWrite(t *testing.T) {
 			_, err := f.be.DumboDBRebase(ctx, &backends.RebaseParams{DBName: f.db, Branch: defaultBranch, Abort: true})
 			return err
 		}, "rebase"},
+		{"cherry-pick", func(f *raceFixture) error {
+			_, err := f.be.DumboDBCherryPick(f.op, &backends.CherryPickParams{DBName: f.db, Branch: defaultBranch, Commit: f.commitID["feat"]})
+			return err
+		}, func(f *raceFixture, ctx context.Context) error {
+			_, err := f.be.DumboDBCherryPick(ctx, &backends.CherryPickParams{DBName: f.db, Branch: defaultBranch, Continue: true})
+			return err
+		}, func(f *raceFixture, ctx context.Context) error {
+			_, err := f.be.DumboDBCherryPick(ctx, &backends.CherryPickParams{DBName: f.db, Branch: defaultBranch, Abort: true})
+			return err
+		}, "cherry-pick"},
+		{"revert", func(f *raceFixture) error {
+			// m2 added x and m3 changed it, so undoing m2 conflicts.
+			_, err := f.be.DumboDBRevert(f.op, &backends.RevertParams{DBName: f.db, Branch: defaultBranch, Commit: f.commitID["m2"], Author: "a"})
+			return err
+		}, func(f *raceFixture, ctx context.Context) error {
+			_, err := f.be.DumboDBRevert(ctx, &backends.RevertParams{DBName: f.db, Branch: defaultBranch, Continue: true, Author: "a"})
+			return err
+		}, func(f *raceFixture, ctx context.Context) error {
+			_, err := f.be.DumboDBRevert(ctx, &backends.RevertParams{DBName: f.db, Branch: defaultBranch, Abort: true})
+			return err
+		}, "revert"},
 	} {
 		// setup pauses the operation with a client transaction that wrote
 		// before the pause and has not committed.
@@ -319,6 +340,9 @@ func TestPausedOpStepsCannotBeRacedByAWrite(t *testing.T) {
 			f.commitDoc("feature", "feat", x(1))
 			f.commitDoc(defaultBranch, "m1", must.NotFail(types.NewDocument("_id", "m1")))
 			f.commitDoc(defaultBranch, "m2", x(2))
+			if tc.op == "revert" {
+				f.updateX(3)
+			}
 			insertInTransaction(t, f.be, f.writer, f.db, "early")
 			require.Error(t, tc.start(f))
 			require.Equal(t, tc.op, f.mergeOp())
@@ -371,13 +395,28 @@ func TestPausedOpStepsCannotBeRacedByAWrite(t *testing.T) {
 
 		t.Run(tc.name+"/abort", func(t *testing.T) {
 			f := setup(t)
+			headBefore := f.head()
 			ctx, commitErr := committing(f)
 			require.NoError(t, tc.abort(f, ctx))
 			refusedAsInConflict(t, commitErr)
 			require.Empty(t, f.mergeOp())
-			require.Equal(t, f.commitID["m2"], f.head())
+			if tc.op == "rebase" {
+				headBefore = f.commitID["m2"]
+			}
+			require.Equal(t, headBefore, f.head())
 		})
 	}
+}
+
+// updateX sets x's v on main and commits it.
+func (f *raceFixture) updateX(v int32) {
+	f.t.Helper()
+	items := must.NotFail(must.NotFail(f.be.Database(f.db)).Collection("items"))
+	_, err := items.UpdateAll(context.Background(), &backends.UpdateAllParams{Docs: []*types.Document{must.NotFail(types.NewDocument("_id", "x", "v", v))}})
+	require.NoError(f.t, err)
+	res, err := f.be.DumboDBCommit(f.op, &backends.CommitParams{DBName: f.db, Message: "m3", Author: "a"})
+	require.NoError(f.t, err)
+	f.commitID["m3"] = res.CommitID
 }
 
 func (f *raceFixture) mergeFeatureOp() error      { return f.mergeFeature(f.op) }
