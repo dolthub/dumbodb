@@ -142,6 +142,7 @@ func NewOperator(doc *types.Document) (Operator, error) {
 var objectArgumentOperators = map[string]struct{}{
 	"$dateFromParts":  {},
 	"$dateFromString": {},
+	"$dateSubtract":   {},
 	"$dateToParts":    {},
 }
 
@@ -176,6 +177,7 @@ var Operators = map[string]newOperatorFunc{
 	"$dateDiff":         newDateDiff,
 	"$dateFromParts":    newDateFromParts,
 	"$dateFromString":   newDateFromString,
+	"$dateSubtract":     newDateSubtract,
 	"$dateToParts":      newDateToParts,
 	"$dateTrunc":        newDateTrunc,
 	"$dateToString":     newDateToString,
@@ -296,7 +298,6 @@ var unsupportedOperators = map[string]struct{}{
 	"$binarySize":     {},
 	"$covariancePop":  {},
 	"$covarianceSamp": {},
-	"$dateSubtract":   {},
 	"$denseRank":      {},
 	"$derivative":     {},
 	"$documentNumber": {},

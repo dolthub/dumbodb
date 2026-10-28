@@ -190,8 +190,14 @@ func (tz mongoTimeZone) zoneInfo(unix int64) (offset, transition int64, isDST bo
 }
 
 // utcSeconds converts local wall clock seconds to Unix seconds, resolving
-// skipped and repeated local times as timelib's do_adjust_timezone does.
+// skipped and repeated local times as timelib's do_adjust_timezone does for a
+// time whose zone was set at the epoch.
 func (tz mongoTimeZone) utcSeconds(local int64) int64 {
+	return tz.utcSecondsWithDST(local, tz.epochIsDST)
+}
+
+// utcSecondsWithDST is utcSeconds for a time whose DST flag is isDST.
+func (tz mongoTimeZone) utcSecondsWithDST(local int64, isDST bool) int64 {
 	if tz.loc == nil {
 		return local - tz.offset
 	}
@@ -201,12 +207,12 @@ func (tz mongoTimeZone) utcSeconds(local int64) int64 {
 	actual, actualTransition := after, afterTransition
 	if current == after {
 		switch {
-		case current >= 0 && tz.epochIsDST && !currentIsDST:
+		case current >= 0 && isDST && !currentIsDST:
 			earlier, earlierTransition, _ := tz.zoneInfo(local - current - 7200)
 			if earlier != after && local-earlier < afterTransition {
 				actual, actualTransition = earlier, earlierTransition
 			}
-		case current <= 0 && currentIsDST && !tz.epochIsDST:
+		case current <= 0 && currentIsDST && !isDST:
 			later, laterTransition, _ := tz.zoneInfo(local - current + 7200)
 			if later != after && local-later >= laterTransition {
 				actual, actualTransition = later, laterTransition
