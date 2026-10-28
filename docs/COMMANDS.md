@@ -57,6 +57,69 @@ Commands that create a commit (`dumboCommit`, `dumboMerge`, `dumboRevert`) or a 
 
 When the server runs with `--auth`, the identity comes from the authenticated user and a client cannot assert its own: passing `author` or `committer` is rejected with `IDLUnknownField (40415)`. Set a user's identity with `commitIdentity: { name, email }` on `createUser` or `updateUser`; a user without one falls back to `<user> <user@authDb>`.
 
+## Version control on a live branch
+
+Clients can keep writing to a branch while version-control commands run on it.
+These rules keep every write a client was told succeeded.
+
+### Operations start only on a clean branch
+
+`dumboMerge`, `dumboCherryPick`, `dumboRevert` and `dumboRebase` refuse to
+start while the branch has uncommitted changes, with
+`ConflictingOperationInProgress (117)` naming the collections and views that
+changed. Commit the changes with `dumboCommit`, or discard them with
+`dumboReset hard: true`, and run the operation again. Unlike git, an operation
+never carries uncommitted changes through: the working set is shared by every
+client, so the changes may be someone else's.
+
+Inside a client transaction, the transaction's own writes count too. An
+operation run in a transaction that has written to the branch is refused the
+same way, and so are `dumboReset`, `dumboResolveConflict`, and the `continue`
+and `abort` forms. A transaction that has written nothing does not stop them.
+
+A branch that is written to continuously is rarely clean, so these operations
+may never get to start on it. Pause the writers first.
+
+### Lost races
+
+A command that loses a race with a client write -- the write landed after the
+command read the branch and before it wrote its result -- changes nothing and
+fails with `WriteConflict (112)`, labelled `TransientTransactionError` inside a
+transaction. Running it again is always safe; the write that won is then an
+uncommitted change, so a merge, cherry-pick, revert or rebase is refused with
+`117` until it is committed.
+
+`dumboCommit`, and `dumboReset` once it has moved the working set, retry a lost
+race themselves, and report `112` only if the branch keeps moving.
+
+### A paused operation holds the branch
+
+From the moment a merge, cherry-pick, revert or rebase pauses on conflicts
+until it is continued or aborted, the branch accepts no writes. Inserts,
+updates, deletes, `findAndModify`, `bulkWrite`, collection, index and view
+changes, and a transaction committing onto the branch are all refused with
+`OperationFailed (96)`:
+
+```
+branch "main" is in a conflicting state: a merge is paused on conflicts, and no writes are accepted until it is finished. Resolve the conflicts with dumboResolveConflict, then run dumboMerge with continue (or abort)
+```
+
+Reads, and writes to other branches, are unaffected. `dumboCommit` and
+`dumboReset` are refused while the operation is paused. Resolve each conflict
+with `dumboResolveConflict`, then finish with `continue`, or undo the operation
+with `abort`.
+
+### Transactions
+
+`dumboCommit` run inside a client transaction first commits the transaction,
+exactly as `commitTransaction` would, and then makes the Dolt commit, which
+includes the transaction's writes. The client carries on in a fresh
+transaction: a later `commitTransaction` commits only what was written after
+`dumboCommit`. If the transaction's writes cannot be reconciled with the
+branch, `dumboCommit` fails with `WriteConflict (112)` labelled
+`TransientTransactionError` and the transaction is aborted, as
+`commitTransaction` would.
+
 ## Available Commands
 
 Every `dumbo*` command has an identical `dolt*` alias:
@@ -143,9 +206,13 @@ db.runCommand({ dumboCommit: 1, message: "add order #1", author: "alice <alice@a
 | Condition | Error |
 |-----------|-------|
 | Connection is a read-only rootish (hash or ancestor expression) | writes are rejected before reaching commit |
+| An operation is paused on the branch | `OperationFailed: dumboCommit: merge in progress: use dumboMerge continue` (or the paused operation's command) |
+| Inside a transaction whose writes conflict with the branch | `WriteConflict (112)` labelled `TransientTransactionError`; the transaction is aborted |
+| The branch kept moving through every retry | `WriteConflict (112)` |
 
 ### Notes
 
+- Inside a client transaction, `dumboCommit` commits the transaction first; see [Transactions](#transactions).
 - Committing an unchanged working set succeeds; the new commit hash is still distinct from the previous one.
 - `timestamp` accepts a BSON Date; pass `new Date("2024-01-01")` to pin the commit time.
 
@@ -417,11 +484,15 @@ main.runCommand({ dumboMerge: 1, abort: 1 })
 | `mergeIn` missing or empty | `BadValue: dumboMerge: from branch name must not be empty` |
 | `mergeIn` cannot be resolved | `OperationFailed: DumboDBMerge: resolving merge source ...` |
 | `noFF` and `ffOnly` both set | `BadValue: dumboMerge: noFF and ffOnly are mutually exclusive` |
+| The branch has uncommitted changes | `ConflictingOperationInProgress (117)`; see [Operations start only on a clean branch](#operations-start-only-on-a-clean-branch) |
+| A client write landed while the merge ran | `WriteConflict (112)`; nothing was merged |
+| `abort` or `continue` while a cherry-pick, revert or rebase is paused | `OperationFailed: DumboDBMerge: rebase in progress on branch "main"; use dumboRebase continue instead` (or `abort`) |
 | Merge produces conflicts | `ok: 0` response with `conflicts` array |
 
 ### Notes
 
 - When conflicts occur, the branch HEAD is unchanged; the staged working set reflects partial merge with "ours" values for conflicting documents.
+- While the merge is paused, the branch accepts no writes; see [A paused operation holds the branch](#a-paused-operation-holds-the-branch).
 - Use `dumboConflicts` to inspect and `dumboResolveConflict` to resolve each conflict, then call `dumboMerge continue:1`.
 - `abort: 1` restores the branch to its pre-merge state.
 - The auto-generated message names the source the way git does: `Merge branch 'feature'`, `Merge tag 'v1.0'`, or `Merge commit '<refspec>'` for hashes and traversal expressions.
@@ -502,7 +573,9 @@ main.runCommand({ dumboCherryPick: 1, commit: "na7kfra98h45fr2u5qtr30o2ggm7vh61"
 | Condition | Error |
 |-----------|-------|
 | `commit` is an unsupported rootish form (reflog, range, `^{type}`) | `BadValue: dumboCherryPick: ...` |
-| Cherry-pick produces conflicts | `ok: 0` response with `conflicts` array |
+| The branch has uncommitted changes | `ConflictingOperationInProgress (117)`; see [Operations start only on a clean branch](#operations-start-only-on-a-clean-branch) |
+| A client write landed while the cherry-pick ran | `WriteConflict (112)`; nothing was applied |
+| Cherry-pick produces conflicts | `ok: 0` response with `conflicts` array; the branch accepts no writes until it is continued or aborted |
 
 ---
 
@@ -571,11 +644,14 @@ db.getSiblingDB("orders@feature").runCommand({ dumboRebase: 1, abort: 1 })
 | Condition | Error |
 |-----------|-------|
 | `onto` is an unsupported rootish form | `BadValue: dumboRebase: ...` |
-| Conflict during replay | `ok: 0` response with `conflicts` and `conflictCommit` |
+| The branch has uncommitted changes | `ConflictingOperationInProgress (117)`; see [Operations start only on a clean branch](#operations-start-only-on-a-clean-branch) |
+| A client write landed while the rebase ran | `WriteConflict (112)`; the branch is as it was |
+| Conflict during replay | `ok: 0` response with `conflicts` and `conflictCommit`; the branch accepts no writes until it is continued or aborted |
 
 ### Notes
 
 - Rebase rewrites commit history; don't rebase branches that others have already pulled.
+- The branch HEAD moves only when the rebase finishes, or when it pauses after replaying at least one commit, and then together with the working set. A rebase that fails or loses a race leaves the branch as it was; one that pauses on its first commit leaves HEAD on the original tip.
 - When paused on a conflict, `conflictCommit` identifies which original commit caused it.
 - Replayed commits preserve the original `author` but set `committer` to the person performing the rebase and `committerTimestamp` to the time of replay. This distinction is visible in `dumboLog`.
 
@@ -1143,6 +1219,9 @@ db.runCommand({ dumboReset: 1, hard: true })
 | Condition | Error |
 |-----------|-------|
 | `to` is not a valid commit hash | `OperationFailed: ...` |
+| An operation is paused on the branch | `OperationFailed: DumboDBReset: an operation is paused on branch "main"; continue or abort it first` |
+| Inside a transaction that has written to the branch | `ConflictingOperationInProgress (117)` |
+| A client write landed before the working set moved | `WriteConflict (112)`; nothing was reset |
 
 ### Notes
 
@@ -1227,7 +1306,9 @@ main.runCommand({ dumboRevert: 1, commit: "HEAD" })
 | Condition | Error |
 |-----------|-------|
 | `commit` is an unsupported rootish form | `BadValue: dumboRevert: ...` |
-| Revert produces conflicts | `ok: 0` response with `conflicts` array |
+| The branch has uncommitted changes | `ConflictingOperationInProgress (117)`; see [Operations start only on a clean branch](#operations-start-only-on-a-clean-branch) |
+| A client write landed while the revert ran | `WriteConflict (112)`; nothing was reverted |
+| Revert produces conflicts | `ok: 0` response with `conflicts` array; the branch accepts no writes until it is continued or aborted |
 
 ### Notes
 
@@ -1493,6 +1574,7 @@ main.runCommand({ dumboMerge: 1, continue: 1 })
 | `"custom"` value on a `validation` conflict still violates the validator | `OperationFailed: DumboDBResolveConflict: custom value still violates the collection validator for <collection>` |
 | Resolving a `document` conflict to a value that violates an active validator | `OperationFailed: DumboDBResolveConflict: resolved document for <collection> violates the collection validator; supply a conforming value ('custom') or drop it` |
 | Unknown `conflictId` | `OperationFailed: ...` |
+| Inside a transaction that has written to the branch | `ConflictingOperationInProgress (117)` |
 
 ### Notes
 
