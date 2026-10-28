@@ -166,6 +166,9 @@ var (
 	newAsin = newTrigOperator("$asin", unitTrigBounds, trigDouble(aggregations.Asin), trigDecimal(aggregations.Asin))
 	newAcos = newTrigOperator("$acos", unitTrigBounds, trigDouble(aggregations.Acos), trigDecimal(aggregations.Acos))
 	newAtan = newTrigOperator("$atan", nil, trigDouble(aggregations.Atan), trigDecimal(aggregations.Atan))
+	newSinh = newTrigOperator("$sinh", nil, trigDouble(aggregations.Sinh), trigDecimal(aggregations.Sinh))
+	newCosh = newTrigOperator("$cosh", nil, trigDouble(aggregations.Cosh), trigDecimal(aggregations.Cosh))
+	newTanh = newTrigOperator("$tanh", nil, trigDouble(aggregations.Tanh), trigDecimal(aggregations.Tanh))
 )
 
 // atan2Op represents { $atan2: [ <y>, <x> ] }. Like MongoDB's

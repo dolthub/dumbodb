@@ -43,6 +43,9 @@ const (
 	Asin
 	Acos
 	Atan
+	Sinh
+	Cosh
+	Tanh
 )
 
 const (
@@ -90,6 +93,14 @@ func halfPiFloat(prec uint) *big.Float {
 
 // TrigDouble returns fn(x) correctly rounded to a double.
 func TrigDouble(fn TrigFunc, x float64) float64 {
+	switch fn {
+	case Sinh:
+		return fdlibmSinh(x)
+	case Cosh:
+		return fdlibmCosh(x)
+	case Tanh:
+		return fdlibmTanh(x)
+	}
 	if math.IsNaN(x) || (math.IsInf(x, 0) && fn != Atan) {
 		return math.NaN()
 	}
@@ -131,6 +142,12 @@ func roundedTrig(fn TrigFunc, x *big.Float, prec uint) *big.Float {
 		return result.Set(acosBig(x, trigWorkPrecision))
 	case Atan:
 		return result.Set(atanBig(x, trigWorkPrecision))
+	case Sinh:
+		return result.Set(sinhBig(x, trigWorkPrecision))
+	case Cosh:
+		return result.Set(coshBig(x, trigWorkPrecision))
+	case Tanh:
+		return result.Set(tanhBig(x, trigWorkPrecision))
 	}
 	if x.Sign() == 0 {
 		if fn == Cos {
@@ -299,6 +316,8 @@ func DecimalTrig(fn TrigFunc, d types.Decimal128) types.Decimal128 {
 	switch fn {
 	case Asin, Acos, Atan:
 		return decimalInverseTrig(fn, d)
+	case Sinh, Cosh, Tanh:
+		return decimalHyperbolic(fn, d)
 	default:
 		return decimalCircularTrig(fn, d)
 	}
@@ -620,6 +639,9 @@ func signedAPDToDecimal128(x *apd.Decimal) types.Decimal128 {
 // so building it and rounding once gives both.
 func binary128ToDecimal(y *big.Float) types.Decimal128 {
 	negative := y.Signbit()
+	if y.IsInf() {
+		return APDToDecimal128(&apd.Decimal{Form: apd.Infinite, Negative: negative})
+	}
 	if y.Sign() == 0 {
 		return signedAPDToDecimal128(&apd.Decimal{Negative: negative})
 	}
