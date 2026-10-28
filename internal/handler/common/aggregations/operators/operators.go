@@ -141,13 +141,16 @@ var Operators = map[string]newOperatorFunc{
 	// sorted alphabetically
 	"$abs":             newAbs,
 	"$acos":            newAcos,
+	"$acosh":           newAcosh,
 	"$add":             newAdd,
 	"$allElementsTrue": newAllElementsTrue,
 	"$and":             newAnd,
 	"$arrayToObject":   newArrayToObject,
 	"$asin":            newAsin,
+	"$asinh":           newAsinh,
 	"$atan":            newAtan,
 	"$atan2":           newAtan2,
+	"$atanh":           newAtanh,
 	"$avg":             newAvgOp,
 	"$anyElementTrue":  newAnyElementTrue,
 	"$arrayElemAt":     newArrayElemAt,
@@ -276,9 +279,6 @@ var Operators = map[string]newOperatorFunc{
 // unsupportedOperators maps all unsupported yet operators.
 var unsupportedOperators = map[string]struct{}{
 	// sorted alphabetically
-	"$acosh":            {},
-	"$asinh":            {},
-	"$atanh":            {},
 	"$binarySize":       {},
 	"$covariancePop":    {},
 	"$covarianceSamp":   {},

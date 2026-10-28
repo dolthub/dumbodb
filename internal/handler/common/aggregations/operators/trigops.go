@@ -36,6 +36,7 @@ type trigBounds struct {
 var (
 	finiteTrigBounds = &trigBounds{lower: math.Inf(-1), upper: math.Inf(1)}
 	unitTrigBounds   = &trigBounds{lower: -1, upper: 1, inclusive: true}
+	acoshTrigBounds  = &trigBounds{lower: 1, upper: math.Inf(1), inclusive: true}
 )
 
 func (b trigBounds) containsDouble(x float64) bool {
@@ -160,15 +161,18 @@ func trigDecimal(fn aggregations.TrigFunc) func(types.Decimal128) types.Decimal1
 }
 
 var (
-	newSin  = newTrigOperator("$sin", finiteTrigBounds, trigDouble(aggregations.Sin), trigDecimal(aggregations.Sin))
-	newCos  = newTrigOperator("$cos", finiteTrigBounds, trigDouble(aggregations.Cos), trigDecimal(aggregations.Cos))
-	newTan  = newTrigOperator("$tan", finiteTrigBounds, trigDouble(aggregations.Tan), trigDecimal(aggregations.Tan))
-	newAsin = newTrigOperator("$asin", unitTrigBounds, trigDouble(aggregations.Asin), trigDecimal(aggregations.Asin))
-	newAcos = newTrigOperator("$acos", unitTrigBounds, trigDouble(aggregations.Acos), trigDecimal(aggregations.Acos))
-	newAtan = newTrigOperator("$atan", nil, trigDouble(aggregations.Atan), trigDecimal(aggregations.Atan))
-	newSinh = newTrigOperator("$sinh", nil, trigDouble(aggregations.Sinh), trigDecimal(aggregations.Sinh))
-	newCosh = newTrigOperator("$cosh", nil, trigDouble(aggregations.Cosh), trigDecimal(aggregations.Cosh))
-	newTanh = newTrigOperator("$tanh", nil, trigDouble(aggregations.Tanh), trigDecimal(aggregations.Tanh))
+	newSin   = newTrigOperator("$sin", finiteTrigBounds, trigDouble(aggregations.Sin), trigDecimal(aggregations.Sin))
+	newCos   = newTrigOperator("$cos", finiteTrigBounds, trigDouble(aggregations.Cos), trigDecimal(aggregations.Cos))
+	newTan   = newTrigOperator("$tan", finiteTrigBounds, trigDouble(aggregations.Tan), trigDecimal(aggregations.Tan))
+	newAsin  = newTrigOperator("$asin", unitTrigBounds, trigDouble(aggregations.Asin), trigDecimal(aggregations.Asin))
+	newAcos  = newTrigOperator("$acos", unitTrigBounds, trigDouble(aggregations.Acos), trigDecimal(aggregations.Acos))
+	newAtan  = newTrigOperator("$atan", nil, trigDouble(aggregations.Atan), trigDecimal(aggregations.Atan))
+	newSinh  = newTrigOperator("$sinh", nil, trigDouble(aggregations.Sinh), trigDecimal(aggregations.Sinh))
+	newCosh  = newTrigOperator("$cosh", nil, trigDouble(aggregations.Cosh), trigDecimal(aggregations.Cosh))
+	newTanh  = newTrigOperator("$tanh", nil, trigDouble(aggregations.Tanh), trigDecimal(aggregations.Tanh))
+	newAsinh = newTrigOperator("$asinh", nil, trigDouble(aggregations.Asinh), trigDecimal(aggregations.Asinh))
+	newAcosh = newTrigOperator("$acosh", acoshTrigBounds, trigDouble(aggregations.Acosh), trigDecimal(aggregations.Acosh))
+	newAtanh = newTrigOperator("$atanh", unitTrigBounds, trigDouble(aggregations.Atanh), trigDecimal(aggregations.Atanh))
 )
 
 // atan2Op represents { $atan2: [ <y>, <x> ] }. Like MongoDB's

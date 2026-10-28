@@ -46,6 +46,9 @@ const (
 	Sinh
 	Cosh
 	Tanh
+	Asinh
+	Acosh
+	Atanh
 )
 
 const (
@@ -100,6 +103,12 @@ func TrigDouble(fn TrigFunc, x float64) float64 {
 		return fdlibmCosh(x)
 	case Tanh:
 		return fdlibmTanh(x)
+	case Asinh:
+		return fdlibmAsinh(x)
+	case Acosh:
+		return fdlibmAcosh(x)
+	case Atanh:
+		return fdlibmAtanh(x)
 	}
 	if math.IsNaN(x) || (math.IsInf(x, 0) && fn != Atan) {
 		return math.NaN()
@@ -148,6 +157,12 @@ func roundedTrig(fn TrigFunc, x *big.Float, prec uint) *big.Float {
 		return result.Set(coshBig(x, trigWorkPrecision))
 	case Tanh:
 		return result.Set(tanhBig(x, trigWorkPrecision))
+	case Asinh:
+		return result.Set(asinhBig(x, trigWorkPrecision))
+	case Acosh:
+		return result.Set(acoshBig(x, trigWorkPrecision))
+	case Atanh:
+		return result.Set(atanhBig(x, trigWorkPrecision))
 	}
 	if x.Sign() == 0 {
 		if fn == Cos {
@@ -318,6 +333,8 @@ func DecimalTrig(fn TrigFunc, d types.Decimal128) types.Decimal128 {
 		return decimalInverseTrig(fn, d)
 	case Sinh, Cosh, Tanh:
 		return decimalHyperbolic(fn, d)
+	case Asinh, Acosh, Atanh:
+		return decimalInverseHyperbolic(fn, d)
 	default:
 		return decimalCircularTrig(fn, d)
 	}
