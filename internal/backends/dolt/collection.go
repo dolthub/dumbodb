@@ -1094,7 +1094,12 @@ func isExistsTrue(v any) bool {
 	if !ok || doc.Len() != 1 || doc.Keys()[0] != "$exists" {
 		return false
 	}
-	switch e := must.NotFail(doc.Get("$exists")).(type) {
+	return existsTruthy(must.NotFail(doc.Get("$exists")))
+}
+
+// existsTruthy reports whether an $exists operand asks for presence.
+func existsTruthy(e any) bool {
+	switch e := e.(type) {
 	case bool:
 		return e
 	case int32:
@@ -1504,14 +1509,14 @@ func partialFilterScalar(v any) (any, bool) {
 	return v, true
 }
 
-// filterImpliesPartial reports whether filter guarantees every
-// condition in a partial index's filter expression pfe. A scalar equality in
-// pfe must appear as the identical equality in filter; a numeric range in pfe
-// ($gt, $gte, $lt, $lte), or a string range when stringRanges (the index is
-// binary-collated, so bounds compare bytewise), must have each bound implied
-// by a bound in the same direction, or an equality, on the same field in
-// filter. Any
-// other shape yields false, leaving the index unused (a sound collection
+// filterImpliesPartial reports whether filter guarantees every condition in a
+// partial index's filter expression pfe. A scalar equality in pfe must appear
+// as the identical equality in filter; $exists: true in pfe needs a filter
+// condition on the field that cannot match a missing field; a numeric range in
+// pfe ($gt, $gte, $lt, $lte), or a string range when stringRanges (the index is
+// binary-collated, so bounds compare bytewise), must have each bound implied by
+// a bound in the same direction, or an equality, on the same field in filter.
+// Any other shape yields false, leaving the index unused (a sound collection
 // scan). When true, every document matching filter lies within the partial
 // index, so scanning the index and re-filtering is sound.
 func filterImpliesPartial(filter, pfe *types.Document, stringRanges bool) bool {
@@ -1533,6 +1538,12 @@ func filterImpliesPartial(filter, pfe *types.Document, stringRanges bool) bool {
 		if ps, ok := partialFilterScalar(pv); ok {
 			fs, ok := partialFilterScalar(fv)
 			if !ok || compareScalars(ps, fs) != 0 {
+				return false
+			}
+			continue
+		}
+		if isExistsTrue(pv) {
+			if !conditionExcludesMissing(fv) {
 				return false
 			}
 			continue
