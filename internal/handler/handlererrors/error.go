@@ -362,6 +362,14 @@ const (
 	ErrRegexNoInput              = ErrorCode(31022)   // Location31022
 	ErrRegexNoRegex              = ErrorCode(31023)   // Location31023
 	ErrRegexUnknownField         = ErrorCode(31024)   // Location31024
+	ErrSortArrayNotObject        = ErrorCode(2942500) // Location2942500
+	ErrSortArrayUnknownField     = ErrorCode(2942501) // Location2942501
+	ErrSortArrayNoInput          = ErrorCode(2942502) // Location2942502
+	ErrSortArrayNoSortBy         = ErrorCode(2942503) // Location2942503
+	ErrSortArrayInputNotArray    = ErrorCode(2942504) // Location2942504
+	ErrSortArrayBadPattern       = ErrorCode(2942505) // Location2942505
+	ErrSortArrayBadOrder         = ErrorCode(2942506) // Location2942506
+	ErrSortArrayBadSortBy        = ErrorCode(2942507) // Location2942507
 	ErrDatePartTimeZoneNotString = ErrorCode(40533)   // Location40533
 	ErrDatePartUnknownOption     = ErrorCode(40535)   // Location40535
 	ErrDatePartArrayLen          = ErrorCode(40536)   // Location40536

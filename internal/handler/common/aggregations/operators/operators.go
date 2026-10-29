@@ -164,6 +164,7 @@ var wholeArgumentOperators = map[string]struct{}{
 	"$replaceAll":     {},
 	"$replaceOne":     {},
 	"$second":         {},
+	"$sortArray":      {},
 	"$week":           {},
 	"$year":           {},
 }
@@ -281,6 +282,7 @@ var Operators = map[string]newOperatorFunc{
 	"$sinh":             newSinh,
 	"$size":             newSize,
 	"$slice":            newSlice,
+	"$sortArray":        newSortArray,
 	"$split":            newSplit,
 	"$sqrt":             newSqrt,
 	"$stdDevPop":        newStdDevPopOp,
@@ -336,7 +338,6 @@ var unsupportedOperators = map[string]struct{}{
 	"$rank":           {},
 	"$sampleRate":     {},
 	"$shift":          {},
-	"$sortArray":      {},
 	"$toObjectId":     {},
 	// please keep sorted alphabetically
 }
