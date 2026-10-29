@@ -229,11 +229,9 @@ func newDateSubtract(args ...any) (Operator, error) {
 	// parses a constant unit and time zone up front.
 	if isConstantOperand(op.startDate) && isConstantOperand(op.unit) && isConstantOperand(op.amount) &&
 		(!hasTimeZone || isConstantOperand(timeZone)) {
-		op.timeZone = &timeZoneArg{expr: timeZone}
-		if !hasTimeZone {
-			op.timeZone.resolved = &mongoTimeZone{}
-		}
-		return op, nil
+		var err error
+		op.timeZone, err = newTimeZoneArgWith(timeZone, hasTimeZone, handlererrors.ErrTimeZoneNotString, false)
+		return op, err
 	}
 
 	if isConstantOperand(op.unit) {

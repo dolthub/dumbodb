@@ -115,16 +115,27 @@ func parseUTCOffset(spec string) (int64, bool) {
 type timeZoneArg struct {
 	expr     any
 	resolved *mongoTimeZone
+
+	// notStringCode is the error for a time zone that is not a string, which
+	// differs between MongoDB's expressions.
+	notStringCode handlererrors.ErrorCode
 }
 
 func newTimeZoneArg(expr any, present bool) (*timeZoneArg, error) {
+	return newTimeZoneArgWith(expr, present, handlererrors.ErrTimeZoneNotString, true)
+}
+
+// newTimeZoneArgWith is newTimeZoneArg with the error code for a non-string
+// time zone; eager resolves a constant time zone now, which MongoDB does
+// unless every operand is constant and the whole expression is folded.
+func newTimeZoneArgWith(expr any, present bool, notStringCode handlererrors.ErrorCode, eager bool) (*timeZoneArg, error) {
 	if !present {
-		return &timeZoneArg{resolved: &mongoTimeZone{}}, nil
+		return &timeZoneArg{resolved: &mongoTimeZone{}, notStringCode: notStringCode}, nil
 	}
 
-	arg := &timeZoneArg{expr: expr}
-	if isConstantTimeZone(expr) {
-		tz, isNull, err := resolveTimeZone(expr)
+	arg := &timeZoneArg{expr: expr, notStringCode: notStringCode}
+	if eager && isConstantTimeZone(expr) {
+		tz, isNull, err := resolveTimeZone(expr, notStringCode)
 		if err != nil {
 			return nil, err
 		}
@@ -155,16 +166,16 @@ func (arg *timeZoneArg) evaluate(doc *types.Document) (tz mongoTimeZone, isNull 
 	if err != nil {
 		return mongoTimeZone{}, false, err
 	}
-	return resolveTimeZone(v)
+	return resolveTimeZone(v, arg.notStringCode)
 }
 
-func resolveTimeZone(v any) (mongoTimeZone, bool, error) {
+func resolveTimeZone(v any, notStringCode handlererrors.ErrorCode) (mongoTimeZone, bool, error) {
 	if isNullish(v) {
 		return mongoTimeZone{}, true, nil
 	}
 	name, ok := v.(string)
 	if !ok {
-		return mongoTimeZone{}, false, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrTimeZoneNotString,
+		return mongoTimeZone{}, false, handlererrors.NewCommandErrorMsgWithArgument(notStringCode,
 			fmt.Sprintf("timezone must evaluate to a string, found %s", handlerparams.AliasFromType(v)), "timezone")
 	}
 	tz, ok := lookupMongoTimeZone(name)

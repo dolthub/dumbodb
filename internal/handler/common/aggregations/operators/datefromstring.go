@@ -127,7 +127,7 @@ func (op *dateFromStringOp) Process(doc *types.Document) (any, error) {
 					fmt.Sprintf("$dateFromString requires that 'format' be a string, found: %s with value %s",
 						handlerparams.AliasFromType(format), types.FormatAnyValue(format)), "$dateFromString")
 			}
-			if err = validateDateFromStringFormat(f); err != nil {
+			if err = validateDateFormat(f, "$dateFromString", isDateFromStringSpecifier); err != nil {
 				return nil, err
 			}
 		}
@@ -211,24 +211,9 @@ func conversionFailure(msg string) error {
 	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrConversionFailure, msg, "$dateFromString")
 }
 
-// validateDateFromStringFormat is MongoDB's validateFromStringFormat: every
-// '%' must be followed by '%' or a supported specifier.
-func validateDateFromStringFormat(format string) error {
-	for i := 0; i < len(format); i++ {
-		if format[i] != '%' {
-			continue
-		}
-		i++
-		if i == len(format) {
-			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFormatUnmatchedPercent,
-				"Unmatched '%' at end of format string", "$dateFromString")
-		}
-		if _, ok := dateFromStringFormats[format[i]]; !ok && format[i] != '%' {
-			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFormatInvalidSpecifier,
-				fmt.Sprintf("Invalid format character '%%%c' in format string", format[i]), "$dateFromString")
-		}
-	}
-	return nil
+func isDateFromStringSpecifier(c byte) bool {
+	_, ok := dateFromStringFormats[c]
+	return ok
 }
 
 var _ Operator = (*dateFromStringOp)(nil)

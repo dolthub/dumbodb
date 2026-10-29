@@ -339,6 +339,15 @@ const (
 	ErrMergeObjectsNotObject     = ErrorCode(5911200) // Location5911200
 	ErrConcatArraysNotArray      = ErrorCode(28664)   // Location28664
 	ErrGroupInclusionStyle       = ErrorCode(17390)   // Location17390
+	ErrDatePartTimeZoneNotString = ErrorCode(40533)   // Location40533
+	ErrDatePartUnknownOption     = ErrorCode(40535)   // Location40535
+	ErrDatePartArrayLen          = ErrorCode(40536)   // Location40536
+	ErrDatePartNoDate            = ErrorCode(40539)   // Location40539
+	ErrDateToStringNotObject     = ErrorCode(18629)   // Location18629
+	ErrDateToStringUnknownField  = ErrorCode(18534)   // Location18534
+	ErrDateToStringNoDate        = ErrorCode(18628)   // Location18628
+	ErrDateToStringFormatType    = ErrorCode(18533)   // Location18533
+	ErrDateComponentOutOfRange   = ErrorCode(18537)   // Location18537
 
 	// ErrOpMsgNoBody indicates an OP_MSG without a kind-0 body section.
 	ErrOpMsgNoBody = ErrorCode(40587) // Location40587

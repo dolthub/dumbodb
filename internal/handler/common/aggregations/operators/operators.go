@@ -145,7 +145,21 @@ var wholeArgumentOperators = map[string]struct{}{
 	"$dateFromString": {},
 	"$dateSubtract":   {},
 	"$dateToParts":    {},
+	"$dateToString":   {},
+	"$dayOfMonth":     {},
+	"$dayOfWeek":      {},
+	"$dayOfYear":      {},
+	"$hour":           {},
+	"$isoDayOfWeek":   {},
+	"$isoWeek":        {},
+	"$isoWeekYear":    {},
 	"$literal":        {},
+	"$millisecond":    {},
+	"$minute":         {},
+	"$month":          {},
+	"$second":         {},
+	"$week":           {},
+	"$year":           {},
 }
 
 // Operators maps all standard aggregation operators.
