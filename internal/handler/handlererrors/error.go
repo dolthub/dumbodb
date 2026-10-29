@@ -152,6 +152,8 @@ const (
 
 	ErrExceededMemoryLimit = ErrorCode(146) // ExceededMemoryLimit
 
+	ErrDurationOverflow = ErrorCode(159) // DurationOverflow
+
 	// ErrQueryExceededMemoryLimitNoDiskUseAllowed indicates a blocking
 	// aggregation stage passed its memory limit and could not spill to disk.
 	ErrQueryExceededMemoryLimitNoDiskUseAllowed = ErrorCode(292) // QueryExceededMemoryLimitNoDiskUseAllowed

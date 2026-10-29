@@ -141,6 +141,7 @@ func NewOperator(doc *types.Document) (Operator, error) {
 // passed through whole, not as a list of arguments, so $literal keeps it and
 // the object-argument operators can reject it.
 var wholeArgumentOperators = map[string]struct{}{
+	"$dateAdd":        {},
 	"$dateFromParts":  {},
 	"$dateFromString": {},
 	"$dateSubtract":   {},
@@ -189,11 +190,11 @@ var Operators = map[string]newOperatorFunc{
 	"$convert":          newConvert,
 	"$cos":              newCos,
 	"$cosh":             newCosh,
-	"$dateAdd":          newDateAdd,
+	"$dateAdd":          newDateArithmetic("$dateAdd"),
 	"$dateDiff":         newDateDiff,
 	"$dateFromParts":    newDateFromParts,
 	"$dateFromString":   newDateFromString,
-	"$dateSubtract":     newDateSubtract,
+	"$dateSubtract":     newDateArithmetic("$dateSubtract"),
 	"$dateToParts":      newDateToParts,
 	"$dateTrunc":        newDateTrunc,
 	"$dateToString":     newDateToString,

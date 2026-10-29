@@ -91,7 +91,12 @@ func addMonths(year, month, amount int64) (int64, int64) {
 // become days that keep the day of month within the target month.
 func mongoDateAdd(ms int64, unit string, amount int64, tz mongoTimeZone) (int64, error) {
 	if unit == "millisecond" {
-		return ms + amount, nil
+		sum := ms + amount
+		if (amount > 0 && sum < ms) || (amount < 0 && sum > ms) {
+			return 0, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDurationOverflow,
+				fmt.Sprintf("Overflow while adding %dms to %dms", amount, ms), "$dateAdd")
+		}
+		return sum, nil
 	}
 	if limit := maxDateAddAmounts[unit]; amount <= -limit || amount >= limit {
 		return 0, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDateAddAmountInvalid,
@@ -174,8 +179,10 @@ func daysInMonth(y, m int64) int64 {
 	return [13]int64{0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}[m]
 }
 
-// dateSubtractOp represents { $dateSubtract: { startDate, unit, amount, timezone } }.
-type dateSubtractOp struct {
+// dateArithmeticOp represents { $dateAdd: { startDate, unit, amount, timezone } }
+// and the same for $dateSubtract.
+type dateArithmeticOp struct {
+	opName                  string
 	startDate, unit, amount any
 
 	// parsedUnit is set when unit is a constant, which MongoDB parses up front.
@@ -184,15 +191,21 @@ type dateSubtractOp struct {
 	timeZone   *timeZoneArg
 }
 
-func newDateSubtract(args ...any) (Operator, error) {
-	const opName = "$dateSubtract"
+// newDateArithmetic follows ExpressionDateArithmetics::parse.
+func newDateArithmetic(opName string) func(args ...any) (Operator, error) {
+	return func(args ...any) (Operator, error) {
+		return parseDateArithmetic(opName, args...)
+	}
+}
+
+func parseDateArithmetic(opName string, args ...any) (Operator, error) {
 	spec, ok := args[0].(*types.Document)
 	if len(args) != 1 || !ok {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDateArithmeticNotObject,
 			opName+" expects an object as its argument", opName)
 	}
 
-	op := new(dateSubtractOp)
+	op := &dateArithmeticOp{opName: opName}
 	var hasStart, hasUnit, hasAmount, hasTimeZone bool
 	var timeZone any
 	iter := spec.Iterator()
@@ -270,8 +283,8 @@ func isConstantOperand(expr any) bool {
 }
 
 // Process follows ExpressionDateArithmetics::evaluate.
-func (op *dateSubtractOp) Process(doc *types.Document) (any, error) {
-	const opName = "$dateSubtract"
+func (op *dateArithmeticOp) Process(doc *types.Document) (any, error) {
+	opName := op.opName
 	if op.alwaysNull {
 		return types.Null, nil
 	}
@@ -312,16 +325,19 @@ func (op *dateSubtractOp) Process(doc *types.Document) (any, error) {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDateArithmeticNotInteger,
 			opName+" expects integer amount of time units", opName)
 	}
-	if amount == math.MinInt64 {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDateSubtractMinAmount,
-			fmt.Sprintf("invalid %s 'amount' parameter value: %d", opName, amount), opName)
+	if opName == "$dateSubtract" {
+		if amount == math.MinInt64 {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDateSubtractMinAmount,
+				fmt.Sprintf("invalid %s 'amount' parameter value: %d", opName, amount), opName)
+		}
+		amount = -amount
 	}
 
-	result, err := mongoDateAdd(ms, unit, -amount, tz)
+	result, err := mongoDateAdd(ms, unit, amount, tz)
 	if err != nil {
 		return nil, err
 	}
 	return time.UnixMilli(result).UTC(), nil
 }
 
-var _ Operator = (*dateSubtractOp)(nil)
+var _ Operator = (*dateArithmeticOp)(nil)

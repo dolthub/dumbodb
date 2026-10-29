@@ -38,109 +38,6 @@ func toTime(v any) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-// dateAddOp represents { $dateAdd: { startDate: <expr>, unit: <string>, amount: <number> } }.
-type dateAddOp struct {
-	startDateArg any
-	unitArg      any
-	amountArg    any
-}
-
-func newDateAdd(args ...any) (Operator, error) {
-	if len(args) != 1 {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$dateAdd",
-			"$dateAdd requires a document argument")
-	}
-
-	doc, ok := args[0].(*types.Document)
-	if !ok {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$dateAdd",
-			"$dateAdd requires a document argument")
-	}
-
-	startDateArg, err := doc.Get("startDate")
-	if err != nil {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$dateAdd",
-			"Missing 'startDate' parameter to $dateAdd")
-	}
-
-	unitArg, err := doc.Get("unit")
-	if err != nil {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$dateAdd",
-			"Missing 'unit' parameter to $dateAdd")
-	}
-
-	amountArg, err := doc.Get("amount")
-	if err != nil {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$dateAdd",
-			"Missing 'amount' parameter to $dateAdd")
-	}
-
-	return &dateAddOp{startDateArg: startDateArg, unitArg: unitArg, amountArg: amountArg}, nil
-}
-
-func (op *dateAddOp) Process(doc *types.Document) (any, error) {
-	sv, err := evalArgValue(op.startDateArg, doc)
-	if err != nil {
-		return nil, err
-	}
-
-	if isNullish(sv) {
-		return types.Null, nil
-	}
-
-	t, ok := toTime(sv)
-	if !ok {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$dateAdd",
-			fmt.Sprintf("$dateAdd startDate must be a date, got %T", sv))
-	}
-
-	uv, err := evalArgValue(op.unitArg, doc)
-	if err != nil {
-		return nil, err
-	}
-
-	unit, ok := uv.(string)
-	if !ok {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$dateAdd",
-			"$dateAdd unit must be a string")
-	}
-
-	av, err := evalArgValue(op.amountArg, doc)
-	if err != nil {
-		return nil, err
-	}
-
-	amount := toInt64(av)
-
-	return addDateUnit(t, unit, amount)
-}
-
-func addDateUnit(t time.Time, unit string, amount int64) (time.Time, error) {
-	switch strings.ToLower(unit) {
-	case "year":
-		return t.AddDate(int(amount), 0, 0), nil
-	case "quarter":
-		return t.AddDate(0, int(amount*3), 0), nil
-	case "month":
-		return t.AddDate(0, int(amount), 0), nil
-	case "week":
-		return t.Add(time.Duration(amount) * 7 * 24 * time.Hour), nil
-	case "day":
-		return t.AddDate(0, 0, int(amount)), nil
-	case "hour":
-		return t.Add(time.Duration(amount) * time.Hour), nil
-	case "minute":
-		return t.Add(time.Duration(amount) * time.Minute), nil
-	case "second":
-		return t.Add(time.Duration(amount) * time.Second), nil
-	case "millisecond":
-		return t.Add(time.Duration(amount) * time.Millisecond), nil
-	default:
-		return time.Time{}, newOperatorError(ErrArgsInvalidLen, "$dateAdd",
-			fmt.Sprintf("unknown date unit: %s", unit))
-	}
-}
-
 func toInt64(v any) int64 {
 	switch n := v.(type) {
 	case int32:
@@ -153,8 +50,6 @@ func toInt64(v any) int64 {
 
 	return 0
 }
-
-var _ Operator = (*dateAddOp)(nil)
 
 // dateDiffOp represents { $dateDiff: { startDate: <expr>, endDate: <expr>, unit: <string> } }.
 type dateDiffOp struct {
