@@ -181,3 +181,11 @@ func DecimalMultiply(x, y *apd.Decimal) *apd.Decimal {
 	_, _ = decimal128Context.Mul(product, x, y)
 	return product
 }
+
+// DecimalAdd returns x+y rounded to Decimal128's 34 digits, as
+// Decimal128::add does.
+func DecimalAdd(x, y *apd.Decimal) *apd.Decimal {
+	sum := new(apd.Decimal)
+	_, _ = decimal128Context.Add(sum, x, y)
+	return sum
+}

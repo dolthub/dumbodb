@@ -341,6 +341,7 @@ const (
 	ErrMergeObjectsNotObject     = ErrorCode(5911200) // Location5911200
 	ErrConcatArraysNotArray      = ErrorCode(28664)   // Location28664
 	ErrGroupInclusionStyle       = ErrorCode(17390)   // Location17390
+	ErrAddTwoDates               = ErrorCode(16612)   // Location16612
 	ErrDatePartTimeZoneNotString = ErrorCode(40533)   // Location40533
 	ErrDatePartUnknownOption     = ErrorCode(40535)   // Location40535
 	ErrDatePartArrayLen          = ErrorCode(40536)   // Location40536
