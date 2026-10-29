@@ -159,6 +159,14 @@ func _() {
 	_ = x[ErrConcatArraysNotArray-28664]
 	_ = x[ErrGroupInclusionStyle-17390]
 	_ = x[ErrAddTwoDates-16612]
+	_ = x[ErrReplaceReplacementType-51744]
+	_ = x[ErrReplaceFindType-51745]
+	_ = x[ErrReplaceInputType-51746]
+	_ = x[ErrReplaceNoReplacement-51747]
+	_ = x[ErrReplaceNoFind-51748]
+	_ = x[ErrReplaceNoInput-51749]
+	_ = x[ErrReplaceUnknownField-51750]
+	_ = x[ErrReplaceNotObject-51751]
 	_ = x[ErrDatePartTimeZoneNotString-40533]
 	_ = x[ErrDatePartUnknownOption-40535]
 	_ = x[ErrDatePartArrayLen-40536]
@@ -253,7 +261,7 @@ func _() {
 	_ = x[ErrAwaitableHelloTopologyVersionRequired-51756]
 }
 
-const _ErrorCode_name = "UnsetInternalErrorBadValueGraphContainsCycleFailedToParseUserNotFoundUnauthorizedTypeMismatchOverflowProtocolErrorAuthenticationFailedIllegalOperationInvalidBSONNamespaceNotFoundIndexNotFoundPathNotViableRoleNotFoundConflictingUpdateOperatorsCursorNotFoundNamespaceExistsInvalidRoleModificationMaxTimeMSExpiredDollarPrefixedFieldNameInvalidIdFieldEmptyFieldNameCommandNotFoundImmutableFieldCannotCreateIndexIndexAlreadyExistsInvalidOptionsInvalidNamespaceNoReplicationEnabledIndexOptionsConflictIndexKeySpecsConflictInvalidReplicaSetConfigNotYetInitializedOperationFailedWriteConflictCommandNotSupportedConflictingOperationInProgressDocumentValidationFailureExceededMemoryLimitDurationOverflowViewDepthLimitExceededCommandNotSupportedOnViewOptionNotSupportedOnViewInvalidPipelineOperatorClientMetadataCannotBeMutatedInvalidIndexSpecificationOptionTimeProofMismatchKeysNotFoundTransactionTooOldNotImplementedConversionFailureNoSuchTransactionOperationNotSupportedInTransactionQueryExceededMemoryLimitNoDiskUseAllowedMechanismUnavailableUnsupportedOpQueryCommandLocation10065NotWritablePrimaryBSONObjectTooLargeDuplicateKeyDatabaseDifferCaseLocation15947Location15948Location15955Location15958Location15959Location15969Location15973Location15974Location15975Location15976Location15981Location15983Location15998Location16004Location16006Location16020Location16406Location16410Location16610Location16611Location16612Location16872Location16979Location17276Location17390Location18533Location18534Location18535Location18536Location18537Location18628Location18629Location28664Location28667Location28680Location28714Location28724Location28729Location28745Location28747Location28756Location28757Location28758Location28759Location28761Location28762Location28763Location28764Location28765Location28766Location28812Location28818Location31002Location31034SearchNotEnabledLocation31095Location31119Location31120Location31249Location31250Location31253Location31254Location31324Location31325Location31368Location31372Location31382Location31393Location31394Location31395Location34443Location34444Location34445Location34446Location34447Location34448Location34449Location40156Location40157Location40158Location40160Location40181Location40192Location40198Location40228Location40234Location40237Location40238Location40246Location40272Location40323Location40324Location40352Location40353IDLFailedToParseIDLUnknownFieldLocation40485Location40489Location40515Location40516Location40517Location40518Location40519Location40520Location40521Location40522Location40523Location40524Location40525Location40533Location40535Location40536Location40539Location40540Location40541Location40542Location40573Location40587Location40602Location40621Location40666Location40684Location50687Location50692Location50840Location50933Location50989Location51002Location51003Location51024Location51044Location51045Location51075Location51081Location51082Location51083Location51091Location51108Location51246Location51247Location51270Location51272Location51756Location3041701Location3041702Location3041703Location3041704Location4161101Location4161102Location4161103Location4161106Location4161107Location4161108Location4161109Location4822819Location5107200Location5107201Location5166400Location5166401Location5166402Location5166403Location5166405Location5166406Location5423901Location5439013Location5447000Location5624900Location5626500Location5733415Location5739101Location5787902Location5787903Location5787908Location5788200Location5911200Location5976500Location6045000Location7582300ConflictResolutionRequired"
+const _ErrorCode_name = "UnsetInternalErrorBadValueGraphContainsCycleFailedToParseUserNotFoundUnauthorizedTypeMismatchOverflowProtocolErrorAuthenticationFailedIllegalOperationInvalidBSONNamespaceNotFoundIndexNotFoundPathNotViableRoleNotFoundConflictingUpdateOperatorsCursorNotFoundNamespaceExistsInvalidRoleModificationMaxTimeMSExpiredDollarPrefixedFieldNameInvalidIdFieldEmptyFieldNameCommandNotFoundImmutableFieldCannotCreateIndexIndexAlreadyExistsInvalidOptionsInvalidNamespaceNoReplicationEnabledIndexOptionsConflictIndexKeySpecsConflictInvalidReplicaSetConfigNotYetInitializedOperationFailedWriteConflictCommandNotSupportedConflictingOperationInProgressDocumentValidationFailureExceededMemoryLimitDurationOverflowViewDepthLimitExceededCommandNotSupportedOnViewOptionNotSupportedOnViewInvalidPipelineOperatorClientMetadataCannotBeMutatedInvalidIndexSpecificationOptionTimeProofMismatchKeysNotFoundTransactionTooOldNotImplementedConversionFailureNoSuchTransactionOperationNotSupportedInTransactionQueryExceededMemoryLimitNoDiskUseAllowedMechanismUnavailableUnsupportedOpQueryCommandLocation10065NotWritablePrimaryBSONObjectTooLargeDuplicateKeyDatabaseDifferCaseLocation15947Location15948Location15955Location15958Location15959Location15969Location15973Location15974Location15975Location15976Location15981Location15983Location15998Location16004Location16006Location16020Location16406Location16410Location16610Location16611Location16612Location16872Location16979Location17276Location17390Location18533Location18534Location18535Location18536Location18537Location18628Location18629Location28664Location28667Location28680Location28714Location28724Location28729Location28745Location28747Location28756Location28757Location28758Location28759Location28761Location28762Location28763Location28764Location28765Location28766Location28812Location28818Location31002Location31034SearchNotEnabledLocation31095Location31119Location31120Location31249Location31250Location31253Location31254Location31324Location31325Location31368Location31372Location31382Location31393Location31394Location31395Location34443Location34444Location34445Location34446Location34447Location34448Location34449Location40156Location40157Location40158Location40160Location40181Location40192Location40198Location40228Location40234Location40237Location40238Location40246Location40272Location40323Location40324Location40352Location40353IDLFailedToParseIDLUnknownFieldLocation40485Location40489Location40515Location40516Location40517Location40518Location40519Location40520Location40521Location40522Location40523Location40524Location40525Location40533Location40535Location40536Location40539Location40540Location40541Location40542Location40573Location40587Location40602Location40621Location40666Location40684Location50687Location50692Location50840Location50933Location50989Location51002Location51003Location51024Location51044Location51045Location51075Location51081Location51082Location51083Location51091Location51108Location51246Location51247Location51270Location51272Location51744Location51745Location51746Location51747Location51748Location51749Location51750Location51751Location51756Location3041701Location3041702Location3041703Location3041704Location4161101Location4161102Location4161103Location4161106Location4161107Location4161108Location4161109Location4822819Location5107200Location5107201Location5166400Location5166401Location5166402Location5166403Location5166405Location5166406Location5423901Location5439013Location5447000Location5624900Location5626500Location5733415Location5739101Location5787902Location5787903Location5787908Location5788200Location5911200Location5976500Location6045000Location7582300ConflictResolutionRequired"
 
 var _ErrorCode_map = map[ErrorCode]string{
 	0:          _ErrorCode_name[0:5],
@@ -462,43 +470,51 @@ var _ErrorCode_map = map[ErrorCode]string{
 	51247:      _ErrorCode_name[2954:2967],
 	51270:      _ErrorCode_name[2967:2980],
 	51272:      _ErrorCode_name[2980:2993],
-	51756:      _ErrorCode_name[2993:3006],
-	3041701:    _ErrorCode_name[3006:3021],
-	3041702:    _ErrorCode_name[3021:3036],
-	3041703:    _ErrorCode_name[3036:3051],
-	3041704:    _ErrorCode_name[3051:3066],
-	4161101:    _ErrorCode_name[3066:3081],
-	4161102:    _ErrorCode_name[3081:3096],
-	4161103:    _ErrorCode_name[3096:3111],
-	4161106:    _ErrorCode_name[3111:3126],
-	4161107:    _ErrorCode_name[3126:3141],
-	4161108:    _ErrorCode_name[3141:3156],
-	4161109:    _ErrorCode_name[3156:3171],
-	4822819:    _ErrorCode_name[3171:3186],
-	5107200:    _ErrorCode_name[3186:3201],
-	5107201:    _ErrorCode_name[3201:3216],
-	5166400:    _ErrorCode_name[3216:3231],
-	5166401:    _ErrorCode_name[3231:3246],
-	5166402:    _ErrorCode_name[3246:3261],
-	5166403:    _ErrorCode_name[3261:3276],
-	5166405:    _ErrorCode_name[3276:3291],
-	5166406:    _ErrorCode_name[3291:3306],
-	5423901:    _ErrorCode_name[3306:3321],
-	5439013:    _ErrorCode_name[3321:3336],
-	5447000:    _ErrorCode_name[3336:3351],
-	5624900:    _ErrorCode_name[3351:3366],
-	5626500:    _ErrorCode_name[3366:3381],
-	5733415:    _ErrorCode_name[3381:3396],
-	5739101:    _ErrorCode_name[3396:3411],
-	5787902:    _ErrorCode_name[3411:3426],
-	5787903:    _ErrorCode_name[3426:3441],
-	5787908:    _ErrorCode_name[3441:3456],
-	5788200:    _ErrorCode_name[3456:3471],
-	5911200:    _ErrorCode_name[3471:3486],
-	5976500:    _ErrorCode_name[3486:3501],
-	6045000:    _ErrorCode_name[3501:3516],
-	7582300:    _ErrorCode_name[3516:3531],
-	2000000001: _ErrorCode_name[3531:3557],
+	51744:      _ErrorCode_name[2993:3006],
+	51745:      _ErrorCode_name[3006:3019],
+	51746:      _ErrorCode_name[3019:3032],
+	51747:      _ErrorCode_name[3032:3045],
+	51748:      _ErrorCode_name[3045:3058],
+	51749:      _ErrorCode_name[3058:3071],
+	51750:      _ErrorCode_name[3071:3084],
+	51751:      _ErrorCode_name[3084:3097],
+	51756:      _ErrorCode_name[3097:3110],
+	3041701:    _ErrorCode_name[3110:3125],
+	3041702:    _ErrorCode_name[3125:3140],
+	3041703:    _ErrorCode_name[3140:3155],
+	3041704:    _ErrorCode_name[3155:3170],
+	4161101:    _ErrorCode_name[3170:3185],
+	4161102:    _ErrorCode_name[3185:3200],
+	4161103:    _ErrorCode_name[3200:3215],
+	4161106:    _ErrorCode_name[3215:3230],
+	4161107:    _ErrorCode_name[3230:3245],
+	4161108:    _ErrorCode_name[3245:3260],
+	4161109:    _ErrorCode_name[3260:3275],
+	4822819:    _ErrorCode_name[3275:3290],
+	5107200:    _ErrorCode_name[3290:3305],
+	5107201:    _ErrorCode_name[3305:3320],
+	5166400:    _ErrorCode_name[3320:3335],
+	5166401:    _ErrorCode_name[3335:3350],
+	5166402:    _ErrorCode_name[3350:3365],
+	5166403:    _ErrorCode_name[3365:3380],
+	5166405:    _ErrorCode_name[3380:3395],
+	5166406:    _ErrorCode_name[3395:3410],
+	5423901:    _ErrorCode_name[3410:3425],
+	5439013:    _ErrorCode_name[3425:3440],
+	5447000:    _ErrorCode_name[3440:3455],
+	5624900:    _ErrorCode_name[3455:3470],
+	5626500:    _ErrorCode_name[3470:3485],
+	5733415:    _ErrorCode_name[3485:3500],
+	5739101:    _ErrorCode_name[3500:3515],
+	5787902:    _ErrorCode_name[3515:3530],
+	5787903:    _ErrorCode_name[3530:3545],
+	5787908:    _ErrorCode_name[3545:3560],
+	5788200:    _ErrorCode_name[3560:3575],
+	5911200:    _ErrorCode_name[3575:3590],
+	5976500:    _ErrorCode_name[3590:3605],
+	6045000:    _ErrorCode_name[3605:3620],
+	7582300:    _ErrorCode_name[3620:3635],
+	2000000001: _ErrorCode_name[3635:3661],
 }
 
 func (i ErrorCode) String() string {

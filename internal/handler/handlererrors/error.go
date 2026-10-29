@@ -342,6 +342,14 @@ const (
 	ErrConcatArraysNotArray      = ErrorCode(28664)   // Location28664
 	ErrGroupInclusionStyle       = ErrorCode(17390)   // Location17390
 	ErrAddTwoDates               = ErrorCode(16612)   // Location16612
+	ErrReplaceReplacementType    = ErrorCode(51744)   // Location51744
+	ErrReplaceFindType           = ErrorCode(51745)   // Location51745
+	ErrReplaceInputType          = ErrorCode(51746)   // Location51746
+	ErrReplaceNoReplacement      = ErrorCode(51747)   // Location51747
+	ErrReplaceNoFind             = ErrorCode(51748)   // Location51748
+	ErrReplaceNoInput            = ErrorCode(51749)   // Location51749
+	ErrReplaceUnknownField       = ErrorCode(51750)   // Location51750
+	ErrReplaceNotObject          = ErrorCode(51751)   // Location51751
 	ErrDatePartTimeZoneNotString = ErrorCode(40533)   // Location40533
 	ErrDatePartUnknownOption     = ErrorCode(40535)   // Location40535
 	ErrDatePartArrayLen          = ErrorCode(40536)   // Location40536
