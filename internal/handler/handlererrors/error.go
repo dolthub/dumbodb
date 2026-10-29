@@ -375,6 +375,9 @@ const (
 	ErrRandInValidator           = ErrorCode(3040500) // Location3040500
 	ErrRandArguments             = ErrorCode(3040501) // Location3040501
 	ErrExpectedObject            = ErrorCode(10065)   // Location10065
+	ErrMetaNotString             = ErrorCode(17307)   // Location17307
+	ErrMetaUnsupported           = ErrorCode(17308)   // Location17308
+	ErrMetadataUnavailable       = ErrorCode(40218)   // Location40218
 	ErrDatePartTimeZoneNotString = ErrorCode(40533)   // Location40533
 	ErrDatePartUnknownOption     = ErrorCode(40535)   // Location40535
 	ErrDatePartArrayLen          = ErrorCode(40536)   // Location40536

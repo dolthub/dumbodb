@@ -155,6 +155,7 @@ var wholeArgumentOperators = map[string]struct{}{
 	"$isoWeek":        {},
 	"$isoWeekYear":    {},
 	"$literal":        {},
+	"$meta":           {},
 	"$millisecond":    {},
 	"$minute":         {},
 	"$month":          {},
@@ -249,6 +250,7 @@ var Operators = map[string]newOperatorFunc{
 	"$maxN":             newNOpFunc("$maxN"),
 	"$median":           newPercentileFunc("$median", true),
 	"$mergeObjects":     newMergeObjects,
+	"$meta":             newMeta,
 	"$millisecond":      newDatePartOp("$millisecond"),
 	"$min":              newMinOp,
 	"$minN":             newNOpFunc("$minN"),
@@ -327,6 +329,5 @@ var Operators = map[string]newOperatorFunc{
 var unsupportedOperators = map[string]struct{}{
 	// sorted alphabetically
 	"$function": {},
-	"$meta":     {},
 	// please keep sorted alphabetically
 }

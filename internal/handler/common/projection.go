@@ -253,23 +253,8 @@ func ValidateProjection(projection *types.Document) (*types.Document, bool, erro
 				continue
 
 			case "$meta":
-				metaStr, ok := opVal.(string)
-				if !ok {
-					return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
-						handlererrors.ErrBadValue,
-						"$meta projection only supports \"textScore\" and \"indexKey\" right now",
-						"$meta",
-					)
-				}
-
-				switch metaStr {
-				case "textScore", "indexKey":
-				default:
-					return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
-						handlererrors.ErrBadValue,
-						"$meta projection only supports \"textScore\" and \"indexKey\" right now",
-						"$meta",
-					)
+				if _, err := operators.ParseMetaName(opVal); err != nil {
+					return nil, false, err
 				}
 
 				inclusionField = true
@@ -908,6 +893,7 @@ func applyMetaProjection(key, metaType string, projected *types.Document) {
 	case "indexKey":
 		projected.Set(key, types.MakeDocument(0))
 	}
+	// Other metadata is missing: DumboDB attaches none to documents.
 }
 
 // includeProjection copies the field on the path from source to projected.

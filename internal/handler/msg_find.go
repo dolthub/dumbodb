@@ -158,6 +158,10 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 		return nil, err
 	}
 
+	if err = common.ValidateFindMetadata(params.Filter, params.Projection, params.Sort); err != nil {
+		return nil, err
+	}
+
 	// A hint naming an index that does not exist is an error, matching MongoDB.
 	if !isView {
 		if err = validateHintExists(connCtx, coll, params.Hint, "find"); err != nil {
