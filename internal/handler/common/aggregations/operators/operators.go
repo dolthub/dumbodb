@@ -326,18 +326,7 @@ var Operators = map[string]newOperatorFunc{
 // unsupportedOperators maps all unsupported yet operators.
 var unsupportedOperators = map[string]struct{}{
 	// sorted alphabetically
-	"$covariancePop":  {},
-	"$covarianceSamp": {},
-	"$denseRank":      {},
-	"$derivative":     {},
-	"$documentNumber": {},
-	"$expMovingAvg":   {},
-	"$function":       {},
-	"$integral":       {},
-	"$linearFill":     {},
-	"$locf":           {},
-	"$meta":           {},
-	"$rank":           {},
-	"$shift":          {},
+	"$function": {},
+	"$meta":     {},
 	// please keep sorted alphabetically
 }

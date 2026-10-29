@@ -181,7 +181,7 @@ func ValidateProjection(projection *types.Document) (*types.Document, bool, erro
 				var exErr *aggregations.ExpressionError
 
 				if errors.As(err, &opErr) || errors.As(err, &exErr) {
-					if err = processOperatorError(err); err != nil {
+					if err = processOperatorError(operators.AsNestedError(err)); err != nil {
 						return nil, false, err
 					}
 				}

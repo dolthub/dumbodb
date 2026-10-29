@@ -467,6 +467,9 @@ const (
 	// ErrStageGroupUnaryOperator indicates that $sum is a unary operator.
 	ErrStageGroupUnaryOperator = ErrorCode(40237) // Location40237
 
+	// ErrStageGroupUnknownOperator indicates a name that is not a $group accumulator.
+	ErrStageGroupUnknownOperator = ErrorCode(15952) // Location15952
+
 	// ErrStageGroupMultipleAccumulator indicates that group field must specify one accumulator.
 	ErrStageGroupMultipleAccumulator = ErrorCode(40238) // Location40238
 
@@ -650,6 +653,12 @@ type ProtoErr interface {
 	Info() *ErrInfo
 }
 
+// commandErrorConverter is an error from a package handlererrors cannot
+// import that knows its client-facing CommandError.
+type commandErrorConverter interface {
+	CommandError() error
+}
+
 // ProtocolError converts any error to wire protocol error.
 //
 // Nil panics (it never should be passed),
@@ -668,6 +677,13 @@ func ProtocolError(err error) ProtoErr {
 	var writeErr *WriteErrors
 	if errors.As(err, &writeErr) {
 		return writeErr
+	}
+
+	var convertible commandErrorConverter
+	if errors.As(err, &convertible) {
+		if commandErr, ok := convertible.CommandError().(*CommandError); ok {
+			return commandErr
+		}
 	}
 
 	if errors.Is(err, bson.ErrNestingTooDeep) {
