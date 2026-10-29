@@ -189,8 +189,9 @@ const (
 	// ErrUnsupportedOpQueryCommand indicates that given op query is not supported.
 	ErrUnsupportedOpQueryCommand = ErrorCode(352) // UnsupportedOpQueryCommand
 
-	// ErrIndexesWrongType indicates that indexes parameter has wrong type.
-	ErrIndexesWrongType = ErrorCode(10065) // Location10065
+	// ErrExpectedObject indicates a parameter that must be an object, such as
+	// createIndexes' indexes or $rand's argument.
+	ErrExpectedObject = ErrorCode(10065) // Location10065
 
 	ErrNotWritablePrimary = ErrorCode(10107) // NotWritablePrimary
 
@@ -374,7 +375,6 @@ const (
 	ErrConversionArity           = ErrorCode(50723)   // Location50723
 	ErrRandInValidator           = ErrorCode(3040500) // Location3040500
 	ErrRandArguments             = ErrorCode(3040501) // Location3040501
-	ErrExpectedObject            = ErrorCode(10065)   // Location10065
 	ErrMetaNotString             = ErrorCode(17307)   // Location17307
 	ErrMetaUnsupported           = ErrorCode(17308)   // Location17308
 	ErrMetadataUnavailable       = ErrorCode(40218)   // Location40218
