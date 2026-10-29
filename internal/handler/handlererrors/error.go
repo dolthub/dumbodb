@@ -370,6 +370,8 @@ const (
 	ErrSortArrayBadPattern       = ErrorCode(2942505) // Location2942505
 	ErrSortArrayBadOrder         = ErrorCode(2942506) // Location2942506
 	ErrSortArrayBadSortBy        = ErrorCode(2942507) // Location2942507
+	ErrBinarySizeType            = ErrorCode(51276)   // Location51276
+	ErrConversionArity           = ErrorCode(50723)   // Location50723
 	ErrDatePartTimeZoneNotString = ErrorCode(40533)   // Location40533
 	ErrDatePartUnknownOption     = ErrorCode(40535)   // Location40535
 	ErrDatePartArrayLen          = ErrorCode(40536)   // Location40536

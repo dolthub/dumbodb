@@ -471,6 +471,8 @@ func newConvert(args ...any) (Operator, error) {
 		toType = bsonTypeAlias(tv)
 	case int64:
 		toType = bsonTypeAlias(int32(tv))
+	case float64:
+		toType = bsonTypeAlias(int32(tv))
 	default:
 		return nil, newOperatorError(ErrArgsInvalidLen, "$convert",
 			fmt.Sprintf("$convert 'to' must be a string or numeric type code, got %T", toVal))
@@ -495,6 +497,8 @@ func bsonTypeAlias(code int32) string {
 		return "string"
 	case 8:
 		return "bool"
+	case 7:
+		return "objectId"
 	case 9:
 		return "date"
 	case 16:
@@ -558,6 +562,8 @@ func convertValue(v any, toType string) (any, error) {
 	case "date":
 		op, _ := newToDate(v)
 		return op.Process(nil)
+	case "objectId":
+		return convertToObjectID(v)
 	default:
 		return nil, newOperatorError(ErrArgsInvalidLen, "$convert",
 			fmt.Sprintf("$convert to type '%s' is not supported", toType))
