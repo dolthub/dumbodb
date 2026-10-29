@@ -60,6 +60,10 @@ func ValidateFindMetadata(filter, projection, sort *types.Document) error {
 			collectMetaNames(doc, used)
 		}
 	}
+	if used["sortKey"] && sort.Len() == 0 {
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
+			"$meta: \"sortKey\" requires the query to have a sort", "$meta")
+	}
 	return metadataUnavailableError(used, filter != nil && filterHasText(filter), false)
 }
 
