@@ -158,6 +158,7 @@ var wholeArgumentOperators = map[string]struct{}{
 	"$millisecond":    {},
 	"$minute":         {},
 	"$month":          {},
+	"$rand":           {},
 	"$regexFind":      {},
 	"$regexFindAll":   {},
 	"$regexMatch":     {},
@@ -262,6 +263,7 @@ var Operators = map[string]newOperatorFunc{
 	"$percentile":       newPercentileFunc("$percentile", false),
 	"$pow":              newPow,
 	"$radiansToDegrees": newRadiansToDegrees,
+	"$rand":             newRand,
 	"$range":            newRange,
 	"$reduce":           newReduce,
 	"$regexFind":        newRegex("$regexFind"),
@@ -335,9 +337,7 @@ var unsupportedOperators = map[string]struct{}{
 	"$linearFill":     {},
 	"$locf":           {},
 	"$meta":           {},
-	"$rand":           {},
 	"$rank":           {},
-	"$sampleRate":     {},
 	"$shift":          {},
 	// please keep sorted alphabetically
 }

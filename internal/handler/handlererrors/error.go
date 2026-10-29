@@ -372,6 +372,9 @@ const (
 	ErrSortArrayBadSortBy        = ErrorCode(2942507) // Location2942507
 	ErrBinarySizeType            = ErrorCode(51276)   // Location51276
 	ErrConversionArity           = ErrorCode(50723)   // Location50723
+	ErrRandInValidator           = ErrorCode(3040500) // Location3040500
+	ErrRandArguments             = ErrorCode(3040501) // Location3040501
+	ErrExpectedObject            = ErrorCode(10065)   // Location10065
 	ErrDatePartTimeZoneNotString = ErrorCode(40533)   // Location40533
 	ErrDatePartUnknownOption     = ErrorCode(40535)   // Location40535
 	ErrDatePartArrayLen          = ErrorCode(40536)   // Location40536

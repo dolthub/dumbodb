@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"math/rand/v2"
 	"slices"
 	"strings"
 	"time"
@@ -30,6 +31,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 
 	"github.com/dolthub/dumbodb/internal/collation"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/commonpath"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
@@ -388,6 +390,9 @@ func filterOperator(doc *types.Document, operator string, filterValue any, cmp *
 	case "$comment":
 		return true, nil
 
+	case "$sampleRate":
+		return filterSampleRate(filterValue)
+
 	case "$expr":
 		return filterExprOperator(doc, filterValue)
 
@@ -413,6 +418,30 @@ func filterOperator(doc *types.Document, operator string, filterValue any, cmp *
 
 		return false, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue, msg, "$operator")
 	}
+}
+
+// filterSampleRate follows parseSampleRate: a number in [0, 1] is the
+// probability that a document matches.
+func filterSampleRate(rate any) (bool, error) {
+	var x float64
+	switch rate := rate.(type) {
+	case int32:
+		x = float64(rate)
+	case int64:
+		x = float64(rate)
+	case float64:
+		x = rate
+	case types.Decimal128:
+		x, _ = aggregations.DecimalToAPD(rate).Float64()
+	default:
+		return false, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
+			"argument to $sampleRate must be a numeric type", "$sampleRate")
+	}
+	if !(x >= 0 && x <= 1) {
+		return false, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
+			"numeric argument to $sampleRate must be in [0, 1]", "$sampleRate")
+	}
+	return rand.Float64() < x, nil
 }
 
 // filterExprOperator uses $expr operator to allow usage of aggregation expression.

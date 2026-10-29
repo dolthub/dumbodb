@@ -77,6 +77,9 @@ func (h *Handler) MsgCollMod(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 		params.SetValidator = true
 		switch v := validatorVal.(type) {
 		case *types.Document:
+			if err := common.ValidateValidatorExpressions(v); err != nil {
+				return nil, err
+			}
 			params.Validator = v
 		case types.NullType:
 			params.Validator = nil
