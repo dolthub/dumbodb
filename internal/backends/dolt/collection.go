@@ -180,6 +180,16 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 			}
 		}
 
+		if !fieldSort {
+			iter, ok, err := streamIndexRanges(ctx, state, m, idxInfos, idxMaps, params)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				return &backends.QueryResult{Iter: iter}, nil
+			}
+		}
+
 		plan, err := planIndexLookupIn(ctx, m, idxInfos, idxMaps, params.Filter, params.Hint, params.Collation, fieldSort)
 		if err != nil {
 			return nil, err
@@ -607,6 +617,15 @@ func (c *collection) planIndexLookup(ctx context.Context, state *dbState, primar
 
 // planIndexLookupIn is planIndexLookup over already resolved indexes.
 func planIndexLookupIn(ctx context.Context, primary prolly.Map, idxInfos []backends.IndexInfo, idxMaps []prolly.Map, filter *types.Document, hint any, queryCollation *types.Document, keepValues bool) (*indexLookupPlan, error) {
+	plan, err := readIndexLookup(ctx, primary, idxInfos, idxMaps, filter, hint, queryCollation, keepValues)
+	if plan != nil {
+		countKeysExamined(plan.keys)
+	}
+	return plan, err
+}
+
+// readIndexLookup is planIndexLookupIn without counting the keys read.
+func readIndexLookup(ctx context.Context, primary prolly.Map, idxInfos []backends.IndexInfo, idxMaps []prolly.Map, filter *types.Document, hint any, queryCollation *types.Document, keepValues bool) (*indexLookupPlan, error) {
 	if filter == nil || filter.Len() == 0 || len(idxInfos) == 0 {
 		return nil, nil
 	}
@@ -621,65 +640,92 @@ func planIndexLookupIn(ctx context.Context, primary prolly.Map, idxInfos []backe
 	if !ok {
 		return nil, nil
 	}
-	chosenMapIdx, startKey, stopKey, pointRanges := choice.mapIdx, choice.startKey, choice.stopKey, choice.pointRanges
+	if hint != nil {
+		return scanIndexChoice(ctx, idxInfos, idxMaps, choice, keepValues, -1)
+	}
+	var plan *indexLookupPlan
+	within, err := indexRangesWithinHalf(primary, func(n int) (bool, error) {
+		var err error
+		plan, err = scanIndexChoice(ctx, idxInfos, idxMaps, choice, keepValues, n)
+		return plan != nil, err
+	}, func() (uint64, error) {
+		return indexRangeEntries(ctx, idxMaps, choice)
+	})
+	if err != nil || !within || plan != nil {
+		return plan, err
+	}
+	return scanIndexChoice(ctx, idxInfos, idxMaps, choice, keepValues, -1)
+}
 
-	idxMap := idxMaps[chosenMapIdx]
+// narrowRangeEntries is how many entries of a range are read before counting
+// it: a range that ends within them costs less to read than to count.
+const narrowRangeEntries = 128
 
-	// Cap the index range scan at half the collection. The point-fetch cost
-	// per matching id (one prolly tree traversal) dominates the scan path's
-	// per-doc cost (sequential leaf walk), so once a filter would route more
-	// than ~50% of the collection through the index path it is strictly
-	// slower than a full scan. m.Count is O(1) (prolly tree metadata), so
-	// the gate is essentially free for the cases where the index does win.
-	primaryCount, err := primary.Count()
+// indexRangesWithinHalf reports whether some index ranges hold at most half
+// of primary's documents; past that, one point lookup per entry loses to a
+// sequential scan. readsAtMost(n) reads up to n entries and reports whether
+// the ranges end within them, so narrow ranges are never counted;
+// countEntries counts them from the index tree.
+func indexRangesWithinHalf(primary prolly.Map, readsAtMost func(n int) (bool, error), countEntries func() (uint64, error)) (bool, error) {
+	docs, err := primary.Count()
 	if err != nil {
-		return nil, fmt.Errorf("index lookup counting primary: %w", err)
+		return false, fmt.Errorf("index lookup counting primary: %w", err)
 	}
-	maxResults := -1
-	if primaryCount > 0 {
-		maxResults = int(primaryCount) / 2
+	half := docs / 2
+	probe := min(narrowRangeEntries, half)
+	narrow, err := readsAtMost(probe)
+	if err != nil || narrow {
+		return narrow, err
 	}
-	scanRange := idxpkg.RangeEntriesCapped
-	if !keepValues {
-		scanRange = func(ctx context.Context, m prolly.Map, start, stop []byte, max int) ([][]byte, [][]byte, bool, error) {
-			ids, exceeded, err := idxpkg.RangeLookupCapped(ctx, m, start, stop, max)
-			return ids, nil, exceeded, err
-		}
+	if probe == half {
+		return false, nil
 	}
-	var primaryIDBytesList, valuesList [][]byte
-	exceeded := false
-	if pointRanges != nil {
-		for _, r := range pointRanges {
-			remaining := -1
-			if maxResults >= 0 {
-				remaining = maxResults - len(primaryIDBytesList)
-			}
-			ids, values, rangeExceeded, err := scanRange(ctx, idxMap, r[0], r[1], remaining)
+	entries, err := countEntries()
+	return entries <= uint64(half), err
+}
+
+// indexRangeEntries is the number of index entries the choices' ranges hold.
+func indexRangeEntries(ctx context.Context, idxMaps []prolly.Map, choices ...indexRangeChoice) (uint64, error) {
+	var total uint64
+	for _, choice := range choices {
+		for _, r := range choice.ranges() {
+			n, err := idxpkg.RangeCardinality(ctx, idxMaps[choice.mapIdx], r[0], r[1])
 			if err != nil {
-				return nil, err
+				return 0, fmt.Errorf("index lookup counting range: %w", err)
 			}
-			primaryIDBytesList = append(primaryIDBytesList, ids...)
-			valuesList = append(valuesList, values...)
-			if rangeExceeded {
-				exceeded = true
-				break
-			}
+			total += n
 		}
-	} else {
-		primaryIDBytesList, valuesList, exceeded, err = scanRange(ctx, idxMap, startKey, stopKey, maxResults)
-		if err != nil {
+	}
+	return total, nil
+}
+
+// scanIndexChoice reads choice's ranges into a plan of their matched ids, or
+// returns nil when they hold more than maxEntries entries; -1 reads them all.
+// The caller counts the keys of the plan it uses.
+func scanIndexChoice(ctx context.Context, idxInfos []backends.IndexInfo, idxMaps []prolly.Map, choice indexRangeChoice, keepValues bool, maxEntries int) (*indexLookupPlan, error) {
+	idxMap := idxMaps[choice.mapIdx]
+	var primaryIDBytesList, valuesList [][]byte
+	for _, r := range choice.ranges() {
+		remaining := -1
+		if maxEntries >= 0 {
+			remaining = maxEntries - len(primaryIDBytesList)
+		}
+		var ids, values [][]byte
+		var exceeded bool
+		var err error
+		if keepValues {
+			ids, values, exceeded, err = idxpkg.RangeEntriesCapped(ctx, idxMap, r[0], r[1], remaining)
+		} else {
+			ids, exceeded, err = idxpkg.RangeLookupCapped(ctx, idxMap, r[0], r[1], remaining)
+		}
+		if err != nil || exceeded {
 			return nil, err
 		}
+		primaryIDBytesList = append(primaryIDBytesList, ids...)
+		valuesList = append(valuesList, values...)
 	}
-	if exceeded {
-		// Caller will fall through to the sequential primary scan, which is
-		// faster than per-id point lookups for low-selectivity ranges.
-		countKeysExamined(maxResults + 1)
-		return nil, nil
-	}
-	countKeysExamined(len(primaryIDBytesList))
 
-	plan := &indexLookupPlan{info: idxInfos[chosenMapIdx], index: idxInfos[chosenMapIdx].Name, keys: len(primaryIDBytesList)}
+	plan := &indexLookupPlan{info: idxInfos[choice.mapIdx], index: idxInfos[choice.mapIdx].Name, keys: len(primaryIDBytesList)}
 	seenIDs := make(map[string]struct{}, len(primaryIDBytesList))
 	for i, idBytes := range primaryIDBytesList {
 		if _, dup := seenIDs[string(idBytes)]; dup {
@@ -701,6 +747,14 @@ type indexRangeChoice struct {
 	startKey    []byte
 	stopKey     []byte
 	pointRanges [][2][]byte
+}
+
+// ranges returns choice's point ranges, or its single range.
+func (choice indexRangeChoice) ranges() [][2][]byte {
+	if choice.pointRanges != nil {
+		return choice.pointRanges
+	}
+	return [][2][]byte{{choice.startKey, choice.stopKey}}
 }
 
 // chooseIndexRange picks the index serving filter's first indexable field and
@@ -842,21 +896,45 @@ func chooseIndexRange(idxInfos []backends.IndexInfo, filter *types.Document, hin
 }
 
 // planOrUnion plans each $or branch on its own index and unions the matched
-// ids, or returns nil when any branch has no index plan or the union exceeds
-// half the collection.
+// ids, or returns nil when any branch has no index plan or the branches'
+// ranges together hold more than half the collection.
 func planOrUnion(ctx context.Context, primary prolly.Map, idxInfos []backends.IndexInfo, idxMaps []prolly.Map, branches any, queryCollation *types.Document) (*indexLookupPlan, error) {
-	arr, ok := branches.(*types.Array)
-	if !ok || arr.Len() == 0 {
+	flat, ok := flattenOrBranches(branches)
+	if !ok {
 		return nil, nil
 	}
-	union := &indexLookupPlan{union: true}
-	seen := make(map[string]struct{})
-	for i := 0; i < arr.Len(); i++ {
-		branch, ok := must.NotFail(arr.Get(i)).(*types.Document)
-		if !ok {
+	choices := make([]indexRangeChoice, len(flat))
+	for i, branch := range flat {
+		if choices[i], ok = chooseIndexRange(idxInfos, branch, nil, queryCollation); !ok {
 			return nil, nil
 		}
-		plan, err := planIndexLookupIn(ctx, primary, idxInfos, idxMaps, branch, nil, queryCollation, false)
+	}
+	var union *indexLookupPlan
+	within, err := indexRangesWithinHalf(primary, func(n int) (bool, error) {
+		var err error
+		union, err = unionIndexChoices(ctx, idxInfos, idxMaps, choices, n)
+		return union != nil, err
+	}, func() (uint64, error) {
+		return indexRangeEntries(ctx, idxMaps, choices...)
+	})
+	if err != nil || !within || union != nil {
+		return union, err
+	}
+	return unionIndexChoices(ctx, idxInfos, idxMaps, choices, -1)
+}
+
+// unionIndexChoices reads every choice's ranges into one plan of their
+// distinct ids, or returns nil when they hold more than maxEntries entries;
+// -1 reads them all.
+func unionIndexChoices(ctx context.Context, idxInfos []backends.IndexInfo, idxMaps []prolly.Map, choices []indexRangeChoice, maxEntries int) (*indexLookupPlan, error) {
+	union := &indexLookupPlan{union: true}
+	seen := make(map[string]struct{})
+	for _, choice := range choices {
+		remaining := -1
+		if maxEntries >= 0 {
+			remaining = maxEntries - union.keys
+		}
+		plan, err := scanIndexChoice(ctx, idxInfos, idxMaps, choice, false, remaining)
 		if err != nil || plan == nil {
 			return nil, err
 		}
@@ -869,14 +947,33 @@ func planOrUnion(ctx context.Context, primary prolly.Map, idxInfos []backends.In
 			union.ids = append(union.ids, id)
 		}
 	}
-	primaryCount, err := primary.Count()
-	if err != nil {
-		return nil, fmt.Errorf("index lookup counting primary: %w", err)
-	}
-	if len(union.ids) > int(primaryCount)/2 {
-		return nil, nil
-	}
 	return union, nil
+}
+
+// flattenOrBranches returns the documents of an $or array, with the branches
+// of any branch that is itself a lone $or in its place.
+func flattenOrBranches(branches any) ([]*types.Document, bool) {
+	arr, ok := branches.(*types.Array)
+	if !ok || arr.Len() == 0 {
+		return nil, false
+	}
+	var flat []*types.Document
+	for i := 0; i < arr.Len(); i++ {
+		branch, ok := must.NotFail(arr.Get(i)).(*types.Document)
+		if !ok {
+			return nil, false
+		}
+		if branch.Len() == 1 && branch.Keys()[0] == "$or" {
+			nested, ok := flattenOrBranches(must.NotFail(branch.Get("$or")))
+			if !ok {
+				return nil, false
+			}
+			flat = append(flat, nested...)
+			continue
+		}
+		flat = append(flat, branch)
+	}
+	return flat, true
 }
 
 // fetch reads the plan's documents from the primary map, keeping only fields
