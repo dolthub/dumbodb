@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // compOp is the type of comparison to perform.
@@ -156,6 +157,11 @@ func compareArgs(left, right any, doc *types.Document) (types.CompareResult, err
 // evalArgValueOrMissing is evalArgValue, also reporting whether arg is a
 // field path the document lacks, which evaluates to null.
 func evalArgValueOrMissing(arg any, doc *types.Document) (any, bool, error) {
+	if path, ok := arg.(string); ok && strings.HasPrefix(path, "$$") {
+		if v, missing, ok := variablePathOrMissing(path, doc); ok {
+			return v, missing, nil
+		}
+	}
 	if path, ok := arg.(string); ok && strings.HasPrefix(path, "$") && !strings.HasPrefix(path, "$$") {
 		if expr, err := fieldExpression(path); err == nil {
 			v, err := expr.Evaluate(doc)
@@ -167,4 +173,33 @@ func evalArgValueOrMissing(arg any, doc *types.Document) (any, bool, error) {
 	}
 	v, err := evalArgValue(arg, doc)
 	return v, false, err
+}
+
+// variablePathOrMissing evaluates $$name.path when name is bound, as $let,
+// $map and $filter bind variables, or is ROOT or CURRENT; ok is false
+// otherwise. The path follows field path rules from the variable's value.
+func variablePathOrMissing(path string, doc *types.Document) (value any, missing, ok bool) {
+	name, sub, hasSub := strings.Cut(strings.TrimPrefix(path, "$$"), ".")
+	if !hasSub || doc == nil {
+		return nil, false, false
+	}
+
+	var base any = doc
+	if name != "ROOT" && name != "CURRENT" {
+		v, err := doc.Get("$$" + name)
+		if err != nil {
+			return nil, false, false
+		}
+		base = v
+	}
+
+	expr, err := fieldExpression("$v." + sub)
+	if err != nil {
+		return nil, false, false
+	}
+	v, err := expr.Evaluate(must.NotFail(types.NewDocument("v", base)))
+	if err != nil {
+		return types.Null, true, true
+	}
+	return v, false, true
 }
