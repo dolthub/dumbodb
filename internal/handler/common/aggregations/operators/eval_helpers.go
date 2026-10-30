@@ -92,6 +92,16 @@ func evalBranch(arg any, doc *types.Document) (any, error) {
 	return v, nil
 }
 
+// copyForVariables copies doc so an operator can bind variables in it.
+// Expressions are validated against no document at all (nil), which binds
+// variables like a document with no fields.
+func copyForVariables(doc *types.Document) *types.Document {
+	if doc == nil {
+		return types.MakeDocument(0)
+	}
+	return doc.DeepCopy()
+}
+
 // evalArgValue evaluates an operand. A missing field, or an operator that
 // produces the missing value, reads as null, as MongoDB's operators treat
 // missing operands as nullish; $$REMOVE alone is reported as ErrMissingValue.
@@ -149,7 +159,7 @@ func evalArgValue(arg any, doc *types.Document) (any, error) {
 			var base any
 			switch varName {
 			case "ROOT", "CURRENT":
-				base = doc.DeepCopy()
+				base = copyForVariables(doc)
 			case "NOW":
 				base = time.Now().UTC()
 			case "REMOVE":

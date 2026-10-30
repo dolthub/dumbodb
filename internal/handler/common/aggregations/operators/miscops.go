@@ -83,7 +83,7 @@ func newLet(args ...any) (Operator, error) {
 
 func (op *letOp) Process(doc *types.Document) (any, error) {
 	// Build an augmented document that includes the evaluated variables as $$name.
-	augmented := doc.DeepCopy()
+	augmented := copyForVariables(doc)
 
 	for _, varName := range op.varsDoc.Keys() {
 		varExpr := must.NotFail(op.varsDoc.Get(varName))

@@ -699,7 +699,7 @@ func (op *filterOp) Process(doc *types.Document) (any, error) {
 	var result []any
 
 	for _, item := range items {
-		iterDoc := doc.DeepCopy()
+		iterDoc := copyForVariables(doc)
 		if err != nil {
 			return nil, err
 		}
@@ -777,7 +777,7 @@ func (op *mapOp) Process(doc *types.Document) (any, error) {
 	result := make([]any, 0, len(items))
 
 	for _, item := range items {
-		iterDoc := doc.DeepCopy()
+		iterDoc := copyForVariables(doc)
 		if err != nil {
 			return nil, err
 		}
@@ -854,7 +854,7 @@ func (op *reduceOp) Process(doc *types.Document) (any, error) {
 	}
 
 	for _, item := range items {
-		iterDoc := doc.DeepCopy()
+		iterDoc := copyForVariables(doc)
 		if err != nil {
 			return nil, err
 		}
