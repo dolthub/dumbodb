@@ -109,10 +109,45 @@ func (op *replaceOp) Process(doc *types.Document) (any, error) {
 	}
 
 	input, find, replacement := values[0].(string), values[1].(string), values[2].(string)
+	matches := 1
+	switch {
+	case op.opName == "$replaceOne" && !strings.Contains(input, find):
+		matches = 0
+	case op.opName == "$replaceAll" && find == "":
+		matches = len(input) + 1
+	case op.opName == "$replaceAll":
+		matches = strings.Count(input, find)
+	}
+	if err := checkStringResultLength(len(input) + matches*(len(replacement)-len(find))); err != nil {
+		return nil, err
+	}
+
 	if op.opName == "$replaceOne" {
 		return strings.Replace(input, find, replacement, 1), nil
 	}
 	return replaceAllBytes(input, find, replacement), nil
+}
+
+// Limits on a string an expression builds, as mongod applies them:
+// BufBuilder cannot grow past BufferMaxSize, and a string value must be
+// smaller than BSONObjMaxUserSize.
+const (
+	bufferMaxSize      = 125 * 1024 * 1024
+	bsonObjMaxUserSize = 16 * 1024 * 1024
+)
+
+// checkStringResultLength returns mongod's error for a string result of n
+// bytes, checked before the string is built.
+func checkStringResultLength(n int) error {
+	switch {
+	case n > bufferMaxSize:
+		return handlererrors.NewCommandErrorMsg(handlererrors.ErrBufBuilderTooLarge,
+			fmt.Sprintf("BufBuilder attempted to grow() to %d bytes, past the %dMB limit.", n, bufferMaxSize/(1024*1024)))
+	case n >= bsonObjMaxUserSize:
+		return handlererrors.NewCommandErrorMsg(handlererrors.ErrStringTooLarge,
+			fmt.Sprintf("RCString too large. Requires size=%d < limit=%d", n, bsonObjMaxUserSize))
+	}
+	return nil
 }
 
 // replaceAllBytes is strings.ReplaceAll, except that an empty find inserts

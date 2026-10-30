@@ -18,6 +18,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
+	"unicode/utf8"
 
 	"github.com/dlclark/regexp2"
 
@@ -43,12 +45,15 @@ type regexOp struct {
 
 // regexState is ExpressionRegex::RegexExecutionState.
 type regexState struct {
-	input     []rune
-	hasInput  bool
-	pattern   *string
-	options   *string
-	re        *regexp2.Regexp
-	startRune int
+	input    []rune
+	hasInput bool
+	// invalidInput is set when input is not valid UTF-8, which PCRE2 in
+	// UTF mode refuses to match.
+	invalidInput bool
+	pattern      *string
+	options      *string
+	re           *regexp2.Regexp
+	startRune    int
 }
 
 func (s *regexState) nullish() bool {
@@ -138,7 +143,7 @@ func (op *regexOp) buildState(doc *types.Document) (*regexState, error) {
 
 	switch input := input.(type) {
 	case string:
-		state.input, state.hasInput = []rune(input), true
+		state.input, state.hasInput, state.invalidInput = []rune(input), true, !utf8.ValidString(input)
 	default:
 		if !isNullish(input) {
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrRegexInputType,
@@ -225,6 +230,9 @@ func (op *regexOp) compile(state *regexState) error {
 	}
 
 	re, err := pcre.Compile(*state.pattern, opts)
+	if err == nil && !utf8.ValidString(*state.pattern) {
+		err = errors.New("UTF-8 error: illegal byte")
+	}
 	if err != nil {
 		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrRegexInvalid,
 			fmt.Sprintf("Invalid Regex in %s: %s", op.opName, err), op.opName)
@@ -235,14 +243,50 @@ func (op *regexOp) compile(state *regexState) error {
 
 // execute is ExpressionRegex::execute.
 func (op *regexOp) execute(state *regexState) (*regexp2.Match, error) {
+	if state.invalidInput {
+		return nil, op.executionError()
+	}
 	m, err := state.re.FindRunesMatchStartingAt(state.input, state.startRune)
 	if err != nil {
-		// regexp2 fails only on its match timeout, MongoDB's PCRE2 match
-		// limit (-47); its message would include the whole input.
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrRegexExecution,
-			fmt.Sprintf("Error occurred while executing the regular expression in %s. Result code: -47", op.opName), op.opName)
+		return nil, op.executionError()
 	}
 	return m, nil
+}
+
+// executionError is MongoDB's error for a match that hits PCRE2's match
+// limit (-47); regexp2 fails only on its match timeout, and its own message
+// would repeat the whole input.
+func (op *regexOp) executionError() error {
+	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrRegexExecution,
+		fmt.Sprintf("Error occurred while executing the regular expression in %s. Result code: -47", op.opName), op.opName)
+}
+
+// regexFindAllMaxOutput is mongo::BufferMaxSize, the limit $regexFindAll
+// puts on the approximate size of its output (its message says 64MB).
+// regexFindAllTimeout bounds one call; mongod has no such limit, but its
+// output limit is reached well within it.
+const (
+	regexFindAllMaxOutput = bufferMaxSize
+	regexFindAllTimeout   = 5 * time.Second
+)
+
+// approximateMatchSize estimates the memory a match document takes, as
+// Value::getApproximateSize does: a fixed overhead plus its strings. The
+// overhead puts the limit where mongod 8.0.28 reaches it, between 300,000
+// and 450,000 one-character matches.
+func approximateMatchSize(match *types.Document) int {
+	size := 350
+	if s, ok := must.NotFail(match.Get("match")).(string); ok {
+		size += len(s)
+	}
+	captures := must.NotFail(match.Get("captures")).(*types.Array)
+	for i := 0; i < captures.Len(); i++ {
+		size += 16
+		if s, ok := must.NotFail(captures.Get(i)).(string); ok {
+			size += len(s)
+		}
+	}
+	return size
 }
 
 // nextMatch is ExpressionRegex::nextMatch; it returns nil when nothing
@@ -299,6 +343,10 @@ func (op *regexOp) Process(doc *types.Document) (any, error) {
 	if state.nullish() {
 		return output, nil
 	}
+	// Each match is bounded by pcre.MatchTimeout and the whole call by
+	// regexFindAllTimeout, so many matches cannot add up without limit.
+	deadline := time.Now().Add(regexFindAllTimeout)
+	var outputSize int
 	for {
 		match, matched, err := op.nextMatch(state)
 		if err != nil {
@@ -307,7 +355,14 @@ func (op *regexOp) Process(doc *types.Document) (any, error) {
 		if match == nil {
 			break
 		}
+		if outputSize += approximateMatchSize(match); outputSize > regexFindAllMaxOutput {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrRegexFindAllTooLarge,
+				op.opName+": the size of buffer to store output exceeded the 64MB limit", op.opName)
+		}
 		output.Append(match)
+		if time.Now().After(deadline) {
+			return nil, op.executionError()
+		}
 
 		// An empty match moves on one code point; otherwise matches do not
 		// overlap.

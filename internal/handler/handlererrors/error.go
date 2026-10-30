@@ -360,6 +360,9 @@ const (
 	ErrRegexOptionsNull          = ErrorCode(51110)   // Location51110
 	ErrRegexInvalid              = ErrorCode(51111)   // Location51111
 	ErrRegexExecution            = ErrorCode(51156)   // Location51156
+	ErrRegexFindAllTooLarge      = ErrorCode(51151)   // Location51151
+	ErrStringTooLarge            = ErrorCode(16493)   // Location16493
+	ErrBufBuilderTooLarge        = ErrorCode(13548)   // Location13548
 	ErrRegexNoInput              = ErrorCode(31022)   // Location31022
 	ErrRegexNoRegex              = ErrorCode(31023)   // Location31023
 	ErrRegexUnknownField         = ErrorCode(31024)   // Location31024
