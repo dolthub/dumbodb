@@ -17,10 +17,11 @@ package pcre
 import (
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/dolthub/dumbodb/internal/util/lineartest"
 )
 
 func TestTranslateMatches(t *testing.T) {
@@ -111,21 +112,19 @@ func TestTranslateErrors(t *testing.T) {
 func TestTranslateIsLinear(t *testing.T) {
 	t.Parallel()
 
-	for name, pattern := range map[string]string{
-		"NonCapturing": strings.Repeat("(?:a)", 20000),
-		"Braces":       strings.Repeat("{", 20000),
-		"Possessive":   strings.Repeat("a++", 20000),
-		"HexBraces":    strings.Repeat(`\x{41}`, 20000),
-		"NamedGroups":  strings.Repeat("(?<n>a)", 1) + strings.Repeat(`\k<n>`, 20000),
-		"Unclosed":     strings.Repeat("(?<", 20000),
-		"POSIX":        "[" + strings.Repeat("[:", 20000) + "]",
+	for name, pattern := range map[string]func(n int) string{
+		"NonCapturing": func(n int) string { return strings.Repeat("(?:a)", n) },
+		"Braces":       func(n int) string { return strings.Repeat("{", n) },
+		"Possessive":   func(n int) string { return strings.Repeat("a++", n) },
+		"HexBraces":    func(n int) string { return strings.Repeat(`\x{41}`, n) },
+		"NamedGroups":  func(n int) string { return "(?<n>a)" + strings.Repeat(`\k<n>`, n) },
+		"Unclosed":     func(n int) string { return strings.Repeat("(?<", n) },
+		"POSIX":        func(n int) string { return "[" + strings.Repeat("[:", n) + "]" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			start := time.Now()
-			_, _ = Translate(pattern, false)
-			assert.Less(t, time.Since(start), time.Second, "translation should be linear in the pattern")
+			lineartest.Assert(t, 1000, func(n int) { _, _ = Translate(pattern(n), false) })
 		})
 	}
 }

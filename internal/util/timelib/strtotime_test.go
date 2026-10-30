@@ -18,10 +18,11 @@ import (
 	"math/rand"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/dolthub/dumbodb/internal/util/lineartest"
 )
 
 // allRules tries every rule at every position, as the scanner did before
@@ -67,19 +68,17 @@ func TestFirstBytePrefilterIsExact(t *testing.T) {
 func TestStrToTimeIsLinear(t *testing.T) {
 	t.Parallel()
 
-	for name, s := range map[string]string{
-		"Dashes":  strings.Repeat("-", 200000),
-		"Pluses":  strings.Repeat("+", 200000),
-		"Digits":  strings.Repeat("1", 200000),
-		"Mondays": strings.Repeat("monday ", 30000),
-		"Spaces":  "2021-01-01" + strings.Repeat(" ", 200000) + "10:00",
+	for name, input := range map[string]func(n int) string{
+		"Dashes":  func(n int) string { return strings.Repeat("-", n) },
+		"Pluses":  func(n int) string { return strings.Repeat("+", n) },
+		"Digits":  func(n int) string { return strings.Repeat("1", n) },
+		"Mondays": func(n int) string { return strings.Repeat("monday ", n) },
+		"Spaces":  func(n int) string { return "2021-01-01" + strings.Repeat(" ", n) + "10:00" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			start := time.Now()
-			_, _ = StrToTime(s)
-			assert.Less(t, time.Since(start), 2*time.Second)
+			lineartest.Assert(t, 1000, func(n int) { _, _ = StrToTime(input(n)) })
 		})
 	}
 }
