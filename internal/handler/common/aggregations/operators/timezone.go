@@ -20,11 +20,11 @@ import (
 	"strings"
 	"sync"
 	"time"
-	_ "time/tzdata" // MongoDB embeds its time zone database; so does DumboDB.
 
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/timelib/tzdb"
 )
 
 // mongoTimeZone is a time zone as MongoDB's TimeZoneDatabase resolves an
@@ -53,8 +53,8 @@ func lookupMongoTimeZone(name string) (mongoTimeZone, bool) {
 	switch {
 	case name == "UTC":
 	case name != "" && name != "Local" && !strings.HasPrefix(name, "+") && !strings.HasPrefix(name, "-"):
-		loc, err := time.LoadLocation(name)
-		if err != nil {
+		loc, ok := tzdb.Load(name)
+		if !ok {
 			return mongoTimeZone{}, false
 		}
 		tz = mongoTimeZone{loc: loc, epochIsDST: time.Unix(0, 0).In(loc).IsDST()}

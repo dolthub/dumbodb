@@ -35,8 +35,11 @@ A copy of the Apache License, Version 2.0 is included in the LICENSE file.
 timelib (https://github.com/derickr/timelib), version 2022.10 as vendored by
 MongoDB, is ported in internal/util/timelib, and its time zone resolution and
 calendar functions are ported in internal/handler/common/aggregations/operators
-(timezone.go, datemath.go), so that date expressions match MongoDB. timelib is
-distributed under the MIT License, reproduced in internal/util/timelib/LICENSE:
+(timezone.go, datemath.go), so that date expressions match MongoDB. Its
+built-in time zone database (timezonedb.h, version 2024.1, derived from the
+public domain IANA tz database) is converted into internal/util/timelib/tzdb.
+timelib is distributed under the MIT License, reproduced in
+internal/util/timelib/LICENSE:
 
   Copyright (c) 2015-2021 Derick Rethans
   Copyright (c) 2017-2019,2021 MongoDB, Inc.
