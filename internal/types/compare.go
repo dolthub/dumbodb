@@ -180,12 +180,9 @@ func compareScalars(v1, v2 any) CompareResult {
 		return compareTypeOrder(v1, v2)
 
 	case Regex:
-		v, ok := v2.(Regex)
-		if ok {
-			v1 := must.NotFail(v1.Compile())
-			v := must.NotFail(v.Compile())
-
-			return compareOrdered(v1.String(), v.String())
+		if v, ok := v2.(Regex); ok {
+			// MongoDB compares the raw bytes: pattern, NUL, then options.
+			return compareOrdered(v1.Pattern+"\x00"+v1.Options, v.Pattern+"\x00"+v.Options)
 		}
 
 		return compareTypeOrder(v1, v2)
