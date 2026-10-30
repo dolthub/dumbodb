@@ -178,8 +178,12 @@ func CheckConstantSubexpressions(expr any) error {
 		}
 	case *types.Document:
 		operator := IsOperator(v)
-		if operator && v.Command() == "$literal" {
-			return nil
+		if operator {
+			// Unknown names are not expressions here, such as $sortArray's
+			// sortBy {"$a": 1}; inside a real expression parsing rejects them.
+			if _, known := Operators[v.Command()]; !known || v.Command() == "$literal" {
+				return nil
+			}
 		}
 		for _, value := range v.Values() {
 			if err := CheckConstantSubexpressions(value); err != nil {
