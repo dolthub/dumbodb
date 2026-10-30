@@ -25,7 +25,7 @@ import (
 // Patterns Go's engine rejects as Perl syntax (lookaround) fall back to a
 // backtracking engine. Before the fix it had no time limit, so a pattern with
 // catastrophic backtracking pinned a CPU for exponential time per document.
-func TestRegexFallbackMatchIsTimeBounded(t *testing.T) {
+func TestRegexMatchIsTimeBounded(t *testing.T) {
 	m, err := Regex{Pattern: "^(?=(a+)+$)"}.Compile()
 	require.NoError(t, err)
 
@@ -37,11 +37,11 @@ func TestRegexFallbackMatchIsTimeBounded(t *testing.T) {
 	case matched := <-done:
 		require.False(t, matched)
 	case <-time.After(10 * time.Second):
-		t.Fatal("fallback regex match did not finish within 10s")
+		t.Fatal("regex match did not finish within 10s")
 	}
 }
 
-func TestRegexFallbackStillMatches(t *testing.T) {
+func TestRegexLookaheadMatches(t *testing.T) {
 	m, err := Regex{Pattern: "^(?=.*foo)bar"}.Compile()
 	require.NoError(t, err)
 	require.True(t, m.MatchString("barfoo"))
