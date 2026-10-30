@@ -774,7 +774,6 @@ func ValidateExpression(value *types.Document) error {
 // - ErrInvalidPipelineOperator when the operator does not exist.
 // - ErrFailedToParse when operator has invalid variable expression.
 // - ErrGroupInvalidFieldPath when operator has empty path expression.
-
 func processOperatorError(err error) error {
 	if err == nil {
 		return nil
