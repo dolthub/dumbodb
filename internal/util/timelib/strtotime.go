@@ -110,18 +110,32 @@ var (
 	reRelNumber = `[+-]*[ \t]*[0-9]{1,13}`
 )
 
+// rulesByFirstByte lists, in rule order, the rules whose matches can start
+// with each byte; a rule that cannot is not tried there.
+var rulesByFirstByte = func() (byFirst [256][]int) {
+	for i, r := range rules {
+		for b := range byFirst {
+			if r.first[b] {
+				byFirst[b] = append(byFirst[b], i)
+			}
+		}
+	}
+	return byFirst
+}()
+
 // rule is one re2c rule: a pattern and its action. An action returns false
 // when it stops early on an error.
 type rule struct {
 	re     *regexp.Regexp
 	action func(s *scanner, tok *cursor)
+	first  byteSet
 }
 
 var rules = func() []rule {
 	def := func(pattern string, action func(s *scanner, tok *cursor)) rule {
 		re := regexp.MustCompile(`^(?:` + pattern + `)`)
 		re.Longest()
-		return rule{re: re, action: action}
+		return rule{re: re, action: action, first: firstBytes(pattern)}
 	}
 	skip := func(*scanner, *cursor) {}
 
@@ -218,6 +232,12 @@ type scanner struct {
 // StrToTime parses s as timelib_strtotime does; ok is false if timelib
 // reports any error or warning.
 func StrToTime(s string) (t *Time, ok bool) {
+	return strToTime(s, func(c byte) []int { return rulesByFirstByte[c] })
+}
+
+// strToTime is StrToTime trying, at each position, the rules candidates
+// returns for the byte there.
+func strToTime(s string, candidates func(byte) []int) (t *Time, ok bool) {
 	b := []byte(s)
 	start, end := 0, len(b)-1
 	if len(b) > 0 {
@@ -236,10 +256,12 @@ func StrToTime(s string) (t *Time, ok bool) {
 	copy(buf, input)
 
 	sc := &scanner{t: newTime()}
-	for pos := 0; pos < len(input); {
+	// Once the scan has failed the result is an error whatever follows, so
+	// the rest of the input is not scanned.
+	for pos := 0; pos < len(input) && !sc.failed; {
 		best, bestLen := -1, 0
-		for i, r := range rules {
-			if loc := r.re.FindIndex(buf[pos:]); loc != nil && loc[1] > bestLen {
+		for _, i := range candidates(buf[pos]) {
+			if loc := rules[i].re.FindIndex(buf[pos:]); loc != nil && loc[1] > bestLen {
 				best, bestLen = i, loc[1]
 			}
 		}
