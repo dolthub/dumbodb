@@ -119,6 +119,7 @@ func newFacet(stage *types.Document) (aggregations.Stage, error) {
 // Process() methods (not from newXxx constructors) to avoid initialization cycles.
 func parsePipelineArray(arr *types.Array) ([]aggregations.Stage, error) {
 	var stageList []aggregations.Stage
+	subStages := must.NotFail(iterator.ConsumeValues(arr.Iterator()))
 
 	for i := 0; i < arr.Len(); i++ {
 		v := must.NotFail(arr.Get(i))
@@ -132,7 +133,13 @@ func parsePipelineArray(arr *types.Array) ([]aggregations.Stage, error) {
 			)
 		}
 
-		s, err := NewStage(stageDoc)
+		var s aggregations.Stage
+		var err error
+		if stageDoc.Command() == "$match" {
+			s, err = NewMatchStage(stageDoc, nil, SeesStoredDocuments(subStages, i))
+		} else {
+			s, err = NewStage(stageDoc)
+		}
 		if err != nil {
 			return nil, err
 		}

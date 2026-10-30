@@ -290,7 +290,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			// A stage doc with more than one field is invalid; defer to NewStage
 			// for that error rather than the single-field NewMatchStage.
 			if d.Len() == 1 {
-				s, err = stages.NewMatchStage(d, collCmp)
+				s, err = stages.NewMatchStage(d, collCmp, stages.SeesStoredDocuments(aggregationStages, i))
 			} else {
 				s, err = stages.NewStage(d)
 			}

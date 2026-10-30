@@ -564,10 +564,11 @@ func (l *lookup) runPipeline(ctx context.Context, fetcher CollectionFetcher, fro
 	}
 
 	// Execute each pipeline stage.
+	subStages := must.NotFail(iterator.ConsumeValues(l.pipeline.Iterator()))
 	pipeIter := l.pipeline.Iterator()
 	defer pipeIter.Close()
 
-	for {
+	for stageIndex := 0; ; stageIndex++ {
 		_, stageVal, err := pipeIter.Next()
 		if errors.Is(err, iterator.ErrIteratorDone) {
 			break
@@ -592,9 +593,12 @@ func (l *lookup) runPipeline(ctx context.Context, fetcher CollectionFetcher, fro
 		// Create the stage. $lookup is handled specially to pass the fetcher.
 		var stage aggregations.Stage
 
-		if substituted.Command() == "$lookup" {
+		switch substituted.Command() {
+		case "$lookup":
 			stage, err = NewLookupStage(substituted, fetcher)
-		} else {
+		case "$match":
+			stage, err = NewMatchStage(substituted, nil, SeesStoredDocuments(subStages, stageIndex))
+		default:
 			stage, err = NewStage(substituted)
 		}
 

@@ -80,27 +80,33 @@ func canonicalCondition(value any) any {
 	return doc
 }
 
-// canonicalExpression sorts the document literals in a $expr expression,
-// whose value is only tested for truth.
+// canonicalExpression sorts a document literal in a $expr expression only
+// where a comparison compares it with a field path, which reads a stored
+// value. Every other document keeps its order: a document literal builds a
+// document, and operators such as $objectToArray and $sortArray depend on
+// its key order.
 func canonicalExpression(expr any) any {
 	switch v := expr.(type) {
 	case *types.Document:
-		if isOperatorDocument(v) {
-			for _, op := range v.Keys() {
-				operand := must.NotFail(v.Get(op))
-				if op == "$literal" {
-					v.Set(op, sortedKeys(operand))
-				} else {
-					v.Set(op, canonicalExpression(operand))
-				}
+		if !isOperatorDocument(v) {
+			for _, k := range v.Keys() {
+				v.Set(k, canonicalExpression(must.NotFail(v.Get(k))))
 			}
 			return v
 		}
-		out := sortedKeys(v).(*types.Document)
-		for _, k := range out.Keys() {
-			out.Set(k, canonicalExpression(must.NotFail(out.Get(k))))
+		for _, op := range v.Keys() {
+			operand := must.NotFail(v.Get(op))
+			switch args, isArgs := operand.(*types.Array); {
+			case op == "$literal":
+			case isArgs && args.Len() == 2 && comparisonOperators[op]:
+				canonicalComparison(args)
+			case isArgs && args.Len() == 2 && op == "$in":
+				canonicalIn(args)
+			default:
+				v.Set(op, canonicalExpression(operand))
+			}
 		}
-		return out
+		return v
 	case *types.Array:
 		for i := range v.Len() {
 			must.NoError(v.Set(i, canonicalExpression(must.NotFail(v.Get(i)))))
@@ -109,6 +115,81 @@ func canonicalExpression(expr any) any {
 	default:
 		return v
 	}
+}
+
+var comparisonOperators = map[string]bool{
+	"$eq": true, "$ne": true, "$gt": true, "$gte": true, "$lt": true, "$lte": true, "$cmp": true,
+}
+
+// canonicalComparison sorts the document literal side of a comparison whose
+// other side is a field path.
+func canonicalComparison(args *types.Array) {
+	left, right := must.NotFail(args.Get(0)), must.NotFail(args.Get(1))
+	switch {
+	case isStoredFieldPath(left) && isDocumentLiteral(right):
+		must.NoError(args.Set(1, sortedLiteral(right)))
+		must.NoError(args.Set(0, canonicalExpression(left)))
+	case isStoredFieldPath(right) && isDocumentLiteral(left):
+		must.NoError(args.Set(0, sortedLiteral(left)))
+		must.NoError(args.Set(1, canonicalExpression(right)))
+	default:
+		must.NoError(args.Set(0, canonicalExpression(left)))
+		must.NoError(args.Set(1, canonicalExpression(right)))
+	}
+}
+
+// canonicalIn sorts the document literals of an array literal that a field
+// path is tested for membership in.
+func canonicalIn(args *types.Array) {
+	needle, haystack := must.NotFail(args.Get(0)), must.NotFail(args.Get(1))
+	elems, isArray := haystack.(*types.Array)
+	if !isStoredFieldPath(needle) || !isArray {
+		must.NoError(args.Set(0, canonicalExpression(needle)))
+		must.NoError(args.Set(1, canonicalExpression(haystack)))
+		return
+	}
+	for i := range elems.Len() {
+		if elem := must.NotFail(elems.Get(i)); isDocumentLiteral(elem) {
+			must.NoError(elems.Set(i, sortedLiteral(elem)))
+		} else {
+			must.NoError(elems.Set(i, canonicalExpression(elem)))
+		}
+	}
+}
+
+// isStoredFieldPath reports whether v reads a field of the current document.
+func isStoredFieldPath(v any) bool {
+	s, ok := v.(string)
+	if !ok || !strings.HasPrefix(s, "$") {
+		return false
+	}
+	return !strings.HasPrefix(s, "$$") || strings.HasPrefix(s, "$$ROOT.") || strings.HasPrefix(s, "$$CURRENT.")
+}
+
+// isDocumentLiteral reports whether v is a document literal or $literal of
+// a document.
+func isDocumentLiteral(v any) bool {
+	doc, ok := v.(*types.Document)
+	if !ok {
+		return false
+	}
+	if !isOperatorDocument(doc) {
+		return true
+	}
+	if doc.Len() == 1 && doc.Keys()[0] == "$literal" {
+		_, isDoc := must.NotFail(doc.Get("$literal")).(*types.Document)
+		return isDoc
+	}
+	return false
+}
+
+// sortedLiteral returns the document literal v in stored key order.
+func sortedLiteral(v any) any {
+	doc := v.(*types.Document)
+	if isOperatorDocument(doc) {
+		return must.NotFail(types.NewDocument("$literal", sortedKeys(must.NotFail(doc.Get("$literal")))))
+	}
+	return sortedKeys(doc)
 }
 
 func isOperatorDocument(doc *types.Document) bool {
