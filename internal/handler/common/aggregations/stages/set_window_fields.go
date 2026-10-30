@@ -614,7 +614,7 @@ func (s *setWindowFields) computeWindowValues(partition []*types.Document, wof w
 	switch wof.operator {
 	case "$documentNumber":
 		for i := range partition {
-			vals[i] = int64(i + 1)
+			vals[i] = windowCount(i + 1)
 		}
 
 	case "$rank":
@@ -639,7 +639,7 @@ func (s *setWindowFields) computeWindowValues(partition []*types.Document, wof w
 	case "$count":
 		for i := range partition {
 			window := s.windowDocs(wof.frame, i, partition)
-			vals[i] = int64(len(window))
+			vals[i] = windowCount(len(window))
 		}
 
 	case "$covariancePop", "$covarianceSamp":
@@ -931,6 +931,15 @@ func (s *setWindowFields) validateSortByFieldIsNumericOrDate(partition []*types.
 	return nil
 }
 
+// windowCount returns a rank, document number or count the way mongod
+// emits it: int32, widening to int64 only past the int32 range.
+func windowCount(n int) any {
+	if n <= math.MaxInt32 {
+		return int32(n)
+	}
+	return int64(n)
+}
+
 // computeRank computes $rank or $denseRank values for all documents in a partition.
 func computeRank(partition []*types.Document, sortBy *types.Document, dense bool) []any {
 	n := len(partition)
@@ -940,28 +949,26 @@ func computeRank(partition []*types.Document, sortBy *types.Document, dense bool
 		return vals
 	}
 
-	rank := int64(1)
-	denseRankVal := int64(1)
-	vals[0] = int64(1)
+	denseRankVal := 1
+	vals[0] = windowCount(1)
 
 	for i := 1; i < n; i++ {
 		tied := isTied(partition[i-1], partition[i], sortBy)
 
 		if tied {
 			if dense {
-				vals[i] = denseRankVal
+				vals[i] = windowCount(denseRankVal)
 			} else {
 				vals[i] = vals[i-1]
 			}
 		} else {
-			// i+1 because rank is 1-based and i is 0-based current position.
-			rank = int64(i + 1)
 			denseRankVal++
 
 			if dense {
-				vals[i] = denseRankVal
+				vals[i] = windowCount(denseRankVal)
 			} else {
-				vals[i] = rank
+				// i+1 because rank is 1-based and i is 0-based current position.
+				vals[i] = windowCount(i + 1)
 			}
 		}
 	}

@@ -314,7 +314,7 @@ func (gl *graphLookup) traverse(ctx context.Context, doc *types.Document, src gr
 
 			result := fromDoc.DeepCopy()
 			if gl.depthField != "" {
-				result.Set(gl.depthField, int32(currentDepth))
+				result.Set(gl.depthField, int64(currentDepth))
 			}
 
 			levelDocs = append(levelDocs, result)

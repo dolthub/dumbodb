@@ -15,9 +15,12 @@
 package handler
 
 import (
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/dolthub/dumbodb/internal/types"
 )
 
 func TestParameterStore_GetReturnsDefaultWhenUnset(t *testing.T) {
@@ -26,7 +29,7 @@ func TestParameterStore_GetReturnsDefaultWhenUnset(t *testing.T) {
 
 	v, ok := s.Get("maxTransactionLockRequestTimeoutMillis")
 	assert.True(t, ok)
-	assert.Equal(t, int64(5), v)
+	assert.Equal(t, int32(5), v)
 
 	v, ok = s.Get("quiet")
 	assert.True(t, ok)
@@ -37,23 +40,23 @@ func TestParameterStore_SetThenGetReturnsStoredValue(t *testing.T) {
 	t.Parallel()
 	s := newParameterStore()
 
-	prev, code := s.Set("maxTransactionLockRequestTimeoutMillis", int64(5000))
+	prev, code, _ := s.Set("maxTransactionLockRequestTimeoutMillis", int64(5000))
 	assert.Equal(t, ParamSetOK, code)
-	assert.Equal(t, int64(5), prev)
+	assert.Equal(t, int32(5), prev)
 
 	v, ok := s.Get("maxTransactionLockRequestTimeoutMillis")
 	assert.True(t, ok)
-	assert.Equal(t, int64(5000), v)
+	assert.Equal(t, int32(5000), v)
 }
 
 func TestParameterStore_SetReturnsPreviousValueOnRepeatedSet(t *testing.T) {
 	t.Parallel()
 	s := newParameterStore()
 
-	_, code := s.Set("quiet", true)
+	_, code, _ := s.Set("quiet", true)
 	assert.Equal(t, ParamSetOK, code)
 
-	prev, code := s.Set("quiet", false)
+	prev, code, _ := s.Set("quiet", false)
 	assert.Equal(t, ParamSetOK, code)
 	assert.Equal(t, true, prev)
 }
@@ -62,7 +65,7 @@ func TestParameterStore_SetUnknownParameterIsRejected(t *testing.T) {
 	t.Parallel()
 	s := newParameterStore()
 
-	_, code := s.Set("notARealParameter", 1)
+	_, code, _ := s.Set("notARealParameter", 1)
 	assert.Equal(t, ParamSetUnknown, code)
 }
 
@@ -70,8 +73,45 @@ func TestParameterStore_SetNotRuntimeSettableIsRejected(t *testing.T) {
 	t.Parallel()
 	s := newParameterStore()
 
-	_, code := s.Set("featureCompatibilityVersion", "8.0")
+	_, code, _ := s.Set("featureCompatibilityVersion", "8.0")
 	assert.Equal(t, ParamSetNotRuntime, code)
+}
+
+func TestParameterStore_SetCoercesToParameterType(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name   string
+		param  string
+		value  any
+		want   any
+		reason string
+	}{
+		{"IntFromDouble", "maxTransactionLockRequestTimeoutMillis", -7.9, int32(-7), ""},
+		{"IntFromDecimal", "maxTransactionLockRequestTimeoutMillis", types.Decimal128{H: 0x303e000000000000, L: 79}, int32(7), ""},
+		{"IntFromBool", "maxTransactionLockRequestTimeoutMillis", true, int32(1), ""},
+		{"IntOutOfBounds", "maxTransactionLockRequestTimeoutMillis", int64(1) << 40, nil, "Out of bounds coercing to integral value"},
+		{"IntFromNaN", "maxTransactionLockRequestTimeoutMillis", math.NaN(), nil, "Unable to coerce NaN/Inf to integral type"},
+		{"IntFromString", "maxTransactionLockRequestTimeoutMillis", "7", nil, "Unable to coerce value to integral type"},
+		{"BoolFromString", "quiet", "false", true, ""},
+		{"BoolFromNull", "quiet", types.Null, false, ""},
+		{"BoolFromZero", "quiet", float64(0), false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := newParameterStore()
+
+			_, code, reason := s.Set(tc.param, tc.value)
+			assert.Equal(t, tc.reason, reason)
+			if tc.reason != "" {
+				assert.Equal(t, ParamSetBadValue, code)
+				return
+			}
+			assert.Equal(t, ParamSetOK, code)
+			v, _ := s.Get(tc.param)
+			assert.Equal(t, tc.want, v)
+		})
+	}
 }
 
 func TestParameterStore_GetUnknownParameterReturnsNotOK(t *testing.T) {

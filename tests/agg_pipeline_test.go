@@ -771,10 +771,10 @@ func TestAgg_SetWindowFields_Rank(t *testing.T) {
 	for _, r := range results {
 		byName[dmap(r)["name"].(string)] = r
 	}
-	assert.Equal(t, int64(1), dmap(byName["alice"])["rank"])
-	assert.Equal(t, int64(1), dmap(byName["carol"])["rank"])
-	assert.Equal(t, int64(3), dmap(byName["bob"])["rank"])
-	assert.Equal(t, int64(4), dmap(byName["dave"])["rank"])
+	assert.Equal(t, int32(1), dmap(byName["alice"])["rank"])
+	assert.Equal(t, int32(1), dmap(byName["carol"])["rank"])
+	assert.Equal(t, int32(3), dmap(byName["bob"])["rank"])
+	assert.Equal(t, int32(4), dmap(byName["dave"])["rank"])
 }
 
 // TestAgg_SetWindowFields_DenseRank verifies $denseRank assigns consecutive ranks
@@ -808,9 +808,9 @@ func TestAgg_SetWindowFields_DenseRank(t *testing.T) {
 	require.Len(t, results, 3)
 
 	// Both 90s get dense rank 1; 80 gets dense rank 2 (no gap).
-	assert.Equal(t, int64(1), dmap(results[0])["dr"])
-	assert.Equal(t, int64(1), dmap(results[1])["dr"])
-	assert.Equal(t, int64(2), dmap(results[2])["dr"])
+	assert.Equal(t, int32(1), dmap(results[0])["dr"])
+	assert.Equal(t, int32(1), dmap(results[1])["dr"])
+	assert.Equal(t, int32(2), dmap(results[2])["dr"])
 }
 
 // TestAgg_SetWindowFields_DocumentNumber verifies $documentNumber assigns a
@@ -843,9 +843,9 @@ func TestAgg_SetWindowFields_DocumentNumber(t *testing.T) {
 	require.NoError(t, cursor.All(ctx, &results))
 	require.Len(t, results, 3)
 
-	assert.Equal(t, int64(1), dmap(results[0])["pos"])
-	assert.Equal(t, int64(2), dmap(results[1])["pos"])
-	assert.Equal(t, int64(3), dmap(results[2])["pos"])
+	assert.Equal(t, int32(1), dmap(results[0])["pos"])
+	assert.Equal(t, int32(2), dmap(results[1])["pos"])
+	assert.Equal(t, int32(3), dmap(results[2])["pos"])
 }
 
 // TestAgg_SetWindowFields_Partition verifies $setWindowFields with a partitionBy
