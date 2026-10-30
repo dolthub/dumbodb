@@ -131,7 +131,7 @@ func isConstantExpression(expr any) bool {
 			switch v.Command() {
 			case "$literal":
 				return true
-			case "$rand":
+			case "$rand", "$sampleRate", "$meta":
 				return false
 			}
 		}
@@ -155,6 +155,43 @@ func checkConstantOperand(expr any) error {
 	}
 	_, _, err := foldConstant(expr, nil)
 	return err
+}
+
+// convertOperators are left unfolded: mongod's $project and find
+// projections do not report a failing constant conversion while parsing
+// (workspace-2vz).
+var convertOperators = map[string]bool{
+	"$convert": true, "$toBool": true, "$toDate": true, "$toDecimal": true, "$toDouble": true,
+	"$toInt": true, "$toLong": true, "$toObjectId": true, "$toString": true, "$toUUID": true,
+}
+
+// CheckConstantSubexpressions returns the error mongod raises while parsing
+// when it folds a constant operator anywhere inside expr, children first, so
+// a failing constant is an error even in a branch never taken.
+func CheckConstantSubexpressions(expr any) error {
+	switch v := expr.(type) {
+	case *types.Array:
+		for i := range v.Len() {
+			if err := CheckConstantSubexpressions(must.NotFail(v.Get(i))); err != nil {
+				return err
+			}
+		}
+	case *types.Document:
+		operator := IsOperator(v)
+		if operator && v.Command() == "$literal" {
+			return nil
+		}
+		for _, value := range v.Values() {
+			if err := CheckConstantSubexpressions(value); err != nil {
+				return err
+			}
+		}
+		if operator && !convertOperators[v.Command()] && isConstantExpression(v) {
+			_, _, err := foldConstant(v, nil)
+			return err
+		}
+	}
+	return nil
 }
 
 // foldConstant is EvalOperand. Operator constructors call it, and EvalOperand

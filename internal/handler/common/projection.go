@@ -114,6 +114,40 @@ func findProjectionPathExists(expr string, doc *types.Document) bool {
 //   - `ErrElementMismatchPositionalProjection` when unexpected array was found on positional projection path;
 //   - `ErrNotImplemented` when there is unimplemented projection operators and expressions.
 func ValidateProjection(projection *types.Document) (*types.Document, bool, error) {
+	validated, inclusion, err := validateProjectionShape(projection)
+	if err == nil {
+		err = checkProjectionConstants(projection)
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return validated, inclusion, nil
+}
+
+// checkProjectionConstants folds constant expressions in a find projection,
+// skipping the $slice and $elemMatch projection operators, which are not
+// expressions.
+func checkProjectionConstants(value any) error {
+	doc, ok := value.(*types.Document)
+	if !ok {
+		return operators.CheckConstantSubexpressions(value)
+	}
+	if operators.IsOperator(doc) {
+		switch doc.Command() {
+		case "$slice", "$elemMatch":
+			return nil
+		}
+		return operators.CheckConstantSubexpressions(doc)
+	}
+	for _, v := range doc.Values() {
+		if err := checkProjectionConstants(v); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateProjectionShape(projection *types.Document) (*types.Document, bool, error) {
 	validated := types.MakeDocument(0)
 
 	if projection.Len() == 0 {

@@ -70,18 +70,23 @@ func (h *Handler) MsgFindAndModify(connCtx context.Context, msg *wire.OpMsg) (*w
 
 	var resDoc *types.Document
 
+	// Like mongod, reject a bad projection before writing, even when no
+	// document will need it.
+	var projection *types.Document
+	var inclusion bool
+	if params.Fields != nil {
+		if projection, inclusion, err = common.ValidateProjection(params.Fields); err != nil {
+			return nil, err
+		}
+	}
+
 	res, err := h.findAndModifyDocument(connCtx, params)
 	if err != nil {
 		return nil, handleUpdateError(params.DB, params.Collection, "findAndModify", err)
 	}
 
-	if params.Fields != nil {
+	if projection != nil {
 		if doc, ok := res.value.(*types.Document); ok {
-			projection, inclusion, projErr := common.ValidateProjection(params.Fields)
-			if projErr != nil {
-				return nil, projErr
-			}
-
 			projected, projErr := common.ProjectDocument(doc, projection, params.Query, inclusion)
 			if projErr != nil {
 				return nil, projErr
