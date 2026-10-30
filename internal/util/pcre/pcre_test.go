@@ -51,7 +51,7 @@ func TestTranslateMatches(t *testing.T) {
 		"InlineExtended":        {pattern: "(?x) a b", input: "ab", want: []string{"ab"}},
 		"Comment":               {pattern: `a(?#note)b`, input: "ab", want: []string{"ab"}},
 		"DollarBeforeNewline":   {pattern: `a$`, input: "a\n", want: []string{"a"}},
-		"CaseInsensitive":       {pattern: `\u00E9`, opts: Options{CaseInsensitive: true}, input: "\u00C9", want: []string{"\u00C9"}},
+		"CaseInsensitive":       {pattern: "\u00E9", opts: Options{CaseInsensitive: true}, input: "\u00C9", want: []string{"\u00C9"}},
 		"DotAll":                {pattern: `a.b`, opts: Options{DotAll: true}, input: "a\nb", want: []string{"a\nb"}},
 	} {
 		t.Run(name, func(t *testing.T) {

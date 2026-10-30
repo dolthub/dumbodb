@@ -28,6 +28,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/dlclark/regexp2"
@@ -71,41 +72,104 @@ func Compile(pattern string, opts Options) (*regexp2.Regexp, error) {
 	return re, nil
 }
 
-const (
-	asciiWord  = `a-zA-Z0-9_`
-	asciiSpace = `\t\n\x0B\f\r `
-	vertical   = `\n\x0B\f\r\x85\u2028\u2029`
-	horizontal = `\t \xA0\u1680\u180E\u2000-\u200A\u202F\u205F\u3000`
+// runeRange is an inclusive range of code points.
+type runeRange struct{ lo, hi rune }
 
-	wordBoundary    = `(?:(?<=[` + asciiWord + `])(?![` + asciiWord + `])|(?<![` + asciiWord + `])(?=[` + asciiWord + `]))`
-	notWordBoundary = `(?:(?<=[` + asciiWord + `])(?=[` + asciiWord + `])|(?<![` + asciiWord + `])(?![` + asciiWord + `]))`
+// The shorthand and POSIX classes, as PCRE2 defines them without UCP.
+var (
+	digitSet      = []runeRange{{'0', '9'}}
+	wordSet       = []runeRange{{'0', '9'}, {'A', 'Z'}, {'_', '_'}, {'a', 'z'}}
+	spaceSet      = []runeRange{{'\t', '\r'}, {' ', ' '}}
+	verticalSet   = []runeRange{{'\n', '\r'}, {0x85, 0x85}, {0x2028, 0x2029}}
+	horizontalSet = []runeRange{
+		{'\t', '\t'}, {' ', ' '}, {0xA0, 0xA0}, {0x1680, 0x1680}, {0x180E, 0x180E},
+		{0x2000, 0x200A}, {0x202F, 0x202F}, {0x205F, 0x205F}, {0x3000, 0x3000},
+	}
+
+	posixClasses = map[string][]runeRange{
+		"alnum":  {{'0', '9'}, {'A', 'Z'}, {'a', 'z'}},
+		"alpha":  {{'A', 'Z'}, {'a', 'z'}},
+		"ascii":  {{0, 0x7F}},
+		"blank":  {{'\t', '\t'}, {' ', ' '}},
+		"cntrl":  {{0, 0x1F}, {0x7F, 0x7F}},
+		"digit":  digitSet,
+		"graph":  {{'!', '~'}},
+		"lower":  {{'a', 'z'}},
+		"print":  {{' ', '~'}},
+		"punct":  {{'!', '/'}, {':', '@'}, {'[', '`'}, {'{', '~'}},
+		"space":  spaceSet,
+		"upper":  {{'A', 'Z'}},
+		"word":   wordSet,
+		"xdigit": {{'0', '9'}, {'A', 'F'}, {'a', 'f'}},
+	}
+
+	// classEscapes are the shorthand classes; an uppercase letter is the
+	// complement of its lowercase one.
+	classEscapes = map[rune][]runeRange{
+		'd': digitSet, 'w': wordSet, 's': spaceSet, 'h': horizontalSet, 'v': verticalSet,
+	}
+
+	word            = classText(wordSet)
+	wordBoundary    = `(?:(?<=[` + word + `])(?![` + word + `])|(?<![` + word + `])(?=[` + word + `]))`
+	notWordBoundary = `(?:(?<=[` + word + `])(?=[` + word + `])|(?<![` + word + `])(?![` + word + `]))`
 )
 
-// classEscapes are the shorthand classes as they appear inside brackets.
-var classEscapes = map[rune]string{
-	'd': `0-9`,
-	'w': asciiWord,
-	's': asciiSpace,
-	'h': horizontal,
-	'v': vertical,
+// classEscapeRanges returns the ranges \c stands for, ok false when c is not
+// a shorthand class.
+func classEscapeRanges(c rune) ([]runeRange, bool) {
+	if set, ok := classEscapes[c]; ok {
+		return set, true
+	}
+	if set, ok := classEscapes[unicode.ToLower(c)]; ok && unicode.IsUpper(c) {
+		return complement(set), true
+	}
+	return nil, false
 }
 
-// posixClasses are PCRE's POSIX bracket expressions without UCP.
-var posixClasses = map[string]string{
-	"alnum":  `a-zA-Z0-9`,
-	"alpha":  `a-zA-Z`,
-	"ascii":  `\x00-\x7F`,
-	"blank":  `\t `,
-	"cntrl":  `\x00-\x1F\x7F`,
-	"digit":  `0-9`,
-	"graph":  `!-~`,
-	"lower":  `a-z`,
-	"print":  ` -~`,
-	"punct":  `!-/:-@\[-` + "`" + `{-~`,
-	"space":  asciiSpace,
-	"upper":  `A-Z`,
-	"word":   asciiWord,
-	"xdigit": `0-9A-Fa-f`,
+// complement returns the code points not in set, which is sorted and
+// non-overlapping.
+func complement(set []runeRange) []runeRange {
+	var out []runeRange
+	next := rune(0)
+	for _, r := range set {
+		if r.lo > next {
+			out = append(out, runeRange{next, r.lo - 1})
+		}
+		next = r.hi + 1
+	}
+	if next <= unicode.MaxRune {
+		out = append(out, runeRange{next, unicode.MaxRune})
+	}
+	return out
+}
+
+// classText spells set as the inside of a regexp2 character class.
+func classText(set []runeRange) string {
+	var b strings.Builder
+	for _, r := range set {
+		b.WriteString(classRune(r.lo))
+		if r.hi > r.lo {
+			b.WriteByte('-')
+			b.WriteString(classRune(r.hi))
+		}
+	}
+	return b.String()
+}
+
+// classRune spells r so regexp2 reads it as a literal inside a class.
+func classRune(r rune) string {
+	switch {
+	case r < 0x20 || r == 0x7F:
+		return fmt.Sprintf(`\x%02X`, r)
+	case strings.ContainsRune(`\]^-[`, r):
+		return `\` + string(r)
+	case r < 0x80:
+		return string(r)
+	case r <= 0xFFFF:
+		return fmt.Sprintf(`\u%04X`, r)
+	default:
+		return string(r)
+	}
 }
 
 // translator rewrites a PCRE2 pattern into regexp2 syntax.
@@ -122,13 +186,19 @@ type translator struct {
 	// atomStart is where the most recent atom begins in out, so a possessive
 	// quantifier can wrap it.
 	atomStart int
+
+	// assertion is set when the most recent item is a simple assertion,
+	// which PCRE2 does not let a quantifier follow.
+	assertion bool
 }
 
 // Translate rewrites pattern into regexp2 syntax. In extended mode,
 // whitespace and comments outside classes are removed.
 func Translate(pattern string, extended bool) (string, error) {
 	t := &translator{in: []rune(pattern), extended: extended, groupNames: map[string]int{}}
-	t.nameGroups()
+	if err := t.nameGroups(); err != nil {
+		return "", err
+	}
 	for t.pos < len(t.in) {
 		if err := t.next(); err != nil {
 			return "", err
@@ -138,12 +208,21 @@ func Translate(pattern string, extended bool) (string, error) {
 }
 
 // nameGroups numbers the named groups up front so backreferences to them can
-// become numeric, as regexp2 numbers named groups after unnamed ones.
-func (t *translator) nameGroups() {
+// become numeric, as regexp2 numbers named groups after unnamed ones. It
+// skips what is not a group: classes, \Q...\E, (?#...) and, in extended
+// mode, # comments.
+func (t *translator) nameGroups() error {
 	n := 0
 	inClass := false
+	extended := t.extended
 	for i := 0; i < len(t.in); i++ {
 		switch c := t.in[i]; {
+		case c == '\\' && i+1 < len(t.in) && t.in[i+1] == 'Q':
+			end := strings.Index(string(t.in[i+2:]), `\E`)
+			if end < 0 {
+				return nil
+			}
+			i += 2 + utf8.RuneCountInString(string(t.in[i+2:])[:end]) + 1
 		case c == '\\':
 			i++
 		case inClass:
@@ -156,15 +235,54 @@ func (t *translator) nameGroups() {
 			if i+1 < len(t.in) && t.in[i+1] == ']' {
 				i++
 			}
+		case extended && c == '#':
+			for i < len(t.in) && t.in[i] != '\n' {
+				i++
+			}
+		case c == '(' && strings.HasPrefix(string(t.in[i:]), "(?#"):
+			for i < len(t.in) && t.in[i] != ')' {
+				i++
+			}
 		case c == '(':
 			if name, _, ok := namedGroupAt(t.in, i); ok {
+				if name[0] >= '0' && name[0] <= '9' {
+					return fmt.Errorf("subpattern name must start with a non-digit")
+				}
+				if _, dup := t.groupNames[name]; dup {
+					return fmt.Errorf("two named subpatterns have the same name %q", name)
+				}
 				n++
 				t.groupNames[name] = n
 			} else if i+1 >= len(t.in) || t.in[i+1] != '?' && t.in[i+1] != '*' {
 				n++
+			} else if on, _, ok := inlineFlags(t.in, i); ok {
+				extended = on
 			}
 		}
 	}
+	return nil
+}
+
+// inlineFlags parses the flag letters of (?flags) or (?flags: at i and
+// reports whether they leave extended mode on.
+func inlineFlags(in []rune, i int) (extended bool, length int, ok bool) {
+	j := i + 2
+	negated := false
+	for j < len(in) && strings.ContainsRune("^imsxnU-", in[j]) {
+		switch in[j] {
+		case '^':
+			extended = false
+		case '-':
+			negated = true
+		case 'x':
+			extended = !negated
+		}
+		j++
+	}
+	if j == i+2 || j >= len(in) || (in[j] != ')' && in[j] != ':') {
+		return false, 0, false
+	}
+	return extended, j - i, true
 }
 
 // namedGroupAt recognizes (?<name>, (?P<name> and (?'name' at i and returns
@@ -203,6 +321,7 @@ func (t *translator) hasPrefix(s string) bool {
 
 func (t *translator) beginAtom() {
 	t.atomStart = t.out.Len()
+	t.assertion = false
 }
 
 func (t *translator) next() error {
@@ -214,6 +333,18 @@ func (t *translator) next() error {
 		for t.pos < len(t.in) && t.in[t.pos] != '\n' {
 			t.pos++
 		}
+	case c == '^':
+		// PCRE2's multiline ^ does not match after a newline that ends the
+		// subject; regexp2's does.
+		t.beginAtom()
+		t.pos++
+		t.out.WriteString(`(?:^(?!\z)|\A)`)
+		t.assertion = true
+	case c == '$':
+		t.beginAtom()
+		t.pos++
+		t.out.WriteRune('$')
+		t.assertion = true
 	case c == '\\':
 		t.beginAtom()
 		return t.escape()
@@ -230,11 +361,17 @@ func (t *translator) next() error {
 		}
 		t.out.WriteRune(')')
 	case c == '*' || c == '+' || c == '?':
+		if t.assertion {
+			return fmt.Errorf("quantifier does not follow a repeatable item")
+		}
 		t.pos++
 		t.out.WriteRune(c)
 		t.quantifierSuffix()
 	case c == '{':
 		if q, ok := t.braceQuantifier(); ok {
+			if t.assertion {
+				return fmt.Errorf("quantifier does not follow a repeatable item")
+			}
 			t.pos += len(q)
 			t.out.WriteString(q)
 			t.quantifierSuffix()
@@ -249,6 +386,22 @@ func (t *translator) next() error {
 		t.out.WriteRune(c)
 	}
 	return nil
+}
+
+// skipExtendedSpace skips whitespace and # comments at pos.
+func (t *translator) skipExtendedSpace() {
+	for t.pos < len(t.in) {
+		switch c := t.in[t.pos]; {
+		case c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v':
+			t.pos++
+		case c == '#':
+			for t.pos < len(t.in) && t.in[t.pos] != '\n' {
+				t.pos++
+			}
+		default:
+			return
+		}
+	}
 }
 
 // braceQuantifier returns {n}, {n,} or {n,m} at pos.
@@ -272,6 +425,10 @@ func (t *translator) braceQuantifier() (string, bool) {
 // quantifierSuffix handles a lazy '?' or turns a possessive '+' into an
 // atomic group around the quantified atom.
 func (t *translator) quantifierSuffix() {
+	t.assertion = false
+	if t.extended {
+		t.skipExtendedSpace()
+	}
 	switch t.peek(0) {
 	case '?':
 		t.pos++
@@ -317,17 +474,15 @@ func (t *translator) openGroup() error {
 		t.pos += 4 + utf8.RuneCountInString(name) + 1
 		return t.backreferenceByName(name)
 	case t.peek(1) == '?':
-		// Inline flags may turn on extended mode for the rest of the pattern.
-		j := t.pos + 2
-		for j < len(t.in) && strings.ContainsRune("imsxnU-", t.in[j]) {
-			if t.in[j] == 'x' && !strings.ContainsRune(string(t.in[t.pos+2:j]), '-') {
-				t.extended = true
+		if extended, n, ok := inlineFlags(t.in, t.pos); ok {
+			t.extended = extended
+			flags := string(t.in[t.pos+2 : t.pos+n])
+			terminator := t.in[t.pos+n]
+			t.pos += n + 1
+			t.out.WriteString(dotNetFlags(flags) + string(terminator))
+			if terminator == ':' {
+				t.groupStarts = append(t.groupStarts, start)
 			}
-			j++
-		}
-		if j < len(t.in) && t.in[j] == ')' && j > t.pos+2 {
-			t.out.WriteString(string(t.in[t.pos : j+1]))
-			t.pos = j + 1
 			return nil
 		}
 	case t.peek(1) != '*':
@@ -338,6 +493,30 @@ func (t *translator) openGroup() error {
 	t.out.WriteRune('(')
 	t.pos++
 	return nil
+}
+
+// dotNetFlags spells PCRE2 inline flags for regexp2: ^ resets i, m, s and x
+// first, and x is applied by the translator, so it is turned off here.
+func dotNetFlags(flags string) string {
+	on, off := "", "x"
+	if rest, reset := strings.CutPrefix(flags, "^"); reset {
+		off += "ims"
+		flags = rest
+	}
+	turnOff := false
+	for _, f := range flags {
+		switch {
+		case f == '-':
+			turnOff = true
+		case f == 'x':
+		case turnOff:
+			off += string(f)
+		default:
+			on += string(f)
+			off = strings.ReplaceAll(off, string(f), "")
+		}
+	}
+	return "(?" + on + "-" + off
 }
 
 func (t *translator) backreferenceByName(name string) error {
@@ -357,45 +536,43 @@ func (t *translator) escape() error {
 	}
 	t.pos += 2
 
+	if set, ok := classEscapeRanges(c); ok {
+		t.out.WriteString("[" + classText(set) + "]")
+		return nil
+	}
+
 	switch c {
-	case 'd':
-		t.out.WriteString(`[0-9]`)
-	case 'D':
-		t.out.WriteString(`[^0-9]`)
-	case 'w':
-		t.out.WriteString(`[` + asciiWord + `]`)
-	case 'W':
-		t.out.WriteString(`[^` + asciiWord + `]`)
-	case 's':
-		t.out.WriteString(`[` + asciiSpace + `]`)
-	case 'S':
-		t.out.WriteString(`[^` + asciiSpace + `]`)
-	case 'h':
-		t.out.WriteString(`[` + horizontal + `]`)
-	case 'H':
-		t.out.WriteString(`[^` + horizontal + `]`)
-	case 'v':
-		t.out.WriteString(`[` + vertical + `]`)
-	case 'V':
-		t.out.WriteString(`[^` + vertical + `]`)
 	case 'R':
-		t.out.WriteString(`(?>\r\n|[` + vertical + `])`)
+		t.out.WriteString(`(?>\r\n|[` + classText(verticalSet) + `])`)
 	case 'N':
+		if r, ok := t.namedCodePoint(); ok {
+			t.out.WriteString(escapeRune(r))
+			return nil
+		}
 		t.out.WriteString(`[^\n]`)
 	case 'b':
 		t.out.WriteString(wordBoundary)
+		t.assertion = true
 	case 'B':
 		t.out.WriteString(notWordBoundary)
+		t.assertion = true
+	case 'A', 'z', 'Z', 'G':
+		t.out.WriteRune('\\')
+		t.out.WriteRune(c)
+		t.assertion = true
 	case 'Q':
 		t.quoted()
 	case 'E':
 	case 'x':
-		r, ok := t.hexBrace()
+		t.out.WriteString(escapeRune(t.hex()))
+	case 'o':
+		r, ok := t.octalBrace()
 		if !ok {
-			t.out.WriteString(`\x`)
-			return nil
+			return fmt.Errorf(`\o is not followed by {octal digits}`)
 		}
 		t.out.WriteString(escapeRune(r))
+	case 'u', 'U', 'L', 'l':
+		return fmt.Errorf(`PCRE2 does not support \%c`, c)
 	case 'k':
 		open := t.peek(0)
 		closer := map[rune]rune{'<': '>', '\'': '\'', '{': '}'}[open]
@@ -426,8 +603,13 @@ func (t *translator) escape() error {
 			}
 		}
 	default:
-		t.out.WriteRune('\\')
-		t.out.WriteRune(c)
+		if c != '_' && (unicode.IsLetter(c) || unicode.IsDigit(c)) {
+			t.out.WriteRune('\\')
+			t.out.WriteRune(c)
+		} else {
+			// PCRE2 reads an escaped non-alphanumeric character literally.
+			t.out.WriteString(escapeRune(c))
+		}
 	}
 	return nil
 }
@@ -466,6 +648,60 @@ func (t *translator) gReference() error {
 	}
 	fmt.Fprintf(&t.out, `(?:\%d)`, n)
 	return nil
+}
+
+// hex reads the hex digits of \x at pos: {hhh}, or up to two digits, none
+// meaning NUL.
+func (t *translator) hex() rune {
+	if r, ok := t.hexBrace(); ok {
+		return r
+	}
+	var r rune
+	for i := 0; i < 2; i++ {
+		d, err := strconv.ParseUint(string(t.peek(0)), 16, 8)
+		if t.peek(0) < 0 || err != nil {
+			break
+		}
+		r = r*16 + rune(d)
+		t.pos++
+	}
+	return r
+}
+
+// octalBrace reads the {ooo} of \o{ooo} at pos.
+func (t *translator) octalBrace() (rune, bool) {
+	if t.peek(0) != '{' {
+		return 0, false
+	}
+	rest := string(t.in[t.pos+1:])
+	end := strings.IndexByte(rest, '}')
+	if end < 0 {
+		return 0, false
+	}
+	n, err := strconv.ParseUint(rest[:end], 8, 32)
+	if err != nil {
+		return 0, false
+	}
+	t.pos += 1 + end + 1
+	return rune(n), true
+}
+
+// namedCodePoint reads the {U+hhhh} of \N{U+hhhh} at pos.
+func (t *translator) namedCodePoint() (rune, bool) {
+	if !t.hasPrefix("{U+") {
+		return 0, false
+	}
+	rest := string(t.in[t.pos+3:])
+	end := strings.IndexByte(rest, '}')
+	if end < 0 {
+		return 0, false
+	}
+	n, err := strconv.ParseUint(rest[:end], 16, 32)
+	if err != nil {
+		return 0, false
+	}
+	t.pos += 3 + end + 1
+	return rune(n), true
 }
 
 // hexBrace reads the {hhh} of \x{hhh} at pos.
@@ -539,12 +775,18 @@ func (t *translator) class() error {
 				continue
 			}
 			name := rest[:end]
-			ranges, ok := posixClasses[name]
+			negate := strings.HasPrefix(name, "^")
+			set, ok := posixClasses[strings.TrimPrefix(name, "^")]
 			if !ok {
 				return fmt.Errorf("unknown POSIX class name %q", name)
 			}
+			if negate {
+				set = complement(set)
+			}
 			t.pos += 2 + len(name) + 2
-			t.out.WriteString(ranges)
+			t.out.WriteString(classText(set))
+		case c == '[' && (t.peek(1) == '.' || t.peek(1) == '='):
+			return fmt.Errorf("POSIX collating elements are not supported")
 		case c == '[':
 			t.pos++
 			t.out.WriteString(`\[`)
@@ -554,8 +796,8 @@ func (t *translator) class() error {
 				return fmt.Errorf(`\ at end of pattern`)
 			}
 			t.pos += 2
-			if ranges, ok := classEscapes[e]; ok {
-				t.out.WriteString(ranges)
+			if set, ok := classEscapeRanges(e); ok {
+				t.out.WriteString(classText(set))
 				continue
 			}
 			switch e {
@@ -563,14 +805,23 @@ func (t *translator) class() error {
 				t.quoted()
 			case 'E':
 			case 'x':
-				if r, ok := t.hexBrace(); ok {
-					t.out.WriteString(escapeRune(r))
-				} else {
-					t.out.WriteString(`\x`)
+				t.out.WriteString(classRune(t.hex()))
+			case 'o':
+				r, ok := t.octalBrace()
+				if !ok {
+					return fmt.Errorf(`\o is not followed by {octal digits}`)
 				}
+				t.out.WriteString(classRune(r))
+			case '8', '9', 'g', '_':
+				// PCRE2 reads these escapes literally inside a class.
+				t.out.WriteString(classRune(e))
 			default:
-				t.out.WriteRune('\\')
-				t.out.WriteRune(e)
+				if unicode.IsLetter(e) || unicode.IsDigit(e) {
+					t.out.WriteRune('\\')
+					t.out.WriteRune(e)
+				} else {
+					t.out.WriteString(classRune(e))
+				}
 			}
 		default:
 			t.pos++

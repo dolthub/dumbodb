@@ -237,8 +237,10 @@ func (op *regexOp) compile(state *regexState) error {
 func (op *regexOp) execute(state *regexState) (*regexp2.Match, error) {
 	m, err := state.re.FindRunesMatchStartingAt(state.input, state.startRune)
 	if err != nil {
+		// regexp2 fails only on its match timeout, MongoDB's PCRE2 match
+		// limit (-47); its message would include the whole input.
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrRegexExecution,
-			fmt.Sprintf("Error occurred while executing the regular expression in %s. Result code: %s", op.opName, err), op.opName)
+			fmt.Sprintf("Error occurred while executing the regular expression in %s. Result code: -47", op.opName), op.opName)
 	}
 	return m, nil
 }
