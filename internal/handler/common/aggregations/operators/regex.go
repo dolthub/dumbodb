@@ -273,7 +273,10 @@ const (
 // approximateMatchSize estimates the memory a match document takes, as
 // Value::getApproximateSize does: a fixed overhead plus its strings. The
 // overhead puts the limit where mongod 8.0.28 reaches it, between 300,000
-// and 450,000 one-character matches.
+// and 450,000 one-character matches. It counts mongod's figure, not Go's
+// heap: a call at the limit peaks near 200-340 MB live (input runes plus
+// match documents). Counting Go's overhead instead would fail calls that
+// succeed on mongod.
 func approximateMatchSize(match *types.Document) int {
 	size := 350
 	if s, ok := must.NotFail(match.Get("match")).(string); ok {
