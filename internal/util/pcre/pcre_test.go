@@ -56,6 +56,9 @@ func TestTranslateMatches(t *testing.T) {
 		"DollarBeforeNewline":   {pattern: `a$`, input: "a\n", want: []string{"a"}},
 		"CaseInsensitive":       {pattern: "\u00E9", opts: Options{CaseInsensitive: true}, input: "\u00C9", want: []string{"\u00C9"}},
 		"DotAll":                {pattern: `a.b`, opts: Options{DotAll: true}, input: "a\nb", want: []string{"a\nb"}},
+		"LookaheadAfterAnchor":  {pattern: `^(?=.*foo)bar`, input: "barfoo", want: []string{"bar"}},
+		"GroupAfterAnchor":      {pattern: `^(?:a)+`, input: "aab", want: []string{"aa"}},
+		"QuantifiedAnchorGroup": {pattern: `(^a)+`, input: "aa", want: []string{"a"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

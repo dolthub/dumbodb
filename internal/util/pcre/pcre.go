@@ -444,6 +444,7 @@ func (t *translator) next() error {
 			t.extended = t.groupExtended[n-1]
 			t.groupExtended = t.groupExtended[:n-1]
 		}
+		t.assertion = false
 		t.out.WriteRune(')')
 	case c == '*' || c == '+' || c == '?':
 		if t.assertion {
@@ -567,6 +568,11 @@ func (t *translator) openGroup() error {
 		t.groupCount++
 	}
 
+	for _, opener := range []string{"(?:", "(?=", "(?!", "(?<=", "(?<!", "(?>"} {
+		if t.hasPrefix(opener) {
+			return t.pushGroup(start, opener, len(opener))
+		}
+	}
 	return t.pushGroup(start, "(", 1)
 }
 
@@ -577,6 +583,7 @@ func (t *translator) pushGroup(start int, open string, consumed int) error {
 	}
 	t.groupStarts = append(t.groupStarts, start)
 	t.groupExtended = append(t.groupExtended, t.extended)
+	t.assertion = false
 	t.out.WriteString(open)
 	t.pos += consumed
 	return nil
