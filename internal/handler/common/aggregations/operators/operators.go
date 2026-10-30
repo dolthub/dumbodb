@@ -208,6 +208,7 @@ var wholeArgumentOperators = map[string]struct{}{
 	"$dateSubtract":   {},
 	"$dateToParts":    {},
 	"$dateToString":   {},
+	"$dateTrunc":      {},
 	"$dayOfMonth":     {},
 	"$dayOfWeek":      {},
 	"$dayOfYear":      {},
