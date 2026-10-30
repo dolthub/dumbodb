@@ -859,12 +859,17 @@ func (op *reduceOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
+	limiter := newReduceLimiter()
 	for _, item := range items {
 		iterDoc := copyForVariables(doc)
 		bindVariable(iterDoc, "value", accumulator, missing)
 		bindVariable(iterDoc, "this", item, false)
 
 		if accumulator, missing, err = EvalOperand(op.inArg, iterDoc); err != nil {
+			return nil, err
+		}
+
+		if err = limiter.check(accumulator); err != nil {
 			return nil, err
 		}
 	}

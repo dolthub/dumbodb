@@ -447,14 +447,8 @@ func compareArrays(docArr, filterArr *Array) CompareResult {
 			continue
 		}
 
-		orderResult := CompareOrder(docValue, filterValue, Ascending)
-		if orderResult != Equal {
+		if orderResult := CompareOrder(docValue, filterValue, Ascending); orderResult != Equal {
 			return orderResult
-		}
-
-		iterationResult := Compare(docValue, filterValue)
-		if iterationResult != Equal {
-			return iterationResult
 		}
 	}
 
