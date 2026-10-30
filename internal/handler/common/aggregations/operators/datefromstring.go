@@ -187,9 +187,20 @@ func (op *dateFromStringOp) convert(dateString, format any, tz mongoTimeZone, tz
 			return types.Null, nil
 		}
 		t, ok = timelib.ParseFromFormat(format.(string), s, '%', dateFromStringFormats)
-	} else {
-		t, ok = timelib.StrToTime(s)
+		if !ok {
+			return nil, conversionFailure(fmt.Sprintf("Error parsing date string '%s'", s))
+		}
+		return tz.fromParsedTime(t, s)
 	}
+	return parseDateString(s, tz)
+}
+
+// parseDateString is TimeZoneDatabase::fromString without a format.
+func parseDateString(s string, tz mongoTimeZone) (any, error) {
+	if len(s) > maxDateStringLength {
+		return nil, conversionFailure(fmt.Sprintf("Error parsing date string: longer than %d bytes", maxDateStringLength))
+	}
+	t, ok := timelib.StrToTime(s)
 	if !ok {
 		return nil, conversionFailure(fmt.Sprintf("Error parsing date string '%s'", s))
 	}

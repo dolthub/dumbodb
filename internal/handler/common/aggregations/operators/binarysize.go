@@ -59,33 +59,6 @@ func (op *binarySizeOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*binarySizeOp)(nil)
 
-// toObjectIDOp represents { $toObjectId: <expr> }, an alias for $convert to
-// objectId.
-type toObjectIDOp struct {
-	arg any
-}
-
-func newToObjectID(args ...any) (Operator, error) {
-	if len(args) != 1 {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrConversionArity,
-			fmt.Sprintf("$toObjectId requires a single argument, got %d", len(args)), "$toObjectId")
-	}
-	return &toObjectIDOp{arg: args[0]}, nil
-}
-
-func (op *toObjectIDOp) Process(doc *types.Document) (any, error) {
-	v, err := evalArgValue(op.arg, doc)
-	if err != nil {
-		return nil, err
-	}
-	if isNullish(v) {
-		return types.Null, nil
-	}
-	return convertToObjectID(v)
-}
-
-var _ Operator = (*toObjectIDOp)(nil)
-
 // convertToObjectID is ExpressionConvert's conversion to objectId: a string
 // is parsed with OID::createFromString, and an ObjectId is kept.
 func convertToObjectID(v any) (any, error) {

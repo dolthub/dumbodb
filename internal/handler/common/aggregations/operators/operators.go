@@ -121,7 +121,14 @@ func NewOperator(doc *types.Document) (Operator, error) {
 
 	switch {
 	case supported:
-		return newOperator(args...)
+		op, err := newOperator(args...)
+		if err != nil || operator == "$literal" {
+			return op, err
+		}
+		if err = parseNested(nestedExpressions(operator, args)); err != nil {
+			return nil, AsNestedError(err)
+		}
+		return op, nil
 	case unsupported:
 		return nil, newOperatorError(
 			ErrNotImplemented,
@@ -137,10 +144,64 @@ func NewOperator(doc *types.Document) (Operator, error) {
 	}
 }
 
+// nonExpressionFields are argument fields that hold data, not expressions.
+var nonExpressionFields = map[string]string{
+	"$sortArray": "sortBy",
+}
+
+// nestedExpressions returns the arguments of operator that are expressions.
+func nestedExpressions(operator string, args []any) []any {
+	field, ok := nonExpressionFields[operator]
+	if !ok || len(args) != 1 {
+		return args
+	}
+	spec, ok := args[0].(*types.Document)
+	if !ok {
+		return args
+	}
+	var exprs []any
+	for _, key := range spec.Keys() {
+		if key != field {
+			exprs = append(exprs, must.NotFail(spec.Get(key)))
+		}
+	}
+	return exprs
+}
+
+// parseNested builds every operator nested in args, as mongod parses and
+// constant-folds a whole expression before evaluating any of it: a branch
+// that never runs still reports its parse errors.
+func parseNested(args []any) error {
+	for _, arg := range args {
+		switch v := arg.(type) {
+		case *types.Document:
+			if IsOperator(v) {
+				if _, err := cachedOperator(v); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := parseNested(v.Values()); err != nil {
+				return err
+			}
+		case *types.Array:
+			vals := make([]any, v.Len())
+			for i := range vals {
+				vals[i] = must.NotFail(v.Get(i))
+			}
+			if err := parseNested(vals); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // wholeArgumentOperators take a single argument as written: an array is
 // passed through whole, not as a list of arguments, so $literal keeps it and
 // the object-argument operators can reject it.
 var wholeArgumentOperators = map[string]struct{}{
+	"$convert":        {},
 	"$dateAdd":        {},
 	"$dateFromParts":  {},
 	"$dateFromString": {},
@@ -303,15 +364,16 @@ var Operators = map[string]newOperatorFunc{
 	"$switch":           newSwitch,
 	"$tan":              newTan,
 	"$tanh":             newTanh,
-	"$toBool":           newToBool,
-	"$toDate":           newToDate,
-	"$toDecimal":        newToDecimal,
-	"$toDouble":         newToDouble,
-	"$toInt":            newToInt,
-	"$toLong":           newToLong,
+	"$toBool":           newConversionAlias("$toBool", "bool", nil),
+	"$toDate":           newConversionAlias("$toDate", "date", nil),
+	"$toDecimal":        newConversionAlias("$toDecimal", "decimal", nil),
+	"$toDouble":         newConversionAlias("$toDouble", "double", nil),
+	"$toInt":            newConversionAlias("$toInt", "int", nil),
+	"$toLong":           newConversionAlias("$toLong", "long", nil),
 	"$toLower":          newToLower,
-	"$toObjectId":       newToObjectID,
-	"$toString":         newToString,
+	"$toObjectId":       newConversionAlias("$toObjectId", "objectId", nil),
+	"$toString":         newConversionAlias("$toString", "string", "auto"),
+	"$toUUID":           newConversionAlias("$toUUID", must.NotFail(types.NewDocument("type", "binData", "subtype", int32(4))), "uuid"),
 	"$toUpper":          newToUpper,
 	"$unsetField":       newUnsetField,
 	"$trim":             newTrim,

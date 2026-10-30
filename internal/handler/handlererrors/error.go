@@ -424,6 +424,27 @@ const (
 	// ErrUnsetPathOverwrite indicates that an $unset path have overwrites another path in arguments.
 	ErrUnsetPathOverwrite = ErrorCode(31250) // Location31250
 
+	// ErrConvertFormatType indicates a $convert 'format' that is not a string.
+	ErrConvertFormatType = ErrorCode(4341114) // Location4341114
+
+	// ErrConvertFormatRequired indicates a BinData conversion without 'format'.
+	ErrConvertFormatRequired = ErrorCode(4341115) // Location4341115
+
+	// ErrConvertFormatInvalid indicates an unknown $convert 'format'.
+	ErrConvertFormatInvalid = ErrorCode(4341125) // Location4341125
+
+	// ErrConvertSubtypeNotInteger indicates a fractional BinData 'subtype'.
+	ErrConvertSubtypeNotInteger = ErrorCode(4341106) // Location4341106
+
+	// ErrConvertSubtypeInvalid indicates a 'subtype' that is no BinData type.
+	ErrConvertSubtypeInvalid = ErrorCode(4341107) // Location4341107
+
+	// ErrConvertSubtypeType indicates a non-numeric BinData 'subtype'.
+	ErrConvertSubtypeType = ErrorCode(4341108) // Location4341108
+
+	// ErrConvertSubtypeColumn indicates a conversion to BinData subtype Column.
+	ErrConvertSubtypeColumn = ErrorCode(12910300) // Location12910300
+
 	// ErrSizeNotArray indicates that the argument to $size is not an array.
 	ErrSizeNotArray = ErrorCode(17124) // Location17124
 
