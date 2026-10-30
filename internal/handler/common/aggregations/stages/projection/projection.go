@@ -730,17 +730,6 @@ func setBySourceOrder(key string, val any, source, projected *types.Document) {
 	}
 }
 
-// processOperatorError takes internal error related to operator evaluation and
-// returns proper CommandError that can be returned by $project aggregation stage.
-//
-// Command error codes:
-// - ErrEmptySubProject when operator value is empty.
-// - ErrFieldPathInvalidName when FieldPath is invalid.
-// - ErrNotImplemented when the operator or expression is not implemented yet.
-// - ErrOperatorWrongLenOfArgs when the operator has an invalid number of arguments.
-// - ErrInvalidPipelineOperator when the operator does not exist.
-// - ErrFailedToParse when operator has invalid variable expression.
-// - ErrGroupInvalidFieldPath when operator has empty path expression.
 // ValidateExpression reports the parse errors mongod reports for an
 // expression object used as a projection value.
 func ValidateExpression(value *types.Document) error {
@@ -749,15 +738,8 @@ func ValidateExpression(value *types.Document) error {
 		return err
 	}
 
-	// The operator runs against a placeholder document, so only errors
-	// describing its shape are meaningful here. Data-dependent outcomes
-	// (a missing field, a field name that resolves to a non-string)
-	// depend on the real document, and the placeholder cannot decide
-	// them. Discarding those is deliberate rather than lossy: MongoDB
-	// reports them when the stage runs too, so $getField with a
-	// non-string 'field' must parse here and fail later. They are not
-	// swallowed, since the runtime path returns every error that is not
-	// a missing value.
+	// Only shape errors matter against the placeholder document; data
+	// errors surface when the stage runs, as in MongoDB.
 	if _, err = op.Process(must.NotFail(types.NewDocument("key", "value"))); err != nil {
 		var opErr operators.OperatorError
 		var exErr *aggregations.ExpressionError
@@ -769,6 +751,18 @@ func ValidateExpression(value *types.Document) error {
 
 	return nil
 }
+
+// processOperatorError takes internal error related to operator evaluation and
+// returns proper CommandError that can be returned by $project aggregation stage.
+//
+// Command error codes:
+// - ErrEmptySubProject when operator value is empty.
+// - ErrFieldPathInvalidName when FieldPath is invalid.
+// - ErrNotImplemented when the operator or expression is not implemented yet.
+// - ErrOperatorWrongLenOfArgs when the operator has an invalid number of arguments.
+// - ErrInvalidPipelineOperator when the operator does not exist.
+// - ErrFailedToParse when operator has invalid variable expression.
+// - ErrGroupInvalidFieldPath when operator has empty path expression.
 
 func processOperatorError(err error) error {
 	if err == nil {
