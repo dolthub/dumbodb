@@ -92,7 +92,7 @@ func newCond(args ...any) (Operator, error) {
 
 // Process implements Operator.
 // Evaluates ifArg; if truthy, returns thenArg result; otherwise elseArg result.
-// MongoDB-falsy values: false and null; everything else is truthy (including 0).
+// Falsy values are those coerceToBool makes false, including numeric zeros.
 func (c *condOp) Process(doc *types.Document) (any, error) {
 	ifResult, err := evalArgValue(c.ifArg, doc)
 	if err != nil {

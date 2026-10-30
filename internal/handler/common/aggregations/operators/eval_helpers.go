@@ -414,16 +414,18 @@ func isNullish(v any) bool {
 	return v == types.Null || v == types.Undefined
 }
 
-// isFalsy returns true when v is MongoDB-falsy for $cond purposes:
-// false (bool), null, or missing.
+// isFalsy reports whether v is false in a boolean context.
 func isFalsy(v any) bool {
-	switch val := v.(type) {
-	case bool:
-		return !val
-	case types.NullType, types.UndefinedType:
-		return true
-	default:
-		_ = val
+	return !coerceToBool(v)
+}
+
+// coerceToBool is Value::coerceToBool: false, numeric zeros, null,
+// undefined and missing are false; everything else is true.
+func coerceToBool(v any) bool {
+	switch v.(type) {
+	case nil, types.NullType, types.UndefinedType:
 		return false
+	default:
+		return convertToBool(v)
 	}
 }

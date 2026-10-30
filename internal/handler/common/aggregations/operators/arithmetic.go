@@ -17,6 +17,7 @@ package operators
 import (
 	"fmt"
 	"math"
+	"strconv"
 	"time"
 
 	"github.com/cockroachdb/apd/v3"
@@ -381,6 +382,13 @@ func toFloat64(v any) float64 {
 		return float64(n)
 	case int64:
 		return float64(n)
+	case types.Decimal128:
+		if f, err := decimalToDouble(n); err == nil {
+			return f.(float64)
+		}
+		// Out of double range: saturate to an infinity or zero.
+		f, _ := strconv.ParseFloat(aggregations.DecimalToAPD(n).String(), 64)
+		return f
 	}
 
 	return 0
