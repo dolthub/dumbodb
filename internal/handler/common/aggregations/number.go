@@ -137,6 +137,10 @@ func toDecimalVal(v any) (decimalVal, bool) {
 	case int64:
 		return decimalVal{big.NewInt(v), 0}, true
 	case float64:
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return decimalVal{}, false
+		}
+
 		// Convert float64 to its Decimal128 representation.
 		// Use 34 significant digits (Decimal128's max precision) in 'g' format
 		// to avoid exceeding bson.ParseDecimal128's 35-digit limit.
@@ -235,6 +239,10 @@ func avgDecimal128(vs []any) types.Decimal128 {
 // of precision. Shared by the batch (avgDecimal128) and incremental (NumberAvg)
 // paths so they produce identical results.
 func avgFromDecimalSum(sum types.Decimal128, count int64) types.Decimal128 {
+	if specialDecimal(sum) != nil {
+		return sum
+	}
+
 	dividend, ok := decimalToAPD(sum)
 	if !ok {
 		return decimalZero()
@@ -399,58 +407,12 @@ func multiplyDecimal128(vs []any) types.Decimal128 {
 // sumDecimal128 sums a slice of numbers using Decimal128 arithmetic.
 // Called when at least one element is types.Decimal128.
 func sumDecimal128(vs []any) types.Decimal128 {
-	// Convert all numeric values to (mantissa, exponent) pairs.
-	var decimals []decimalVal
-
+	var s decimalSum
 	for _, v := range vs {
-		d, ok := toDecimalVal(v)
-		if ok {
-			decimals = append(decimals, d)
-		}
+		s.add(v)
 	}
 
-	if len(decimals) == 0 {
-		// No summable values: return Decimal128 zero.
-		p, _ := bson.ParseDecimal128FromBigInt(big.NewInt(0), 0)
-		h, l := p.GetBytes()
-
-		return types.Decimal128{H: h, L: l}
-	}
-
-	// Find the minimum exponent so all values can be expressed with it.
-	minExp := decimals[0].exp
-	for _, d := range decimals[1:] {
-		if d.exp < minExp {
-			minExp = d.exp
-		}
-	}
-
-	ten := big.NewInt(10)
-	totalM := big.NewInt(0)
-
-	for _, d := range decimals {
-		// Scale: d.m * 10^(d.exp - minExp)
-		scale := d.exp - minExp
-		scaled := new(big.Int).Set(d.m)
-
-		if scale > 0 {
-			factor := new(big.Int).Exp(ten, big.NewInt(int64(scale)), nil)
-			scaled.Mul(scaled, factor)
-		}
-
-		totalM.Add(totalM, scaled)
-	}
-
-	// totalM * 10^minExp is the result.
-	p, ok := bson.ParseDecimal128FromBigInt(totalM, minExp)
-	if !ok {
-		// Overflow  -- return Decimal128 zero as fallback.
-		p, _ = bson.ParseDecimal128FromBigInt(big.NewInt(0), 0)
-	}
-
-	h, l := p.GetBytes()
-
-	return types.Decimal128{H: h, L: l}
+	return s.result()
 }
 
 // decimalSum incrementally accumulates Decimal128 values, producing the same
@@ -461,6 +423,10 @@ type decimalSum struct {
 	totalM *big.Int
 	minExp int
 	any    bool
+
+	// special is the NaN or infinity the total has become, which no finite
+	// value can change.
+	special *apd.Decimal
 }
 
 func (s *decimalSum) addDecimalVal(dv decimalVal) {
@@ -494,12 +460,53 @@ func (s *decimalSum) addDecimalVal(dv decimalVal) {
 }
 
 func (s *decimalSum) add(v any) {
+	if special := specialDecimal(v); special != nil {
+		s.addSpecial(special)
+		return
+	}
+
 	if dv, ok := toDecimalVal(v); ok {
 		s.addDecimalVal(dv)
 	}
 }
 
+// addSpecial follows IEEE 754: NaN absorbs everything, and infinities of
+// opposite sign make NaN.
+func (s *decimalSum) addSpecial(x *apd.Decimal) {
+	switch {
+	case s.special == nil:
+		s.special = x
+	case s.special.Form == apd.NaN:
+	case x.Form == apd.NaN || x.Negative != s.special.Negative:
+		s.special = &apd.Decimal{Form: apd.NaN}
+	}
+}
+
+// specialDecimal returns v as a Decimal128 NaN or infinity, or nil when v
+// is not one.
+func specialDecimal(v any) *apd.Decimal {
+	switch v := v.(type) {
+	case float64:
+		switch {
+		case math.IsNaN(v):
+			return &apd.Decimal{Form: apd.NaN}
+		case math.IsInf(v, 0):
+			return &apd.Decimal{Form: apd.Infinite, Negative: v < 0}
+		}
+	case types.Decimal128:
+		if x := DecimalToAPD(v); x.Form != apd.Finite {
+			return x
+		}
+	}
+
+	return nil
+}
+
 func (s *decimalSum) result() types.Decimal128 {
+	if s.special != nil {
+		return APDToDecimal128(s.special)
+	}
+
 	if !s.any {
 		return decimalZero()
 	}
