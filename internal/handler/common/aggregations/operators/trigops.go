@@ -70,6 +70,15 @@ func (b trigBounds) String() string {
 	return open + formatBound(b.lower) + "," + formatBound(b.upper) + closing
 }
 
+// formatDoubleForMessage formats f as a C++ ostream does by default, with
+// six significant digits, as MongoDB's error messages show it.
+func formatDoubleForMessage(f float64) string {
+	if math.IsInf(f, 0) {
+		return formatBound(f)
+	}
+	return strconv.FormatFloat(f, 'g', 6, 64)
+}
+
 func formatBound(f float64) string {
 	switch {
 	case math.IsInf(f, 1):
@@ -140,7 +149,7 @@ func (op *trigOp) Process(doc *types.Document) (any, error) {
 		return v, nil
 	}
 	if !op.bounds.containsDouble(f) {
-		return nil, op.outOfBounds(formatBound(f))
+		return nil, op.outOfBounds(formatDoubleForMessage(f))
 	}
 	return op.double(f), nil
 }

@@ -27,7 +27,8 @@ import (
 //
 // glibc computes double asinh, acosh and atanh with fdlibm's formulas over
 // log1p, log and sqrt, ported here (math.Log1p is fdlibm's log1p; log is
-// correctly rounded, as glibc's is in practice). Decimal128 follows
+// correctly rounded, as glibc's nearly always is, see workspace-m8c.13).
+// Decimal128 follows
 // bid128_asinh, bid128_acosh and bid128_atanh.
 
 var (
@@ -131,7 +132,7 @@ func atanhBig(x *big.Float, prec uint) *big.Float {
 	return r
 }
 
-// logDouble is ln(x) correctly rounded, as glibc's log is in practice.
+// logDouble is ln(x) correctly rounded, as glibc's log nearly always is.
 func logDouble(x float64) float64 {
 	r, _ := new(big.Float).SetPrec(binary64Precision).Set(logBig(new(big.Float).SetFloat64(x), trigWorkPrecision)).Float64()
 	return r

@@ -26,8 +26,10 @@ import (
 
 // Trigonometric functions that reproduce MongoDB's results exactly.
 //
-// Doubles are correctly rounded from a high precision evaluation, which is
-// what glibc's libm returns. Decimal128 values follow the Intel decimal
+// Doubles are correctly rounded from a high precision evaluation. glibc's
+// libm is nearly but not always correctly rounded, so a small fraction of
+// results differ from MongoDB's in the last digit (workspace-m8c.13). Decimal128
+// values follow the Intel decimal
 // floating point library MongoDB links (bid128_sin.c and friends): small
 // arguments take shortcuts, others are reduced modulo pi/2 in fixed point,
 // evaluated as IEEE binary128 and converted back with binary128_to_bid128.
@@ -496,10 +498,39 @@ func apdToBinary128(x *apd.Decimal) *big.Float {
 		return f
 	}
 	f.SetRat(decimalRat(x.Negative, x.Coeff.MathBigInt(), int(x.Exponent)))
+	f = binary128Subnormal(f)
 	if f.MantExp(nil) > 16384 {
 		return f.SetInf(x.Negative)
 	}
 	return f
+}
+
+// binary128Subnormal rounds f, already rounded to binary128's precision, to
+// the reduced precision binary128 has below its smallest normal number,
+// 2^-16382: a multiple of the smallest subnormal, 2^-16494, ties to even.
+// What rounds to zero keeps its sign.
+func binary128Subnormal(f *big.Float) *big.Float {
+	if f.IsInf() || f.Sign() == 0 || f.MantExp(nil) > -16381 {
+		return f
+	}
+	scaled := new(big.Float).SetMantExp(f, 16494)
+	n, _ := scaled.Int(nil)
+	frac := new(big.Float).Sub(scaled, new(big.Float).SetInt(n))
+	half := big.NewFloat(0.5)
+	switch frac.Abs(frac).Cmp(half) {
+	case 1:
+		n.Add(n, big.NewInt(int64(scaled.Sign())))
+	case 0:
+		if n.Bit(0) == 1 {
+			n.Add(n, big.NewInt(int64(scaled.Sign())))
+		}
+	}
+	out := new(big.Float).SetPrec(binary128Precision).SetInt(n)
+	out.SetMantExp(out, -16494)
+	if n.Sign() == 0 && f.Signbit() {
+		out.Neg(out)
+	}
+	return out
 }
 
 func withDecimalSign(d types.Decimal128, negative bool) types.Decimal128 {

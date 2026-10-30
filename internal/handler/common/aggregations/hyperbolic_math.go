@@ -28,8 +28,9 @@ import (
 //
 // glibc computes double sinh, cosh and tanh with fdlibm's formulas over expm1
 // and exp, which are not correctly rounded, so those formulas are ported here
-// (math.Expm1 is fdlibm's expm1; exp is correctly rounded, as glibc's is in
-// practice). Decimal128 follows bid128_sinh, bid128_cosh and bid128_tanh.
+// (math.Expm1 is fdlibm's expm1; exp is correctly rounded, as glibc's nearly
+// always is, see workspace-m8c.13). Decimal128 follows bid128_sinh,
+// bid128_cosh and bid128_tanh.
 
 var (
 	decimalShifter  = types.Decimal128{H: 0x3040363bf3b1ceee, L: 0xbe00000000000000}
@@ -140,7 +141,7 @@ func tanhBig(x *big.Float, prec uint) *big.Float {
 	return r.Quo(r, coshBig(x, prec))
 }
 
-// expDouble is e^x correctly rounded, as glibc's exp is in practice.
+// expDouble is e^x correctly rounded, as glibc's exp nearly always is.
 func expDouble(x float64) float64 {
 	switch {
 	case math.IsNaN(x) || math.IsInf(x, 1):
@@ -255,9 +256,10 @@ func fdlibmTanh(x float64) float64 {
 	return -z
 }
 
-// quadRound rounds f to binary128, overflowing to infinity.
+// quadRound rounds f to binary128, overflowing to infinity and underflowing
+// through its subnormals.
 func quadRound(f *big.Float) *big.Float {
-	r := new(big.Float).SetPrec(binary128Precision).Set(f)
+	r := binary128Subnormal(new(big.Float).SetPrec(binary128Precision).Set(f))
 	if !r.IsInf() && r.Sign() != 0 && r.MantExp(nil) > 16384 {
 		r.SetInf(r.Signbit())
 	}
