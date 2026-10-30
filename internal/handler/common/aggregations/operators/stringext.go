@@ -110,11 +110,18 @@ func (op *substrBytesOp) Process(doc *types.Document) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	if isNullish(sv) {
-		return "", nil
+	startV, err := evalArgValue(op.start, doc)
+	if err != nil {
+		return nil, err
+	}
+	lenV, err := evalArgValue(op.length, doc)
+	if err != nil {
+		return nil, err
 	}
 
+	if isNullish(sv) {
+		sv = ""
+	}
 	s, ok := sv.(string)
 	if !ok {
 		return nil, newOperatorError(
@@ -123,41 +130,7 @@ func (op *substrBytesOp) Process(doc *types.Document) (any, error) {
 			fmt.Sprintf("$substrBytes requires a string first argument, got %T", sv),
 		)
 	}
-
-	startV, err := evalArgValue(op.start, doc)
-	if err != nil {
-		return nil, err
-	}
-
-	lenV, err := evalArgValue(op.length, doc)
-	if err != nil {
-		return nil, err
-	}
-
-	start := toBoundedInt(startV)
-	length := toBoundedInt(lenV)
-
-	b := []byte(s)
-
-	if start < 0 {
-		start = 0
-	}
-
-	if start >= len(b) {
-		return "", nil
-	}
-
-	b = b[start:]
-
-	if length < 0 {
-		return string(b), nil
-	}
-
-	if length > len(b) {
-		length = len(b)
-	}
-
-	return string(b[:length]), nil
+	return substrBytes("$substrBytes", s, startV, lenV)
 }
 
 var _ Operator = (*substrBytesOp)(nil)

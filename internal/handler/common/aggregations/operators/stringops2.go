@@ -19,6 +19,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
@@ -109,50 +111,17 @@ func (op *substrOp) Process(doc *types.Document) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	if isNullish(sv) {
-		return "", nil
-	}
-
-	s, ok := sv.(string)
-	if !ok {
-		return "", nil
-	}
-
 	startV, err := evalArgValue(op.startArg, doc)
 	if err != nil {
 		return nil, err
 	}
-
 	lenV, err := evalArgValue(op.lengthArg, doc)
 	if err != nil {
 		return nil, err
 	}
 
-	start := toBoundedInt(startV)
-	length := toBoundedInt(lenV)
-
-	bytes := []byte(s)
-	n := len(bytes)
-
-	if start < 0 {
-		start = 0
-	}
-
-	if start >= n {
-		return "", nil
-	}
-
-	if length < 0 {
-		return string(bytes[start:]), nil
-	}
-
-	end := n
-	if length < n-start {
-		end = start + length
-	}
-
-	return string(bytes[start:end]), nil
+	s, _ := sv.(string)
+	return substrBytes("$substrBytes", s, startV, lenV)
 }
 
 var _ Operator = (*substrOp)(nil)
@@ -178,50 +147,63 @@ func (op *substrCPOp) Process(doc *types.Document) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	if isNullish(sv) {
-		return "", nil
-	}
-
-	s, ok := sv.(string)
-	if !ok {
-		return "", nil
-	}
-
 	startV, err := evalArgValue(op.startArg, doc)
 	if err != nil {
 		return nil, err
 	}
-
 	lenV, err := evalArgValue(op.lengthArg, doc)
 	if err != nil {
 		return nil, err
 	}
+	s, _ := sv.(string)
 
-	start := toBoundedInt(startV)
-	length := toBoundedInt(lenV)
-
-	runes := []rune(s)
-	n := len(runes)
-
-	if start < 0 {
-		start = 0
+	if !isNumber(startV) {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSubstrCPStartNotNumeric,
+			"$substrCP: starting index must be a numeric type (is BSON type "+handlerparams.AliasFromType(startV)+")", "$substrCP")
 	}
-
-	if start >= n {
-		return "", nil
+	start, ok := integralInt(startV)
+	if !ok {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSubstrCPStartNotInt,
+			"$substrCP: starting index cannot be represented as a 32-bit integral value: "+scalarString(startV), "$substrCP")
 	}
-
+	if !isNumber(lenV) {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSubstrCPLengthNotNumeric,
+			"$substrCP: length must be a numeric type (is BSON type "+handlerparams.AliasFromType(lenV)+")", "$substrCP")
+	}
+	length, ok := integralInt(lenV)
+	if !ok {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSubstrCPLengthNotInt,
+			"$substrCP: length cannot be represented as a 32-bit integral value: "+scalarString(lenV), "$substrCP")
+	}
 	if length < 0 {
-		return string(runes[start:]), nil
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSubstrCPLengthNegative,
+			"$substrCP: length must be a nonnegative integer.", "$substrCP")
+	}
+	if start < 0 {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSubstrCPStartNegative,
+			"$substrCP: the starting index must be nonnegative integer.", "$substrCP")
 	}
 
-	end := n
-	if length < n-start {
-		end = start + length
+	invalid := handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSubstrCPInvalidUTF8,
+		"$substrCP: invalid UTF-8 string", "$substrCP")
+	startByte := 0
+	for range start {
+		if startByte >= len(s) {
+			return "", nil
+		}
+		if isUTF8Continuation(s[startByte]) || utf8CodePointLength(s[startByte]) > 4 {
+			return nil, invalid
+		}
+		startByte += utf8CodePointLength(s[startByte])
 	}
-
-	return string(runes[start:end]), nil
+	endByte := startByte
+	for i := 0; i < length && endByte < len(s); i++ {
+		if isUTF8Continuation(s[endByte]) || utf8CodePointLength(s[endByte]) > 4 {
+			return nil, invalid
+		}
+		endByte += utf8CodePointLength(s[endByte])
+	}
+	return s[startByte:min(endByte, len(s))], nil
 }
 
 var _ Operator = (*substrCPOp)(nil)
@@ -403,71 +385,52 @@ func (op *indexOfBytesOp) Process(doc *types.Document) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	if isNullish(sv) {
 		return types.Null, nil
 	}
-
 	s, ok := sv.(string)
 	if !ok {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$indexOfBytes",
-			fmt.Sprintf("$indexOfBytes requires a string, got %T", sv))
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIndexOfBytesNotString,
+			"$indexOfBytes requires a string as the first argument, found: "+handlerparams.AliasFromType(sv), "$indexOfBytes")
 	}
-
-	subV, err := evalArgValue(op.substringArg, doc)
+	tokenV, err := evalArgValue(op.substringArg, doc)
 	if err != nil {
 		return nil, err
 	}
-
-	sub, ok := subV.(string)
+	token, ok := tokenV.(string)
 	if !ok {
-		return int32(-1), nil
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIndexOfBytesTokenString,
+			"$indexOfBytes requires a string as the second argument, found: "+handlerparams.AliasFromType(tokenV), "$indexOfBytes")
 	}
 
-	bytes := []byte(s)
-	n := len(bytes)
-	start := 0
-	end := n
-
+	start, end := 0, len(s)
 	if op.startArg != nil {
 		stv, err := evalArgValue(op.startArg, doc)
 		if err != nil {
 			return nil, err
 		}
-
-		if !isNullish(stv) {
-			start = toBoundedInt(stv)
+		if start, err = requireIndex(stv, "$indexOfBytes", "starting index"); err != nil {
+			return nil, err
 		}
 	}
-
 	if op.endArg != nil {
 		ev, err := evalArgValue(op.endArg, doc)
 		if err != nil {
 			return nil, err
 		}
-
-		if !isNullish(ev) {
-			end = toBoundedInt(ev)
+		if end, err = requireIndex(ev, "$indexOfBytes", "ending index"); err != nil {
+			return nil, err
 		}
+		end = min(end, len(s))
 	}
 
-	if start < 0 {
-		start = 0
-	}
-
-	if end > n {
-		end = n
-	}
-
-	if start >= end {
+	if start > len(s) || end < start {
 		return int32(-1), nil
 	}
-
-	idx := strings.Index(string(bytes[start:end]), sub)
+	idx := strings.Index(s[start:end], token)
 	if idx < 0 {
 		return int32(-1), nil
 	}
-
 	return int32(start + idx), nil
 }
 
@@ -500,76 +463,74 @@ func (op *indexOfCPOp) Process(doc *types.Document) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	if isNullish(sv) {
 		return types.Null, nil
 	}
-
 	s, ok := sv.(string)
 	if !ok {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$indexOfCP",
-			fmt.Sprintf("$indexOfCP requires a string, got %T", sv))
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIndexOfCPNotString,
+			"$indexOfCP requires a string as the first argument, found: "+handlerparams.AliasFromType(sv), "$indexOfCP")
 	}
-
-	subV, err := evalArgValue(op.substringArg, doc)
+	tokenV, err := evalArgValue(op.substringArg, doc)
 	if err != nil {
 		return nil, err
 	}
-
-	sub, ok := subV.(string)
+	token, ok := tokenV.(string)
 	if !ok {
-		return int32(-1), nil
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIndexOfCPTokenString,
+			"$indexOfCP requires a string as the second argument, found: "+handlerparams.AliasFromType(tokenV), "$indexOfCP")
 	}
 
-	runes := []rune(s)
-	n := len(runes)
 	start := 0
-	end := n
-
 	if op.startArg != nil {
 		stv, err := evalArgValue(op.startArg, doc)
 		if err != nil {
 			return nil, err
 		}
-
-		if !isNullish(stv) {
-			start = toBoundedInt(stv)
+		if start, err = requireIndex(stv, "$indexOfCP", "starting index"); err != nil {
+			return nil, err
 		}
 	}
 
+	// Count code points, noting the byte where the search starts; past the
+	// end it stays 0, as in mongod.
+	codePoints, startByte := 0, 0
+	for b := 0; b < len(s); codePoints++ {
+		if codePoints == start {
+			startByte = b
+		}
+		if isUTF8Continuation(s[b]) {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIndexOfCPBadUTF8,
+				"$indexOfCP found bad UTF-8 in the input", "$indexOfCP")
+		}
+		b += utf8CodePointLength(s[b])
+	}
+
+	end := codePoints
 	if op.endArg != nil {
 		ev, err := evalArgValue(op.endArg, doc)
 		if err != nil {
 			return nil, err
 		}
-
-		if !isNullish(ev) {
-			end = toBoundedInt(ev)
+		if end, err = requireIndex(ev, "$indexOfCP", "ending index"); err != nil {
+			return nil, err
 		}
+		end = min(end, codePoints)
 	}
 
-	if start < 0 {
-		start = 0
-	}
-
-	if end > n {
-		end = n
-	}
-
-	if start >= end {
+	if end < start {
 		return int32(-1), nil
 	}
-
-	subStr := string([]rune(sub))
-	haystack := string(runes[start:end])
-	idx := strings.Index(haystack, subStr)
-
-	if idx < 0 {
-		return int32(-1), nil
+	if startByte == 0 && s == "" && token == "" {
+		return int32(0), nil
 	}
-
-	// Convert byte index back to rune index.
-	return int32(start + utf8.RuneCountInString(haystack[:idx])), nil
+	for b, cp := startByte, start; cp < end; cp++ {
+		if b+len(token) <= len(s) && s[b:b+len(token)] == token {
+			return int32(cp), nil
+		}
+		b += utf8CodePointLength(s[b])
+	}
+	return int32(-1), nil
 }
 
 var _ Operator = (*indexOfCPOp)(nil)
