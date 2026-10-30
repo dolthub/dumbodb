@@ -113,6 +113,58 @@ func isMissingVariable(doc *types.Document, name string) bool {
 	return doc != nil && doc.Has(missingVariablePrefix+name)
 }
 
+// isConstantExpression reports whether expr reads no field and no variable,
+// so that mongod folds it to a constant while parsing.
+func isConstantExpression(expr any) bool {
+	switch v := expr.(type) {
+	case string:
+		return !strings.HasPrefix(v, "$")
+	case *types.Array:
+		for i := range v.Len() {
+			if !isConstantExpression(must.NotFail(v.Get(i))) {
+				return false
+			}
+		}
+		return true
+	case *types.Document:
+		if IsOperator(v) {
+			switch v.Command() {
+			case "$literal":
+				return true
+			case "$rand":
+				return false
+			}
+		}
+		for _, k := range v.Keys() {
+			if !isConstantExpression(must.NotFail(v.Get(k))) {
+				return false
+			}
+		}
+		return true
+	default:
+		return true
+	}
+}
+
+// checkConstantOperand returns the error mongod raises when it folds a
+// constant operand that fails while parsing, even if the operand would
+// never be evaluated.
+func checkConstantOperand(expr any) error {
+	if !isConstantExpression(expr) {
+		return nil
+	}
+	_, _, err := foldConstant(expr, nil)
+	return err
+}
+
+// foldConstant is EvalOperand. Operator constructors call it, and EvalOperand
+// reaches Operators, so it is bound in init to avoid an initialization cycle.
+var foldConstant func(expr any, doc *types.Document) (any, bool, error)
+
+func init() {
+	foldConstant = EvalOperand
+}
+
 // copyForVariables copies doc so an operator can bind variables in it.
 // Expressions are validated against no document at all (nil), which binds
 // variables like a document with no fields.

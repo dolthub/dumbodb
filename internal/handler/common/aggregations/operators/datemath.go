@@ -35,7 +35,13 @@ type civilDate struct {
 
 // civilFromMillis splits Unix milliseconds into date and time parts.
 func civilFromMillis(ms int64) civilDate {
-	seconds, millis := floorDiv(ms, 1000), floorMod(ms, 1000)
+	return civilFromSeconds(floorDiv(ms, 1000), floorMod(ms, 1000))
+}
+
+// civilFromSeconds is civilFromMillis for a time split into whole seconds
+// and milliseconds, which can be shifted by a zone offset without
+// overflowing at the ends of the date range.
+func civilFromSeconds(seconds, millis int64) civilDate {
 	days, secondOfDay := floorDiv(seconds, 86400), floorMod(seconds, 86400)
 	year, month, day := civilFromDays(days)
 	return civilDate{
@@ -145,7 +151,7 @@ func (tz mongoTimeZone) localCivil(ms int64) civilDate {
 	if tz.loc != nil {
 		offset, _, _ = tz.zoneInfo(seconds)
 	}
-	return civilFromMillis(ms + offset*1000)
+	return civilFromSeconds(seconds+offset, floorMod(ms, 1000))
 }
 
 // coerceToDateMillis is Value::coerceToDate: dates, timestamps (their

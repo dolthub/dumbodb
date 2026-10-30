@@ -103,6 +103,16 @@ func newDateFromString(args ...any) (Operator, error) {
 	if op.timeZone, err = newTimeZoneArg(timeZone, hasTimeZone); err != nil {
 		return nil, err
 	}
+	for _, operand := range []struct {
+		expr    any
+		present bool
+	}{{op.onNull, op.hasOnNull}, {op.onError, op.hasOnError}} {
+		if operand.present {
+			if err = checkConstantOperand(operand.expr); err != nil {
+				return nil, err
+			}
+		}
+	}
 	return op, nil
 }
 
@@ -140,7 +150,7 @@ func (op *dateFromStringOp) Process(doc *types.Document) (any, error) {
 
 	if isNullish(dateString) {
 		if op.hasOnNull {
-			return evalArgValue(op.onNull, doc)
+			return evalBranch(op.onNull, doc)
 		}
 		return types.Null, nil
 	}
@@ -148,7 +158,7 @@ func (op *dateFromStringOp) Process(doc *types.Document) (any, error) {
 	result, err := op.convert(dateString, format, tz, tzNull)
 	var cmdErr *handlererrors.CommandError
 	if err != nil && op.hasOnError && errors.As(err, &cmdErr) && cmdErr.Code() == handlererrors.ErrConversionFailure {
-		return evalArgValue(op.onError, doc)
+		return evalBranch(op.onError, doc)
 	}
 	return result, err
 }

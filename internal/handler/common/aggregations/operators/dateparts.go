@@ -204,6 +204,11 @@ func newDateToString(args ...any) (Operator, error) {
 	if op.timeZone, err = newTimeZoneArg(timeZone, hasTimeZone); err != nil {
 		return nil, err
 	}
+	if op.hasOnNull {
+		if err = checkConstantOperand(op.onNull); err != nil {
+			return nil, err
+		}
+	}
 	return op, nil
 }
 
@@ -240,7 +245,7 @@ func (op *dateToStringOp) Process(doc *types.Document) (any, error) {
 
 	if isNullish(date) {
 		if op.hasOnNull {
-			return evalArgValue(op.onNull, doc)
+			return evalBranch(op.onNull, doc)
 		}
 		return types.Null, nil
 	}
