@@ -99,10 +99,18 @@ func newFacet(stage *types.Document) (aggregations.Stage, error) {
 		// Validate that each element is a document (basic validation at parse time).
 		for i := 0; i < pipelineArr.Len(); i++ {
 			elem := must.NotFail(pipelineArr.Get(i))
-			if _, ok := elem.(*types.Document); !ok {
+			stage, ok := elem.(*types.Document)
+			if !ok {
 				return nil, handlererrors.NewCommandErrorMsgWithArgument(
 					handlererrors.ErrStageInvalid,
 					"A pipeline stage specification object must contain exactly one field.",
+					"$facet (stage)",
+				)
+			}
+			if stage.Command() == "$documents" {
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrStageNotAllowedInFacet,
+					"$documents is not allowed to be used within a $facet stage",
 					"$facet (stage)",
 				)
 			}

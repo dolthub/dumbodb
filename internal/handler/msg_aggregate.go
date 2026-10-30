@@ -257,6 +257,10 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			)
 		}
 
+		if err = documentsNotFirst(d, i); err != nil {
+			return nil, err
+		}
+
 		var s aggregations.Stage
 
 		switch d.Command() {
@@ -872,6 +876,9 @@ func (h *Handler) aggregateDocuments(connCtx context.Context, document, firstSta
 				document.Command(),
 			)
 		}
+		if err := documentsNotFirst(sd, i); err != nil {
+			return nil, err
+		}
 		s, err := stages.NewStage(sd)
 		if err != nil {
 			return nil, err
@@ -1471,4 +1478,16 @@ func buildMergeKey(doc *types.Document, fields []string) string {
 	}
 
 	return key
+}
+
+// documentsNotFirst is mongod's error for $documents after the first stage.
+func documentsNotFirst(stage *types.Document, i int) error {
+	if i == 0 || stage.Command() != "$documents" {
+		return nil
+	}
+	return handlererrors.NewCommandErrorMsgWithArgument(
+		handlererrors.ErrCollStatsIsNotFirstStage,
+		"$documents is only valid as the first stage in a pipeline",
+		"$documents",
+	)
 }
