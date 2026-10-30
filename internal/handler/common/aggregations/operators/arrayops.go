@@ -92,13 +92,19 @@ func newSize(args ...any) (Operator, error) {
 }
 
 func (op *sizeOp) Process(doc *types.Document) (any, error) {
-	arr, isNull, err := collectArray(op.arg, doc, "$size")
+	v, missing, err := evalArgValueOrMissing(op.arg, doc)
 	if err != nil {
 		return nil, err
 	}
 
-	if isNull {
-		return types.Null, nil
+	arr, ok := v.(*types.Array)
+	if !ok || missing {
+		typeName := "missing"
+		if !missing {
+			typeName = handlerparams.AliasFromType(v)
+		}
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSizeNotArray,
+			"The argument to $size must be an array, but was of type: "+typeName, "$size")
 	}
 
 	return int32(arr.Len()), nil

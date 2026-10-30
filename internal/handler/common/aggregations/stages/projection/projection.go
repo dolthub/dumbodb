@@ -162,29 +162,8 @@ func ValidateProjection(projection *types.Document) (*types.Document, bool, erro
 				break
 			}
 
-			op, err := operators.NewOperator(value)
-			if err = processOperatorError(err); err != nil {
+			if err := ValidateExpression(value); err != nil {
 				return nil, false, err
-			}
-
-			// The operator runs against a placeholder document, so only errors
-			// describing its shape are meaningful here. Data-dependent outcomes
-			// (a missing field, a field name that resolves to a non-string)
-			// depend on the real document, and the placeholder cannot decide
-			// them. Discarding those is deliberate rather than lossy: MongoDB
-			// reports them when the stage runs too, so $getField with a
-			// non-string 'field' must parse here and fail later. They are not
-			// swallowed, since the runtime path returns every error that is not
-			// a missing value.
-			if _, err = op.Process(must.NotFail(types.NewDocument("key", "value"))); err != nil {
-				var opErr operators.OperatorError
-				var exErr *aggregations.ExpressionError
-
-				if errors.As(err, &opErr) || errors.As(err, &exErr) {
-					if err = processOperatorError(operators.AsNestedError(err)); err != nil {
-						return nil, false, err
-					}
-				}
 			}
 
 			// validate operators later
@@ -762,6 +741,35 @@ func setBySourceOrder(key string, val any, source, projected *types.Document) {
 // - ErrInvalidPipelineOperator when the operator does not exist.
 // - ErrFailedToParse when operator has invalid variable expression.
 // - ErrGroupInvalidFieldPath when operator has empty path expression.
+// ValidateExpression reports the parse errors mongod reports for an
+// expression object used as a projection value.
+func ValidateExpression(value *types.Document) error {
+	op, err := operators.NewOperator(value)
+	if err = processOperatorError(err); err != nil {
+		return err
+	}
+
+	// The operator runs against a placeholder document, so only errors
+	// describing its shape are meaningful here. Data-dependent outcomes
+	// (a missing field, a field name that resolves to a non-string)
+	// depend on the real document, and the placeholder cannot decide
+	// them. Discarding those is deliberate rather than lossy: MongoDB
+	// reports them when the stage runs too, so $getField with a
+	// non-string 'field' must parse here and fail later. They are not
+	// swallowed, since the runtime path returns every error that is not
+	// a missing value.
+	if _, err = op.Process(must.NotFail(types.NewDocument("key", "value"))); err != nil {
+		var opErr operators.OperatorError
+		var exErr *aggregations.ExpressionError
+
+		if errors.As(err, &opErr) || errors.As(err, &exErr) {
+			return processOperatorError(operators.AsNestedError(err))
+		}
+	}
+
+	return nil
+}
+
 func processOperatorError(err error) error {
 	if err == nil {
 		return nil

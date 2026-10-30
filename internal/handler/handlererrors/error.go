@@ -424,6 +424,13 @@ const (
 	// ErrUnsetPathOverwrite indicates that an $unset path have overwrites another path in arguments.
 	ErrUnsetPathOverwrite = ErrorCode(31250) // Location31250
 
+	// ErrSizeNotArray indicates that the argument to $size is not an array.
+	ErrSizeNotArray = ErrorCode(17124) // Location17124
+
+	// ErrProjectionExpressionInExclusion indicates an expression in an
+	// exclusion projection.
+	ErrProjectionExpressionInExclusion = ErrorCode(31252) // Location31252
+
 	// ErrProjectionInEx for $elemMatch indicates that inclusion statement found
 	// while projection document already marked as exclusion.
 	ErrProjectionInEx = ErrorCode(31253) // Location31253

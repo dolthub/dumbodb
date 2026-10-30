@@ -108,6 +108,12 @@ func SpecHasComputedPath(spec *types.Document, projection bool) bool {
 	return false
 }
 
+// EvalComputed evaluates a computed projection value against root, reporting
+// whether the result is missing.
+func EvalComputed(expr any, root *types.Document) (any, bool, error) {
+	return evalComputed(expr, root)
+}
+
 // evalComputed evaluates a computed field's expression against root, reporting
 // whether it is missing.
 func evalComputed(expr any, root *types.Document) (any, bool, error) {
