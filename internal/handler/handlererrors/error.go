@@ -331,6 +331,13 @@ const (
 	ErrFormatUnmatchedPercent    = ErrorCode(18535)   // Location18535
 	ErrFormatInvalidSpecifier    = ErrorCode(18536)   // Location18536
 	ErrTimeUnitNotString         = ErrorCode(5439013) // Location5439013
+	ErrDateDiffNotObject         = ErrorCode(5166301) // Location5166301
+	ErrDateDiffBadField          = ErrorCode(5166302) // Location5166302
+	ErrDateDiffNoStartDate       = ErrorCode(5166303) // Location5166303
+	ErrDateDiffNoEndDate         = ErrorCode(5166304) // Location5166304
+	ErrDateDiffNoUnit            = ErrorCode(5166305) // Location5166305
+	ErrDateDiffNotDate           = ErrorCode(5166307) // Location5166307
+	ErrDateDiffOverflow          = ErrorCode(5166308) // Location5166308
 	ErrDateTruncShiftOverflow    = ErrorCode(5439000) // Location5439000
 	ErrDateTruncResultOverflow   = ErrorCode(5439001) // Location5439001
 	ErrDateTruncBinSizeOverflow  = ErrorCode(5439002) // Location5439002

@@ -203,6 +203,7 @@ func parseNested(args []any) error {
 var wholeArgumentOperators = map[string]struct{}{
 	"$convert":        {},
 	"$dateAdd":        {},
+	"$dateDiff":       {},
 	"$dateFromParts":  {},
 	"$dateFromString": {},
 	"$dateSubtract":   {},

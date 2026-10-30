@@ -115,13 +115,13 @@ func newDateTrunc(args ...any) (Operator, error) {
 			op.alwaysNull = true
 			return op, nil
 		}
-		if op.parsedStartOfWeek, err = parseDayOfWeek(op.startOfWeek); err != nil {
+		if op.parsedStartOfWeek, err = parseDayOfWeek(op.startOfWeek, "$dateTrunc"); err != nil {
 			return nil, err
 		}
 	}
 
 	if op.timeZone, err = newTimeZoneArg(timeZone, hasTimeZone); err != nil {
-		return nil, timeZoneParsingFailed(err)
+		return nil, timeZoneParsingFailed(err, "$dateTrunc")
 	}
 	if hasTimeZone && isConstantOperand(timeZone) && isNullish(timeZone) {
 		op.alwaysNull = true
@@ -187,7 +187,7 @@ func (op *dateTruncOp) Process(doc *types.Document) (any, error) {
 			if err != nil || isNullish(v) {
 				return types.Null, err
 			}
-			if startOfWeek, err = parseDayOfWeek(v); err != nil {
+			if startOfWeek, err = parseDayOfWeek(v, "$dateTrunc"); err != nil {
 				return nil, err
 			}
 		}
@@ -195,7 +195,7 @@ func (op *dateTruncOp) Process(doc *types.Document) (any, error) {
 
 	tz, isNull, err := op.timeZone.evaluate(doc)
 	if err != nil {
-		return nil, timeZoneParsingFailed(err)
+		return nil, timeZoneParsingFailed(err, "$dateTrunc")
 	}
 	if isNull {
 		return types.Null, nil
@@ -214,13 +214,13 @@ func (op *dateTruncOp) Process(doc *types.Document) (any, error) {
 	return time.UnixMilli(res).UTC(), nil
 }
 
-func timeZoneParsingFailed(err error) error {
+func timeZoneParsingFailed(err error, opName string) error {
 	var cmdErr *handlererrors.CommandError
 	if !errors.As(err, &cmdErr) {
 		return err
 	}
 	return handlererrors.NewCommandErrorMsgWithArgument(cmdErr.Code(),
-		"$dateTrunc parameter 'timezone' value parsing failed :: caused by :: "+cmdErr.Err().Error(), "$dateTrunc")
+		opName+" parameter 'timezone' value parsing failed :: caused by :: "+cmdErr.Err().Error(), opName)
 }
 
 // convertToBinSize is ExpressionDateTrunc::convertToBinSize.
@@ -257,17 +257,17 @@ var daysOfWeek = map[string]int64{
 	"sunday": 7, "sun": 7,
 }
 
-// parseDayOfWeek is MongoDB's parseDayOfWeek for $dateTrunc's 'startOfWeek'.
-func parseDayOfWeek(v any) (int64, error) {
+// parseDayOfWeek is MongoDB's parseDayOfWeek for an operator's 'startOfWeek'.
+func parseDayOfWeek(v any, opName string) (int64, error) {
 	name, ok := v.(string)
 	if !ok {
 		return 0, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrStartOfWeekNotString,
-			"$dateTrunc requires 'startOfWeek' to be a string, but got "+handlerparams.AliasFromType(v), "$dateTrunc")
+			opName+" requires 'startOfWeek' to be a string, but got "+handlerparams.AliasFromType(v), opName)
 	}
 	day, ok := daysOfWeek[strings.ToLower(name)]
 	if !ok {
 		return 0, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrStartOfWeekInvalid,
-			"$dateTrunc parameter 'startOfWeek' value cannot be recognized as a day of a week: "+name, "$dateTrunc")
+			opName+" parameter 'startOfWeek' value cannot be recognized as a day of a week: "+name, opName)
 	}
 	return day, nil
 }
