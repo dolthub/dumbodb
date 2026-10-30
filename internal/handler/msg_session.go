@@ -94,9 +94,10 @@ func (h *Handler) finishClientTransaction(connCtx context.Context) error {
 			sab.OnTransactionAbort(ci.Owner())
 		}
 		ci.SetInTransaction(false)
-		return handlererrors.NewCommandError(
+		return handlererrors.NewCommandErrorWithLabels(
 			handlererrors.ErrNoSuchTransaction,
 			errors.New("Transaction was aborted by a prior server-side rejection."),
+			handlererrors.TransientTransactionErrorLabel,
 		)
 	}
 	if ok {

@@ -18,8 +18,13 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"fmt"
 
+	"github.com/FerretDB/wire"
+
+	"github.com/dolthub/dumbodb/internal/bson"
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
@@ -103,4 +108,40 @@ func extractAndSetTransactionFlag(ctx context.Context, doc *types.Document) (sta
 	}
 
 	return started
+}
+
+// abortedTransactionError is mongod's error for a statement in a
+// transaction that an earlier failure aborted.
+func abortedTransactionError(doc *types.Document) error {
+	msg := "Transaction has been aborted."
+	if n, err := doc.Get("txnNumber"); err == nil {
+		msg = fmt.Sprintf("Transaction with { txnNumber: %v } has been aborted.", n)
+	}
+	return handlererrors.NewCommandErrorWithLabels(
+		handlererrors.ErrNoSuchTransaction,
+		errors.New(msg),
+		handlererrors.TransientTransactionErrorLabel,
+	)
+}
+
+// replyHasWriteErrors reports whether a successful write command's reply
+// carries writeErrors, which also abort a transaction in mongod.
+func replyHasWriteErrors(resMsg *wire.OpMsg) bool {
+	if resMsg == nil {
+		return false
+	}
+	raw, err := resMsg.RawDocument()
+	if err != nil {
+		return false
+	}
+	doc, err := bson.DecodeRawDocument(raw)
+	if err != nil {
+		return false
+	}
+	writeErrors, err := doc.Get("writeErrors")
+	if err != nil {
+		return false
+	}
+	arr, ok := writeErrors.(*types.Array)
+	return ok && arr.Len() > 0
 }
