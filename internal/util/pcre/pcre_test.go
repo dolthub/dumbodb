@@ -30,18 +30,18 @@ func TestTranslateMatches(t *testing.T) {
 		input   string
 		want    []string // every non-overlapping match
 	}{
-		"DigitIsASCII":          {pattern: `\d+`, input: "12٣", want: []string{"12"}},
-		"WordIsASCII":           {pattern: `\w+`, input: "café", want: []string{"caf"}},
+		"DigitIsASCII":          {pattern: `\d+`, input: "12\u0663", want: []string{"12"}},
+		"WordIsASCII":           {pattern: `\w+`, input: "caf\u00E9", want: []string{"caf"}},
 		"SpaceHasVerticalTab":   {pattern: `\s`, input: "a\vb", want: []string{"\v"}},
-		"WordBoundaryASCII":     {pattern: `\bb`, input: "éb b", want: []string{"b", "b"}},
+		"WordBoundaryASCII":     {pattern: `\bb`, input: "\u00E9b b", want: []string{"b", "b"}},
 		"ClassShorthands":       {pattern: `[\d\s]+`, input: "a1 2b", want: []string{"1 2"}},
 		"Possessive":            {pattern: `a++b`, input: "aaab", want: []string{"aaab"}},
 		"PossessiveFails":       {pattern: `a*+a`, input: "aaa", want: nil},
 		"PossessiveGroup":       {pattern: `(?:ab)++c`, input: "ababc", want: []string{"ababc"}},
 		"POSIXClass":            {pattern: `[[:upper:][:digit:]]+`, input: "aB1c", want: []string{"B1"}},
 		"Quoted":                {pattern: `\Qa.b\E+`, input: "a.bb axb", want: []string{"a.bb"}},
-		"HexBrace":              {pattern: `\x{e9}`, input: "café", want: []string{"é"}},
-		"UnicodeProperty":       {pattern: `\p{Lu}`, input: "aÉ", want: []string{"É"}},
+		"HexBrace":              {pattern: `\x{e9}`, input: "caf\u00E9", want: []string{"\u00E9"}},
+		"UnicodeProperty":       {pattern: `\p{Lu}`, input: "a\u00C9", want: []string{"\u00C9"}},
 		"NamedBackreference":    {pattern: `(?<c>\w)\k<c>`, input: "abbc", want: []string{"bb"}},
 		"PythonNamedGroup":      {pattern: `(?P<c>\w)(?P=c)`, input: "abbc", want: []string{"bb"}},
 		"RelativeBackreference": {pattern: `(a)(b)\g{-1}`, input: "abb", want: []string{"abb"}},
@@ -51,7 +51,7 @@ func TestTranslateMatches(t *testing.T) {
 		"InlineExtended":        {pattern: "(?x) a b", input: "ab", want: []string{"ab"}},
 		"Comment":               {pattern: `a(?#note)b`, input: "ab", want: []string{"ab"}},
 		"DollarBeforeNewline":   {pattern: `a$`, input: "a\n", want: []string{"a"}},
-		"CaseInsensitive":       {pattern: `é`, opts: Options{CaseInsensitive: true}, input: "É", want: []string{"É"}},
+		"CaseInsensitive":       {pattern: `\u00E9`, opts: Options{CaseInsensitive: true}, input: "\u00C9", want: []string{"\u00C9"}},
 		"DotAll":                {pattern: `a.b`, opts: Options{DotAll: true}, input: "a\nb", want: []string{"a\nb"}},
 	} {
 		t.Run(name, func(t *testing.T) {

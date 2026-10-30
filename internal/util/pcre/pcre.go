@@ -74,8 +74,8 @@ func Compile(pattern string, opts Options) (*regexp2.Regexp, error) {
 const (
 	asciiWord  = `a-zA-Z0-9_`
 	asciiSpace = `\t\n\x0B\f\r `
-	vertical   = `\n\x0B\f\r\x85  `
-	horizontal = `\t \xA0 ᠎ -   　`
+	vertical   = `\n\x0B\f\r\x85\u2028\u2029`
+	horizontal = `\t \xA0\u1680\u180E\u2000-\u200A\u202F\u205F\u3000`
 
 	wordBoundary    = `(?:(?<=[` + asciiWord + `])(?![` + asciiWord + `])|(?<![` + asciiWord + `])(?=[` + asciiWord + `]))`
 	notWordBoundary = `(?:(?<=[` + asciiWord + `])(?=[` + asciiWord + `])|(?<![` + asciiWord + `])(?![` + asciiWord + `]))`
