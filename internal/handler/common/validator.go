@@ -15,18 +15,68 @@
 package common
 
 import (
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// ValidateValidatorExpressions returns the error MongoDB raises for an
-// expression a collection validator may not use: $rand, which is
-// non-deterministic.
+// GeoNearNotAllowedMsg is MongoDB's verbatim Location5626500 message
+// (including its "operationfor" typo) so the error compares equal.
+const GeoNearNotAllowedMsg = "$geoNear, $near, and $nearSphere are not allowed in this context, " +
+	"as these operators require sorting geospatial data. If you do not need sort, consider using " +
+	"$geoWithin instead. Check out https://dochub.mongodb.org/core/near-sort-operation and " +
+	"https://dochub.mongodb.org/core/nearSphere-sort-operationfor more details."
+
+// ValidateValidatorExpressions returns the error MongoDB raises when it
+// parses validator as a query for create or collMod: non-deterministic
+// expressions and $where, $text and geo sorts are not allowed, and the
+// query and its $expr must parse.
 func ValidateValidatorExpressions(validator *types.Document) error {
-	if containsKey(validator, "$rand") {
-		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrRandInValidator,
-			"$rand not allowed inside collection validators", "validator")
+	for _, name := range []string{"$rand", "$sampleRate"} {
+		if containsKey(validator, name) {
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrRandInValidator,
+				name+" not allowed inside collection validators", "validator")
+		}
+	}
+	for _, name := range []string{"$where", "$text"} {
+		if containsKey(validator, name) {
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
+				name+" is not allowed in collection validators", "validator")
+		}
+	}
+	if FindGeoSortKey(validator) != nil {
+		return handlererrors.NewCommandErrorMsg(handlererrors.ErrGeoNearNotAllowedInContext, GeoNearNotAllowedMsg)
+	}
+	if err := validateFilter(validator, nil, false); err != nil {
+		return err
+	}
+	return validateExprs(validator)
+}
+
+// validateExprs parses each $expr in filter, including under $and, $or and
+// $nor.
+func validateExprs(filter *types.Document) error {
+	for _, key := range filter.Keys() {
+		value := must.NotFail(filter.Get(key))
+		switch key {
+		case "$expr":
+			if _, err := operators.ParseExpr(must.NotFail(types.NewDocument("$expr", value)), "validator"); err != nil {
+				return err
+			}
+		case "$and", "$or", "$nor":
+			branches, ok := value.(*types.Array)
+			if !ok {
+				continue
+			}
+			for i := range branches.Len() {
+				if branch, ok := must.NotFail(branches.Get(i)).(*types.Document); ok {
+					if err := validateExprs(branch); err != nil {
+						return err
+					}
+				}
+			}
+		}
 	}
 	return nil
 }

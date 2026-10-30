@@ -64,13 +64,6 @@ func (m *match) Process(ctx context.Context, iter types.DocumentsIterator, close
 	return common.FilterIteratorColl(iter, closer, m.filter, m.cmp), nil
 }
 
-// geoNearNotAllowedMsg is MongoDB's verbatim Location5626500 message
-// (including its "operationfor" typo) so the error compares equal.
-const geoNearNotAllowedMsg = "$geoNear, $near, and $nearSphere are not allowed in this context, " +
-	"as these operators require sorting geospatial data. If you do not need sort, consider using " +
-	"$geoWithin instead. Check out https://dochub.mongodb.org/core/near-sort-operation and " +
-	"https://dochub.mongodb.org/core/nearSphere-sort-operationfor more details."
-
 // validateMatch validates $expr field if any.
 func validateMatch(filter *types.Document) error {
 	if filter.Has("$expr") {
@@ -86,7 +79,7 @@ func validateMatch(filter *types.Document) error {
 	if common.FindGeoSortKey(filter) != nil {
 		return handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrGeoNearNotAllowedInContext,
-			geoNearNotAllowedMsg,
+			common.GeoNearNotAllowedMsg,
 		)
 	}
 
