@@ -44,6 +44,10 @@ func newRedact(stage *types.Document) (aggregations.Stage, error) {
 		return nil, lazyerrors.Error(err)
 	}
 
+	if err := operators.CheckConstantSubexpressions(v); err != nil {
+		return nil, err
+	}
+
 	return &redactStage{expr: v}, nil
 }
 

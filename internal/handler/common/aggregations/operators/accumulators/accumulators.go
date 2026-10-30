@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
@@ -133,6 +134,10 @@ func NewAccumulator(stage, key string, value any) (Accumulator, error) {
 
 	if _, isArray := expr.(*types.Array); isArray {
 		return nil, unaryOperatorError(operator)
+	}
+
+	if err := operators.CheckConstantSubexpressions(expr); err != nil {
+		return nil, err
 	}
 
 	return newAccumulator(args...)

@@ -96,6 +96,9 @@ func newGroup(stage *types.Document) (aggregations.Stage, error) {
 			if err = validateGroupKey(v); err != nil {
 				return nil, err
 			}
+			if err = operators.CheckConstantSubexpressions(v); err != nil {
+				return nil, err
+			}
 
 			groupKey = v
 			continue

@@ -24,6 +24,7 @@ import (
 
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
@@ -127,6 +128,9 @@ func newSetWindowFields(stage *types.Document) (aggregations.Stage, error) {
 	// Parse partitionBy (optional).
 	if spec.Has("partitionBy") {
 		pb := must.NotFail(spec.Get("partitionBy"))
+		if err := operators.CheckConstantSubexpressions(pb); err != nil {
+			return nil, err
+		}
 		swf.partitionBy = pb
 	}
 
@@ -210,6 +214,9 @@ func parseWindowOutputField(field string, spec *types.Document) (windowOutputFie
 
 		// This is the window operator.
 		wof.operator = k
+		if err = operators.CheckConstantSubexpressions(v); err != nil {
+			return wof, err
+		}
 
 		switch k {
 		case "$rank", "$denseRank", "$documentNumber", "$count", "$locf", "$linearFill":
