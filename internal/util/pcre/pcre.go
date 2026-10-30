@@ -46,8 +46,19 @@ type Options struct {
 // time where PCRE2 would hit its match limit.
 const MatchTimeout = time.Second
 
+// MaxPatternLength is the length in bytes mongod lets PCRE2 compile
+// (kMaxPatternLength); maxNesting is PCRE2's PARENS_NEST_LIMIT as mongod
+// builds it.
+const (
+	MaxPatternLength = 32764
+	maxNesting       = 250
+)
+
 // Compile translates pattern and compiles it.
 func Compile(pattern string, opts Options) (*regexp2.Regexp, error) {
+	if len(pattern) > MaxPatternLength {
+		return nil, fmt.Errorf("pattern string is longer than the limit set by the application")
+	}
 	translated, err := Translate(pattern, opts.Extended)
 	if err != nil {
 		return nil, err
@@ -172,11 +183,69 @@ func classRune(r rune) string {
 	}
 }
 
+// outBuffer collects the translated pattern. Unlike strings.Builder it can
+// insert at an earlier position, moving only what follows it.
+type outBuffer struct{ b []byte }
+
+func (o *outBuffer) Write(p []byte) (int, error) { o.b = append(o.b, p...); return len(p), nil }
+func (o *outBuffer) WriteString(s string)        { o.b = append(o.b, s...) }
+func (o *outBuffer) WriteRune(r rune)            { o.b = utf8.AppendRune(o.b, r) }
+func (o *outBuffer) WriteByte(c byte) error      { o.b = append(o.b, c); return nil }
+func (o *outBuffer) Len() int                    { return len(o.b) }
+func (o *outBuffer) String() string              { return string(o.b) }
+
+// insert puts s at byte offset at.
+func (o *outBuffer) insert(at int, s string) {
+	o.b = append(o.b, s...)
+	copy(o.b[at+len(s):], o.b[at:len(o.b)-len(s)])
+	copy(o.b[at:], s)
+}
+
+// maxPOSIXNameLength bounds the scan for a POSIX class name, the longest
+// being "^xdigit".
+const maxPOSIXNameLength = 7
+
+// maxNameLength is PCRE2's limit on group names; scans for a name's closing
+// delimiter stop there, which keeps translation linear.
+const maxNameLength = 32
+
+// hasPrefixAt reports whether in[i:] starts with s.
+func hasPrefixAt(in []rune, i int, s string) bool {
+	for _, r := range s {
+		if i >= len(in) || in[i] != r {
+			return false
+		}
+		i++
+	}
+	return true
+}
+
+// indexWithin returns the index of the first r in in[from:from+limit], or -1.
+func indexWithin(in []rune, from int, r rune, limit int) int {
+	for i := from; i < len(in) && i < from+limit; i++ {
+		if in[i] == r {
+			return i
+		}
+	}
+	return -1
+}
+
+// indexQuoteEnd returns the index of the \E closing a \Q quote that starts
+// at from, or -1.
+func indexQuoteEnd(in []rune, from int) int {
+	for i := from; i+1 < len(in); i++ {
+		if in[i] == '\\' && in[i+1] == 'E' {
+			return i
+		}
+	}
+	return -1
+}
+
 // translator rewrites a PCRE2 pattern into regexp2 syntax.
 type translator struct {
 	in       []rune
 	pos      int
-	out      strings.Builder
+	out      outBuffer
 	extended bool
 
 	groupCount  int
@@ -218,11 +287,11 @@ func (t *translator) nameGroups() error {
 	for i := 0; i < len(t.in); i++ {
 		switch c := t.in[i]; {
 		case c == '\\' && i+1 < len(t.in) && t.in[i+1] == 'Q':
-			end := strings.Index(string(t.in[i+2:]), `\E`)
+			end := indexQuoteEnd(t.in, i+2)
 			if end < 0 {
 				return nil
 			}
-			i += 2 + utf8.RuneCountInString(string(t.in[i+2:])[:end]) + 1
+			i = end + 1
 		case c == '\\':
 			i++
 		case inClass:
@@ -239,7 +308,7 @@ func (t *translator) nameGroups() error {
 			for i < len(t.in) && t.in[i] != '\n' {
 				i++
 			}
-		case c == '(' && strings.HasPrefix(string(t.in[i:]), "(?#"):
+		case c == '(' && hasPrefixAt(t.in, i, "(?#"):
 			for i < len(t.in) && t.in[i] != ')' {
 				i++
 			}
@@ -288,24 +357,23 @@ func inlineFlags(in []rune, i int) (extended bool, length int, ok bool) {
 // namedGroupAt recognizes (?<name>, (?P<name> and (?'name' at i and returns
 // the name and the length of the opener.
 func namedGroupAt(in []rune, i int) (string, int, bool) {
-	rest := string(in[i:])
-	var open, close string
+	var open int
+	var closer rune
 	switch {
-	case strings.HasPrefix(rest, "(?P<"):
-		open, close = "(?P<", ">"
-	case strings.HasPrefix(rest, "(?<") && !strings.HasPrefix(rest, "(?<=") && !strings.HasPrefix(rest, "(?<!"):
-		open, close = "(?<", ">"
-	case strings.HasPrefix(rest, "(?'"):
-		open, close = "(?'", "'"
+	case hasPrefixAt(in, i, "(?P<"):
+		open, closer = 4, '>'
+	case hasPrefixAt(in, i, "(?<") && !hasPrefixAt(in, i, "(?<=") && !hasPrefixAt(in, i, "(?<!"):
+		open, closer = 3, '>'
+	case hasPrefixAt(in, i, "(?'"):
+		open, closer = 3, '\''
 	default:
 		return "", 0, false
 	}
-	end := strings.Index(rest[len(open):], close)
-	if end <= 0 {
+	end := indexWithin(in, i+open, closer, maxNameLength+1)
+	if end <= i+open {
 		return "", 0, false
 	}
-	name := rest[len(open) : len(open)+end]
-	return name, utf8.RuneCountInString(open + name + close), true
+	return string(in[i+open : end]), end + 1 - i, true
 }
 
 func (t *translator) peek(offset int) rune {
@@ -316,7 +384,7 @@ func (t *translator) peek(offset int) rune {
 }
 
 func (t *translator) hasPrefix(s string) bool {
-	return strings.HasPrefix(string(t.in[t.pos:]), s)
+	return hasPrefixAt(t.in, t.pos, s)
 }
 
 func (t *translator) beginAtom() {
@@ -372,7 +440,7 @@ func (t *translator) next() error {
 			if t.assertion {
 				return fmt.Errorf("quantifier does not follow a repeatable item")
 			}
-			t.pos += len(q)
+			t.pos += utf8.RuneCountInString(q)
 			t.out.WriteString(q)
 			t.quantifierSuffix()
 			return nil
@@ -406,20 +474,19 @@ func (t *translator) skipExtendedSpace() {
 
 // braceQuantifier returns {n}, {n,} or {n,m} at pos.
 func (t *translator) braceQuantifier() (string, bool) {
-	rest := string(t.in[t.pos:])
-	end := strings.IndexByte(rest, '}')
-	if end < 0 {
+	i := t.pos + 1
+	for i < len(t.in) && (t.in[i] >= '0' && t.in[i] <= '9' || t.in[i] == ',') {
+		i++
+	}
+	if i >= len(t.in) || t.in[i] != '}' {
 		return "", false
 	}
-	body := rest[1:end]
+	body := string(t.in[t.pos+1 : i])
 	lo, hi, hasComma := strings.Cut(body, ",")
-	if lo == "" || strings.Trim(lo, "0123456789") != "" || strings.Trim(hi, "0123456789") != "" {
+	if lo == "" || strings.Contains(hi, ",") || (!hasComma && hi != "") {
 		return "", false
 	}
-	if !hasComma && hi != "" {
-		return "", false
-	}
-	return rest[:end+1], true
+	return "{" + body + "}", true
 }
 
 // quantifierSuffix handles a lazy '?' or turns a possessive '+' into an
@@ -435,11 +502,7 @@ func (t *translator) quantifierSuffix() {
 		t.out.WriteRune('?')
 	case '+':
 		t.pos++
-		s := t.out.String()
-		t.out.Reset()
-		t.out.WriteString(s[:t.atomStart])
-		t.out.WriteString("(?>")
-		t.out.WriteString(s[t.atomStart:])
+		t.out.insert(t.atomStart, "(?>")
 		t.out.WriteString(")")
 	}
 }
@@ -450,10 +513,7 @@ func (t *translator) openGroup() error {
 
 	if _, n, ok := namedGroupAt(t.in, t.pos); ok {
 		t.groupCount++
-		t.pos += n
-		t.groupStarts = append(t.groupStarts, start)
-		t.out.WriteRune('(')
-		return nil
+		return t.pushGroup(start, "(", n)
 	}
 
 	switch {
@@ -465,33 +525,40 @@ func (t *translator) openGroup() error {
 		t.pos = min(end+1, len(t.in))
 		return nil
 	case t.hasPrefix("(?P="):
-		rest := string(t.in[t.pos+4:])
-		end := strings.IndexByte(rest, ')')
+		end := indexWithin(t.in, t.pos+4, ')', maxNameLength+1)
 		if end < 0 {
 			return fmt.Errorf("missing ) after (?P= name")
 		}
-		name := rest[:end]
-		t.pos += 4 + utf8.RuneCountInString(name) + 1
+		name := string(t.in[t.pos+4 : end])
+		t.pos = end + 1
 		return t.backreferenceByName(name)
 	case t.peek(1) == '?':
 		if extended, n, ok := inlineFlags(t.in, t.pos); ok {
 			t.extended = extended
 			flags := string(t.in[t.pos+2 : t.pos+n])
 			terminator := t.in[t.pos+n]
-			t.pos += n + 1
-			t.out.WriteString(dotNetFlags(flags) + string(terminator))
 			if terminator == ':' {
-				t.groupStarts = append(t.groupStarts, start)
+				return t.pushGroup(start, dotNetFlags(flags)+":", n+1)
 			}
+			t.pos += n + 1
+			t.out.WriteString(dotNetFlags(flags) + ")")
 			return nil
 		}
 	case t.peek(1) != '*':
 		t.groupCount++
 	}
 
+	return t.pushGroup(start, "(", 1)
+}
+
+// pushGroup opens a group, written as open, that ends at the next ')'.
+func (t *translator) pushGroup(start int, open string, consumed int) error {
+	if len(t.groupStarts) >= maxNesting {
+		return fmt.Errorf("parentheses are too deeply nested")
+	}
 	t.groupStarts = append(t.groupStarts, start)
-	t.out.WriteRune('(')
-	t.pos++
+	t.out.WriteString(open)
+	t.pos += consumed
 	return nil
 }
 
@@ -546,6 +613,9 @@ func (t *translator) escape() error {
 		t.out.WriteString(`(?>\r\n|[` + classText(verticalSet) + `])`)
 	case 'N':
 		if r, ok := t.namedCodePoint(); ok {
+			if err := checkCodePoint(r); err != nil {
+				return err
+			}
 			t.out.WriteString(escapeRune(r))
 			return nil
 		}
@@ -564,11 +634,18 @@ func (t *translator) escape() error {
 		t.quoted()
 	case 'E':
 	case 'x':
-		t.out.WriteString(escapeRune(t.hex()))
+		r := t.hex()
+		if err := checkCodePoint(r); err != nil {
+			return err
+		}
+		t.out.WriteString(escapeRune(r))
 	case 'o':
 		r, ok := t.octalBrace()
 		if !ok {
 			return fmt.Errorf(`\o is not followed by {octal digits}`)
+		}
+		if err := checkCodePoint(r); err != nil {
+			return err
 		}
 		t.out.WriteString(escapeRune(r))
 	case 'u', 'U', 'L', 'l':
@@ -579,13 +656,12 @@ func (t *translator) escape() error {
 		if closer == 0 {
 			return fmt.Errorf(`\k is not followed by a name`)
 		}
-		rest := string(t.in[t.pos+1:])
-		end := strings.IndexRune(rest, closer)
+		end := indexWithin(t.in, t.pos+1, closer, maxNameLength+1)
 		if end < 0 {
 			return fmt.Errorf(`\k is not followed by a name`)
 		}
-		name := rest[:end]
-		t.pos += 1 + utf8.RuneCountInString(name) + 1
+		name := string(t.in[t.pos+1 : end])
+		t.pos = end + 1
 		return t.backreferenceByName(name)
 	case 'g':
 		return t.gReference()
@@ -618,13 +694,12 @@ func (t *translator) escape() error {
 func (t *translator) gReference() error {
 	var ref string
 	if t.peek(0) == '{' {
-		rest := string(t.in[t.pos+1:])
-		end := strings.IndexByte(rest, '}')
+		end := indexWithin(t.in, t.pos+1, '}', maxNameLength+1)
 		if end < 0 {
 			return fmt.Errorf(`\g is not followed by a number or name`)
 		}
-		ref = rest[:end]
-		t.pos += 1 + utf8.RuneCountInString(ref) + 1
+		ref = string(t.in[t.pos+1 : end])
+		t.pos = end + 1
 	} else {
 		start := t.pos
 		if t.peek(0) == '-' {
@@ -670,20 +745,7 @@ func (t *translator) hex() rune {
 
 // octalBrace reads the {ooo} of \o{ooo} at pos.
 func (t *translator) octalBrace() (rune, bool) {
-	if t.peek(0) != '{' {
-		return 0, false
-	}
-	rest := string(t.in[t.pos+1:])
-	end := strings.IndexByte(rest, '}')
-	if end < 0 {
-		return 0, false
-	}
-	n, err := strconv.ParseUint(rest[:end], 8, 32)
-	if err != nil {
-		return 0, false
-	}
-	t.pos += 1 + end + 1
-	return rune(n), true
+	return t.bracedCodePoint(0, 8)
 }
 
 // namedCodePoint reads the {U+hhhh} of \N{U+hhhh} at pos.
@@ -691,35 +753,51 @@ func (t *translator) namedCodePoint() (rune, bool) {
 	if !t.hasPrefix("{U+") {
 		return 0, false
 	}
-	rest := string(t.in[t.pos+3:])
-	end := strings.IndexByte(rest, '}')
-	if end < 0 {
-		return 0, false
-	}
-	n, err := strconv.ParseUint(rest[:end], 16, 32)
-	if err != nil {
-		return 0, false
-	}
-	t.pos += 3 + end + 1
-	return rune(n), true
+	return t.bracedCodePoint(2, 16)
 }
 
 // hexBrace reads the {hhh} of \x{hhh} at pos.
 func (t *translator) hexBrace() (rune, bool) {
+	return t.bracedCodePoint(0, 16)
+}
+
+// maxCodePointDigits bounds the digits read for a code point; more cannot
+// name a valid one, so the scan stays short.
+const maxCodePointDigits = 16
+
+// bracedCodePoint reads a code point in base written in braces at pos, its
+// digits starting skip runes after the brace. A value outside Unicode is
+// returned as is for the caller to reject.
+func (t *translator) bracedCodePoint(skip, base int) (rune, bool) {
 	if t.peek(0) != '{' {
 		return 0, false
 	}
-	rest := string(t.in[t.pos+1:])
-	end := strings.IndexByte(rest, '}')
+	start := t.pos + 1 + skip
+	end := indexWithin(t.in, start, '}', maxCodePointDigits+1)
 	if end < 0 {
 		return 0, false
 	}
-	n, err := strconv.ParseUint(rest[:end], 16, 32)
+	n, err := strconv.ParseUint(string(t.in[start:end]), base, 32)
 	if err != nil {
 		return 0, false
 	}
-	t.pos += 1 + end + 1
+	t.pos = end + 1
+	if n > unicode.MaxRune {
+		return unicode.MaxRune + 1, true
+	}
 	return rune(n), true
+}
+
+// checkCodePoint returns PCRE2's error for a code point UTF mode does not
+// allow: one past U+10FFFF, or a surrogate.
+func checkCodePoint(r rune) error {
+	switch {
+	case r > unicode.MaxRune:
+		return fmt.Errorf("character code point value in \\x{} or \\o{} is too large")
+	case r >= 0xD800 && r <= 0xDFFF:
+		return fmt.Errorf("disallowed Unicode code point (>= 0xd800 && <= 0xdfff)")
+	}
+	return nil
 }
 
 // quoted copies \Q...\E as escaped literals.
@@ -767,14 +845,13 @@ func (t *translator) class() error {
 			t.out.WriteRune(']')
 			return nil
 		case c == '[' && t.peek(1) == ':':
-			rest := string(t.in[t.pos+2:])
-			end := strings.Index(rest, ":]")
-			if end < 0 {
+			end := indexWithin(t.in, t.pos+2, ':', maxPOSIXNameLength+1)
+			if end < 0 || end+1 >= len(t.in) || t.in[end+1] != ']' {
 				t.pos++
 				t.out.WriteString(`\[`)
 				continue
 			}
-			name := rest[:end]
+			name := string(t.in[t.pos+2 : end])
 			negate := strings.HasPrefix(name, "^")
 			set, ok := posixClasses[strings.TrimPrefix(name, "^")]
 			if !ok {
@@ -783,7 +860,7 @@ func (t *translator) class() error {
 			if negate {
 				set = complement(set)
 			}
-			t.pos += 2 + len(name) + 2
+			t.pos = end + 2
 			t.out.WriteString(classText(set))
 		case c == '[' && (t.peek(1) == '.' || t.peek(1) == '='):
 			return fmt.Errorf("POSIX collating elements are not supported")
@@ -804,12 +881,16 @@ func (t *translator) class() error {
 			case 'Q':
 				t.quoted()
 			case 'E':
-			case 'x':
-				t.out.WriteString(classRune(t.hex()))
-			case 'o':
-				r, ok := t.octalBrace()
+			case 'x', 'o':
+				r, ok := t.hex(), true
+				if e == 'o' {
+					r, ok = t.octalBrace()
+				}
 				if !ok {
 					return fmt.Errorf(`\o is not followed by {octal digits}`)
+				}
+				if err := checkCodePoint(r); err != nil {
+					return err
 				}
 				t.out.WriteString(classRune(r))
 			case '8', '9', 'g', '_':

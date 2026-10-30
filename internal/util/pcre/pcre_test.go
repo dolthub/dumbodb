@@ -15,7 +15,9 @@
 package pcre
 
 import (
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -102,6 +104,28 @@ func TestTranslateErrors(t *testing.T) {
 
 			_, err := Compile(pattern, Options{})
 			assert.Error(t, err)
+		})
+	}
+}
+
+func TestTranslateIsLinear(t *testing.T) {
+	t.Parallel()
+
+	for name, pattern := range map[string]string{
+		"NonCapturing": strings.Repeat("(?:a)", 20000),
+		"Braces":       strings.Repeat("{", 20000),
+		"Possessive":   strings.Repeat("a++", 20000),
+		"HexBraces":    strings.Repeat(`\x{41}`, 20000),
+		"NamedGroups":  strings.Repeat("(?<n>a)", 1) + strings.Repeat(`\k<n>`, 20000),
+		"Unclosed":     strings.Repeat("(?<", 20000),
+		"POSIX":        "[" + strings.Repeat("[:", 20000) + "]",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			start := time.Now()
+			_, _ = Translate(pattern, false)
+			assert.Less(t, time.Since(start), time.Second, "translation should be linear in the pattern")
 		})
 	}
 }
