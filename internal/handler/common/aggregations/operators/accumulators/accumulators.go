@@ -131,6 +131,10 @@ func NewAccumulator(stage, key string, value any) (Accumulator, error) {
 		return nil, unknownAccumulatorError(stage, operator, expr)
 	}
 
+	if _, isArray := expr.(*types.Array); isArray {
+		return nil, unaryOperatorError(operator)
+	}
+
 	return newAccumulator(args...)
 }
 
@@ -164,16 +168,22 @@ func unknownAccumulatorError(stage, operator string, operand any) error {
 	}
 
 	if _, isArray := operand.(*types.Array); isArray && (operator == "$covariancePop" || operator == "$covarianceSamp") {
-		return handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrStageGroupUnaryOperator,
-			fmt.Sprintf("The %s accumulator is a unary operator", operator),
-			operator+" (accumulator)",
-		)
+		return unaryOperatorError(operator)
 	}
 
 	return handlererrors.NewCommandErrorMsgWithArgument(
 		handlererrors.ErrStageGroupUnknownOperator,
 		fmt.Sprintf("unknown group operator '%s'", operator),
+		operator+" (accumulator)",
+	)
+}
+
+// unaryOperatorError is MongoDB's error for an array operand: every $group
+// accumulator takes exactly one.
+func unaryOperatorError(operator string) error {
+	return handlererrors.NewCommandErrorMsgWithArgument(
+		handlererrors.ErrStageGroupUnaryOperator,
+		fmt.Sprintf("The %s accumulator is a unary operator", operator),
 		operator+" (accumulator)",
 	)
 }

@@ -29,7 +29,7 @@ type mergeObjectsAccumulator struct {
 
 func newMergeObjectsAccumulator(args ...any) (Accumulator, error) {
 	if len(args) != 1 {
-		return nil, nil
+		return nil, unaryOperatorError("$mergeObjects")
 	}
 
 	arg, err := newOperand(args[0])
