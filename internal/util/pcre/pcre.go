@@ -252,6 +252,10 @@ type translator struct {
 	groupNames  map[string]int
 	groupStarts []int
 
+	// groupExtended is the extended mode at each open group's start, which
+	// its ')' restores: inline flags last only to the end of their group.
+	groupExtended []bool
+
 	// atomStart is where the most recent atom begins in out, so a possessive
 	// quantifier can wrap it.
 	atomStart int
@@ -284,6 +288,7 @@ func (t *translator) nameGroups() error {
 	n := 0
 	inClass := false
 	extended := t.extended
+	var outer []bool
 	for i := 0; i < len(t.in); i++ {
 		switch c := t.in[i]; {
 		case c == '\\' && i+1 < len(t.in) && t.in[i+1] == 'Q':
@@ -312,7 +317,16 @@ func (t *translator) nameGroups() error {
 			for i < len(t.in) && t.in[i] != ')' {
 				i++
 			}
+		case c == ')':
+			if len(outer) > 0 {
+				extended = outer[len(outer)-1]
+				outer = outer[:len(outer)-1]
+			}
 		case c == '(':
+			on, length, isFlags := inlineFlags(t.in, i, extended)
+			if !isFlags || t.in[i+length] == ':' {
+				outer = append(outer, extended)
+			}
 			if name, _, ok := namedGroupAt(t.in, i); ok {
 				if name[0] >= '0' && name[0] <= '9' {
 					return fmt.Errorf("subpattern name must start with a non-digit")
@@ -324,7 +338,7 @@ func (t *translator) nameGroups() error {
 				t.groupNames[name] = n
 			} else if i+1 >= len(t.in) || t.in[i+1] != '?' && t.in[i+1] != '*' {
 				n++
-			} else if on, _, ok := inlineFlags(t.in, i); ok {
+			} else if isFlags {
 				extended = on
 			}
 		}
@@ -333,8 +347,9 @@ func (t *translator) nameGroups() error {
 }
 
 // inlineFlags parses the flag letters of (?flags) or (?flags: at i and
-// reports whether they leave extended mode on.
-func inlineFlags(in []rune, i int) (extended bool, length int, ok bool) {
+// reports whether they leave extended mode, currently current, on.
+func inlineFlags(in []rune, i int, current bool) (extended bool, length int, ok bool) {
+	extended = current
 	j := i + 2
 	negated := false
 	for j < len(in) && strings.ContainsRune("^imsxnU-", in[j]) {
@@ -426,6 +441,8 @@ func (t *translator) next() error {
 		if n := len(t.groupStarts); n > 0 {
 			t.atomStart = t.groupStarts[n-1]
 			t.groupStarts = t.groupStarts[:n-1]
+			t.extended = t.groupExtended[n-1]
+			t.groupExtended = t.groupExtended[:n-1]
 		}
 		t.out.WriteRune(')')
 	case c == '*' || c == '+' || c == '?':
@@ -533,13 +550,15 @@ func (t *translator) openGroup() error {
 		t.pos = end + 1
 		return t.backreferenceByName(name)
 	case t.peek(1) == '?':
-		if extended, n, ok := inlineFlags(t.in, t.pos); ok {
-			t.extended = extended
+		if extended, n, ok := inlineFlags(t.in, t.pos, t.extended); ok {
 			flags := string(t.in[t.pos+2 : t.pos+n])
 			terminator := t.in[t.pos+n]
 			if terminator == ':' {
-				return t.pushGroup(start, dotNetFlags(flags)+":", n+1)
+				err := t.pushGroup(start, dotNetFlags(flags)+":", n+1)
+				t.extended = extended
+				return err
 			}
+			t.extended = extended
 			t.pos += n + 1
 			t.out.WriteString(dotNetFlags(flags) + ")")
 			return nil
@@ -557,6 +576,7 @@ func (t *translator) pushGroup(start int, open string, consumed int) error {
 		return fmt.Errorf("parentheses are too deeply nested")
 	}
 	t.groupStarts = append(t.groupStarts, start)
+	t.groupExtended = append(t.groupExtended, t.extended)
 	t.out.WriteString(open)
 	t.pos += consumed
 	return nil
