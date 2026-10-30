@@ -724,25 +724,32 @@ func parseIntegerString(s string, lo, hi int64) (int64, error) {
 	if digits == "" {
 		return 0, parseNumberError(s, "No digits")
 	}
-	magnitude := new(big.Int)
 	for i := 0; i < len(digits); i++ {
-		c := digits[i]
-		if c < '0' || c > '9' {
+		if c := digits[i]; c < '0' || c > '9' {
 			if i == 0 {
 				return 0, parseNumberError(s, "Did not consume any digits")
 			}
 			return 0, parseNumberError(s, "Did not consume whole string.")
 		}
-		magnitude.Mul(magnitude, big.NewInt(10))
-		magnitude.Add(magnitude, big.NewInt(int64(c-'0')))
 	}
-	if negative {
-		magnitude.Neg(magnitude)
-	}
-	if !magnitude.IsInt64() || magnitude.Int64() < lo || magnitude.Int64() > hi {
+
+	// At most 19 significant digits fit; more always overflow.
+	significant := strings.TrimLeft(digits, "0")
+	if len(significant) > 19 {
 		return 0, parseNumberError(s, "Overflow")
 	}
-	return magnitude.Int64(), nil
+	magnitude, _ := strconv.ParseUint("0"+significant, 10, 64)
+	limit := uint64(hi)
+	if negative {
+		limit = uint64(-(lo + 1)) + 1
+	}
+	if magnitude > limit {
+		return 0, parseNumberError(s, "Overflow")
+	}
+	if negative {
+		return int64(-magnitude), nil
+	}
+	return int64(magnitude), nil
 }
 
 // parseDoubleString is NumberParser for a double, which is glibc strtod over
@@ -777,7 +784,7 @@ func parseDoubleString(s string) (any, error) {
 	if !ok {
 		return nil, parseNumberError(s, "Did not consume whole string.")
 	}
-	f, err := strconv.ParseFloat(sign+body, 64)
+	f, err := strconv.ParseFloat(sign+shortenDecimalString(body, 800), 64)
 	if err != nil || (nonZero && math.Abs(f) < 0x1p-1022) {
 		return nil, parseNumberError(s, "Out of range")
 	}
@@ -796,6 +803,71 @@ func isNaNChars(s string) bool {
 		}
 	}
 	return true
+}
+
+// shortenDecimalString rewrites s, which scanDecimalFloat accepts, as at most
+// maxDigits significant digits plus a sticky 1 standing for any non-zero
+// digits dropped, with the exponent folded in and clamped. Rounding to fewer
+// than maxDigits digits gives the same result as for s, but parsers whose
+// cost grows faster than the input, or which cap the exponent they read
+// (strconv at 10000, apd at about 100000), see a short, exact-range input.
+func shortenDecimalString(s string, maxDigits int) string {
+	const maxExponent = 50000
+
+	var mantissa []byte
+	sticky, fraction := false, false
+	exponent := int64(0)
+	i := 0
+	for ; i < len(s) && s[i] != 'e' && s[i] != 'E'; i++ {
+		c := s[i]
+		switch {
+		case c == '.':
+			fraction = true
+			continue
+		case len(mantissa) == 0 && c == '0':
+		case len(mantissa) < maxDigits:
+			mantissa = append(mantissa, c)
+		default:
+			sticky = sticky || c != '0'
+			exponent++
+		}
+		if fraction {
+			exponent--
+		}
+	}
+	if i < len(s) {
+		exponent += parseClampedExponent(s[i+1:])
+	}
+	if sticky {
+		mantissa = append(mantissa, '1')
+		exponent--
+	}
+	if len(mantissa) == 0 {
+		mantissa = append(mantissa, '0')
+	}
+	exponent = max(-maxExponent, min(maxExponent, exponent))
+	return string(mantissa) + "e" + strconv.FormatInt(exponent, 10)
+}
+
+// parseClampedExponent parses an optionally signed run of digits, clamping
+// its magnitude so arbitrarily long exponents cannot overflow.
+func parseClampedExponent(s string) int64 {
+	const limit = 1 << 40
+	negative := false
+	if s != "" && (s[0] == '+' || s[0] == '-') {
+		negative = s[0] == '-'
+		s = s[1:]
+	}
+	var e int64
+	for i := 0; i < len(s); i++ {
+		if e < limit {
+			e = e*10 + int64(s[i]-'0')
+		}
+	}
+	if negative {
+		return -e
+	}
+	return e
 }
 
 // scanDecimalFloat reports whether s is digits with an optional point and
@@ -852,12 +924,13 @@ func parseHexFloat(s, sign, digits string) (any, error) {
 	return f, nil
 }
 
-// decimalParseContext rounds a parsed string to Decimal128.
+// decimalParseContext rounds a parsed string to Decimal128 toward zero,
+// NumberParser's default rounding mode.
 var decimalParseContext = apd.Context{
 	Precision:   34,
 	MaxExponent: 6144,
 	MinExponent: -6143,
-	Rounding:    apd.RoundHalfEven,
+	Rounding:    apd.RoundDown,
 }
 
 // parseDecimalString is NumberParser for a Decimal128: rounding is allowed,
@@ -878,7 +951,11 @@ func parseDecimalString(s string) (any, error) {
 		}
 	}
 
-	x, _, err := apd.NewFromString(s)
+	shortened := body
+	if _, ok := scanDecimalFloat(body); ok {
+		shortened = shortenDecimalString(body, 40)
+	}
+	x, _, err := apd.NewFromString(s[:len(s)-len(body)] + shortened)
 	if err != nil {
 		return nil, parseNumberError(s, "Failed to parse string to decimal")
 	}
