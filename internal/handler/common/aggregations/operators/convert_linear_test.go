@@ -18,7 +18,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/lineartest"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // Numeric strings parse in linear time (workspace-8tj.16, workspace-8tj.17).
@@ -46,4 +48,18 @@ func TestNumericStringParsingIsLinear(t *testing.T) {
 			})
 		}
 	}
+}
+
+// Constant folding evaluates each operator once (workspace-8tj.20).
+func TestConstantFoldingIsLinear(t *testing.T) {
+	t.Parallel()
+
+	chain := func(n int) any {
+		expr := any(int32(1))
+		for range n {
+			expr = must.NotFail(types.NewDocument("$add", must.NotFail(types.NewArray(int32(1), expr))))
+		}
+		return expr
+	}
+	lineartest.Assert(t, 500, func(n int) { _ = CheckConstantSubexpressions(chain(n)) })
 }

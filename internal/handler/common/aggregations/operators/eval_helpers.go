@@ -166,36 +166,81 @@ var convertOperators = map[string]bool{
 }
 
 // CheckConstantSubexpressions returns the error mongod raises while parsing
-// when it folds a constant operator anywhere inside expr, children first, so
-// a failing constant is an error even in a branch never taken.
+// when it folds a constant operator anywhere inside expr. Like mongod's
+// optimize, it folds children first, so a failing constant is an error even
+// in a branch never taken, and each operator is evaluated once, over its
+// children's folded values.
 func CheckConstantSubexpressions(expr any) error {
+	_, _, err := foldConstants(expr)
+	return err
+}
+
+// foldConstants returns expr with each folded operator replaced by
+// {$literal: value}, and whether expr is constant.
+func foldConstants(expr any) (any, bool, error) {
 	switch v := expr.(type) {
+	case string:
+		return v, !strings.HasPrefix(v, "$"), nil
 	case *types.Array:
+		folded := types.MakeArray(v.Len())
+		constant := true
 		for i := range v.Len() {
-			if err := CheckConstantSubexpressions(must.NotFail(v.Get(i))); err != nil {
-				return err
+			elem, elemConstant, err := foldConstants(must.NotFail(v.Get(i)))
+			if err != nil {
+				return nil, false, err
 			}
+			folded.Append(elem)
+			constant = constant && elemConstant
 		}
+		return folded, constant, nil
 	case *types.Document:
-		operator := IsOperator(v)
-		if operator {
-			// Unknown names are not expressions here, such as $sortArray's
-			// sortBy {"$a": 1}; inside a real expression parsing rejects them.
-			if _, known := Operators[v.Command()]; !known || v.Command() == "$literal" {
-				return nil
-			}
-		}
-		for _, value := range v.Values() {
-			if err := CheckConstantSubexpressions(value); err != nil {
-				return err
-			}
-		}
-		if operator && !convertOperators[v.Command()] && isConstantExpression(v) {
-			_, _, err := foldConstant(v, nil)
-			return err
+		return foldDocumentConstants(v)
+	default:
+		return v, true, nil
+	}
+}
+
+func foldDocumentConstants(doc *types.Document) (any, bool, error) {
+	operator := IsOperator(doc)
+	name := ""
+	if operator {
+		name = doc.Command()
+		// Unknown names are not expressions here, such as $sortArray's
+		// sortBy {"$a": 1}; inside a real expression parsing rejects them.
+		if _, known := Operators[name]; !known || name == "$literal" {
+			return doc, isConstantExpression(doc), nil
 		}
 	}
-	return nil
+
+	folded := types.MakeDocument(doc.Len())
+	constant := true
+	keys, values := doc.Keys(), doc.Values()
+	for i, value := range values {
+		value, valueConstant, err := foldConstants(value)
+		if err != nil {
+			return nil, false, err
+		}
+		folded.AppendDecoded(keys[i], value)
+		constant = constant && valueConstant
+	}
+
+	switch {
+	case !operator:
+		return folded, constant, nil
+	case name == "$rand" || name == "$sampleRate" || name == "$meta":
+		return folded, false, nil
+	case !constant || convertOperators[name]:
+		return folded, constant, nil
+	}
+
+	value, missing, err := foldConstant(folded, nil)
+	if err != nil {
+		return nil, false, err
+	}
+	if missing {
+		return folded, false, nil
+	}
+	return must.NotFail(types.NewDocument("$literal", value)), true, nil
 }
 
 // foldConstant is EvalOperand. Operator constructors call it, and EvalOperand
