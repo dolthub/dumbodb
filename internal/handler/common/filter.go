@@ -21,6 +21,7 @@ import (
 	"math/big"
 	"math/rand/v2"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -115,6 +116,9 @@ func filterDocumentPair(doc *types.Document, filterKey string, filterValue any, 
 
 	switch filterValue := filterValue.(type) {
 	case *types.Document:
+		if res, ok := positionalDocumentEquality(doc, filterKey, vals, filterValue); ok {
+			return res, nil
+		}
 		if filterSuffix == filterKey {
 			// A top-level key has one branch, which reads the same value from
 			// doc as from a {filterKey: value} copy.
@@ -170,6 +174,52 @@ func filterDocumentPair(doc *types.Document, filterKey string, filterValue any, 
 
 	// If we got here, it means that none of the documents matched the filter.
 	return false, nil
+}
+
+// positionalDocumentEquality decides {path: doc}, {path: {$eq: doc}} and
+// {path: {$ne: doc}} when the path ends in an array index. MongoDB does not
+// expand the array such a path reaches, so it equals doc only if it is that
+// document. ok is false for other filters and paths.
+func positionalDocumentEquality(doc *types.Document, filterKey string, vals []any, filter *types.Document) (res, ok bool) {
+	path, err := types.NewPathFromString(filterKey)
+	if err != nil || path.Len() < 2 {
+		return false, false
+	}
+	if _, err := strconv.Atoi(path.Suffix()); err != nil {
+		return false, false
+	}
+	parents, err := commonpath.FindValues(doc, path.TrimSuffix(), &commonpath.FindValuesOpts{
+		FindArrayIndex:     true,
+		FindArrayDocuments: true,
+	})
+	if err != nil || !slices.ContainsFunc(parents, func(v any) bool { _, isArray := v.(*types.Array); return isArray }) {
+		return false, false
+	}
+
+	expected, negate := filter, false
+	if isOperatorDocument(filter) {
+		if filter.Len() != 1 {
+			return false, false
+		}
+		operand, isDoc := must.NotFail(filter.Get(filter.Keys()[0])).(*types.Document)
+		switch op := filter.Keys()[0]; {
+		case !isDoc:
+			return false, false
+		case op == "$eq":
+			expected = operand
+		case op == "$ne":
+			expected, negate = operand, true
+		default:
+			return false, false
+		}
+	}
+
+	for _, v := range vals {
+		if d, isDoc := v.(*types.Document); isDoc && types.Compare(d, expected) == types.Equal {
+			return !negate, true
+		}
+	}
+	return negate, true
 }
 
 // filterFieldExprBranches evaluates {field: {expr}} when a dotted path reaches
