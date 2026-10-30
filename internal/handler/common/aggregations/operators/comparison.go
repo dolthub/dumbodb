@@ -186,6 +186,9 @@ func variablePathOrMissing(path string, doc *types.Document) (value any, missing
 
 	var base any = doc
 	if name != "ROOT" && name != "CURRENT" {
+		if isMissingVariable(doc, name) {
+			return types.Null, true, true
+		}
 		v, err := doc.Get("$$" + name)
 		if err != nil {
 			return nil, false, false

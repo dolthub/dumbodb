@@ -284,6 +284,10 @@ func validateGroupKeyDocument(groupKey any, topLevel bool) error {
 		if err != nil && !errors.Is(err, operators.ErrMissingValue) {
 			return processGroupStageError(err)
 		}
+
+		// The operator validated its own arguments; they are not a key
+		// literal, and may refer to variables it binds, such as $let's.
+		return nil
 	}
 
 	if topLevel && !isOperator {

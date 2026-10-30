@@ -704,7 +704,7 @@ func (op *filterOp) Process(doc *types.Document) (any, error) {
 			return nil, err
 		}
 
-		iterDoc.Set("$$"+op.asName, item)
+		bindVariable(iterDoc, op.asName, item, false)
 
 		condVal, err := evalArgValue(op.condArg, iterDoc)
 		if err != nil {
@@ -782,7 +782,7 @@ func (op *mapOp) Process(doc *types.Document) (any, error) {
 			return nil, err
 		}
 
-		iterDoc.Set("$$"+op.asName, item)
+		bindVariable(iterDoc, op.asName, item, false)
 
 		val, err := evalArgValue(op.inArg, iterDoc)
 		if err != nil {
@@ -843,7 +843,7 @@ func (op *reduceOp) Process(doc *types.Document) (any, error) {
 		return types.Null, nil
 	}
 
-	accumulator, err := evalArgValue(op.initialValueArg, doc)
+	accumulator, missing, err := EvalOperand(op.initialValueArg, doc)
 	if err != nil {
 		return nil, err
 	}
@@ -855,19 +855,17 @@ func (op *reduceOp) Process(doc *types.Document) (any, error) {
 
 	for _, item := range items {
 		iterDoc := copyForVariables(doc)
-		if err != nil {
-			return nil, err
-		}
+		bindVariable(iterDoc, "value", accumulator, missing)
+		bindVariable(iterDoc, "this", item, false)
 
-		iterDoc.Set("$$value", accumulator)
-		iterDoc.Set("$$this", item)
-
-		accumulator, err = evalArgValue(op.inArg, iterDoc)
-		if err != nil {
+		if accumulator, missing, err = EvalOperand(op.inArg, iterDoc); err != nil {
 			return nil, err
 		}
 	}
 
+	if missing {
+		return nil, aggregations.ErrMissingValue
+	}
 	return accumulator, nil
 }
 

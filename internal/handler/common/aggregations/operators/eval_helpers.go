@@ -92,6 +92,27 @@ func evalBranch(arg any, doc *types.Document) (any, error) {
 	return v, nil
 }
 
+// missingVariablePrefix marks a variable bound to the missing value. Variable
+// names cannot start with '$', so the key cannot collide with a binding.
+const missingVariablePrefix = "$$$missing:"
+
+// bindVariable binds $$name in doc to v, or to the missing value, replacing
+// any outer binding of the same name.
+func bindVariable(doc *types.Document, name string, v any, missing bool) {
+	if missing {
+		doc.Remove("$$" + name)
+		doc.Set(missingVariablePrefix+name, true)
+		return
+	}
+	doc.Remove(missingVariablePrefix + name)
+	doc.Set("$$"+name, v)
+}
+
+// isMissingVariable reports whether doc binds $$name to the missing value.
+func isMissingVariable(doc *types.Document, name string) bool {
+	return doc != nil && doc.Has(missingVariablePrefix+name)
+}
+
 // copyForVariables copies doc so an operator can bind variables in it.
 // Expressions are validated against no document at all (nil), which binds
 // variables like a document with no fields.
@@ -170,6 +191,9 @@ func evalArgValue(arg any, doc *types.Document) (any, error) {
 				// $redact reads these as literal strings to decide its action.
 				base = v
 			default:
+				if isMissingVariable(doc, varName) {
+					return nil, aggregations.ErrMissingValue
+				}
 				val, err := doc.Get("$$" + varName)
 				if err != nil {
 					return nil, handlererrors.NewCommandErrorMsg(
