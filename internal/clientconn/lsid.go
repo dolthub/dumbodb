@@ -124,6 +124,13 @@ func abortedTransactionError(doc *types.Document) error {
 	)
 }
 
+// isUncommittedChangesRefusal reports whether err is a version-control
+// command's refusal to run over uncommitted changes.
+func isUncommittedChangesRefusal(err error) bool {
+	var ce *handlererrors.CommandError
+	return errors.As(err, &ce) && ce.Code() == handlererrors.ErrConflictingOperationInProgress
+}
+
 // writeErrorCommands are the commands whose ok replies can carry
 // writeErrors.
 var writeErrorCommands = map[string]bool{"insert": true, "update": true, "delete": true, "bulkWrite": true}

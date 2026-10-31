@@ -593,8 +593,11 @@ func (c *conn) route(connCtx context.Context, reqHeader *wire.MsgHeader, reqBody
 			}
 
 			// Like mongod, any failed statement aborts the transaction, so
-			// nothing it or earlier statements wrote can be committed.
-			if !endsTxn && ci.InTransaction() && (err != nil || writeErrorCommands[command] && replyHasWriteErrors(resMsg)) {
+			// nothing it or earlier statements wrote can be committed. A
+			// version-control command refused over uncommitted changes wrote
+			// nothing, and the transaction's writes survive to its commit.
+			if !endsTxn && ci.InTransaction() && !isUncommittedChangesRefusal(err) &&
+				(err != nil || writeErrorCommands[command] && replyHasWriteErrors(resMsg)) {
 				c.h.AbortPendingTransaction(connCtx)
 			}
 		}
