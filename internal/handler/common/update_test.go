@@ -12,14 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package common
+package common_test
 
 import (
+	"context"
 	"testing"
 
+	"github.com/dolthub/dumbodb/internal/handler/common"
+	_ "github.com/dolthub/dumbodb/internal/handler/common/aggregations/stages"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
+
+func processPipelineUpdate(doc *types.Document, pipeline *types.Array) (bool, error) {
+	stages, err := common.ParseUpdatePipeline(pipeline)
+	if err != nil {
+		return false, err
+	}
+	return common.ProcessPipelineUpdate(context.Background(), doc, stages)
+}
 
 // TestPipelineUpdate_replaceWith tests $replaceWith as a stage in an update pipeline.
 // MongoDB allows UpdateOne/UpdateMany with a pipeline argument where $replaceWith

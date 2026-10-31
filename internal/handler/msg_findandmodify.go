@@ -225,6 +225,7 @@ func (h *Handler) findAndModifyDocument(ctx context.Context, params *common.Find
 		HasUpdateOperators: params.HasUpdateOperators,
 		IsPipeline:         params.Pipeline != nil,
 		Pipeline:           params.Pipeline,
+		PipelineStages:     params.PipelineStages,
 		ArrayFilters:       params.ArrayFilters,
 		Validator:          validator,
 		ValidationLevel:    valLevel,

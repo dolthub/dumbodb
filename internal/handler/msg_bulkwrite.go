@@ -137,6 +137,25 @@ func (h *Handler) MsgBulkWrite(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		namespaces[i] = bulkWriteNS{db: nsStr[:dot], coll: nsStr[dot+1:]}
 	}
 
+	// mongod parses every op before running any: a pipeline element that is
+	// not an object fails the whole command.
+	for i := 0; i < ops.Len(); i++ {
+		opDoc, _ := must.NotFail(ops.Get(i)).(*types.Document)
+		if opDoc == nil || !opDoc.Has("updateMods") {
+			continue
+		}
+		pipeline, _ := must.NotFail(opDoc.Get("updateMods")).(*types.Array)
+		for j := 0; pipeline != nil && j < pipeline.Len(); j++ {
+			if _, ok := must.NotFail(pipeline.Get(j)).(*types.Document); !ok {
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrTypeMismatch,
+					"Each element of the 'pipeline' array must be an object",
+					"bulkWrite",
+				)
+			}
+		}
+	}
+
 	// Counters and per-op responses accumulate as we iterate.
 	var (
 		nInserted, nMatched, nModified, nUpserted, nDeleted, nErrors int32
@@ -473,8 +492,13 @@ func execBulkWriteUpdate(ctx context.Context, db backends.Database, c backends.C
 			)
 		}
 	case *types.Array:
+		stages, err := common.ParseUpdatePipeline(u)
+		if err != nil {
+			return bulkWriteOpResult{}, err
+		}
 		update.IsPipeline = true
 		update.Pipeline = u
+		update.PipelineStages = stages
 	default:
 		return bulkWriteOpResult{}, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrFailedToParse,

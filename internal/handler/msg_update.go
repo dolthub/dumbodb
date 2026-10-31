@@ -155,13 +155,14 @@ func (h *Handler) updateDocument(ctx context.Context, params *common.UpdateParam
 		common.CanonicalizeFilter(u.Filter)
 		err = common.ValidateFilter(u.Filter, cmp)
 		if err == nil && u.IsPipeline {
-			err = common.ValidateUpdatePipeline(u.Pipeline)
+			u.PipelineStages, err = common.ParseUpdatePipeline(u.Pipeline)
 		}
 		if err != nil {
 			// MongoDB reports an update's invalid filter or pipeline as a write
-			// error.
+			// error, except a malformed or unknown pipeline stage.
 			var ce *handlererrors.CommandError
-			if errors.As(err, &ce) {
+			if errors.As(err, &ce) && ce.Code() != handlererrors.ErrStageInvalid &&
+				ce.Code() != handlererrors.ErrStageUnrecognized {
 				return 0, 0, nil, handlererrors.NewWriteErrorMsg(ce.Code(), ce.Err().Error())
 			}
 			return 0, 0, nil, err

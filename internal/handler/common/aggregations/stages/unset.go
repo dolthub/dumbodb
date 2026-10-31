@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/stages/projection"
@@ -144,39 +143,11 @@ func (u *unset) Process(_ context.Context, iter types.DocumentsIterator, closer 
 
 // validateUnsetField returns error on invalid field value.
 func validateUnsetField(field string) (*types.Path, error) {
-	if field == "" {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrEmptyFieldPath,
-			"Invalid $unset :: caused by :: FieldPath cannot be constructed with empty string",
-			"$unset (stage)",
-		)
+	if err := checkFieldPath("$unset", field); err != nil {
+		return nil, err
 	}
 
-	if strings.HasPrefix(field, "$") {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrFieldPathInvalidName,
-			"Invalid $unset :: caused by :: FieldPath field names may not start with '$'. "+
-				"Consider using $getField or $setField.",
-			"$unset (stage)",
-		)
-	}
-
-	if strings.HasSuffix(field, ".") {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrInvalidFieldPath,
-			"Invalid $unset :: caused by :: FieldPath must not end with a '.'.",
-			"$unset (stage)",
-		)
-	}
-
-	path, err := types.NewPathFromString(field)
-	if err != nil {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrPathContainsEmptyElement,
-			"Invalid $unset :: caused by :: FieldPath field names may not be empty strings.",
-			"$unset (stage)",
-		)
-	}
+	path := must.NotFail(types.NewPathFromString(field))
 
 	return &path, nil
 }

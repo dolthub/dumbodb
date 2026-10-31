@@ -18,10 +18,10 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
-	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 //nolint:vet // for readability
@@ -37,8 +37,9 @@ type FindAndModifyParams struct {
 	ReturnNewDocument bool            `dumbo:"new,opt,numericBool"`
 	MaxTimeMS         int64           `dumbo:"maxTimeMS,opt,wholePositiveNumber"`
 
-	Update   *types.Document `dumbo:"-"`
-	Pipeline *types.Array    `dumbo:"-"`
+	Update         *types.Document      `dumbo:"-"`
+	Pipeline       *types.Array         `dumbo:"-"`
+	PipelineStages []aggregations.Stage `dumbo:"-"`
 
 	HasUpdateOperators bool `dumbo:"-"`
 
@@ -99,10 +100,12 @@ func GetFindAndModifyParams(doc *types.Document, l *slog.Logger) (*FindAndModify
 		case *types.Document:
 			params.Update = updateParam
 		case *types.Array:
-			if err := validateFindAndModifyPipeline(updateParam); err != nil {
+			stages, err := ParseUpdatePipeline(updateParam)
+			if err != nil {
 				return nil, err
 			}
 			params.Pipeline = updateParam
+			params.PipelineStages = stages
 		default:
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrFailedToParse,
@@ -136,24 +139,4 @@ func GetFindAndModifyParams(doc *types.Document, l *slog.Logger) (*FindAndModify
 	CanonicalizeFilter(params.Query)
 
 	return &params, nil
-}
-
-// validateFindAndModifyPipeline returns the errors MongoDB raises while
-// parsing a pipeline-style update: each stage must be an object, one of the
-// stages an update allows, with expressions that parse.
-func validateFindAndModifyPipeline(pipeline *types.Array) error {
-	for i := range pipeline.Len() {
-		stage, ok := must.NotFail(pipeline.Get(i)).(*types.Document)
-		if !ok {
-			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrTypeMismatch,
-				"Each element of the 'pipeline' array must be an object", "update")
-		}
-		switch name := stage.Command(); name {
-		case "$set", "$addFields", "$unset", "$project", "$replaceWith", "$replaceRoot":
-		default:
-			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidOptions,
-				name+" is not allowed to be used within an update", "update")
-		}
-	}
-	return ValidateUpdatePipeline(pipeline)
 }
