@@ -594,7 +594,7 @@ func (c *conn) route(connCtx context.Context, reqHeader *wire.MsgHeader, reqBody
 
 			// Like mongod, any failed statement aborts the transaction, so
 			// nothing it or earlier statements wrote can be committed.
-			if !endsTxn && ci.InTransaction() && (err != nil || replyHasWriteErrors(resMsg)) {
+			if !endsTxn && ci.InTransaction() && (err != nil || writeErrorCommands[command] && replyHasWriteErrors(resMsg)) {
 				c.h.AbortPendingTransaction(connCtx)
 			}
 		}

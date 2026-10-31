@@ -124,6 +124,10 @@ func abortedTransactionError(doc *types.Document) error {
 	)
 }
 
+// writeErrorCommands are the commands whose ok replies can carry
+// writeErrors.
+var writeErrorCommands = map[string]bool{"insert": true, "update": true, "delete": true, "bulkWrite": true}
+
 // replyHasWriteErrors reports whether a successful write command's reply
 // carries writeErrors, which also abort a transaction in mongod.
 func replyHasWriteErrors(resMsg *wire.OpMsg) bool {
