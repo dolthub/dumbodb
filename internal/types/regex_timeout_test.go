@@ -47,3 +47,20 @@ func TestRegexLookaheadMatches(t *testing.T) {
 	require.True(t, m.MatchString("barfoo"))
 	require.False(t, m.MatchString("barbaz"))
 }
+
+func TestRegexCompileIsCached(t *testing.T) {
+	a, err := Regex{Pattern: "^ab+c", Options: "im"}.Compile()
+	require.NoError(t, err)
+	b, err := Regex{Pattern: "^ab+c", Options: "mi"}.Compile()
+	require.NoError(t, err)
+	require.Same(t, a, b)
+
+	c, err := Regex{Pattern: "^ab+c"}.Compile()
+	require.NoError(t, err)
+	require.NotSame(t, a, c)
+
+	_, err = Regex{Pattern: "("}.Compile()
+	require.Error(t, err)
+	_, err = Regex{Pattern: "("}.Compile()
+	require.Error(t, err)
+}

@@ -21,7 +21,9 @@ import (
 	"time"
 
 	"github.com/dlclark/regexp2"
+	lru "github.com/hashicorp/golang-lru/v2"
 
+	"github.com/dolthub/dumbodb/internal/util/must"
 	"github.com/dolthub/dumbodb/internal/util/pcre"
 )
 
@@ -54,21 +56,43 @@ type Regex struct {
 	Options string
 }
 
+type compiledRegex struct {
+	matcher Matcher
+	err     error
+}
+
+type regexCacheKey struct {
+	pattern string
+	options pcre.Options
+}
+
+// compiledRegexes keeps filters from compiling a pattern once per document.
+var compiledRegexes = must.NotFail(lru.New[regexCacheKey, compiledRegex](1024))
+
 // Compile compiles the regex as PCRE2 does for mongod, with the same
 // translation the expression operators use. Options other than i, m, s and
 // x are ignored.
 func (r Regex) Compile() (Matcher, error) {
-	re, err := pcre.Compile(r.Pattern, pcre.Options{
+	key := regexCacheKey{pattern: r.Pattern, options: pcre.Options{
 		CaseInsensitive: strings.ContainsRune(r.Options, 'i'),
 		Multiline:       strings.ContainsRune(r.Options, 'm'),
 		DotAll:          strings.ContainsRune(r.Options, 's'),
 		Extended:        strings.ContainsRune(r.Options, 'x'),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("Regular expression is invalid: %w", err)
+	}}
+	if c, ok := compiledRegexes.Get(key); ok {
+		return c.matcher, c.err
 	}
-	re.MatchTimeout = filterMatchTimeout
-	return &regexp2Matcher{re: re}, nil
+
+	var c compiledRegex
+	re, err := pcre.Compile(key.pattern, key.options)
+	if err != nil {
+		c.err = fmt.Errorf("Regular expression is invalid: %w", err)
+	} else {
+		re.MatchTimeout = filterMatchTimeout
+		c.matcher = &regexp2Matcher{re: re}
+	}
+	compiledRegexes.Add(key, c)
+	return c.matcher, c.err
 }
 
 func (r Regex) LogValue() slog.Value {
