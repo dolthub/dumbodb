@@ -607,6 +607,8 @@ func (l *lookup) runPipeline(ctx context.Context, fetcher CollectionFetcher, fro
 		switch substituted.Command() {
 		case "$lookup":
 			stage, err = NewLookupStage(substituted, fetcher)
+		case "$unionWith":
+			stage, err = NewUnionWithStage(substituted, fetcher)
 		case "$match":
 			stage, err = NewMatchStage(substituted, nil, SeesStoredDocuments(subStages, stageIndex))
 		default:

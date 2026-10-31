@@ -264,12 +264,15 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		var s aggregations.Stage
 
 		switch d.Command() {
-		case "$lookup", "$graphLookup":
+		case "$lookup", "$graphLookup", "$unionWith":
 			fetcher := foreignCollectionFetcher(db)
 
-			if d.Command() == "$graphLookup" {
+			switch d.Command() {
+			case "$graphLookup":
 				s, err = stages.NewGraphLookupStage(d, fetcher)
-			} else {
+			case "$unionWith":
+				s, err = stages.NewUnionWithStage(d, fetcher)
+			default:
 				s, err = stages.NewLookupStage(d, fetcher)
 			}
 
@@ -879,7 +882,22 @@ func (h *Handler) aggregateDocuments(connCtx context.Context, document, firstSta
 		if err := documentsNotFirst(sd, i); err != nil {
 			return nil, err
 		}
-		s, err := stages.NewStage(sd)
+		var s aggregations.Stage
+		var err error
+		switch sd.Command() {
+		case "$lookup", "$unionWith":
+			db, dbErr := h.b.Database(dbName)
+			if dbErr != nil {
+				return nil, lazyerrors.Error(dbErr)
+			}
+			if sd.Command() == "$lookup" {
+				s, err = stages.NewLookupStage(sd, foreignCollectionFetcher(db))
+			} else {
+				s, err = stages.NewUnionWithStage(sd, foreignCollectionFetcher(db))
+			}
+		default:
+			s, err = stages.NewStage(sd)
+		}
 		if err != nil {
 			return nil, err
 		}

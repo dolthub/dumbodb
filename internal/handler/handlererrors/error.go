@@ -331,6 +331,7 @@ const (
 	ErrFormatUnmatchedPercent    = ErrorCode(18535)   // Location18535
 	ErrFormatInvalidSpecifier    = ErrorCode(18536)   // Location18536
 	ErrTimeUnitNotString         = ErrorCode(5439013) // Location5439013
+	ErrOutInSubPipeline          = ErrorCode(31441)   // Location31441
 	ErrUnwindNotArray            = ErrorCode(5858203) // Location5858203
 	ErrCannotConvertToString     = ErrorCode(16007)   // Location16007
 	ErrStageNotAllowedInFacet    = ErrorCode(40600)   // Location40600
