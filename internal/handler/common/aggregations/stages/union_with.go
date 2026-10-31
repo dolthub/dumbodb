@@ -43,8 +43,12 @@ func NewUnionWithStage(stage *types.Document, fetcher CollectionFetcher) (aggreg
 
 	switch spec := spec.(type) {
 	case string:
+		if err := checkSubPipelineSource(spec, types.MakeDocument(0), "$unionWith"); err != nil {
+			return nil, err
+		}
 		sub.from = spec
 	case *types.Document:
+		var fromGiven bool
 		for _, key := range spec.Keys() {
 			value := must.NotFail(spec.Get(key))
 			switch key {
@@ -54,6 +58,7 @@ func NewUnionWithStage(stage *types.Document, fetcher CollectionFetcher) (aggreg
 					return nil, unionWithWrongType(key, value, "string")
 				}
 				sub.from = coll
+				fromGiven = true
 			case "pipeline":
 				pipeline, ok := value.(*types.Array)
 				if !ok {
@@ -65,7 +70,11 @@ func NewUnionWithStage(stage *types.Document, fetcher CollectionFetcher) (aggreg
 					fmt.Sprintf("BSON field '$unionWith.%s' is an unknown field.", key), "$unionWith (stage)")
 			}
 		}
-		if sub.from == "" && !startsWithDocuments(spec) {
+		if fromGiven {
+			if err := checkSubPipelineSource(sub.from, spec, "$unionWith"); err != nil {
+				return nil, err
+			}
+		} else if !startsWithDocuments(spec) {
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFailedToParse,
 				"$unionWith stage without explicit collection must have a pipeline with $documents as first stage",
 				"$unionWith (stage)")

@@ -172,6 +172,11 @@ func NewLookupStage(stage *types.Document, fetcher CollectionFetcher) (aggregati
 			"$lookup (stage)",
 		)
 	}
+	if err == nil {
+		if err = checkSubPipelineSource(from, specDoc, "$lookup"); err != nil {
+			return nil, err
+		}
+	}
 
 	// "as" is required.
 	asVal, err := specDoc.Get("as")
@@ -540,7 +545,7 @@ func (l *lookup) perDocCandidates(ctx context.Context, fetcher CollectionFetcher
 		return nil, err
 	}
 	first := must.NotFail(l.pipeline.Get(0)).(*types.Document)
-	value, ok := leadingMatchEqualityValue(substituteVarsInDoc(first, vars), field)
+	value, ok := leadingMatchEqualityValue(substituteVarsInStage(first, vars), field)
 	if !ok {
 		return fetcher.Fetch(ctx, l.from, nil)
 	}
@@ -591,7 +596,7 @@ func (l *lookup) runPipeline(ctx context.Context, fetcher CollectionFetcher, fro
 		}
 
 		// Substitute let variables into the stage spec.
-		substituted := substituteVarsInDoc(stageDoc, vars)
+		substituted := substituteVarsInStage(stageDoc, vars)
 
 		if stageIndex == 0 && l.from == "" {
 			if current, err = evalDocuments(substituted); err != nil {
@@ -668,9 +673,13 @@ func leadingMatchEqualityValue(substitutedMatch *types.Document, field string) (
 	if !ok || gotField != field {
 		return nil, false
 	}
+	literal, isLiteral := value.(*types.Document)
+	if isLiteral = isLiteral && literal.Len() == 1 && literal.Command() == "$literal"; isLiteral {
+		value = must.NotFail(literal.Get("$literal"))
+	}
 	switch v := value.(type) {
 	case string:
-		if strings.HasPrefix(v, "$") {
+		if strings.HasPrefix(v, "$") && !isLiteral {
 			return nil, false
 		}
 	case int32, int64, bool, types.ObjectID, time.Time:
@@ -739,8 +748,47 @@ func evaluateLetExpr(expr any, localDoc *types.Document) (any, error) {
 	return v, nil
 }
 
+// substituteVarsInStage substitutes let variables into a sub-pipeline stage.
+// A $match query only reads variables inside $expr.
+func substituteVarsInStage(stage *types.Document, vars map[string]any) *types.Document {
+	if len(vars) == 0 || stage.Len() != 1 || stage.Command() != "$match" {
+		return substituteVarsInDoc(stage, vars)
+	}
+	query, ok := must.NotFail(stage.Get("$match")).(*types.Document)
+	if !ok {
+		return stage
+	}
+	return must.NotFail(types.NewDocument("$match", substituteVarsInQuery(query, vars)))
+}
+
+func substituteVarsInQuery(query *types.Document, vars map[string]any) *types.Document {
+	result := types.MakeDocument(query.Len())
+	for _, k := range query.Keys() {
+		v := must.NotFail(query.Get(k))
+		switch k {
+		case "$expr":
+			v = substituteVarsInValue(v, vars)
+		case "$and", "$or", "$nor":
+			if arr, ok := v.(*types.Array); ok {
+				clauses := types.MakeArray(arr.Len())
+				for i := range arr.Len() {
+					clause := must.NotFail(arr.Get(i))
+					if d, isDoc := clause.(*types.Document); isDoc {
+						clause = substituteVarsInQuery(d, vars)
+					}
+					clauses.Append(clause)
+				}
+				v = clauses
+			}
+		}
+		result.Set(k, v)
+	}
+	return result
+}
+
 // substituteVarsInDoc recursively replaces $$varName references in a document
-// with the corresponding values from vars.
+// with the corresponding values from vars, wrapped in $literal so that values
+// such as "$b" are not evaluated again.
 func substituteVarsInDoc(doc *types.Document, vars map[string]any) *types.Document {
 	if len(vars) == 0 {
 		return doc
@@ -774,7 +822,7 @@ func substituteVarsInValue(val any, vars map[string]any) any {
 		if strings.HasPrefix(v, "$$") {
 			varName := strings.TrimPrefix(v, "$$")
 			if resolved, ok := vars[varName]; ok {
-				return resolved
+				return must.NotFail(types.NewDocument("$literal", resolved))
 			}
 		}
 
@@ -1007,6 +1055,20 @@ func startsWithDocuments(spec *types.Document) bool {
 	}
 	first, ok := must.NotFail(arr.Get(0)).(*types.Document)
 	return ok && first.Command() == "$documents"
+}
+
+// checkSubPipelineSource rejects an explicitly named collection that is
+// empty or paired with a leading $documents, before any collection is read.
+func checkSubPipelineSource(coll string, spec *types.Document, stage string) error {
+	switch {
+	case coll == "":
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace,
+			"Invalid "+stage+" namespace: collection name cannot be empty", stage+" (stage)")
+	case startsWithDocuments(spec):
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace,
+			"'$documents' can only be run with {aggregate: 1}", "$documents (stage)")
+	}
+	return nil
 }
 
 // evalDocuments evaluates a $documents stage as mongod's desugaring does:

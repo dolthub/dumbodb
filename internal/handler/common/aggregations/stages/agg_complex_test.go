@@ -231,10 +231,7 @@ func TestLookup_PipelineFormNoLet(t *testing.T) {
 
 // TestLookup_PipelineFormWithLet verifies pipeline form with let variables.
 // Let binds a field from the local document; the subpipeline $match uses $$var
-// to filter the from collection to only matching docs.
-//
-// After variable substitution, the $$cid reference becomes the scalar value
-// from the local document, so the match filter resolves to {custId: <value>}.
+// inside $expr to filter the from collection to only matching docs.
 func TestLookup_PipelineFormWithLet(t *testing.T) {
 	t.Parallel()
 
@@ -247,10 +244,9 @@ func TestLookup_PipelineFormWithLet(t *testing.T) {
 
 	fetcher := makeFetcher(map[string][]*types.Document{"orders": orders})
 
-	// Pipeline: [{$match: {custId: "$$cid"}}]
-	// After substitution, $$cid becomes the local _id value (e.g. int32(1)),
-	// producing {$match: {custId: int32(1)}} which uses the existing equality filter.
-	matchFilter := must.NotFail(types.NewDocument("custId", "$$cid"))
+	// Pipeline: [{$match: {$expr: {$eq: ["$custId", "$$cid"]}}}]
+	eq := must.NotFail(types.NewDocument("$eq", must.NotFail(types.NewArray("$custId", "$$cid"))))
+	matchFilter := must.NotFail(types.NewDocument("$expr", eq))
 	matchStage := must.NotFail(types.NewDocument("$match", matchFilter))
 
 	pipeline := must.NotFail(types.NewArray(matchStage))
