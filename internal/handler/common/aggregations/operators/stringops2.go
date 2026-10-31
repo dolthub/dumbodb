@@ -190,26 +190,33 @@ func (op *substrCPOp) Process(doc *types.Document) (any, error) {
 			"$substrCP: the starting index must be nonnegative integer.", "$substrCP")
 	}
 
+	// A code point running past the end of s is invalid too; mongod reads
+	// beyond the string there (workspace-1eo).
 	invalid := handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSubstrCPInvalidUTF8,
 		"$substrCP: invalid UTF-8 string", "$substrCP")
+	nextCodePoint := func(i int) (int, bool) {
+		n := utf8CodePointLength(s[i])
+		if isUTF8Continuation(s[i]) || n > 4 || i+n > len(s) {
+			return 0, false
+		}
+		return i + n, true
+	}
 	startByte := 0
 	for range start {
 		if startByte >= len(s) {
 			return "", nil
 		}
-		if isUTF8Continuation(s[startByte]) || utf8CodePointLength(s[startByte]) > 4 {
+		if startByte, ok = nextCodePoint(startByte); !ok {
 			return nil, invalid
 		}
-		startByte += utf8CodePointLength(s[startByte])
 	}
 	endByte := startByte
 	for i := 0; i < length && endByte < len(s); i++ {
-		if isUTF8Continuation(s[endByte]) || utf8CodePointLength(s[endByte]) > 4 {
+		if endByte, ok = nextCodePoint(endByte); !ok {
 			return nil, invalid
 		}
-		endByte += utf8CodePointLength(s[endByte])
 	}
-	return s[startByte:min(endByte, len(s))], nil
+	return s[startByte:endByte], nil
 }
 
 var _ Operator = (*substrCPOp)(nil)

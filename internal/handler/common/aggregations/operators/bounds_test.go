@@ -65,6 +65,28 @@ func TestSubstringOperatorsSurviveExtremeArguments(t *testing.T) {
 	}
 }
 
+// mongod reads past the string for a truncated code point (workspace-1eo);
+// DumboDB reports invalid UTF-8 instead.
+func TestSubstrCPTruncatedCodePoint(t *testing.T) {
+	for _, tc := range []struct {
+		s             string
+		start, length int32
+	}{
+		{"\xE0", 1, 0},
+		{"\xE0", 0, 1},
+		{"a\xF0\x9F", 1, 1},
+		{"a\xF0\x9F", 2, 0},
+		{"\xC3", 1, 5},
+	} {
+		_, err := processOperator(t, newSubstrCP, tc.s, tc.start, tc.length)
+		requireCode(t, err, handlererrors.ErrSubstrCPInvalidUTF8)
+	}
+
+	res, err := processOperator(t, newSubstrCP, "a\xC3\xA9b", int32(1), int32(1))
+	require.NoError(t, err)
+	require.Equal(t, "\xC3\xA9", res)
+}
+
 func TestSliceSurvivesExtremeArguments(t *testing.T) {
 	items := func() *types.Array { return must.NotFail(types.NewArray(int32(1), int32(2), int32(3))) }
 
