@@ -33,6 +33,11 @@ type replaceRoot struct {
 }
 
 func newReplaceRoot(stage *types.Document) (aggregations.Stage, error) {
+	return newReplaceRootStage(stage, true)
+}
+
+// newReplaceRootStage folds constant subexpressions if fold is set.
+func newReplaceRootStage(stage *types.Document, fold bool) (aggregations.Stage, error) {
 	spec, err := stage.Get("$replaceRoot")
 	if err != nil {
 		return nil, err
@@ -56,8 +61,10 @@ func newReplaceRoot(stage *types.Document) (aggregations.Stage, error) {
 		)
 	}
 
-	if err := operators.CheckConstantSubexpressions(newRootVal); err != nil {
-		return nil, err
+	if fold {
+		if err := operators.CheckConstantSubexpressions(newRootVal); err != nil {
+			return nil, err
+		}
 	}
 
 	return &replaceRoot{newRoot: newRootVal}, nil
@@ -67,13 +74,20 @@ func newReplaceRoot(stage *types.Document) (aggregations.Stage, error) {
 //
 //	{ $replaceWith: <replacement document expression> }
 func newReplaceWith(stage *types.Document) (aggregations.Stage, error) {
+	return newReplaceWithStage(stage, true)
+}
+
+// newReplaceWithStage folds constant subexpressions if fold is set.
+func newReplaceWithStage(stage *types.Document, fold bool) (aggregations.Stage, error) {
 	newRootVal, err := stage.Get("$replaceWith")
 	if err != nil {
 		return nil, err
 	}
 
-	if err := operators.CheckConstantSubexpressions(newRootVal); err != nil {
-		return nil, err
+	if fold {
+		if err := operators.CheckConstantSubexpressions(newRootVal); err != nil {
+			return nil, err
+		}
 	}
 
 	return &replaceRoot{newRoot: newRootVal}, nil

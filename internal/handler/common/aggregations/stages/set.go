@@ -37,6 +37,11 @@ type set struct {
 }
 
 func newSet(stage *types.Document) (aggregations.Stage, error) {
+	return newSetStage(stage, true)
+}
+
+// newSetStage folds constant subexpressions if fold is set.
+func newSetStage(stage *types.Document, fold bool) (aggregations.Stage, error) {
 	fields, err := stage.Get("$set")
 	if err != nil {
 		return nil, lazyerrors.Error(err)
@@ -63,8 +68,10 @@ func newSet(stage *types.Document) (aggregations.Stage, error) {
 		return nil, err
 	}
 
-	if err := operators.CheckConstantSubexpressions(fieldsDoc); err != nil {
-		return nil, err
+	if fold {
+		if err := operators.CheckConstantSubexpressions(fieldsDoc); err != nil {
+			return nil, err
+		}
 	}
 
 	return &set{

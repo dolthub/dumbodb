@@ -22,13 +22,15 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-var updatePipelineStages = map[string]struct{}{
-	"$addFields":   {},
-	"$set":         {},
-	"$project":     {},
-	"$unset":       {},
-	"$replaceRoot": {},
-	"$replaceWith": {},
+// updatePipelineStages build the stages an update pipeline allows. mongod
+// does not fold constant subexpressions there.
+var updatePipelineStages = map[string]newStageFunc{
+	"$addFields":   func(stage *types.Document) (aggregations.Stage, error) { return newAddFieldsStage(stage, false) },
+	"$set":         func(stage *types.Document) (aggregations.Stage, error) { return newSetStage(stage, false) },
+	"$project":     func(stage *types.Document) (aggregations.Stage, error) { return newProjectStage(stage, false) },
+	"$unset":       newUnset,
+	"$replaceRoot": func(stage *types.Document) (aggregations.Stage, error) { return newReplaceRootStage(stage, false) },
+	"$replaceWith": func(stage *types.Document) (aggregations.Stage, error) { return newReplaceWithStage(stage, false) },
 }
 
 func init() {
@@ -45,16 +47,21 @@ func newUpdatePipeline(pipeline *types.Array) ([]aggregations.Stage, error) {
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrTypeMismatch,
 				"Each element of the 'pipeline' array must be an object", "update")
 		}
+		newStage := NewStage
 		if stage.Len() == 1 {
 			name := stage.Command()
 			_, known := Stages[name]
-			if _, allowed := updatePipelineStages[name]; known && !allowed {
+			allowed, isAllowed := updatePipelineStages[name]
+			if known && !isAllowed {
 				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidOptions,
 					name+" is not allowed to be used within an update", "update")
 			}
+			if isAllowed {
+				newStage = allowed
+			}
 		}
 		var err error
-		if stages[i], err = NewStage(stage); err != nil {
+		if stages[i], err = newStage(stage); err != nil {
 			return nil, err
 		}
 	}

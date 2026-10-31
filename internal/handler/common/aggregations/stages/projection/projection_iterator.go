@@ -27,7 +27,8 @@ import (
 //
 // Close method closes the underlying iterator.
 func ProjectionIterator(iter types.DocumentsIterator, closer *iterator.MultiCloser, projection *types.Document) (types.DocumentsIterator, error) { //nolint:lll // for readability
-	projectionValidated, inclusion, err := ValidateProjection(projection)
+	// Stages fold constant subexpressions when they parse, if at all.
+	projectionValidated, inclusion, err := ValidateProjectionShape(projection)
 	if err != nil {
 		return nil, err
 	}

@@ -39,6 +39,11 @@ type project struct {
 }
 
 func newProject(stage *types.Document) (aggregations.Stage, error) {
+	return newProjectStage(stage, true)
+}
+
+// newProjectStage folds constant subexpressions if fold is set.
+func newProjectStage(stage *types.Document, fold bool) (aggregations.Stage, error) {
 	fields, err := common.GetRequiredParam[*types.Document](stage, "$project")
 	if err != nil {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
@@ -48,7 +53,11 @@ func newProject(stage *types.Document) (aggregations.Stage, error) {
 		)
 	}
 
-	validated, inclusion, err := projection.ValidateProjection(fields)
+	validate := projection.ValidateProjectionShape
+	if fold {
+		validate = projection.ValidateProjection
+	}
+	validated, inclusion, err := validate(fields)
 	if err != nil {
 		return nil, err
 	}

@@ -47,7 +47,7 @@ import (
 //   - `ErrAggregatePositionalProject` when positional projection contains empty path;
 //   - `ErrNotImplemented` when there is unimplemented projection operators and expressions.
 func ValidateProjection(projection *types.Document) (*types.Document, bool, error) {
-	validated, inclusion, err := validateProjectionShape(projection)
+	validated, inclusion, err := ValidateProjectionShape(projection)
 	if err == nil {
 		err = operators.CheckConstantSubexpressions(projection)
 	}
@@ -57,7 +57,9 @@ func ValidateProjection(projection *types.Document) (*types.Document, bool, erro
 	return validated, inclusion, nil
 }
 
-func validateProjectionShape(projection *types.Document) (*types.Document, bool, error) {
+// ValidateProjectionShape is ValidateProjection without folding constant
+// subexpressions, as an update pipeline parses $project.
+func ValidateProjectionShape(projection *types.Document) (*types.Document, bool, error) {
 	validated := types.MakeDocument(0)
 	if err := CheckPathCollisions(projection, "Invalid $project :: caused by :: ", "$project (stage)"); err != nil {
 		return nil, false, err
