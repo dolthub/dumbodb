@@ -32,7 +32,7 @@ type DeleteParams struct {
 
 	Let *types.Document `dumbo:"let,unimplemented"`
 
-	MaxTimeMS        int64           `dumbo:"maxTimeMS,ignored"`
+	MaxTimeMS        int64           `dumbo:"maxTimeMS,opt,wholePositiveNumber"`
 	WriteConcern     *types.Document `dumbo:"writeConcern,opt"`
 	LSID             any             `dumbo:"lsid,ignored"`
 	TxnNumber        int64           `dumbo:"txnNumber,ignored"`

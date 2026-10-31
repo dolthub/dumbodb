@@ -33,7 +33,7 @@ type CountParams struct {
 
 	Fields any `dumbo:"fields,ignored"` // legacy MongoDB shell adds it, but it is never actually used
 
-	MaxTimeMS      int64           `dumbo:"maxTimeMS,ignored"`
+	MaxTimeMS      int64           `dumbo:"maxTimeMS,opt,wholePositiveNumber"`
 	Hint           any             `dumbo:"hint,ignored"`
 	ReadConcern    *types.Document `dumbo:"readConcern,ignored"`
 	Comment        string          `dumbo:"comment,ignored"`

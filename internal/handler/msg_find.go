@@ -575,13 +575,21 @@ var executorWrapSkip = map[handlererrors.ErrorCode]bool{
 	handlererrors.ErrTypeMismatch: true,
 }
 
+// withMaxTimeMS bounds ctx by maxTimeMS, if it is set.
+func withMaxTimeMS(ctx context.Context, maxTimeMS int64) (context.Context, context.CancelFunc) {
+	if maxTimeMS == 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, time.Duration(maxTimeMS)*time.Millisecond)
+}
+
 // handleMaxTimeMSError returns the MaxTimeMSExpired error if provided error is a result of context cancellation.
 // The MaxTimeMSExpired error won't be returned if maxTimeMS wasn't set.
 func handleMaxTimeMSError(err error, maxTimeMS int64, cmd string) error {
 	switch {
 	case err == nil:
 		return nil
-	case maxTimeMS != 0 && errors.Is(err, context.Canceled):
+	case maxTimeMS != 0 && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)):
 		return handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrMaxTimeMSExpired,
 			"Executor error during "+cmd+" command :: caused by :: operation exceeded time limit",

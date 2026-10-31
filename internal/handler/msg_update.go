@@ -184,7 +184,7 @@ func (h *Handler) updateDocument(ctx context.Context, params *common.UpdateParam
 
 		closer.Add(res.Iter)
 
-		iter := common.FilterIteratorColl(res.Iter, closer, u.Filter, cmp)
+		iter := common.FilterIteratorColl(iterator.WithContext(ctx, res.Iter), closer, u.Filter, cmp)
 
 		if !u.Multi {
 			iter = common.LimitIterator(iter, closer, 1)

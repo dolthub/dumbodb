@@ -82,6 +82,9 @@ func (h *Handler) MsgFindAndModify(connCtx context.Context, msg *wire.OpMsg) (*w
 
 	res, err := h.findAndModifyDocument(connCtx, params)
 	if err != nil {
+		if params.MaxTimeMS != 0 && (errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)) {
+			return nil, handleMaxTimeMSError(err, params.MaxTimeMS, "findAndModify")
+		}
 		return nil, handleUpdateError(params.DB, params.Collection, "findAndModify", err)
 	}
 
@@ -171,7 +174,7 @@ func (h *Handler) findAndModifyDocument(ctx context.Context, params *common.Find
 
 	closer.Add(queryRes.Iter)
 
-	iter := common.FilterIteratorColl(queryRes.Iter, closer, params.Query, cmp)
+	iter := common.FilterIteratorColl(iterator.WithContext(ctx, queryRes.Iter), closer, params.Query, cmp)
 
 	iter, err = common.SortIteratorWithCollation(iter, closer, params.Sort, cmp)
 	if err != nil {

@@ -50,6 +50,9 @@ func (h *Handler) MsgDelete(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		return nil, lazyerrors.Error(err)
 	}
 
+	connCtx, cancel := withMaxTimeMS(connCtx, params.MaxTimeMS)
+	defer cancel()
+
 	if err = enforceWritableRootish(params.DB); err != nil {
 		return nil, err
 	}
@@ -91,6 +94,10 @@ func (h *Handler) MsgDelete(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		d, err = h.execDelete(connCtx, c, &p)
 
 		deleted += d
+
+		if params.MaxTimeMS != 0 && connCtx.Err() != nil {
+			return nil, handleMaxTimeMSError(connCtx.Err(), params.MaxTimeMS, "delete")
+		}
 
 		if err != nil {
 			var ce *handlererrors.CommandError
@@ -151,6 +158,7 @@ func (h *Handler) execDelete(ctx context.Context, c backends.Collection, p *comm
 	if err != nil {
 		return 0, lazyerrors.Error(err)
 	}
+	q.Iter = iterator.WithContext(ctx, q.Iter)
 
 	var ids []any
 	for {

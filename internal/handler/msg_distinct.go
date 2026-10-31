@@ -45,6 +45,9 @@ func (h *Handler) MsgDistinct(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 		return nil, err
 	}
 
+	connCtx, cancel := withMaxTimeMS(connCtx, params.MaxTimeMS)
+	defer cancel()
+
 	// Validate rootish before backend access so invalid forms (HEAD, reflog, range)
 	// return OperationFailed (96) rather than silently succeeding or returning
 	// InvalidNamespace (73) from MongoDB's own namespace check.
@@ -79,11 +82,11 @@ func (h *Handler) MsgDistinct(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 		if verr != nil {
 			return nil, verr
 		}
-		iter = common.FilterIteratorColl(iter, closer, params.Filter, cmp)
+		iter = common.FilterIteratorColl(iterator.WithContext(connCtx, iter), closer, params.Filter, cmp)
 
 		distinct, derr := common.FilterDistinctValues(iter, params.Key, cmp)
 		if derr != nil {
-			return nil, lazyerrors.Error(derr)
+			return nil, handleMaxTimeMSError(derr, params.MaxTimeMS, "distinct")
 		}
 		return documentOpMsg(
 			must.NotFail(types.NewDocument(
@@ -169,11 +172,11 @@ func (h *Handler) MsgDistinct(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 
 	closer.Add(queryRes.Iter)
 
-	iter := common.FilterIteratorColl(queryRes.Iter, closer, params.Filter, cmp)
+	iter := common.FilterIteratorColl(iterator.WithContext(connCtx, queryRes.Iter), closer, params.Filter, cmp)
 
 	distinct, err := common.FilterDistinctValues(iter, params.Key, cmp)
 	if err != nil {
-		return nil, lazyerrors.Error(err)
+		return nil, handleMaxTimeMSError(err, params.MaxTimeMS, "distinct")
 	}
 
 	return documentOpMsg(

@@ -42,6 +42,9 @@ func (h *Handler) MsgCount(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMs
 		return nil, err
 	}
 
+	connCtx, cancel := withMaxTimeMS(connCtx, params.MaxTimeMS)
+	defer cancel()
+
 	// Validate rootish before backend access so invalid forms (HEAD, reflog, range)
 	// return OperationFailed (96) rather than silently succeeding or returning
 	// InvalidNamespace (73) from MongoDB's own namespace check.
@@ -106,14 +109,14 @@ func (h *Handler) MsgCount(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMs
 			return nil, verr
 		}
 
-		iter = common.FilterIteratorColl(iter, closer, params.Filter, cmp)
+		iter = common.FilterIteratorColl(iterator.WithContext(connCtx, iter), closer, params.Filter, cmp)
 		iter = common.SkipIterator(iter, closer, params.Skip)
 		iter = common.LimitIterator(iter, closer, params.Limit)
 		iter = common.CountIterator(iter, closer, "count")
 
 		_, res, cerr := iter.Next()
 		if cerr != nil && !errors.Is(cerr, iterator.ErrIteratorDone) {
-			return nil, lazyerrors.Error(cerr)
+			return nil, handleMaxTimeMSError(cerr, params.MaxTimeMS, "count")
 		}
 
 		// CountIterator yields ErrIteratorDone with a nil document when nothing
@@ -200,9 +203,9 @@ func (h *Handler) MsgCount(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMs
 		return nil, lazyerrors.Error(err)
 	}
 
-	iter := queryRes.Iter
+	iter := iterator.WithContext(connCtx, queryRes.Iter)
 
-	closer := iterator.NewMultiCloser(iter)
+	closer := iterator.NewMultiCloser(queryRes.Iter)
 	defer closer.Close()
 
 	iter = common.FilterIteratorColl(iter, closer, params.Filter, cmp)
@@ -219,7 +222,7 @@ func (h *Handler) MsgCount(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMs
 	}
 
 	if err != nil {
-		return nil, lazyerrors.Error(err)
+		return nil, handleMaxTimeMSError(err, params.MaxTimeMS, "count")
 	}
 
 	count, _ := res.Get("count")
