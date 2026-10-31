@@ -120,7 +120,10 @@ func (op *substrOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	s, _ := sv.(string)
+	s, err := coerceToString(sv)
+	if err != nil {
+		return nil, err
+	}
 	return substrBytes("$substrBytes", s, startV, lenV)
 }
 
@@ -155,7 +158,10 @@ func (op *substrCPOp) Process(doc *types.Document) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	s, _ := sv.(string)
+	s, err := coerceToString(sv)
+	if err != nil {
+		return nil, err
+	}
 
 	if !isNumber(startV) {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSubstrCPStartNotNumeric,
