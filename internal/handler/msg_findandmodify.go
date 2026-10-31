@@ -223,6 +223,8 @@ func (h *Handler) findAndModifyDocument(ctx context.Context, params *common.Find
 		Update:             params.Update,
 		Upsert:             params.Upsert,
 		HasUpdateOperators: params.HasUpdateOperators,
+		IsPipeline:         params.Pipeline != nil,
+		Pipeline:           params.Pipeline,
 		ArrayFilters:       params.ArrayFilters,
 		Validator:          validator,
 		ValidationLevel:    valLevel,

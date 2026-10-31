@@ -411,7 +411,39 @@ func processPipelineUpdate(doc *types.Document, pipeline *types.Array) (bool, er
 		}
 	}
 
+	if err := keepPipelineID(before, doc); err != nil {
+		return false, err
+	}
+
 	return types.Compare(before, doc) != types.Equal, nil
+}
+
+// keepPipelineID restores the _id a pipeline dropped, first, as MongoDB
+// does, and refuses one it changed.
+func keepPipelineID(before, doc *types.Document) error {
+	id, err := before.Get("_id")
+	if err != nil {
+		return nil
+	}
+
+	newID, err := doc.Get("_id")
+	if err == nil {
+		if types.Compare(newID, id) != types.Equal {
+			return handlererrors.NewCommandErrorMsg(handlererrors.ErrImmutableField,
+				"Performing an update on the path '_id' would modify the immutable field '_id'")
+		}
+		return nil
+	}
+
+	keys, values := doc.Keys(), doc.Values()
+	for _, key := range keys {
+		doc.Remove(key)
+	}
+	doc.Set("_id", id)
+	for i, key := range keys {
+		doc.Set(key, values[i])
+	}
+	return nil
 }
 
 // evaluateReplaceExpr evaluates a $replaceWith/$replaceRoot expression against doc
