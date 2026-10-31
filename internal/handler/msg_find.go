@@ -154,7 +154,15 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 		}
 	}
 
+	if err = common.ValidateFilterExprs(params.Filter); err != nil {
+		return nil, err
+	}
+
 	if err = common.ValidateGeoFilter(params.Filter); err != nil {
+		return nil, err
+	}
+
+	if err = common.ValidateFindMetadata(params.Filter, params.Projection, params.Sort); err != nil {
 		return nil, err
 	}
 
@@ -210,7 +218,7 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 		return nil, handleMaxTimeMSError(err, params.MaxTimeMS, "find")
 	}
 
-	iter, err := h.makeFindIter(srcIter, closer, params, sorted)
+	iter, err := h.makeFindIter(iterator.WithContext(ctx, srcIter), closer, params, sorted)
 	if err != nil {
 		return nil, handleMaxTimeMSError(err, params.MaxTimeMS, "find")
 	}

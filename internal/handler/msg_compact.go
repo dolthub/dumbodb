@@ -17,6 +17,7 @@ package handler
 import (
 	"context"
 	"fmt"
+	"math"
 
 	"github.com/FerretDB/wire"
 
@@ -151,8 +152,17 @@ func (h *Handler) MsgCompact(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 
 	return documentOpMsg(
 		must.NotFail(types.NewDocument(
-			"bytesFreed", float64(bytesFreed),
+			"bytesFreed", appendNumber(bytesFreed),
 			"ok", float64(1),
 		)),
 	)
+}
+
+// appendNumber narrows n to int32 when it fits, as mongod's
+// BSONObjBuilder::appendNumber does for counters.
+func appendNumber(n int64) any {
+	if n >= math.MinInt32 && n <= math.MaxInt32 {
+		return int32(n)
+	}
+	return n
 }

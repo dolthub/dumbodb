@@ -173,3 +173,19 @@ func DecimalFullPrecisionResult(x *apd.Decimal) types.Decimal128 {
 	}
 	return APDToDecimal128(rounded)
 }
+
+// DecimalMultiply returns x*y rounded to Decimal128's 34 digits, as
+// Decimal128::multiply does.
+func DecimalMultiply(x, y *apd.Decimal) *apd.Decimal {
+	product := new(apd.Decimal)
+	_, _ = decimal128Context.Mul(product, x, y)
+	return product
+}
+
+// DecimalAdd returns x+y rounded to Decimal128's 34 digits, as
+// Decimal128::add does.
+func DecimalAdd(x, y *apd.Decimal) *apd.Decimal {
+	sum := new(apd.Decimal)
+	_, _ = decimal128Context.Add(sum, x, y)
+	return sum
+}

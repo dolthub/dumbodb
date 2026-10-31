@@ -19,7 +19,9 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"math/rand/v2"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -30,6 +32,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 
 	"github.com/dolthub/dumbodb/internal/collation"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/commonpath"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
@@ -113,6 +116,9 @@ func filterDocumentPair(doc *types.Document, filterKey string, filterValue any, 
 
 	switch filterValue := filterValue.(type) {
 	case *types.Document:
+		if res, ok := positionalDocumentEquality(doc, filterKey, vals, filterValue); ok {
+			return res, nil
+		}
 		if filterSuffix == filterKey {
 			// A top-level key has one branch, which reads the same value from
 			// doc as from a {filterKey: value} copy.
@@ -160,7 +166,7 @@ func filterDocumentPair(doc *types.Document, filterKey string, filterValue any, 
 		}
 	default:
 		for _, val := range vals {
-			if result := collCompare(val, filterValue, cmp); result == types.Equal {
+			if equalsOrHasElement(val, filterValue, cmp) {
 				return true, nil
 			}
 		}
@@ -168,6 +174,93 @@ func filterDocumentPair(doc *types.Document, filterKey string, filterValue any, 
 
 	// If we got here, it means that none of the documents matched the filter.
 	return false, nil
+}
+
+// equalsOrHasElement is MongoDB's equality match: value equals target, or is
+// an array with an element equal to target. collCompare already compares an
+// array's elements with a scalar or document target; an array target is
+// compared with the array elements of an array here.
+func equalsOrHasElement(value, target any, cmp *collation.Comparator) bool {
+	if collCompare(value, target, cmp) == types.Equal {
+		return true
+	}
+	arr, isArray := value.(*types.Array)
+	targetArr, targetIsArray := target.(*types.Array)
+	if !isArray || !targetIsArray {
+		return false
+	}
+	for i := 0; i < arr.Len(); i++ {
+		if elem, ok := must.NotFail(arr.Get(i)).(*types.Array); ok && types.Compare(elem, targetArr) == types.Equal {
+			return true
+		}
+	}
+	return false
+}
+
+// positionalDocumentEquality decides {path: doc} and $eq, $ne, $in and $nin
+// with document operands when the path ends in an array index. MongoDB does not
+// expand the array such a path reaches, so it equals doc only if it is that
+// document. ok is false for other filters and paths.
+func positionalDocumentEquality(doc *types.Document, filterKey string, vals []any, filter *types.Document) (res, ok bool) {
+	path, err := types.NewPathFromString(filterKey)
+	if err != nil || path.Len() < 2 {
+		return false, false
+	}
+	if _, err := strconv.Atoi(path.Suffix()); err != nil {
+		return false, false
+	}
+	parents, err := commonpath.FindValues(doc, path.TrimSuffix(), &commonpath.FindValuesOpts{
+		FindArrayIndex:     true,
+		FindArrayDocuments: true,
+	})
+	if err != nil || !slices.ContainsFunc(parents, func(v any) bool { _, isArray := v.(*types.Array); return isArray }) {
+		return false, false
+	}
+
+	expected, negate := []*types.Document{filter}, false
+	if isOperatorDocument(filter) {
+		if filter.Len() != 1 {
+			return false, false
+		}
+		operand := must.NotFail(filter.Get(filter.Keys()[0]))
+		switch op := filter.Keys()[0]; op {
+		case "$eq", "$ne":
+			doc, isDoc := operand.(*types.Document)
+			if !isDoc {
+				return false, false
+			}
+			expected, negate = []*types.Document{doc}, op == "$ne"
+		case "$in", "$nin":
+			members, isArray := operand.(*types.Array)
+			if !isArray || members.Len() == 0 {
+				return false, false
+			}
+			expected = nil
+			for i := 0; i < members.Len(); i++ {
+				doc, isDoc := must.NotFail(members.Get(i)).(*types.Document)
+				if !isDoc {
+					return false, false
+				}
+				expected = append(expected, doc)
+			}
+			negate = op == "$nin"
+		default:
+			return false, false
+		}
+	}
+
+	for _, v := range vals {
+		d, isDoc := v.(*types.Document)
+		if !isDoc {
+			continue
+		}
+		for _, e := range expected {
+			if types.Compare(d, e) == types.Equal {
+				return !negate, true
+			}
+		}
+	}
+	return negate, true
 }
 
 // filterFieldExprBranches evaluates {field: {expr}} when a dotted path reaches
@@ -388,6 +481,9 @@ func filterOperator(doc *types.Document, operator string, filterValue any, cmp *
 	case "$comment":
 		return true, nil
 
+	case "$sampleRate":
+		return filterSampleRate(filterValue)
+
 	case "$expr":
 		return filterExprOperator(doc, filterValue)
 
@@ -413,6 +509,30 @@ func filterOperator(doc *types.Document, operator string, filterValue any, cmp *
 
 		return false, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue, msg, "$operator")
 	}
+}
+
+// filterSampleRate follows parseSampleRate: a number in [0, 1] is the
+// probability that a document matches.
+func filterSampleRate(rate any) (bool, error) {
+	var x float64
+	switch rate := rate.(type) {
+	case int32:
+		x = float64(rate)
+	case int64:
+		x = float64(rate)
+	case float64:
+		x = rate
+	case types.Decimal128:
+		x, _ = aggregations.DecimalToAPD(rate).Float64()
+	default:
+		return false, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
+			"argument to $sampleRate must be a numeric type", "$sampleRate")
+	}
+	if !(x >= 0 && x <= 1) {
+		return false, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
+			"numeric argument to $sampleRate must be in [0, 1]", "$sampleRate")
+	}
+	return rand.Float64() < x, nil
 }
 
 // filterExprOperator uses $expr operator to allow usage of aggregation expression.
@@ -516,9 +636,10 @@ func filterFieldExpr(doc *types.Document, filterKey, filterSuffix string, expr *
 		}
 
 		if !strings.HasPrefix(exprKey, "$") {
-			if documentValue, ok := fieldValue.(*types.Document); ok {
-				result := types.Compare(documentValue, expr)
-				return result == types.Equal, nil
+			// An array matches if it, or one of its elements, equals expr.
+			switch fieldValue.(type) {
+			case *types.Document, *types.Array:
+				return types.Compare(fieldValue, expr) == types.Equal, nil
 			}
 			return false, nil
 		}
@@ -526,41 +647,21 @@ func filterFieldExpr(doc *types.Document, filterKey, filterSuffix string, expr *
 		switch exprKey {
 		case "$eq":
 			// {field: {$eq: exprValue}}
-			switch exprValue := exprValue.(type) {
-			case *types.Document:
-				if fieldValue, ok := fieldValue.(*types.Document); ok {
-					result := types.Compare(exprValue, fieldValue)
-					return result == types.Equal, nil
-				}
+			if !equalsOrHasElement(fieldValue, exprValue, cmp) {
 				return false, nil
-			default:
-				result := collCompare(fieldValue, exprValue, cmp)
-				if result != types.Equal {
-					return false, nil
-				}
 			}
 
 		case "$ne":
 			// {field: {$ne: exprValue}}
-			switch exprValue := exprValue.(type) {
-			case *types.Document:
-				if fieldValue, ok := fieldValue.(*types.Document); ok {
-					result := types.Compare(exprValue, fieldValue)
-					return result != types.Equal, nil
-				}
-
-				return true, nil
-			case types.Regex:
+			if _, isRegex := exprValue.(types.Regex); isRegex {
 				return false, handlererrors.NewCommandErrorMsgWithArgument(
 					handlererrors.ErrBadValue,
 					"Can't have regex as arg to $ne.",
 					exprKey,
 				)
-			default:
-				result := collCompare(fieldValue, exprValue, cmp)
-				if result == types.Equal {
-					return false, nil
-				}
+			}
+			if equalsOrHasElement(fieldValue, exprValue, cmp) {
+				return false, nil
 			}
 
 		case "$gt":
@@ -691,10 +792,8 @@ func filterFieldExpr(doc *types.Document, filterKey, filterSuffix string, expr *
 						}
 					}
 
-					if fieldValue, ok := fieldValue.(*types.Document); ok {
-						if result := types.Compare(fieldValue, arrValue); result == types.Equal {
-							found = true
-						}
+					if equalsOrHasElement(fieldValue, arrValue, cmp) {
+						found = true
 					}
 				case types.Regex:
 					match, err := filterFieldRegex(fieldValue, arrValue)
@@ -705,8 +804,7 @@ func filterFieldExpr(doc *types.Document, filterKey, filterSuffix string, expr *
 						found = true
 					}
 				default:
-					result := collCompare(fieldValue, arrValue, cmp)
-					if result == types.Equal {
+					if equalsOrHasElement(fieldValue, arrValue, cmp) {
 						found = true
 					}
 				}
@@ -745,10 +843,8 @@ func filterFieldExpr(doc *types.Document, filterKey, filterSuffix string, expr *
 						}
 					}
 
-					if fieldValue, ok := fieldValue.(*types.Document); ok {
-						if result := types.Compare(fieldValue, arrValue); result == types.Equal {
-							found = true
-						}
+					if equalsOrHasElement(fieldValue, arrValue, cmp) {
+						found = true
 					}
 				case types.Regex:
 					match, err := filterFieldRegex(fieldValue, arrValue)
@@ -759,8 +855,7 @@ func filterFieldExpr(doc *types.Document, filterKey, filterSuffix string, expr *
 						found = true
 					}
 				default:
-					result := collCompare(fieldValue, arrValue, cmp)
-					if result == types.Equal {
+					if equalsOrHasElement(fieldValue, arrValue, cmp) {
 						found = true
 					}
 				}

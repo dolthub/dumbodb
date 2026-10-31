@@ -29,6 +29,241 @@ func EvalArgValue(arg any, doc *types.Document) (any, error) {
 	return evalArgValue(arg, doc)
 }
 
+// EvalOperand evaluates any aggregation expression, reporting whether it
+// produced MongoDB's missing value (an absent field or $$REMOVE). As in
+// MongoDB, a document literal omits fields that are missing and an array
+// literal holds null in their place.
+func EvalOperand(expr any, doc *types.Document) (value any, missing bool, err error) {
+	switch v := expr.(type) {
+	case *types.Document:
+		if IsOperator(v) {
+			op, err := cachedOperator(v)
+			if err != nil {
+				return nil, false, err
+			}
+			value, err = op.Process(doc)
+			if errors.Is(err, aggregations.ErrMissingValue) {
+				return nil, true, nil
+			}
+			return value, false, err
+		}
+		value, err = evalDocumentExpressions(v, doc)
+		return value, false, err
+
+	case *types.Array:
+		out := types.MakeArray(v.Len())
+		for i := range v.Len() {
+			elem, elemMissing, err := EvalOperand(must.NotFail(v.Get(i)), doc)
+			if err != nil {
+				return nil, false, err
+			}
+			if elemMissing {
+				elem = types.Null
+			}
+			out.Append(elem)
+		}
+		return out, false, nil
+
+	case string:
+		if v == "$$REMOVE" {
+			return nil, true, nil
+		}
+		value, missing, err = evalArgValueOrMissing(v, doc)
+		if errors.Is(err, aggregations.ErrMissingValue) {
+			return nil, true, nil
+		}
+		return value, missing, err
+
+	default:
+		return v, false, nil
+	}
+}
+
+// evalBranch evaluates an expression an operator returns as is, such as a
+// $cond branch, so that a missing value stays missing (ErrMissingValue).
+func evalBranch(arg any, doc *types.Document) (any, error) {
+	v, missing, err := EvalOperand(arg, doc)
+	if err != nil {
+		return nil, err
+	}
+	if missing {
+		return nil, aggregations.ErrMissingValue
+	}
+	return v, nil
+}
+
+// missingVariablePrefix marks a variable bound to the missing value. Variable
+// names cannot start with '$', so the key cannot collide with a binding.
+const missingVariablePrefix = "$$$missing:"
+
+// bindVariable binds $$name in doc to v, or to the missing value, replacing
+// any outer binding of the same name.
+func bindVariable(doc *types.Document, name string, v any, missing bool) {
+	if missing {
+		doc.Remove("$$" + name)
+		doc.Set(missingVariablePrefix+name, true)
+		return
+	}
+	doc.Remove(missingVariablePrefix + name)
+	doc.Set("$$"+name, v)
+}
+
+// isMissingVariable reports whether doc binds $$name to the missing value.
+func isMissingVariable(doc *types.Document, name string) bool {
+	return doc != nil && doc.Has(missingVariablePrefix+name)
+}
+
+// isConstantExpression reports whether expr reads no field and no variable,
+// so that mongod folds it to a constant while parsing.
+func isConstantExpression(expr any) bool {
+	switch v := expr.(type) {
+	case string:
+		return !strings.HasPrefix(v, "$")
+	case *types.Array:
+		for i := range v.Len() {
+			if !isConstantExpression(must.NotFail(v.Get(i))) {
+				return false
+			}
+		}
+		return true
+	case *types.Document:
+		if IsOperator(v) {
+			switch v.Command() {
+			case "$literal":
+				return true
+			case "$rand", "$sampleRate", "$meta":
+				return false
+			}
+		}
+		for _, k := range v.Keys() {
+			if !isConstantExpression(must.NotFail(v.Get(k))) {
+				return false
+			}
+		}
+		return true
+	default:
+		return true
+	}
+}
+
+// checkConstantOperand returns the error mongod raises when it folds a
+// constant operand that fails while parsing, even if the operand would
+// never be evaluated.
+func checkConstantOperand(expr any) error {
+	if !isConstantExpression(expr) {
+		return nil
+	}
+	_, _, err := foldConstant(expr, nil)
+	return err
+}
+
+// convertOperators are left unfolded: mongod's $project and find
+// projections do not report a failing constant conversion while parsing
+// (workspace-2vz).
+var convertOperators = map[string]bool{
+	"$convert": true, "$toBool": true, "$toDate": true, "$toDecimal": true, "$toDouble": true,
+	"$toInt": true, "$toLong": true, "$toObjectId": true, "$toString": true, "$toUUID": true,
+}
+
+// CheckConstantSubexpressions returns the error mongod raises while parsing
+// when it folds a constant operator anywhere inside expr. Like mongod's
+// optimize, it folds children first, so a failing constant is an error even
+// in a branch never taken, and each operator is evaluated once, over its
+// children's folded values.
+func CheckConstantSubexpressions(expr any) error {
+	_, _, err := foldConstants(expr)
+	return err
+}
+
+// foldConstants returns expr with each folded operator replaced by
+// {$literal: value}, and whether expr is constant.
+func foldConstants(expr any) (any, bool, error) {
+	switch v := expr.(type) {
+	case string:
+		return v, !strings.HasPrefix(v, "$"), nil
+	case *types.Array:
+		folded := types.MakeArray(v.Len())
+		constant := true
+		for i := range v.Len() {
+			elem, elemConstant, err := foldConstants(must.NotFail(v.Get(i)))
+			if err != nil {
+				return nil, false, err
+			}
+			folded.Append(elem)
+			constant = constant && elemConstant
+		}
+		return folded, constant, nil
+	case *types.Document:
+		return foldDocumentConstants(v)
+	default:
+		return v, true, nil
+	}
+}
+
+func foldDocumentConstants(doc *types.Document) (any, bool, error) {
+	operator := IsOperator(doc)
+	name := ""
+	if operator {
+		name = doc.Command()
+		// Unknown names are not expressions here, such as $sortArray's
+		// sortBy {"$a": 1}; inside a real expression parsing rejects them.
+		if _, known := Operators[name]; !known || name == "$literal" {
+			return doc, isConstantExpression(doc), nil
+		}
+	}
+
+	folded := types.MakeDocument(doc.Len())
+	constant := true
+	keys, values := doc.Keys(), doc.Values()
+	for i, value := range values {
+		value, valueConstant, err := foldConstants(value)
+		if err != nil {
+			return nil, false, err
+		}
+		folded.AppendDecoded(keys[i], value)
+		constant = constant && valueConstant
+	}
+
+	switch {
+	case !operator:
+		return folded, constant, nil
+	case name == "$rand" || name == "$sampleRate" || name == "$meta":
+		return folded, false, nil
+	case !constant || convertOperators[name]:
+		return folded, constant, nil
+	}
+
+	value, missing, err := foldConstant(folded, nil)
+	if err != nil {
+		return nil, false, err
+	}
+	if missing {
+		return folded, false, nil
+	}
+	return must.NotFail(types.NewDocument("$literal", value)), true, nil
+}
+
+// foldConstant is EvalOperand. Operator constructors call it, and EvalOperand
+// reaches Operators, so it is bound in init to avoid an initialization cycle.
+var foldConstant func(expr any, doc *types.Document) (any, bool, error)
+
+func init() {
+	foldConstant = EvalOperand
+}
+
+// copyForVariables copies doc so an operator can bind variables in it.
+// Expressions are validated against no document at all (nil), which binds
+// variables like a document with no fields.
+func copyForVariables(doc *types.Document) *types.Document {
+	if doc == nil {
+		return types.MakeDocument(0)
+	}
+	return doc.DeepCopy()
+}
+
+// evalArgValue evaluates an operand. A missing field, or an operator that
+// produces the missing value, reads as null, as MongoDB's operators treat
+// missing operands as nullish; $$REMOVE alone is reported as ErrMissingValue.
 func evalArgValue(arg any, doc *types.Document) (any, error) {
 	switch v := arg.(type) {
 	case *types.Document:
@@ -38,10 +273,30 @@ func evalArgValue(arg any, doc *types.Document) (any, error) {
 				return nil, err
 			}
 
-			return op.Process(doc)
+			res, err := op.Process(doc)
+			if errors.Is(err, aggregations.ErrMissingValue) {
+				return types.Null, nil
+			}
+			return res, err
 		}
 
 		return evalDocumentExpressions(v, doc)
+
+	case *types.Array:
+		// An array literal is an expression: each element is evaluated, and a
+		// missing element becomes null.
+		out := types.MakeArray(v.Len())
+		for i := range v.Len() {
+			elem, err := evalArgValue(must.NotFail(v.Get(i)), doc)
+			if errors.Is(err, aggregations.ErrMissingValue) {
+				elem, err = types.Null, nil
+			}
+			if err != nil {
+				return nil, err
+			}
+			out.Append(elem)
+		}
+		return out, nil
 
 	case string:
 		if strings.HasPrefix(v, "$$") {
@@ -63,7 +318,7 @@ func evalArgValue(arg any, doc *types.Document) (any, error) {
 			var base any
 			switch varName {
 			case "ROOT", "CURRENT":
-				base = doc.DeepCopy()
+				base = copyForVariables(doc)
 			case "NOW":
 				base = time.Now().UTC()
 			case "REMOVE":
@@ -74,6 +329,9 @@ func evalArgValue(arg any, doc *types.Document) (any, error) {
 				// $redact reads these as literal strings to decide its action.
 				base = v
 			default:
+				if isMissingVariable(doc, varName) {
+					return nil, aggregations.ErrMissingValue
+				}
 				val, err := doc.Get("$$" + varName)
 				if err != nil {
 					return nil, handlererrors.NewCommandErrorMsg(
@@ -132,18 +390,19 @@ func evalArgValue(arg any, doc *types.Document) (any, error) {
 	}
 }
 
+// evalDocumentExpressions evaluates a document literal as MongoDB's
+// ExpressionObject does: a field whose value is missing is omitted.
 func evalDocumentExpressions(expr *types.Document, doc *types.Document) (*types.Document, error) {
-	result := must.NotFail(types.NewDocument())
+	result := types.MakeDocument(expr.Len())
 
 	for _, k := range expr.Keys() {
-		val := must.NotFail(expr.Get(k))
-
-		evaluated, err := evalArgValue(val, doc)
+		evaluated, missing, err := EvalOperand(must.NotFail(expr.Get(k)), doc)
 		if err != nil {
 			return nil, err
 		}
-
-		result.Set(k, evaluated)
+		if !missing {
+			result.Set(k, evaluated)
+		}
 	}
 
 	return result, nil
@@ -155,16 +414,18 @@ func isNullish(v any) bool {
 	return v == types.Null || v == types.Undefined
 }
 
-// isFalsy returns true when v is MongoDB-falsy for $cond purposes:
-// false (bool), null, or missing.
+// isFalsy reports whether v is false in a boolean context.
 func isFalsy(v any) bool {
-	switch val := v.(type) {
-	case bool:
-		return !val
-	case types.NullType, types.UndefinedType:
-		return true
-	default:
-		_ = val
+	return !coerceToBool(v)
+}
+
+// coerceToBool is Value::coerceToBool: false, numeric zeros, null,
+// undefined and missing are false; everything else is true.
+func coerceToBool(v any) bool {
+	switch v.(type) {
+	case nil, types.NullType, types.UndefinedType:
 		return false
+	default:
+		return convertToBool(v)
 	}
 }

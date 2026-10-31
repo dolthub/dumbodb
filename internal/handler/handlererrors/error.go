@@ -152,6 +152,8 @@ const (
 
 	ErrExceededMemoryLimit = ErrorCode(146) // ExceededMemoryLimit
 
+	ErrDurationOverflow = ErrorCode(159) // DurationOverflow
+
 	// ErrQueryExceededMemoryLimitNoDiskUseAllowed indicates a blocking
 	// aggregation stage passed its memory limit and could not spill to disk.
 	ErrQueryExceededMemoryLimitNoDiskUseAllowed = ErrorCode(292) // QueryExceededMemoryLimitNoDiskUseAllowed
@@ -187,8 +189,9 @@ const (
 	// ErrUnsupportedOpQueryCommand indicates that given op query is not supported.
 	ErrUnsupportedOpQueryCommand = ErrorCode(352) // UnsupportedOpQueryCommand
 
-	// ErrIndexesWrongType indicates that indexes parameter has wrong type.
-	ErrIndexesWrongType = ErrorCode(10065) // Location10065
+	// ErrExpectedObject indicates a parameter that must be an object, such as
+	// createIndexes' indexes or $rand's argument.
+	ErrExpectedObject = ErrorCode(10065) // Location10065
 
 	ErrNotWritablePrimary = ErrorCode(10107) // NotWritablePrimary
 
@@ -299,6 +302,147 @@ const (
 	ErrRoundNonNumeric         = ErrorCode(51081)   // Location51081
 	ErrRoundPlaceNotIntegral   = ErrorCode(51082)   // Location51082
 	ErrRoundPlaceOutOfRange    = ErrorCode(51083)   // Location51083
+	ErrTrigOutOfBounds         = ErrorCode(50989)   // Location50989
+	ErrNumericFirstArgument    = ErrorCode(51044)   // Location51044
+	ErrNumericSecondArgument   = ErrorCode(51045)   // Location51045
+
+	// Date expression errors, named for MongoDB's checks.
+	ErrUnrecognizedTimeZone      = ErrorCode(40485)   // Location40485
+	ErrTimeZoneNotString         = ErrorCode(40517)   // Location40517
+	ErrDateFromPartsMixedNatural = ErrorCode(40489)   // Location40489
+	ErrDateFromPartsNotInteger   = ErrorCode(40515)   // Location40515
+	ErrDateFromPartsNoYear       = ErrorCode(40516)   // Location40516
+	ErrDateFromPartsUnknownField = ErrorCode(40518)   // Location40518
+	ErrDateFromPartsNotObject    = ErrorCode(40519)   // Location40519
+	ErrDateFromPartsYearRange    = ErrorCode(40523)   // Location40523
+	ErrDateFromPartsMixedISO     = ErrorCode(40525)   // Location40525
+	ErrDatePartOutOfRange        = ErrorCode(31034)   // Location31034
+	ErrDateFromPartsISOYearRange = ErrorCode(31095)   // Location31095
+	ErrCannotConvertToDate       = ErrorCode(16006)   // Location16006
+	ErrDateToPartsUnknownField   = ErrorCode(40520)   // Location40520
+	ErrDateToPartsISONotBool     = ErrorCode(40521)   // Location40521
+	ErrDateToPartsNoDate         = ErrorCode(40522)   // Location40522
+	ErrDateToPartsNotObject      = ErrorCode(40524)   // Location40524
+	ErrConversionFailure         = ErrorCode(241)     // ConversionFailure
+	ErrDateFromStringNotObject   = ErrorCode(40540)   // Location40540
+	ErrDateFromStringBadField    = ErrorCode(40541)   // Location40541
+	ErrDateFromStringNoInput     = ErrorCode(40542)   // Location40542
+	ErrDateFormatNotString       = ErrorCode(40684)   // Location40684
+	ErrFormatUnmatchedPercent    = ErrorCode(18535)   // Location18535
+	ErrFormatInvalidSpecifier    = ErrorCode(18536)   // Location18536
+	ErrTimeUnitNotString         = ErrorCode(5439013) // Location5439013
+	ErrOutInSubPipeline          = ErrorCode(31441)   // Location31441
+	ErrUnwindNotArray            = ErrorCode(5858203) // Location5858203
+	ErrCannotConvertToString     = ErrorCode(16007)   // Location16007
+	ErrStageNotAllowedInFacet    = ErrorCode(40600)   // Location40600
+	ErrArrayElemAtNotArray       = ErrorCode(28689)   // Location28689
+	ErrArrayElemAtNotNumeric     = ErrorCode(28690)   // Location28690
+	ErrArrayElemAtNotInt         = ErrorCode(28691)   // Location28691
+	ErrSliceSecondNotNumeric     = ErrorCode(28725)   // Location28725
+	ErrSliceSecondNotInt         = ErrorCode(28726)   // Location28726
+	ErrSliceThirdNotNumeric      = ErrorCode(28727)   // Location28727
+	ErrSliceThirdNotInt          = ErrorCode(28728)   // Location28728
+	ErrIndexOfArrayNotArray      = ErrorCode(40090)   // Location40090
+	ErrIndexOfBytesNotString     = ErrorCode(40091)   // Location40091
+	ErrIndexOfBytesTokenString   = ErrorCode(40092)   // Location40092
+	ErrIndexOfCPNotString        = ErrorCode(40093)   // Location40093
+	ErrIndexOfCPTokenString      = ErrorCode(40094)   // Location40094
+	ErrIndexOfCPBadUTF8          = ErrorCode(40095)   // Location40095
+	ErrIndexNotIntegral          = ErrorCode(40096)   // Location40096
+	ErrIndexNegative             = ErrorCode(40097)   // Location40097
+	ErrSubstrStartNotNumeric     = ErrorCode(16034)   // Location16034
+	ErrSubstrLengthNotNumeric    = ErrorCode(16035)   // Location16035
+	ErrSubstrStartNegative       = ErrorCode(50752)   // Location50752
+	ErrSubstrStartContinuation   = ErrorCode(28656)   // Location28656
+	ErrSubstrEndMidCharacter     = ErrorCode(28657)   // Location28657
+	ErrSubstrCPStartNotNumeric   = ErrorCode(34450)   // Location34450
+	ErrSubstrCPStartNotInt       = ErrorCode(34451)   // Location34451
+	ErrSubstrCPLengthNotNumeric  = ErrorCode(34452)   // Location34452
+	ErrSubstrCPLengthNotInt      = ErrorCode(34453)   // Location34453
+	ErrSubstrCPLengthNegative    = ErrorCode(34454)   // Location34454
+	ErrSubstrCPStartNegative     = ErrorCode(34455)   // Location34455
+	ErrSubstrCPInvalidUTF8       = ErrorCode(34456)   // Location34456
+	ErrCoerceLongOutOfRange      = ErrorCode(31109)   // Location31109
+	ErrDateDiffNotObject         = ErrorCode(5166301) // Location5166301
+	ErrDateDiffBadField          = ErrorCode(5166302) // Location5166302
+	ErrDateDiffNoStartDate       = ErrorCode(5166303) // Location5166303
+	ErrDateDiffNoEndDate         = ErrorCode(5166304) // Location5166304
+	ErrDateDiffNoUnit            = ErrorCode(5166305) // Location5166305
+	ErrDateDiffNotDate           = ErrorCode(5166307) // Location5166307
+	ErrDateDiffOverflow          = ErrorCode(5166308) // Location5166308
+	ErrDateTruncShiftOverflow    = ErrorCode(5439000) // Location5439000
+	ErrDateTruncResultOverflow   = ErrorCode(5439001) // Location5439001
+	ErrDateTruncBinSizeOverflow  = ErrorCode(5439002) // Location5439002
+	ErrDateTruncBinBoundOverflow = ErrorCode(5439004) // Location5439004
+	ErrDateTruncBinSizeTooLarge  = ErrorCode(5439006) // Location5439006
+	ErrDateTruncNotObject        = ErrorCode(5439007) // Location5439007
+	ErrDateTruncBadField         = ErrorCode(5439008) // Location5439008
+	ErrDateTruncNoDate           = ErrorCode(5439009) // Location5439009
+	ErrDateTruncNoUnit           = ErrorCode(5439010) // Location5439010
+	ErrDateTruncNotDate          = ErrorCode(5439012) // Location5439012
+	ErrStartOfWeekNotString      = ErrorCode(5439015) // Location5439015
+	ErrStartOfWeekInvalid        = ErrorCode(5439016) // Location5439016
+	ErrDateTruncBinSizeNotInt    = ErrorCode(5439017) // Location5439017
+	ErrDateTruncBinSizeNotPos    = ErrorCode(5439018) // Location5439018
+	ErrDateAddAmountInvalid      = ErrorCode(5976500) // Location5976500
+	ErrDateAddOverflow           = ErrorCode(5166406) // Location5166406
+	ErrDateArithmeticNotObject   = ErrorCode(5166400) // Location5166400
+	ErrDateArithmeticBadField    = ErrorCode(5166401) // Location5166401
+	ErrDateArithmeticNoField     = ErrorCode(5166402) // Location5166402
+	ErrDateArithmeticNotDate     = ErrorCode(5166403) // Location5166403
+	ErrDateArithmeticNotInteger  = ErrorCode(5166405) // Location5166405
+	ErrDateSubtractMinAmount     = ErrorCode(6045000) // Location6045000
+	ErrMergeObjectsNotObject     = ErrorCode(5911200) // Location5911200
+	ErrConcatArraysNotArray      = ErrorCode(28664)   // Location28664
+	ErrGroupInclusionStyle       = ErrorCode(17390)   // Location17390
+	ErrAddTwoDates               = ErrorCode(16612)   // Location16612
+	ErrReplaceReplacementType    = ErrorCode(51744)   // Location51744
+	ErrReplaceFindType           = ErrorCode(51745)   // Location51745
+	ErrReplaceInputType          = ErrorCode(51746)   // Location51746
+	ErrReplaceNoReplacement      = ErrorCode(51747)   // Location51747
+	ErrReplaceNoFind             = ErrorCode(51748)   // Location51748
+	ErrReplaceNoInput            = ErrorCode(51749)   // Location51749
+	ErrReplaceUnknownField       = ErrorCode(51750)   // Location51750
+	ErrReplaceNotObject          = ErrorCode(51751)   // Location51751
+	ErrRegexNotObject            = ErrorCode(51103)   // Location51103
+	ErrRegexInputType            = ErrorCode(51104)   // Location51104
+	ErrRegexType                 = ErrorCode(51105)   // Location51105
+	ErrRegexOptionsType          = ErrorCode(51106)   // Location51106
+	ErrRegexOptionsTwice         = ErrorCode(51107)   // Location51107
+	ErrRegexPatternNull          = ErrorCode(51109)   // Location51109
+	ErrRegexOptionsNull          = ErrorCode(51110)   // Location51110
+	ErrRegexInvalid              = ErrorCode(51111)   // Location51111
+	ErrRegexExecution            = ErrorCode(51156)   // Location51156
+	ErrRegexFindAllTooLarge      = ErrorCode(51151)   // Location51151
+	ErrStringTooLarge            = ErrorCode(16493)   // Location16493
+	ErrBufBuilderTooLarge        = ErrorCode(13548)   // Location13548
+	ErrRegexNoInput              = ErrorCode(31022)   // Location31022
+	ErrRegexNoRegex              = ErrorCode(31023)   // Location31023
+	ErrRegexUnknownField         = ErrorCode(31024)   // Location31024
+	ErrSortArrayNotObject        = ErrorCode(2942500) // Location2942500
+	ErrSortArrayUnknownField     = ErrorCode(2942501) // Location2942501
+	ErrSortArrayNoInput          = ErrorCode(2942502) // Location2942502
+	ErrSortArrayNoSortBy         = ErrorCode(2942503) // Location2942503
+	ErrSortArrayInputNotArray    = ErrorCode(2942504) // Location2942504
+	ErrSortArrayBadPattern       = ErrorCode(2942505) // Location2942505
+	ErrSortArrayBadOrder         = ErrorCode(2942506) // Location2942506
+	ErrSortArrayBadSortBy        = ErrorCode(2942507) // Location2942507
+	ErrBinarySizeType            = ErrorCode(51276)   // Location51276
+	ErrConversionArity           = ErrorCode(50723)   // Location50723
+	ErrRandInValidator           = ErrorCode(3040500) // Location3040500
+	ErrRandArguments             = ErrorCode(3040501) // Location3040501
+	ErrMetaNotString             = ErrorCode(17307)   // Location17307
+	ErrMetaUnsupported           = ErrorCode(17308)   // Location17308
+	ErrMetadataUnavailable       = ErrorCode(40218)   // Location40218
+	ErrDatePartTimeZoneNotString = ErrorCode(40533)   // Location40533
+	ErrDatePartUnknownOption     = ErrorCode(40535)   // Location40535
+	ErrDatePartArrayLen          = ErrorCode(40536)   // Location40536
+	ErrDatePartNoDate            = ErrorCode(40539)   // Location40539
+	ErrDateToStringNotObject     = ErrorCode(18629)   // Location18629
+	ErrDateToStringUnknownField  = ErrorCode(18534)   // Location18534
+	ErrDateToStringNoDate        = ErrorCode(18628)   // Location18628
+	ErrDateToStringFormatType    = ErrorCode(18533)   // Location18533
+	ErrDateComponentOutOfRange   = ErrorCode(18537)   // Location18537
 
 	// ErrOpMsgNoBody indicates an OP_MSG without a kind-0 body section.
 	ErrOpMsgNoBody = ErrorCode(40587) // Location40587
@@ -332,6 +476,34 @@ const (
 
 	// ErrUnsetPathOverwrite indicates that an $unset path have overwrites another path in arguments.
 	ErrUnsetPathOverwrite = ErrorCode(31250) // Location31250
+
+	// ErrConvertFormatType indicates a $convert 'format' that is not a string.
+	ErrConvertFormatType = ErrorCode(4341114) // Location4341114
+
+	// ErrConvertFormatRequired indicates a BinData conversion without 'format'.
+	ErrConvertFormatRequired = ErrorCode(4341115) // Location4341115
+
+	// ErrConvertFormatInvalid indicates an unknown $convert 'format'.
+	ErrConvertFormatInvalid = ErrorCode(4341125) // Location4341125
+
+	// ErrConvertSubtypeNotInteger indicates a fractional BinData 'subtype'.
+	ErrConvertSubtypeNotInteger = ErrorCode(4341106) // Location4341106
+
+	// ErrConvertSubtypeInvalid indicates a 'subtype' that is no BinData type.
+	ErrConvertSubtypeInvalid = ErrorCode(4341107) // Location4341107
+
+	// ErrConvertSubtypeType indicates a non-numeric BinData 'subtype'.
+	ErrConvertSubtypeType = ErrorCode(4341108) // Location4341108
+
+	// ErrConvertSubtypeColumn indicates a conversion to BinData subtype Column.
+	ErrConvertSubtypeColumn = ErrorCode(12910300) // Location12910300
+
+	// ErrSizeNotArray indicates that the argument to $size is not an array.
+	ErrSizeNotArray = ErrorCode(17124) // Location17124
+
+	// ErrProjectionExpressionInExclusion indicates an expression in an
+	// exclusion projection.
+	ErrProjectionExpressionInExclusion = ErrorCode(31252) // Location31252
 
 	// ErrProjectionInEx for $elemMatch indicates that inclusion statement found
 	// while projection document already marked as exclusion.
@@ -381,6 +553,9 @@ const (
 
 	// ErrStageGroupUnaryOperator indicates that $sum is a unary operator.
 	ErrStageGroupUnaryOperator = ErrorCode(40237) // Location40237
+
+	// ErrStageGroupUnknownOperator indicates a name that is not a $group accumulator.
+	ErrStageGroupUnknownOperator = ErrorCode(15952) // Location15952
 
 	// ErrStageGroupMultipleAccumulator indicates that group field must specify one accumulator.
 	ErrStageGroupMultipleAccumulator = ErrorCode(40238) // Location40238
@@ -565,6 +740,12 @@ type ProtoErr interface {
 	Info() *ErrInfo
 }
 
+// commandErrorConverter is an error from a package handlererrors cannot
+// import that knows its client-facing CommandError.
+type commandErrorConverter interface {
+	CommandError() error
+}
+
 // ProtocolError converts any error to wire protocol error.
 //
 // Nil panics (it never should be passed),
@@ -583,6 +764,13 @@ func ProtocolError(err error) ProtoErr {
 	var writeErr *WriteErrors
 	if errors.As(err, &writeErr) {
 		return writeErr
+	}
+
+	var convertible commandErrorConverter
+	if errors.As(err, &convertible) {
+		if commandErr, ok := convertible.CommandError().(*CommandError); ok {
+			return commandErr
+		}
 	}
 
 	if errors.Is(err, bson.ErrNestingTooDeep) {

@@ -15,24 +15,16 @@
 package accumulators
 
 import (
-	"errors"
-
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
-	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
-	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 )
 
 type sum struct {
-	expression *aggregations.Expression
-	operator   operators.Operator
-	number     any
+	arg operand
 }
 
 func newSum(args ...any) (Accumulator, error) {
-	accumulator := new(sum)
-
 	if len(args) != 1 {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrStageGroupUnaryOperator,
@@ -41,42 +33,12 @@ func newSum(args ...any) (Accumulator, error) {
 		)
 	}
 
-	for _, arg := range args {
-		switch arg := arg.(type) {
-		case *types.Document:
-			if !operators.IsOperator(arg) {
-				accumulator.number = int32(0)
-				break
-			}
-
-			op, err := operators.NewOperator(arg)
-			if err != nil {
-				var opErr operators.OperatorError
-				if !errors.As(err, &opErr) {
-					return nil, lazyerrors.Error(err)
-				}
-
-				return nil, opErr
-			}
-
-			accumulator.operator = op
-		case float64:
-			accumulator.number = arg
-		case string:
-			var err error
-			if accumulator.expression, err = aggregations.NewExpression(arg, nil); err != nil {
-				// $sum returns 0 on non-existent field.
-				accumulator.number = int32(0)
-			}
-		case int32, int64:
-			accumulator.number = arg
-		default:
-			accumulator.number = int32(0)
-			// $sum returns 0 on non-numeric field
-		}
+	arg, err := newOperand(args[0])
+	if err != nil {
+		return nil, err
 	}
 
-	return accumulator, nil
+	return &sum{arg: arg}, nil
 }
 
 func (s *sum) New() Accumulation {
@@ -88,35 +50,15 @@ type sumState struct {
 	acc  *aggregations.NumberSum
 }
 
+// Accumulate adds the operand's value; non-numeric and missing values
+// contribute nothing, so { $sum: 1 } counts documents.
 func (st *sumState) Accumulate(doc *types.Document) error {
-	s := st.spec
-
-	switch {
-	case s.operator != nil:
-		v, err := s.operator.Process(doc)
-		if err != nil {
-			return err
-		}
-
-		st.acc.Add(v)
-
-		return nil
-
-	case s.expression != nil:
-		// sum fields that exist
-		if value, err := s.expression.Evaluate(doc); err == nil {
-			st.acc.Add(value)
-		}
-
-		return nil
+	value, missing, err := st.spec.arg.evaluate(doc)
+	if err != nil || missing {
+		return err
 	}
 
-	// Constant: { $sum: 1 } folds the same value per document (equivalent to
-	// $count). Non-numeric constants contribute nothing, so Result stays int32(0).
-	switch s.number.(type) {
-	case float64, int32, int64:
-		st.acc.Add(s.number)
-	}
+	st.acc.Add(value)
 
 	return nil
 }

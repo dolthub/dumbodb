@@ -14,6 +14,8 @@
 
 package operators
 
+import "errors"
+
 // operatorErrorCode represents the type of error.
 type operatorErrorCode uint
 
@@ -88,4 +90,22 @@ func (opErr OperatorError) Code() operatorErrorCode {
 // Name returns the name of the operator (e.g. $sum) that produced an error.
 func (opErr OperatorError) Name() string {
 	return opErr.name
+}
+
+// CommandError converts opErr to the error MongoDB reports, for errors that
+// reach the client without a stage translating them.
+func (opErr OperatorError) CommandError() error {
+	return processExprOperatorErrors(opErr, opErr.name)
+}
+
+// AsNestedError reports an unknown expression found while evaluating an
+// operator as nested, which MongoDB reports differently from an unknown
+// expression at the top of a $project field.
+func AsNestedError(err error) error {
+	var opErr OperatorError
+	if errors.As(err, &opErr) && opErr.code == ErrInvalidExpression {
+		opErr.code = ErrInvalidNestedExpression
+		return opErr
+	}
+	return err
 }

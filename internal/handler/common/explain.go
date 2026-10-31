@@ -231,6 +231,8 @@ func GetExplainParams(document *types.Document, l *slog.Logger) (*ExplainParams,
 		}
 	}
 
+	CanonicalizeFilter(filter)
+
 	return &ExplainParams{
 		DB:          db,
 		Collection:  collection,

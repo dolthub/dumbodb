@@ -152,8 +152,14 @@ func (h *Handler) updateDocument(ctx context.Context, params *common.UpdateParam
 
 		cmp := collation.Parse(u.Collation).Comparator()
 
-		if err := common.ValidateFilter(u.Filter, cmp); err != nil {
-			// MongoDB reports an update's invalid filter as a write error.
+		common.CanonicalizeFilter(u.Filter)
+		err = common.ValidateFilter(u.Filter, cmp)
+		if err == nil && u.IsPipeline {
+			err = common.ValidateUpdatePipeline(u.Pipeline)
+		}
+		if err != nil {
+			// MongoDB reports an update's invalid filter or pipeline as a write
+			// error.
 			var ce *handlererrors.CommandError
 			if errors.As(err, &ce) {
 				return 0, 0, nil, handlererrors.NewWriteErrorMsg(ce.Code(), ce.Err().Error())

@@ -25,14 +25,18 @@ package cursor
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"strconv"
 	"sync"
 	"time"
 
+	"github.com/dolthub/dumbodb/internal/bson"
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
+	"github.com/dolthub/dumbodb/internal/util/must"
 	"github.com/dolthub/dumbodb/internal/util/resource"
 )
 
@@ -164,6 +168,14 @@ func (c *Cursor) NextBatch(maxDocs, maxBytes int) (batch []*types.Document, done
 			return nil, false, lazyerrors.Error(err)
 		}
 
+		if exceedsOutputNesting(doc, 1) {
+			c.Close()
+			return nil, false, handlererrors.NewCommandErrorMsg(handlererrors.ErrOverflow, fmt.Sprintf(
+				"cannot convert document to BSON because it exceeds the limit of %d levels of nesting",
+				bson.MaxNestingDepth,
+			))
+		}
+
 		docSize := batchElementSize(len(batch), doc)
 		if len(batch) > 0 && size+docSize > maxBytes {
 			c.m.Lock()
@@ -187,6 +199,38 @@ func (c *Cursor) nextPendingFirst() (*types.Document, error) {
 	}
 	_, doc, err := c.Next()
 	return doc, err
+}
+
+// exceedsOutputNesting ports the checks of mongod's Document::toBson: every
+// document and value checks its level; a document's fields share its level,
+// while subdocuments and array elements sit one level deeper.
+func exceedsOutputNesting(doc *types.Document, level int) bool {
+	if level > bson.MaxNestingDepth {
+		return true
+	}
+	for _, v := range doc.Values() {
+		if valueExceedsOutputNesting(v, level) {
+			return true
+		}
+	}
+	return false
+}
+
+func valueExceedsOutputNesting(v any, level int) bool {
+	if level > bson.MaxNestingDepth {
+		return true
+	}
+	switch v := v.(type) {
+	case *types.Document:
+		return exceedsOutputNesting(v, level+1)
+	case *types.Array:
+		for i := range v.Len() {
+			if valueExceedsOutputNesting(must.NotFail(v.Get(i)), level+1) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // batchElementSize is the encoded size of doc as element i of a batch array.

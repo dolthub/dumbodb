@@ -822,10 +822,10 @@ func TestGraphLookup_DepthField(t *testing.T) {
 		}
 
 		// Depth should be 0 for bob (first hop) and 1 for carol (second hop).
-		// MongoDB returns depthField as int32 for small values.
-		depth, ok := depthVal.(int32)
+		// MongoDB returns depthField as int64.
+		depth, ok := depthVal.(int64)
 		if !ok {
-			t.Errorf("managers[%d].depth not int32: %T (%v)", i, depthVal, depthVal)
+			t.Errorf("managers[%d].depth not int64: %T (%v)", i, depthVal, depthVal)
 		} else if depth < 0 || depth > 1 {
 			t.Errorf("managers[%d].depth out of expected range [0,1]: %d", i, depth)
 		}
@@ -1311,7 +1311,7 @@ func TestAggComplex_matchUnwindGroupSort(t *testing.T) {
 }
 
 // TestAggStage_graphLookup_MaxDepthLimitsTraversal verifies that maxDepth correctly
-// limits traversal and that depthField values are returned as int32 (matching MongoDB).
+// limits traversal and that depthField values are returned as int64 (matching MongoDB).
 //
 // Graph: alice -> bob -> carol -> dave -> eve (5-node chain)
 // With maxDepth=2, only bob (depth 0), carol (depth 1), and dave (depth 2) should
@@ -1378,9 +1378,9 @@ func TestAggStage_graphLookup_MaxDepthLimitsTraversal(t *testing.T) {
 
 	// MongoDB ordering: depth-0 first, then remaining levels deepest-first.
 	// For this linear chain: bob(d0), dave(d2), carol(d1).
-	// Verify depthField is int32 (matching MongoDB BSON wire type).
+	// Verify depthField is int64 (matching MongoDB BSON wire type).
 	expectedNames := []string{"bob", "dave", "carol"}
-	expectedDepths := []int32{0, 2, 1}
+	expectedDepths := []int64{0, 2, 1}
 
 	for i := 0; i < managers.Len(); i++ {
 		v, _ := managers.Get(i)
@@ -1406,10 +1406,10 @@ func TestAggStage_graphLookup_MaxDepthLimitsTraversal(t *testing.T) {
 			continue
 		}
 
-		// depthField must be int32, matching MongoDB's BSON wire representation.
-		depth, ok := depthVal.(int32)
+		// depthField must be int64, matching MongoDB's BSON wire representation.
+		depth, ok := depthVal.(int64)
 		if !ok {
-			t.Errorf("managers[%d].depth is %T, want int32", i, depthVal)
+			t.Errorf("managers[%d].depth is %T, want int64", i, depthVal)
 			continue
 		}
 

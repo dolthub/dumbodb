@@ -53,6 +53,7 @@ func _() {
 	_ = x[ErrTimeProofMismatch-204]
 	_ = x[ErrKeysNotFound-211]
 	_ = x[ErrExceededMemoryLimit-146]
+	_ = x[ErrDurationOverflow-159]
 	_ = x[ErrQueryExceededMemoryLimitNoDiskUseAllowed-292]
 	_ = x[ErrViewDepthLimitExceeded-165]
 	_ = x[ErrCommandNotSupportedOnView-166]
@@ -65,7 +66,7 @@ func _() {
 	_ = x[ErrOperationNotSupportedInTransaction-263]
 	_ = x[ErrMechanismUnavailable-334]
 	_ = x[ErrUnsupportedOpQueryCommand-352]
-	_ = x[ErrIndexesWrongType-10065]
+	_ = x[ErrExpectedObject-10065]
 	_ = x[ErrNotWritablePrimary-10107]
 	_ = x[ErrDuplicateKeyInsert-11000]
 	_ = x[ErrSetBadExpression-40272]
@@ -119,6 +120,145 @@ func _() {
 	_ = x[ErrRoundNonNumeric-51081]
 	_ = x[ErrRoundPlaceNotIntegral-51082]
 	_ = x[ErrRoundPlaceOutOfRange-51083]
+	_ = x[ErrTrigOutOfBounds-50989]
+	_ = x[ErrNumericFirstArgument-51044]
+	_ = x[ErrNumericSecondArgument-51045]
+	_ = x[ErrUnrecognizedTimeZone-40485]
+	_ = x[ErrTimeZoneNotString-40517]
+	_ = x[ErrDateFromPartsMixedNatural-40489]
+	_ = x[ErrDateFromPartsNotInteger-40515]
+	_ = x[ErrDateFromPartsNoYear-40516]
+	_ = x[ErrDateFromPartsUnknownField-40518]
+	_ = x[ErrDateFromPartsNotObject-40519]
+	_ = x[ErrDateFromPartsYearRange-40523]
+	_ = x[ErrDateFromPartsMixedISO-40525]
+	_ = x[ErrDatePartOutOfRange-31034]
+	_ = x[ErrDateFromPartsISOYearRange-31095]
+	_ = x[ErrCannotConvertToDate-16006]
+	_ = x[ErrDateToPartsUnknownField-40520]
+	_ = x[ErrDateToPartsISONotBool-40521]
+	_ = x[ErrDateToPartsNoDate-40522]
+	_ = x[ErrDateToPartsNotObject-40524]
+	_ = x[ErrConversionFailure-241]
+	_ = x[ErrDateFromStringNotObject-40540]
+	_ = x[ErrDateFromStringBadField-40541]
+	_ = x[ErrDateFromStringNoInput-40542]
+	_ = x[ErrDateFormatNotString-40684]
+	_ = x[ErrFormatUnmatchedPercent-18535]
+	_ = x[ErrFormatInvalidSpecifier-18536]
+	_ = x[ErrTimeUnitNotString-5439013]
+	_ = x[ErrOutInSubPipeline-31441]
+	_ = x[ErrUnwindNotArray-5858203]
+	_ = x[ErrCannotConvertToString-16007]
+	_ = x[ErrStageNotAllowedInFacet-40600]
+	_ = x[ErrArrayElemAtNotArray-28689]
+	_ = x[ErrArrayElemAtNotNumeric-28690]
+	_ = x[ErrArrayElemAtNotInt-28691]
+	_ = x[ErrSliceSecondNotNumeric-28725]
+	_ = x[ErrSliceSecondNotInt-28726]
+	_ = x[ErrSliceThirdNotNumeric-28727]
+	_ = x[ErrSliceThirdNotInt-28728]
+	_ = x[ErrIndexOfArrayNotArray-40090]
+	_ = x[ErrIndexOfBytesNotString-40091]
+	_ = x[ErrIndexOfBytesTokenString-40092]
+	_ = x[ErrIndexOfCPNotString-40093]
+	_ = x[ErrIndexOfCPTokenString-40094]
+	_ = x[ErrIndexOfCPBadUTF8-40095]
+	_ = x[ErrIndexNotIntegral-40096]
+	_ = x[ErrIndexNegative-40097]
+	_ = x[ErrSubstrStartNotNumeric-16034]
+	_ = x[ErrSubstrLengthNotNumeric-16035]
+	_ = x[ErrSubstrStartNegative-50752]
+	_ = x[ErrSubstrStartContinuation-28656]
+	_ = x[ErrSubstrEndMidCharacter-28657]
+	_ = x[ErrSubstrCPStartNotNumeric-34450]
+	_ = x[ErrSubstrCPStartNotInt-34451]
+	_ = x[ErrSubstrCPLengthNotNumeric-34452]
+	_ = x[ErrSubstrCPLengthNotInt-34453]
+	_ = x[ErrSubstrCPLengthNegative-34454]
+	_ = x[ErrSubstrCPStartNegative-34455]
+	_ = x[ErrSubstrCPInvalidUTF8-34456]
+	_ = x[ErrCoerceLongOutOfRange-31109]
+	_ = x[ErrDateDiffNotObject-5166301]
+	_ = x[ErrDateDiffBadField-5166302]
+	_ = x[ErrDateDiffNoStartDate-5166303]
+	_ = x[ErrDateDiffNoEndDate-5166304]
+	_ = x[ErrDateDiffNoUnit-5166305]
+	_ = x[ErrDateDiffNotDate-5166307]
+	_ = x[ErrDateDiffOverflow-5166308]
+	_ = x[ErrDateTruncShiftOverflow-5439000]
+	_ = x[ErrDateTruncResultOverflow-5439001]
+	_ = x[ErrDateTruncBinSizeOverflow-5439002]
+	_ = x[ErrDateTruncBinBoundOverflow-5439004]
+	_ = x[ErrDateTruncBinSizeTooLarge-5439006]
+	_ = x[ErrDateTruncNotObject-5439007]
+	_ = x[ErrDateTruncBadField-5439008]
+	_ = x[ErrDateTruncNoDate-5439009]
+	_ = x[ErrDateTruncNoUnit-5439010]
+	_ = x[ErrDateTruncNotDate-5439012]
+	_ = x[ErrStartOfWeekNotString-5439015]
+	_ = x[ErrStartOfWeekInvalid-5439016]
+	_ = x[ErrDateTruncBinSizeNotInt-5439017]
+	_ = x[ErrDateTruncBinSizeNotPos-5439018]
+	_ = x[ErrDateAddAmountInvalid-5976500]
+	_ = x[ErrDateAddOverflow-5166406]
+	_ = x[ErrDateArithmeticNotObject-5166400]
+	_ = x[ErrDateArithmeticBadField-5166401]
+	_ = x[ErrDateArithmeticNoField-5166402]
+	_ = x[ErrDateArithmeticNotDate-5166403]
+	_ = x[ErrDateArithmeticNotInteger-5166405]
+	_ = x[ErrDateSubtractMinAmount-6045000]
+	_ = x[ErrMergeObjectsNotObject-5911200]
+	_ = x[ErrConcatArraysNotArray-28664]
+	_ = x[ErrGroupInclusionStyle-17390]
+	_ = x[ErrAddTwoDates-16612]
+	_ = x[ErrReplaceReplacementType-51744]
+	_ = x[ErrReplaceFindType-51745]
+	_ = x[ErrReplaceInputType-51746]
+	_ = x[ErrReplaceNoReplacement-51747]
+	_ = x[ErrReplaceNoFind-51748]
+	_ = x[ErrReplaceNoInput-51749]
+	_ = x[ErrReplaceUnknownField-51750]
+	_ = x[ErrReplaceNotObject-51751]
+	_ = x[ErrRegexNotObject-51103]
+	_ = x[ErrRegexInputType-51104]
+	_ = x[ErrRegexType-51105]
+	_ = x[ErrRegexOptionsType-51106]
+	_ = x[ErrRegexOptionsTwice-51107]
+	_ = x[ErrRegexPatternNull-51109]
+	_ = x[ErrRegexOptionsNull-51110]
+	_ = x[ErrRegexInvalid-51111]
+	_ = x[ErrRegexExecution-51156]
+	_ = x[ErrRegexFindAllTooLarge-51151]
+	_ = x[ErrStringTooLarge-16493]
+	_ = x[ErrBufBuilderTooLarge-13548]
+	_ = x[ErrRegexNoInput-31022]
+	_ = x[ErrRegexNoRegex-31023]
+	_ = x[ErrRegexUnknownField-31024]
+	_ = x[ErrSortArrayNotObject-2942500]
+	_ = x[ErrSortArrayUnknownField-2942501]
+	_ = x[ErrSortArrayNoInput-2942502]
+	_ = x[ErrSortArrayNoSortBy-2942503]
+	_ = x[ErrSortArrayInputNotArray-2942504]
+	_ = x[ErrSortArrayBadPattern-2942505]
+	_ = x[ErrSortArrayBadOrder-2942506]
+	_ = x[ErrSortArrayBadSortBy-2942507]
+	_ = x[ErrBinarySizeType-51276]
+	_ = x[ErrConversionArity-50723]
+	_ = x[ErrRandInValidator-3040500]
+	_ = x[ErrRandArguments-3040501]
+	_ = x[ErrMetaNotString-17307]
+	_ = x[ErrMetaUnsupported-17308]
+	_ = x[ErrMetadataUnavailable-40218]
+	_ = x[ErrDatePartTimeZoneNotString-40533]
+	_ = x[ErrDatePartUnknownOption-40535]
+	_ = x[ErrDatePartArrayLen-40536]
+	_ = x[ErrDatePartNoDate-40539]
+	_ = x[ErrDateToStringNotObject-18629]
+	_ = x[ErrDateToStringUnknownField-18534]
+	_ = x[ErrDateToStringNoDate-18628]
+	_ = x[ErrDateToStringFormatType-18533]
+	_ = x[ErrDateComponentOutOfRange-18537]
 	_ = x[ErrOpMsgNoBody-40587]
 	_ = x[ErrStageUnsetNoPath-31119]
 	_ = x[ErrStageUnsetArrElementInvalidType-31120]
@@ -130,6 +270,15 @@ func _() {
 	_ = x[ErrStageUnwindNoPrefix-28818]
 	_ = x[ErrUnsetPathCollision-31249]
 	_ = x[ErrUnsetPathOverwrite-31250]
+	_ = x[ErrConvertFormatType-4341114]
+	_ = x[ErrConvertFormatRequired-4341115]
+	_ = x[ErrConvertFormatInvalid-4341125]
+	_ = x[ErrConvertSubtypeNotInteger-4341106]
+	_ = x[ErrConvertSubtypeInvalid-4341107]
+	_ = x[ErrConvertSubtypeType-4341108]
+	_ = x[ErrConvertSubtypeColumn-12910300]
+	_ = x[ErrSizeNotArray-17124]
+	_ = x[ErrProjectionExpressionInExclusion-31252]
 	_ = x[ErrProjectionInEx-31253]
 	_ = x[ErrProjectionExIn-31254]
 	_ = x[ErrAggregatePositionalProject-31324]
@@ -145,6 +294,7 @@ func _() {
 	_ = x[ErrBucketNotEnoughBoundaries-40192]
 	_ = x[ErrBucketMissingBoundaries-40198]
 	_ = x[ErrStageGroupUnaryOperator-40237]
+	_ = x[ErrStageGroupUnknownOperator-15952]
 	_ = x[ErrStageGroupMultipleAccumulator-40238]
 	_ = x[ErrBucketAutoMissingRequiredFields-40246]
 	_ = x[ErrStageGroupInvalidAccumulator-40234]
@@ -204,7 +354,7 @@ func _() {
 	_ = x[ErrAwaitableHelloTopologyVersionRequired-51756]
 }
 
-const _ErrorCode_name = "UnsetInternalErrorBadValueGraphContainsCycleFailedToParseUserNotFoundUnauthorizedTypeMismatchOverflowProtocolErrorAuthenticationFailedIllegalOperationInvalidBSONNamespaceNotFoundIndexNotFoundPathNotViableRoleNotFoundConflictingUpdateOperatorsCursorNotFoundNamespaceExistsInvalidRoleModificationMaxTimeMSExpiredDollarPrefixedFieldNameInvalidIdFieldEmptyFieldNameCommandNotFoundImmutableFieldCannotCreateIndexIndexAlreadyExistsInvalidOptionsInvalidNamespaceNoReplicationEnabledIndexOptionsConflictIndexKeySpecsConflictInvalidReplicaSetConfigNotYetInitializedOperationFailedWriteConflictCommandNotSupportedConflictingOperationInProgressDocumentValidationFailureExceededMemoryLimitViewDepthLimitExceededCommandNotSupportedOnViewOptionNotSupportedOnViewInvalidPipelineOperatorClientMetadataCannotBeMutatedInvalidIndexSpecificationOptionTimeProofMismatchKeysNotFoundTransactionTooOldNotImplementedNoSuchTransactionOperationNotSupportedInTransactionQueryExceededMemoryLimitNoDiskUseAllowedMechanismUnavailableUnsupportedOpQueryCommandLocation10065NotWritablePrimaryBSONObjectTooLargeDuplicateKeyDatabaseDifferCaseLocation15947Location15948Location15955Location15958Location15959Location15969Location15973Location15974Location15975Location15976Location15981Location15983Location15998Location16004Location16020Location16406Location16410Location16610Location16611Location16872Location16979Location17276Location28667Location28680Location28714Location28724Location28729Location28745Location28747Location28756Location28757Location28758Location28759Location28761Location28762Location28763Location28764Location28765Location28766Location28812Location28818Location31002SearchNotEnabledLocation31119Location31120Location31249Location31250Location31253Location31254Location31324Location31325Location31368Location31372Location31382Location31393Location31394Location31395Location34443Location34444Location34445Location34446Location34447Location34448Location34449Location40156Location40157Location40158Location40160Location40181Location40192Location40198Location40228Location40234Location40237Location40238Location40246Location40272Location40323Location40324Location40352Location40353IDLFailedToParseIDLUnknownFieldLocation40573Location40587Location40602Location40621Location40666Location50687Location50692Location50840Location50933Location51002Location51003Location51024Location51075Location51081Location51082Location51083Location51091Location51108Location51246Location51247Location51270Location51272Location51756Location3041701Location3041702Location3041703Location3041704Location4161101Location4161102Location4161103Location4161106Location4161107Location4161108Location4161109Location4822819Location5107200Location5107201Location5423901Location5447000Location5624900Location5626500Location5733415Location5739101Location5787902Location5787903Location5787908Location5788200Location7582300ConflictResolutionRequired"
+const _ErrorCode_name = "UnsetInternalErrorBadValueGraphContainsCycleFailedToParseUserNotFoundUnauthorizedTypeMismatchOverflowProtocolErrorAuthenticationFailedIllegalOperationInvalidBSONNamespaceNotFoundIndexNotFoundPathNotViableRoleNotFoundConflictingUpdateOperatorsCursorNotFoundNamespaceExistsInvalidRoleModificationMaxTimeMSExpiredDollarPrefixedFieldNameInvalidIdFieldEmptyFieldNameCommandNotFoundImmutableFieldCannotCreateIndexIndexAlreadyExistsInvalidOptionsInvalidNamespaceNoReplicationEnabledIndexOptionsConflictIndexKeySpecsConflictInvalidReplicaSetConfigNotYetInitializedOperationFailedWriteConflictCommandNotSupportedConflictingOperationInProgressDocumentValidationFailureExceededMemoryLimitDurationOverflowViewDepthLimitExceededCommandNotSupportedOnViewOptionNotSupportedOnViewInvalidPipelineOperatorClientMetadataCannotBeMutatedInvalidIndexSpecificationOptionTimeProofMismatchKeysNotFoundTransactionTooOldNotImplementedConversionFailureNoSuchTransactionOperationNotSupportedInTransactionQueryExceededMemoryLimitNoDiskUseAllowedMechanismUnavailableUnsupportedOpQueryCommandLocation10065NotWritablePrimaryBSONObjectTooLargeDuplicateKeyDatabaseDifferCaseLocation13548Location15947Location15948Location15952Location15955Location15958Location15959Location15969Location15973Location15974Location15975Location15976Location15981Location15983Location15998Location16004Location16006Location16007Location16020Location16034Location16035Location16406Location16410Location16493Location16610Location16611Location16612Location16872Location16979Location17124Location17276Location17307Location17308Location17390Location18533Location18534Location18535Location18536Location18537Location18628Location18629Location28656Location28657Location28664Location28667Location28680Location28689Location28690Location28691Location28714Location28724Location28725Location28726Location28727Location28728Location28729Location28745Location28747Location28756Location28757Location28758Location28759Location28761Location28762Location28763Location28764Location28765Location28766Location28812Location28818Location31002Location31022Location31023Location31024Location31034SearchNotEnabledLocation31095Location31109Location31119Location31120Location31249Location31250Location31252Location31253Location31254Location31324Location31325Location31368Location31372Location31382Location31393Location31394Location31395Location31441Location34443Location34444Location34445Location34446Location34447Location34448Location34449Location34450Location34451Location34452Location34453Location34454Location34455Location34456Location40090Location40091Location40092Location40093Location40094Location40095Location40096Location40097Location40156Location40157Location40158Location40160Location40181Location40192Location40198Location40218Location40228Location40234Location40237Location40238Location40246Location40272Location40323Location40324Location40352Location40353IDLFailedToParseIDLUnknownFieldLocation40485Location40489Location40515Location40516Location40517Location40518Location40519Location40520Location40521Location40522Location40523Location40524Location40525Location40533Location40535Location40536Location40539Location40540Location40541Location40542Location40573Location40587Location40600Location40602Location40621Location40666Location40684Location50687Location50692Location50723Location50752Location50840Location50933Location50989Location51002Location51003Location51024Location51044Location51045Location51075Location51081Location51082Location51083Location51091Location51103Location51104Location51105Location51106Location51107Location51108Location51109Location51110Location51111Location51151Location51156Location51246Location51247Location51270Location51272Location51276Location51744Location51745Location51746Location51747Location51748Location51749Location51750Location51751Location51756Location2942500Location2942501Location2942502Location2942503Location2942504Location2942505Location2942506Location2942507Location3040500Location3040501Location3041701Location3041702Location3041703Location3041704Location4161101Location4161102Location4161103Location4161106Location4161107Location4161108Location4161109Location4341106Location4341107Location4341108Location4341114Location4341115Location4341125Location4822819Location5107200Location5107201Location5166301Location5166302Location5166303Location5166304Location5166305Location5166307Location5166308Location5166400Location5166401Location5166402Location5166403Location5166405Location5166406Location5423901Location5439000Location5439001Location5439002Location5439004Location5439006Location5439007Location5439008Location5439009Location5439010Location5439012Location5439013Location5439015Location5439016Location5439017Location5439018Location5447000Location5624900Location5626500Location5733415Location5739101Location5787902Location5787903Location5787908Location5788200Location5858203Location5911200Location5976500Location6045000Location7582300Location12910300ConflictResolutionRequired"
 
 var _ErrorCode_map = map[ErrorCode]string{
 	0:          _ErrorCode_name[0:5],
@@ -249,158 +399,308 @@ var _ErrorCode_map = map[ErrorCode]string{
 	117:        _ErrorCode_name[603:633],
 	121:        _ErrorCode_name[633:658],
 	146:        _ErrorCode_name[658:677],
-	165:        _ErrorCode_name[677:699],
-	166:        _ErrorCode_name[699:724],
-	167:        _ErrorCode_name[724:748],
-	168:        _ErrorCode_name[748:771],
-	186:        _ErrorCode_name[771:800],
-	197:        _ErrorCode_name[800:831],
-	204:        _ErrorCode_name[831:848],
-	211:        _ErrorCode_name[848:860],
-	225:        _ErrorCode_name[860:877],
-	238:        _ErrorCode_name[877:891],
-	251:        _ErrorCode_name[891:908],
-	263:        _ErrorCode_name[908:942],
-	292:        _ErrorCode_name[942:982],
-	334:        _ErrorCode_name[982:1002],
-	352:        _ErrorCode_name[1002:1027],
-	10065:      _ErrorCode_name[1027:1040],
-	10107:      _ErrorCode_name[1040:1058],
-	10334:      _ErrorCode_name[1058:1076],
-	11000:      _ErrorCode_name[1076:1088],
-	13297:      _ErrorCode_name[1088:1106],
-	15947:      _ErrorCode_name[1106:1119],
-	15948:      _ErrorCode_name[1119:1132],
-	15955:      _ErrorCode_name[1132:1145],
-	15958:      _ErrorCode_name[1145:1158],
-	15959:      _ErrorCode_name[1158:1171],
-	15969:      _ErrorCode_name[1171:1184],
-	15973:      _ErrorCode_name[1184:1197],
-	15974:      _ErrorCode_name[1197:1210],
-	15975:      _ErrorCode_name[1210:1223],
-	15976:      _ErrorCode_name[1223:1236],
-	15981:      _ErrorCode_name[1236:1249],
-	15983:      _ErrorCode_name[1249:1262],
-	15998:      _ErrorCode_name[1262:1275],
-	16004:      _ErrorCode_name[1275:1288],
-	16020:      _ErrorCode_name[1288:1301],
-	16406:      _ErrorCode_name[1301:1314],
-	16410:      _ErrorCode_name[1314:1327],
-	16610:      _ErrorCode_name[1327:1340],
-	16611:      _ErrorCode_name[1340:1353],
-	16872:      _ErrorCode_name[1353:1366],
-	16979:      _ErrorCode_name[1366:1379],
-	17276:      _ErrorCode_name[1379:1392],
-	28667:      _ErrorCode_name[1392:1405],
-	28680:      _ErrorCode_name[1405:1418],
-	28714:      _ErrorCode_name[1418:1431],
-	28724:      _ErrorCode_name[1431:1444],
-	28729:      _ErrorCode_name[1444:1457],
-	28745:      _ErrorCode_name[1457:1470],
-	28747:      _ErrorCode_name[1470:1483],
-	28756:      _ErrorCode_name[1483:1496],
-	28757:      _ErrorCode_name[1496:1509],
-	28758:      _ErrorCode_name[1509:1522],
-	28759:      _ErrorCode_name[1522:1535],
-	28761:      _ErrorCode_name[1535:1548],
-	28762:      _ErrorCode_name[1548:1561],
-	28763:      _ErrorCode_name[1561:1574],
-	28764:      _ErrorCode_name[1574:1587],
-	28765:      _ErrorCode_name[1587:1600],
-	28766:      _ErrorCode_name[1600:1613],
-	28812:      _ErrorCode_name[1613:1626],
-	28818:      _ErrorCode_name[1626:1639],
-	31002:      _ErrorCode_name[1639:1652],
-	31082:      _ErrorCode_name[1652:1668],
-	31119:      _ErrorCode_name[1668:1681],
-	31120:      _ErrorCode_name[1681:1694],
-	31249:      _ErrorCode_name[1694:1707],
-	31250:      _ErrorCode_name[1707:1720],
-	31253:      _ErrorCode_name[1720:1733],
-	31254:      _ErrorCode_name[1733:1746],
-	31324:      _ErrorCode_name[1746:1759],
-	31325:      _ErrorCode_name[1759:1772],
-	31368:      _ErrorCode_name[1772:1785],
-	31372:      _ErrorCode_name[1785:1798],
-	31382:      _ErrorCode_name[1798:1811],
-	31393:      _ErrorCode_name[1811:1824],
-	31394:      _ErrorCode_name[1824:1837],
-	31395:      _ErrorCode_name[1837:1850],
-	34443:      _ErrorCode_name[1850:1863],
-	34444:      _ErrorCode_name[1863:1876],
-	34445:      _ErrorCode_name[1876:1889],
-	34446:      _ErrorCode_name[1889:1902],
-	34447:      _ErrorCode_name[1902:1915],
-	34448:      _ErrorCode_name[1915:1928],
-	34449:      _ErrorCode_name[1928:1941],
-	40156:      _ErrorCode_name[1941:1954],
-	40157:      _ErrorCode_name[1954:1967],
-	40158:      _ErrorCode_name[1967:1980],
-	40160:      _ErrorCode_name[1980:1993],
-	40181:      _ErrorCode_name[1993:2006],
-	40192:      _ErrorCode_name[2006:2019],
-	40198:      _ErrorCode_name[2019:2032],
-	40228:      _ErrorCode_name[2032:2045],
-	40234:      _ErrorCode_name[2045:2058],
-	40237:      _ErrorCode_name[2058:2071],
-	40238:      _ErrorCode_name[2071:2084],
-	40246:      _ErrorCode_name[2084:2097],
-	40272:      _ErrorCode_name[2097:2110],
-	40323:      _ErrorCode_name[2110:2123],
-	40324:      _ErrorCode_name[2123:2136],
-	40352:      _ErrorCode_name[2136:2149],
-	40353:      _ErrorCode_name[2149:2162],
-	40414:      _ErrorCode_name[2162:2178],
-	40415:      _ErrorCode_name[2178:2193],
-	40573:      _ErrorCode_name[2193:2206],
-	40587:      _ErrorCode_name[2206:2219],
-	40602:      _ErrorCode_name[2219:2232],
-	40621:      _ErrorCode_name[2232:2245],
-	40666:      _ErrorCode_name[2245:2258],
-	50687:      _ErrorCode_name[2258:2271],
-	50692:      _ErrorCode_name[2271:2284],
-	50840:      _ErrorCode_name[2284:2297],
-	50933:      _ErrorCode_name[2297:2310],
-	51002:      _ErrorCode_name[2310:2323],
-	51003:      _ErrorCode_name[2323:2336],
-	51024:      _ErrorCode_name[2336:2349],
-	51075:      _ErrorCode_name[2349:2362],
-	51081:      _ErrorCode_name[2362:2375],
-	51082:      _ErrorCode_name[2375:2388],
-	51083:      _ErrorCode_name[2388:2401],
-	51091:      _ErrorCode_name[2401:2414],
-	51108:      _ErrorCode_name[2414:2427],
-	51246:      _ErrorCode_name[2427:2440],
-	51247:      _ErrorCode_name[2440:2453],
-	51270:      _ErrorCode_name[2453:2466],
-	51272:      _ErrorCode_name[2466:2479],
-	51756:      _ErrorCode_name[2479:2492],
-	3041701:    _ErrorCode_name[2492:2507],
-	3041702:    _ErrorCode_name[2507:2522],
-	3041703:    _ErrorCode_name[2522:2537],
-	3041704:    _ErrorCode_name[2537:2552],
-	4161101:    _ErrorCode_name[2552:2567],
-	4161102:    _ErrorCode_name[2567:2582],
-	4161103:    _ErrorCode_name[2582:2597],
-	4161106:    _ErrorCode_name[2597:2612],
-	4161107:    _ErrorCode_name[2612:2627],
-	4161108:    _ErrorCode_name[2627:2642],
-	4161109:    _ErrorCode_name[2642:2657],
-	4822819:    _ErrorCode_name[2657:2672],
-	5107200:    _ErrorCode_name[2672:2687],
-	5107201:    _ErrorCode_name[2687:2702],
-	5423901:    _ErrorCode_name[2702:2717],
-	5447000:    _ErrorCode_name[2717:2732],
-	5624900:    _ErrorCode_name[2732:2747],
-	5626500:    _ErrorCode_name[2747:2762],
-	5733415:    _ErrorCode_name[2762:2777],
-	5739101:    _ErrorCode_name[2777:2792],
-	5787902:    _ErrorCode_name[2792:2807],
-	5787903:    _ErrorCode_name[2807:2822],
-	5787908:    _ErrorCode_name[2822:2837],
-	5788200:    _ErrorCode_name[2837:2852],
-	7582300:    _ErrorCode_name[2852:2867],
-	2000000001: _ErrorCode_name[2867:2893],
+	159:        _ErrorCode_name[677:693],
+	165:        _ErrorCode_name[693:715],
+	166:        _ErrorCode_name[715:740],
+	167:        _ErrorCode_name[740:764],
+	168:        _ErrorCode_name[764:787],
+	186:        _ErrorCode_name[787:816],
+	197:        _ErrorCode_name[816:847],
+	204:        _ErrorCode_name[847:864],
+	211:        _ErrorCode_name[864:876],
+	225:        _ErrorCode_name[876:893],
+	238:        _ErrorCode_name[893:907],
+	241:        _ErrorCode_name[907:924],
+	251:        _ErrorCode_name[924:941],
+	263:        _ErrorCode_name[941:975],
+	292:        _ErrorCode_name[975:1015],
+	334:        _ErrorCode_name[1015:1035],
+	352:        _ErrorCode_name[1035:1060],
+	10065:      _ErrorCode_name[1060:1073],
+	10107:      _ErrorCode_name[1073:1091],
+	10334:      _ErrorCode_name[1091:1109],
+	11000:      _ErrorCode_name[1109:1121],
+	13297:      _ErrorCode_name[1121:1139],
+	13548:      _ErrorCode_name[1139:1152],
+	15947:      _ErrorCode_name[1152:1165],
+	15948:      _ErrorCode_name[1165:1178],
+	15952:      _ErrorCode_name[1178:1191],
+	15955:      _ErrorCode_name[1191:1204],
+	15958:      _ErrorCode_name[1204:1217],
+	15959:      _ErrorCode_name[1217:1230],
+	15969:      _ErrorCode_name[1230:1243],
+	15973:      _ErrorCode_name[1243:1256],
+	15974:      _ErrorCode_name[1256:1269],
+	15975:      _ErrorCode_name[1269:1282],
+	15976:      _ErrorCode_name[1282:1295],
+	15981:      _ErrorCode_name[1295:1308],
+	15983:      _ErrorCode_name[1308:1321],
+	15998:      _ErrorCode_name[1321:1334],
+	16004:      _ErrorCode_name[1334:1347],
+	16006:      _ErrorCode_name[1347:1360],
+	16007:      _ErrorCode_name[1360:1373],
+	16020:      _ErrorCode_name[1373:1386],
+	16034:      _ErrorCode_name[1386:1399],
+	16035:      _ErrorCode_name[1399:1412],
+	16406:      _ErrorCode_name[1412:1425],
+	16410:      _ErrorCode_name[1425:1438],
+	16493:      _ErrorCode_name[1438:1451],
+	16610:      _ErrorCode_name[1451:1464],
+	16611:      _ErrorCode_name[1464:1477],
+	16612:      _ErrorCode_name[1477:1490],
+	16872:      _ErrorCode_name[1490:1503],
+	16979:      _ErrorCode_name[1503:1516],
+	17124:      _ErrorCode_name[1516:1529],
+	17276:      _ErrorCode_name[1529:1542],
+	17307:      _ErrorCode_name[1542:1555],
+	17308:      _ErrorCode_name[1555:1568],
+	17390:      _ErrorCode_name[1568:1581],
+	18533:      _ErrorCode_name[1581:1594],
+	18534:      _ErrorCode_name[1594:1607],
+	18535:      _ErrorCode_name[1607:1620],
+	18536:      _ErrorCode_name[1620:1633],
+	18537:      _ErrorCode_name[1633:1646],
+	18628:      _ErrorCode_name[1646:1659],
+	18629:      _ErrorCode_name[1659:1672],
+	28656:      _ErrorCode_name[1672:1685],
+	28657:      _ErrorCode_name[1685:1698],
+	28664:      _ErrorCode_name[1698:1711],
+	28667:      _ErrorCode_name[1711:1724],
+	28680:      _ErrorCode_name[1724:1737],
+	28689:      _ErrorCode_name[1737:1750],
+	28690:      _ErrorCode_name[1750:1763],
+	28691:      _ErrorCode_name[1763:1776],
+	28714:      _ErrorCode_name[1776:1789],
+	28724:      _ErrorCode_name[1789:1802],
+	28725:      _ErrorCode_name[1802:1815],
+	28726:      _ErrorCode_name[1815:1828],
+	28727:      _ErrorCode_name[1828:1841],
+	28728:      _ErrorCode_name[1841:1854],
+	28729:      _ErrorCode_name[1854:1867],
+	28745:      _ErrorCode_name[1867:1880],
+	28747:      _ErrorCode_name[1880:1893],
+	28756:      _ErrorCode_name[1893:1906],
+	28757:      _ErrorCode_name[1906:1919],
+	28758:      _ErrorCode_name[1919:1932],
+	28759:      _ErrorCode_name[1932:1945],
+	28761:      _ErrorCode_name[1945:1958],
+	28762:      _ErrorCode_name[1958:1971],
+	28763:      _ErrorCode_name[1971:1984],
+	28764:      _ErrorCode_name[1984:1997],
+	28765:      _ErrorCode_name[1997:2010],
+	28766:      _ErrorCode_name[2010:2023],
+	28812:      _ErrorCode_name[2023:2036],
+	28818:      _ErrorCode_name[2036:2049],
+	31002:      _ErrorCode_name[2049:2062],
+	31022:      _ErrorCode_name[2062:2075],
+	31023:      _ErrorCode_name[2075:2088],
+	31024:      _ErrorCode_name[2088:2101],
+	31034:      _ErrorCode_name[2101:2114],
+	31082:      _ErrorCode_name[2114:2130],
+	31095:      _ErrorCode_name[2130:2143],
+	31109:      _ErrorCode_name[2143:2156],
+	31119:      _ErrorCode_name[2156:2169],
+	31120:      _ErrorCode_name[2169:2182],
+	31249:      _ErrorCode_name[2182:2195],
+	31250:      _ErrorCode_name[2195:2208],
+	31252:      _ErrorCode_name[2208:2221],
+	31253:      _ErrorCode_name[2221:2234],
+	31254:      _ErrorCode_name[2234:2247],
+	31324:      _ErrorCode_name[2247:2260],
+	31325:      _ErrorCode_name[2260:2273],
+	31368:      _ErrorCode_name[2273:2286],
+	31372:      _ErrorCode_name[2286:2299],
+	31382:      _ErrorCode_name[2299:2312],
+	31393:      _ErrorCode_name[2312:2325],
+	31394:      _ErrorCode_name[2325:2338],
+	31395:      _ErrorCode_name[2338:2351],
+	31441:      _ErrorCode_name[2351:2364],
+	34443:      _ErrorCode_name[2364:2377],
+	34444:      _ErrorCode_name[2377:2390],
+	34445:      _ErrorCode_name[2390:2403],
+	34446:      _ErrorCode_name[2403:2416],
+	34447:      _ErrorCode_name[2416:2429],
+	34448:      _ErrorCode_name[2429:2442],
+	34449:      _ErrorCode_name[2442:2455],
+	34450:      _ErrorCode_name[2455:2468],
+	34451:      _ErrorCode_name[2468:2481],
+	34452:      _ErrorCode_name[2481:2494],
+	34453:      _ErrorCode_name[2494:2507],
+	34454:      _ErrorCode_name[2507:2520],
+	34455:      _ErrorCode_name[2520:2533],
+	34456:      _ErrorCode_name[2533:2546],
+	40090:      _ErrorCode_name[2546:2559],
+	40091:      _ErrorCode_name[2559:2572],
+	40092:      _ErrorCode_name[2572:2585],
+	40093:      _ErrorCode_name[2585:2598],
+	40094:      _ErrorCode_name[2598:2611],
+	40095:      _ErrorCode_name[2611:2624],
+	40096:      _ErrorCode_name[2624:2637],
+	40097:      _ErrorCode_name[2637:2650],
+	40156:      _ErrorCode_name[2650:2663],
+	40157:      _ErrorCode_name[2663:2676],
+	40158:      _ErrorCode_name[2676:2689],
+	40160:      _ErrorCode_name[2689:2702],
+	40181:      _ErrorCode_name[2702:2715],
+	40192:      _ErrorCode_name[2715:2728],
+	40198:      _ErrorCode_name[2728:2741],
+	40218:      _ErrorCode_name[2741:2754],
+	40228:      _ErrorCode_name[2754:2767],
+	40234:      _ErrorCode_name[2767:2780],
+	40237:      _ErrorCode_name[2780:2793],
+	40238:      _ErrorCode_name[2793:2806],
+	40246:      _ErrorCode_name[2806:2819],
+	40272:      _ErrorCode_name[2819:2832],
+	40323:      _ErrorCode_name[2832:2845],
+	40324:      _ErrorCode_name[2845:2858],
+	40352:      _ErrorCode_name[2858:2871],
+	40353:      _ErrorCode_name[2871:2884],
+	40414:      _ErrorCode_name[2884:2900],
+	40415:      _ErrorCode_name[2900:2915],
+	40485:      _ErrorCode_name[2915:2928],
+	40489:      _ErrorCode_name[2928:2941],
+	40515:      _ErrorCode_name[2941:2954],
+	40516:      _ErrorCode_name[2954:2967],
+	40517:      _ErrorCode_name[2967:2980],
+	40518:      _ErrorCode_name[2980:2993],
+	40519:      _ErrorCode_name[2993:3006],
+	40520:      _ErrorCode_name[3006:3019],
+	40521:      _ErrorCode_name[3019:3032],
+	40522:      _ErrorCode_name[3032:3045],
+	40523:      _ErrorCode_name[3045:3058],
+	40524:      _ErrorCode_name[3058:3071],
+	40525:      _ErrorCode_name[3071:3084],
+	40533:      _ErrorCode_name[3084:3097],
+	40535:      _ErrorCode_name[3097:3110],
+	40536:      _ErrorCode_name[3110:3123],
+	40539:      _ErrorCode_name[3123:3136],
+	40540:      _ErrorCode_name[3136:3149],
+	40541:      _ErrorCode_name[3149:3162],
+	40542:      _ErrorCode_name[3162:3175],
+	40573:      _ErrorCode_name[3175:3188],
+	40587:      _ErrorCode_name[3188:3201],
+	40600:      _ErrorCode_name[3201:3214],
+	40602:      _ErrorCode_name[3214:3227],
+	40621:      _ErrorCode_name[3227:3240],
+	40666:      _ErrorCode_name[3240:3253],
+	40684:      _ErrorCode_name[3253:3266],
+	50687:      _ErrorCode_name[3266:3279],
+	50692:      _ErrorCode_name[3279:3292],
+	50723:      _ErrorCode_name[3292:3305],
+	50752:      _ErrorCode_name[3305:3318],
+	50840:      _ErrorCode_name[3318:3331],
+	50933:      _ErrorCode_name[3331:3344],
+	50989:      _ErrorCode_name[3344:3357],
+	51002:      _ErrorCode_name[3357:3370],
+	51003:      _ErrorCode_name[3370:3383],
+	51024:      _ErrorCode_name[3383:3396],
+	51044:      _ErrorCode_name[3396:3409],
+	51045:      _ErrorCode_name[3409:3422],
+	51075:      _ErrorCode_name[3422:3435],
+	51081:      _ErrorCode_name[3435:3448],
+	51082:      _ErrorCode_name[3448:3461],
+	51083:      _ErrorCode_name[3461:3474],
+	51091:      _ErrorCode_name[3474:3487],
+	51103:      _ErrorCode_name[3487:3500],
+	51104:      _ErrorCode_name[3500:3513],
+	51105:      _ErrorCode_name[3513:3526],
+	51106:      _ErrorCode_name[3526:3539],
+	51107:      _ErrorCode_name[3539:3552],
+	51108:      _ErrorCode_name[3552:3565],
+	51109:      _ErrorCode_name[3565:3578],
+	51110:      _ErrorCode_name[3578:3591],
+	51111:      _ErrorCode_name[3591:3604],
+	51151:      _ErrorCode_name[3604:3617],
+	51156:      _ErrorCode_name[3617:3630],
+	51246:      _ErrorCode_name[3630:3643],
+	51247:      _ErrorCode_name[3643:3656],
+	51270:      _ErrorCode_name[3656:3669],
+	51272:      _ErrorCode_name[3669:3682],
+	51276:      _ErrorCode_name[3682:3695],
+	51744:      _ErrorCode_name[3695:3708],
+	51745:      _ErrorCode_name[3708:3721],
+	51746:      _ErrorCode_name[3721:3734],
+	51747:      _ErrorCode_name[3734:3747],
+	51748:      _ErrorCode_name[3747:3760],
+	51749:      _ErrorCode_name[3760:3773],
+	51750:      _ErrorCode_name[3773:3786],
+	51751:      _ErrorCode_name[3786:3799],
+	51756:      _ErrorCode_name[3799:3812],
+	2942500:    _ErrorCode_name[3812:3827],
+	2942501:    _ErrorCode_name[3827:3842],
+	2942502:    _ErrorCode_name[3842:3857],
+	2942503:    _ErrorCode_name[3857:3872],
+	2942504:    _ErrorCode_name[3872:3887],
+	2942505:    _ErrorCode_name[3887:3902],
+	2942506:    _ErrorCode_name[3902:3917],
+	2942507:    _ErrorCode_name[3917:3932],
+	3040500:    _ErrorCode_name[3932:3947],
+	3040501:    _ErrorCode_name[3947:3962],
+	3041701:    _ErrorCode_name[3962:3977],
+	3041702:    _ErrorCode_name[3977:3992],
+	3041703:    _ErrorCode_name[3992:4007],
+	3041704:    _ErrorCode_name[4007:4022],
+	4161101:    _ErrorCode_name[4022:4037],
+	4161102:    _ErrorCode_name[4037:4052],
+	4161103:    _ErrorCode_name[4052:4067],
+	4161106:    _ErrorCode_name[4067:4082],
+	4161107:    _ErrorCode_name[4082:4097],
+	4161108:    _ErrorCode_name[4097:4112],
+	4161109:    _ErrorCode_name[4112:4127],
+	4341106:    _ErrorCode_name[4127:4142],
+	4341107:    _ErrorCode_name[4142:4157],
+	4341108:    _ErrorCode_name[4157:4172],
+	4341114:    _ErrorCode_name[4172:4187],
+	4341115:    _ErrorCode_name[4187:4202],
+	4341125:    _ErrorCode_name[4202:4217],
+	4822819:    _ErrorCode_name[4217:4232],
+	5107200:    _ErrorCode_name[4232:4247],
+	5107201:    _ErrorCode_name[4247:4262],
+	5166301:    _ErrorCode_name[4262:4277],
+	5166302:    _ErrorCode_name[4277:4292],
+	5166303:    _ErrorCode_name[4292:4307],
+	5166304:    _ErrorCode_name[4307:4322],
+	5166305:    _ErrorCode_name[4322:4337],
+	5166307:    _ErrorCode_name[4337:4352],
+	5166308:    _ErrorCode_name[4352:4367],
+	5166400:    _ErrorCode_name[4367:4382],
+	5166401:    _ErrorCode_name[4382:4397],
+	5166402:    _ErrorCode_name[4397:4412],
+	5166403:    _ErrorCode_name[4412:4427],
+	5166405:    _ErrorCode_name[4427:4442],
+	5166406:    _ErrorCode_name[4442:4457],
+	5423901:    _ErrorCode_name[4457:4472],
+	5439000:    _ErrorCode_name[4472:4487],
+	5439001:    _ErrorCode_name[4487:4502],
+	5439002:    _ErrorCode_name[4502:4517],
+	5439004:    _ErrorCode_name[4517:4532],
+	5439006:    _ErrorCode_name[4532:4547],
+	5439007:    _ErrorCode_name[4547:4562],
+	5439008:    _ErrorCode_name[4562:4577],
+	5439009:    _ErrorCode_name[4577:4592],
+	5439010:    _ErrorCode_name[4592:4607],
+	5439012:    _ErrorCode_name[4607:4622],
+	5439013:    _ErrorCode_name[4622:4637],
+	5439015:    _ErrorCode_name[4637:4652],
+	5439016:    _ErrorCode_name[4652:4667],
+	5439017:    _ErrorCode_name[4667:4682],
+	5439018:    _ErrorCode_name[4682:4697],
+	5447000:    _ErrorCode_name[4697:4712],
+	5624900:    _ErrorCode_name[4712:4727],
+	5626500:    _ErrorCode_name[4727:4742],
+	5733415:    _ErrorCode_name[4742:4757],
+	5739101:    _ErrorCode_name[4757:4772],
+	5787902:    _ErrorCode_name[4772:4787],
+	5787903:    _ErrorCode_name[4787:4802],
+	5787908:    _ErrorCode_name[4802:4817],
+	5788200:    _ErrorCode_name[4817:4832],
+	5858203:    _ErrorCode_name[4832:4847],
+	5911200:    _ErrorCode_name[4847:4862],
+	5976500:    _ErrorCode_name[4862:4877],
+	6045000:    _ErrorCode_name[4877:4892],
+	7582300:    _ErrorCode_name[4892:4907],
+	12910300:   _ErrorCode_name[4907:4923],
+	2000000001: _ErrorCode_name[4923:4949],
 }
 
 func (i ErrorCode) String() string {

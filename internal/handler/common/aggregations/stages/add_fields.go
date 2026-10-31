@@ -20,6 +20,7 @@ import (
 
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
@@ -53,6 +54,14 @@ func newAddFields(stage *types.Document) (aggregations.Stage, error) {
 	}
 
 	if err := validateExpression("$addFields", fieldsDoc); err != nil {
+		return nil, err
+	}
+
+	if err := common.ValidateAddFieldsExpressions("$addFields", fieldsDoc); err != nil {
+		return nil, err
+	}
+
+	if err := operators.CheckConstantSubexpressions(fieldsDoc); err != nil {
 		return nil, err
 	}
 

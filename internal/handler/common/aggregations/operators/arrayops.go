@@ -92,13 +92,19 @@ func newSize(args ...any) (Operator, error) {
 }
 
 func (op *sizeOp) Process(doc *types.Document) (any, error) {
-	arr, isNull, err := collectArray(op.arg, doc, "$size")
+	v, missing, err := evalArgValueOrMissing(op.arg, doc)
 	if err != nil {
 		return nil, err
 	}
 
-	if isNull {
-		return types.Null, nil
+	arr, ok := v.(*types.Array)
+	if !ok || missing {
+		typeName := "missing"
+		if !missing {
+			typeName = handlerparams.AliasFromType(v)
+		}
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSizeNotArray,
+			"The argument to $size must be an array, but was of type: "+typeName, "$size")
 	}
 
 	return int32(arr.Len()), nil
@@ -146,41 +152,42 @@ func newArrayElemAt(args ...any) (Operator, error) {
 }
 
 func (op *arrayElemAtOp) Process(doc *types.Document) (any, error) {
-	arr, isNull, err := collectArray(op.arrayArg, doc, "$arrayElemAt")
+	arrV, err := evalArgValue(op.arrayArg, doc)
 	if err != nil {
 		return nil, err
 	}
-
-	if isNull {
-		return types.Null, nil
-	}
-
 	idxV, err := evalArgValue(op.idxArg, doc)
 	if err != nil {
 		return nil, err
 	}
-
-	if isNullish(idxV) {
+	if isNullish(arrV) || isNullish(idxV) {
 		return types.Null, nil
 	}
 
-	idx := toBoundedInt(idxV)
+	arr, ok := arrV.(*types.Array)
+	if !ok {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrArrayElemAtNotArray,
+			"$arrayElemAt's first argument must be an array, but is "+handlerparams.AliasFromType(arrV), "$arrayElemAt")
+	}
+	if !isNumber(idxV) {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrArrayElemAtNotNumeric,
+			"$arrayElemAt's second argument must be a numeric value, but is "+handlerparams.AliasFromType(idxV), "$arrayElemAt")
+	}
+	idx, ok := integralInt(idxV)
+	if !ok {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrArrayElemAtNotInt,
+			"$arrayElemAt's second argument must be representable as a 32-bit integer: "+doubleString(idxV), "$arrayElemAt")
+	}
+
 	n := arr.Len()
-
 	if idx < 0 {
-		idx = n + idx
+		idx += n
 	}
-
+	// MongoDB's $arrayElemAt is missing, not null, for an index out of range.
 	if idx < 0 || idx >= n {
-		return types.Null, nil
+		return nil, aggregations.ErrMissingValue
 	}
-
-	v, err := arr.Get(idx)
-	if err != nil {
-		return types.Null, nil
-	}
-
-	return v, nil
+	return must.NotFail(arr.Get(idx)), nil
 }
 
 var _ Operator = (*arrayElemAtOp)(nil)
@@ -191,17 +198,27 @@ func newConcatArrays(args ...any) (Operator, error) {
 	return &concatArraysOp{args: args}, nil
 }
 
+// Process follows ExpressionConcatArrays::evaluate: arguments are checked
+// left to right, and the first nullish one makes the result null and the
+// first non-array is an error.
 func (op *concatArraysOp) Process(doc *types.Document) (any, error) {
 	var result []any
 
 	for _, arg := range op.args {
-		arr, isNull, err := collectArray(arg, doc, "$concatArrays")
+		v, err := evalArgValue(arg, doc)
+		if errors.Is(err, aggregations.ErrMissingValue) {
+			return types.Null, nil
+		}
 		if err != nil {
 			return nil, err
 		}
-
-		if isNull {
+		if isNullish(v) {
 			return types.Null, nil
+		}
+		arr, ok := v.(*types.Array)
+		if !ok {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrConcatArraysNotArray,
+				fmt.Sprintf("$concatArrays only supports arrays, not %s", handlerparams.AliasFromType(v)), "$concatArrays")
 		}
 
 		items, err := arrayToSlice(arr)
@@ -272,74 +289,80 @@ func newSlice(args ...any) (Operator, error) {
 }
 
 func (op *sliceOp) Process(doc *types.Document) (any, error) {
-	arr, isNull, err := collectArray(op.arrayArg, doc, "$slice")
+	arrV, err := evalArgValue(op.arrayArg, doc)
 	if err != nil {
 		return nil, err
 	}
-
-	if isNull {
+	second := op.nArg
+	if op.positionArg != nil {
+		second = op.positionArg
+	}
+	secondV, err := evalArgValue(second, doc)
+	if err != nil {
+		return nil, err
+	}
+	if isNullish(arrV) || isNullish(secondV) {
 		return types.Null, nil
+	}
+
+	arr, ok := arrV.(*types.Array)
+	if !ok {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSliceFirstArg,
+			"First argument to $slice must be an array, but is of type: "+handlerparams.AliasFromType(arrV), "$slice")
+	}
+	if !isNumber(secondV) {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSliceSecondNotNumeric,
+			"Second argument to $slice must be a numeric value, but is of type: "+handlerparams.AliasFromType(secondV), "$slice")
+	}
+	secondInt, ok := integralInt(secondV)
+	if !ok {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSliceSecondNotInt,
+			"Second argument to $slice can't be represented as a 32-bit integer: "+doubleString(secondV), "$slice")
 	}
 
 	items, err := arrayToSlice(arr)
 	if err != nil {
 		return nil, err
 	}
-
 	n := len(items)
+	start, end := 0, n
 
-	nV, err := evalArgValue(op.nArg, doc)
+	if op.positionArg == nil {
+		if secondInt >= 0 {
+			end = min(n, secondInt)
+		} else {
+			start = max(0, n+secondInt)
+		}
+		return sliceToArray(items[start:end]), nil
+	}
+
+	if secondInt < 0 {
+		start = max(0, n+secondInt)
+	} else {
+		start = min(n, secondInt)
+	}
+
+	countV, err := evalArgValue(op.nArg, doc)
 	if err != nil {
 		return nil, err
 	}
-
-	count := toBoundedInt(nV)
-
-	start := 0
-	if op.positionArg != nil {
-		if count < 0 {
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrSliceThirdArgNotPositive,
-				fmt.Sprintf("Third argument to $slice must be positive: %d", count),
-				"$slice",
-			)
-		}
-
-		pV, err := evalArgValue(op.positionArg, doc)
-		if err != nil {
-			return nil, err
-		}
-
-		start = toBoundedInt(pV)
-		if start < 0 {
-			start = n + start
-			if start < 0 {
-				start = 0
-			}
-		}
-	} else if count < 0 {
-		// negative n without position means from end
-		start = n + count
-		if start < 0 {
-			start = 0
-		}
-
-		count = n - start
+	if isNullish(countV) {
+		return types.Null, nil
 	}
-
-	if start > n {
-		return sliceToArray(nil), nil
+	if !isNumber(countV) {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSliceThirdNotNumeric,
+			"Third argument to $slice must be numeric, but is of type: "+handlerparams.AliasFromType(countV), "$slice")
 	}
-
-	end := n
-	if count < n-start {
-		end = start + count
+	count, ok := integralInt(countV)
+	if !ok {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSliceThirdNotInt,
+			"Third argument to $slice can't be represented as a 32-bit integer: "+doubleString(countV), "$slice")
 	}
-
-	if start < 0 {
-		start = 0
+	if count <= 0 {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSliceThirdArgNotPositive,
+			fmt.Sprintf("Third argument to $slice must be positive: %d", count), "$slice")
 	}
-
+	end = min(start+count, n)
 	return sliceToArray(items[start:end]), nil
 }
 
@@ -368,13 +391,17 @@ func newIndexOfArray(args ...any) (Operator, error) {
 }
 
 func (op *indexOfArrayOp) Process(doc *types.Document) (any, error) {
-	arr, isNull, err := collectArray(op.arrayArg, doc, "$indexOfArray")
+	arrV, err := evalArgValue(op.arrayArg, doc)
 	if err != nil {
 		return nil, err
 	}
-
-	if isNull {
+	if isNullish(arrV) {
 		return types.Null, nil
+	}
+	arr, ok := arrV.(*types.Array)
+	if !ok {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIndexOfArrayNotArray,
+			"$indexOfArray requires an array as a first argument, found: "+handlerparams.AliasFromType(arrV), "$indexOfArray")
 	}
 
 	search, err := evalArgValue(op.searchArg, doc)
@@ -386,39 +413,25 @@ func (op *indexOfArrayOp) Process(doc *types.Document) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	n := len(items)
-	start := 0
-	end := n
-
+	start, end := 0, len(items)
 	if op.startArg != nil {
 		sv, err := evalArgValue(op.startArg, doc)
 		if err != nil {
 			return nil, err
 		}
-
-		if !isNullish(sv) {
-			start = toBoundedInt(sv)
+		if start, err = requireIndex(sv, "$indexOfArray", "starting index"); err != nil {
+			return nil, err
 		}
 	}
-
 	if op.endArg != nil {
 		ev, err := evalArgValue(op.endArg, doc)
 		if err != nil {
 			return nil, err
 		}
-
-		if !isNullish(ev) {
-			end = toBoundedInt(ev)
+		if end, err = requireIndex(ev, "$indexOfArray", "ending index"); err != nil {
+			return nil, err
 		}
-	}
-
-	if start < 0 {
-		start = 0
-	}
-
-	if end > n {
-		end = n
+		end = min(end, len(items))
 	}
 
 	for i := start; i < end; i++ {
@@ -426,7 +439,6 @@ func (op *indexOfArrayOp) Process(doc *types.Document) (any, error) {
 			return int32(i), nil
 		}
 	}
-
 	return int32(-1), nil
 }
 
@@ -693,12 +705,12 @@ func (op *filterOp) Process(doc *types.Document) (any, error) {
 	var result []any
 
 	for _, item := range items {
-		iterDoc := doc.DeepCopy()
+		iterDoc := copyForVariables(doc)
 		if err != nil {
 			return nil, err
 		}
 
-		iterDoc.Set("$$"+op.asName, item)
+		bindVariable(iterDoc, op.asName, item, false)
 
 		condVal, err := evalArgValue(op.condArg, iterDoc)
 		if err != nil {
@@ -771,12 +783,12 @@ func (op *mapOp) Process(doc *types.Document) (any, error) {
 	result := make([]any, 0, len(items))
 
 	for _, item := range items {
-		iterDoc := doc.DeepCopy()
+		iterDoc := copyForVariables(doc)
 		if err != nil {
 			return nil, err
 		}
 
-		iterDoc.Set("$$"+op.asName, item)
+		bindVariable(iterDoc, op.asName, item, false)
 
 		val, err := evalArgValue(op.inArg, iterDoc)
 		if err != nil {
@@ -837,7 +849,7 @@ func (op *reduceOp) Process(doc *types.Document) (any, error) {
 		return types.Null, nil
 	}
 
-	accumulator, err := evalArgValue(op.initialValueArg, doc)
+	accumulator, missing, err := EvalOperand(op.initialValueArg, doc)
 	if err != nil {
 		return nil, err
 	}
@@ -847,21 +859,24 @@ func (op *reduceOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
+	limiter := newReduceLimiter()
 	for _, item := range items {
-		iterDoc := doc.DeepCopy()
-		if err != nil {
+		iterDoc := copyForVariables(doc)
+		bindVariable(iterDoc, "value", accumulator, missing)
+		bindVariable(iterDoc, "this", item, false)
+
+		if accumulator, missing, err = EvalOperand(op.inArg, iterDoc); err != nil {
 			return nil, err
 		}
 
-		iterDoc.Set("$$value", accumulator)
-		iterDoc.Set("$$this", item)
-
-		accumulator, err = evalArgValue(op.inArg, iterDoc)
-		if err != nil {
+		if err = limiter.check(accumulator); err != nil {
 			return nil, err
 		}
 	}
 
+	if missing {
+		return nil, aggregations.ErrMissingValue
+	}
 	return accumulator, nil
 }
 

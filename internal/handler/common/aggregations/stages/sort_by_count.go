@@ -57,6 +57,10 @@ func newSortByCount(stage *types.Document) (aggregations.Stage, error) {
 		)
 	}
 
+	if err := operators.CheckConstantSubexpressions(v); err != nil {
+		return nil, err
+	}
+
 	return &sortByCount{groupExpression: v}, nil
 }
 

@@ -15,151 +15,33 @@
 package operators
 
 import (
-	"errors"
-
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/types"
-	"github.com/dolthub/dumbodb/internal/util/iterator"
-	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 )
 
-type sum struct {
-	// expressions are valid path expression requiring evaluation
-	expressions []*aggregations.Expression
-	// operators are documents containing operator expressions i.e. `[{$sum: 1}]`
-	operators []*types.Document
-	// numbers are int32, int64 or float64 values
-	numbers []any
-	// arrayLen is set when $sum operator contains array field such as `{$sum: [1, "$v"]}`
-	arrayLen int
-	// rawArgs are variable references ($$var) evaluated at process time
-	rawArgs []string
+// sumOp represents { $sum: <operands> }: a single operand that evaluates to
+// an array sums its elements; non-numeric values are ignored.
+type sumOp struct {
+	args []any
 }
 
-// newSum collects values that can be summed in `numbers`,
-// finds nested operators if any, validates path expressions
-// to populate `$sum` operator. It ignores values that are not summable.
 func newSum(args ...any) (Operator, error) {
-	operator := new(sum)
-
-	operator.arrayLen = len(args)
-
-	for _, arg := range args {
-		switch arg := arg.(type) {
-		case *types.Document:
-			if IsOperator(arg) {
-				operator.operators = append(operator.operators, arg)
-			}
-		case float64:
-			operator.numbers = append(operator.numbers, arg)
-		case string:
-			ex, err := aggregations.NewExpression(arg, nil)
-
-			var exErr *aggregations.ExpressionError
-			if errors.As(err, &exErr) {
-				switch exErr.Code() {
-				case aggregations.ErrUndefinedVariable:
-					operator.rawArgs = append(operator.rawArgs, arg)
-				case aggregations.ErrEmptyFieldPath, aggregations.ErrEmptyVariable, aggregations.ErrInvalidExpression:
-					return nil, err
-				}
-
-				continue
-			}
-
-			if err != nil {
-				return nil, err
-			}
-
-			operator.expressions = append(operator.expressions, ex)
-		case int32, int64:
-			operator.numbers = append(operator.numbers, arg)
-		}
-	}
-
-	return operator, nil
+	return &sumOp{args: args}, nil
 }
 
 // Process implements Operator interface.
-// It evaluates expressions if any to fetch a value, creates new operator and processes them if any
-// and sums all int32, int64 and float64 numbers ignoring other types.
-func (s *sum) Process(doc *types.Document) (any, error) {
-	var numbers []any
-
-	for _, expression := range s.expressions {
-		value, err := expression.Evaluate(doc)
-		if err != nil {
-			// $sum ignores failed expression evaluation
-			continue
-		}
-
-		switch v := value.(type) {
-		case *types.Array:
-			if s.arrayLen > 1 {
-				// This handles strange behaviour of MongoDB.
-				// When $sum has more than one argument,
-				// expression is ignored if evaluated path contains *array*.
-				// Below case, `$sum` has two arguments, so "$v" is ignored.
-				// `{$sum: ["$v", 1]}` and doc is `{v: [2, 3]}` => sum is `1`
-				// Below case, `$sum` has one argument, "$v" is evaluated.
-				// `{$sum: ["$v"]}` and doc is `{v: [2, 3]}` => sum is `5`
-				continue
-			}
-
-			iter := v.Iterator()
-			defer iter.Close()
-
-			for {
-				_, v, err := iter.Next()
-				if errors.Is(err, iterator.ErrIteratorDone) {
-					break
-				}
-
-				if err != nil {
-					return nil, lazyerrors.Error(err)
-				}
-
-				numbers = append(numbers, v)
-			}
-		default:
-			numbers = append(numbers, value)
-		}
+func (op *sumOp) Process(doc *types.Document) (any, error) {
+	values, err := accumulatorValues(op.args, doc)
+	if err != nil {
+		return nil, err
 	}
 
-	for _, operatorExpr := range s.operators {
-		// NewOperator is created here, doing it in newSum() creates initialization cycle for operators
-		op, err := NewOperator(operatorExpr)
-		if err != nil {
-			return nil, err
-		}
-
-		v, err := op.Process(doc)
-		if err != nil {
-			return nil, err
-		}
-
-		numbers = append(numbers, v)
+	sum := aggregations.NewNumberSum()
+	for _, v := range values {
+		sum.Add(v)
 	}
 
-	for _, rawArg := range s.rawArgs {
-		v, err := evalArgValue(rawArg, doc)
-		if err != nil {
-			continue
-		}
-
-		numbers = append(numbers, v)
-	}
-
-	for _, number := range s.numbers {
-		switch number := number.(type) {
-		case float64, int32, int64:
-			numbers = append(numbers, number)
-		}
-	}
-
-	return aggregations.SumNumbers(numbers...), nil
+	return sum.Result(), nil
 }
 
-var (
-	_ Operator = (*sum)(nil)
-)
+var _ Operator = (*sumOp)(nil)

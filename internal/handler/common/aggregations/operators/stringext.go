@@ -16,7 +16,6 @@ package operators
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/dolthub/dumbodb/internal/types"
 )
@@ -47,30 +46,20 @@ func (op *strcasecmpOp) Process(doc *types.Document) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	bv, err := evalArgValue(op.rhs, doc)
 	if err != nil {
 		return nil, err
 	}
-
-	a := ""
-	b := ""
-
-	if !isNullish(av) {
-		if s, ok := av.(string); ok {
-			a = s
-		}
+	a, err := coerceToString(av)
+	if err != nil {
+		return nil, err
+	}
+	b, err := coerceToString(bv)
+	if err != nil {
+		return nil, err
 	}
 
-	if !isNullish(bv) {
-		if s, ok := bv.(string); ok {
-			b = s
-		}
-	}
-
-	al := strings.ToLower(a)
-	bl := strings.ToLower(b)
-
+	al, bl := asciiLower(a), asciiLower(b)
 	switch {
 	case al < bl:
 		return int32(-1), nil
@@ -110,54 +99,20 @@ func (op *substrBytesOp) Process(doc *types.Document) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	if isNullish(sv) {
-		return "", nil
-	}
-
-	s, ok := sv.(string)
-	if !ok {
-		return nil, newOperatorError(
-			ErrArgsInvalidLen,
-			"$substrBytes",
-			fmt.Sprintf("$substrBytes requires a string first argument, got %T", sv),
-		)
-	}
-
 	startV, err := evalArgValue(op.start, doc)
 	if err != nil {
 		return nil, err
 	}
-
 	lenV, err := evalArgValue(op.length, doc)
 	if err != nil {
 		return nil, err
 	}
 
-	start := toBoundedInt(startV)
-	length := toBoundedInt(lenV)
-
-	b := []byte(s)
-
-	if start < 0 {
-		start = 0
+	s, err := coerceToString(sv)
+	if err != nil {
+		return nil, err
 	}
-
-	if start >= len(b) {
-		return "", nil
-	}
-
-	b = b[start:]
-
-	if length < 0 {
-		return string(b), nil
-	}
-
-	if length > len(b) {
-		length = len(b)
-	}
-
-	return string(b[:length]), nil
+	return substrBytes("$substrBytes", s, startV, lenV)
 }
 
 var _ Operator = (*substrBytesOp)(nil)

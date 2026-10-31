@@ -92,7 +92,7 @@ func newCond(args ...any) (Operator, error) {
 
 // Process implements Operator.
 // Evaluates ifArg; if truthy, returns thenArg result; otherwise elseArg result.
-// MongoDB-falsy values: false and null; everything else is truthy (including 0).
+// Falsy values are those coerceToBool makes false, including numeric zeros.
 func (c *condOp) Process(doc *types.Document) (any, error) {
 	ifResult, err := evalArgValue(c.ifArg, doc)
 	if err != nil {
@@ -100,10 +100,10 @@ func (c *condOp) Process(doc *types.Document) (any, error) {
 	}
 
 	if isFalsy(ifResult) {
-		return evalArgValue(c.elseArg, doc)
+		return evalBranch(c.elseArg, doc)
 	}
 
-	return evalArgValue(c.thenArg, doc)
+	return evalBranch(c.thenArg, doc)
 }
 
 var _ Operator = (*condOp)(nil)
@@ -135,13 +135,16 @@ func newIfNull(args ...any) (Operator, error) {
 // Falls back to the last argument if all are null.
 func (n *ifNullOp) Process(doc *types.Document) (any, error) {
 	for i, arg := range n.args {
-		v, err := evalArgValue(arg, doc)
+		// The last argument is returned as is, so a missing one stays missing.
+		if i == len(n.args)-1 {
+			return evalBranch(arg, doc)
+		}
+
+		v, missing, err := EvalOperand(arg, doc)
 		if err != nil {
 			return nil, err
 		}
-
-		// Return the first non-null value OR always return the last argument.
-		if !isNullish(v) || i == len(n.args)-1 {
+		if !missing && !isNullish(v) {
 			return v, nil
 		}
 	}

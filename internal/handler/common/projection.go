@@ -46,13 +46,12 @@ func translateExpressionError(err error) error {
 	return err
 }
 
-var findProjectionAllowedOperators = map[string]bool{
-	"$add":      true,
-	"$bsonSize": true,
-	"$ifNull":   true,
-	"$literal":  true,
-	"$toString": true,
-	"$type":     true,
+func expressionInExclusionError() error {
+	return handlererrors.NewCommandErrorMsgWithArgument(
+		handlererrors.ErrProjectionExpressionInExclusion,
+		"Cannot use expression other than $meta in exclusion projection",
+		"projection",
+	)
 }
 
 // Distinguishes null-valued fields (project null) from missing fields
@@ -115,6 +114,40 @@ func findProjectionPathExists(expr string, doc *types.Document) bool {
 //   - `ErrElementMismatchPositionalProjection` when unexpected array was found on positional projection path;
 //   - `ErrNotImplemented` when there is unimplemented projection operators and expressions.
 func ValidateProjection(projection *types.Document) (*types.Document, bool, error) {
+	validated, inclusion, err := validateProjectionShape(projection)
+	if err == nil {
+		err = checkProjectionConstants(projection)
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return validated, inclusion, nil
+}
+
+// checkProjectionConstants folds constant expressions in a find projection,
+// skipping the $slice and $elemMatch projection operators, which are not
+// expressions.
+func checkProjectionConstants(value any) error {
+	doc, ok := value.(*types.Document)
+	if !ok {
+		return operators.CheckConstantSubexpressions(value)
+	}
+	if operators.IsOperator(doc) {
+		switch doc.Command() {
+		case "$slice", "$elemMatch":
+			return nil
+		}
+		return operators.CheckConstantSubexpressions(doc)
+	}
+	for _, v := range doc.Values() {
+		if err := checkProjectionConstants(v); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateProjectionShape(projection *types.Document) (*types.Document, bool, error) {
 	validated := types.MakeDocument(0)
 
 	if projection.Len() == 0 {
@@ -220,15 +253,12 @@ func ValidateProjection(projection *types.Document) (*types.Document, bool, erro
 
 		switch value := value.(type) {
 		case *types.Document:
-			if value.Len() != 1 {
-				return nil, false, handlererrors.NewCommandErrorMsg(
-					handlererrors.ErrNotImplemented,
-					fmt.Sprintf("projection expression %s is not supported", types.FormatAnyValue(value)),
-				)
+			var opKey string
+			var opVal any
+			if value.Len() == 1 {
+				opKey = value.Keys()[0]
+				opVal = must.NotFail(value.Get(opKey))
 			}
-
-			opKey := value.Keys()[0]
-			opVal := must.NotFail(value.Get(opKey))
 
 			switch opKey {
 			case "$elemMatch":
@@ -253,37 +283,26 @@ func ValidateProjection(projection *types.Document) (*types.Document, bool, erro
 				continue
 
 			case "$meta":
-				metaStr, ok := opVal.(string)
-				if !ok {
-					return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
-						handlererrors.ErrBadValue,
-						"$meta projection only supports \"textScore\" and \"indexKey\" right now",
-						"$meta",
-					)
-				}
-
-				switch metaStr {
-				case "textScore", "indexKey":
-				default:
-					return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
-						handlererrors.ErrBadValue,
-						"$meta projection only supports \"textScore\" and \"indexKey\" right now",
-						"$meta",
-					)
+				if _, err := operators.ParseMetaName(opVal); err != nil {
+					return nil, false, err
 				}
 
 				inclusionField = true
 				validated.Set(key, value)
 
 			default:
-				if !findProjectionAllowedOperators[opKey] {
-					return nil, false, handlererrors.NewCommandErrorMsg(
-						handlererrors.ErrNotImplemented,
-						fmt.Sprintf("projection expression %s is not supported", types.FormatAnyValue(value)),
+				if value.Len() == 0 {
+					return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
+						handlererrors.ErrEmptySubProject,
+						"An empty sub-projection is not a valid value. Found empty object at path",
+						"projection",
 					)
 				}
-				if _, err := operators.NewOperator(value); err != nil {
-					return nil, false, err
+				if err := stageProjection.ValidateExpression(value); err != nil {
+					return nil, false, withoutProjectPrefix(err)
+				}
+				if inclusion != nil && !*inclusion {
+					return nil, false, expressionInExclusionError()
 				}
 				inclusionField = true
 				validated.Set(key, value)
@@ -470,15 +489,18 @@ func projectID(doc, projection *types.Document) (*types.Document, error) {
 		var set bool
 
 		switch idValue := idValue.(type) {
-		case *types.Document: // field: { $elemMatch: { field2: value }}
-			return nil, handlererrors.NewCommandErrorMsg(
-				handlererrors.ErrCommandNotFound,
-				fmt.Sprintf("projection %s is not supported",
-					types.FormatAnyValue(idValue),
-				),
-			)
+		case *types.Document, *types.Array, string:
+			res, missing, err := operators.EvalComputed(idValue, doc)
+			if err != nil {
+				return nil, translateExpressionError(err)
+			}
+			if !missing {
+				projected.Set("_id", res)
+			}
 
-		case *types.Array, string, types.Binary, types.ObjectID,
+			set = !missing
+
+		case types.Binary, types.ObjectID,
 			time.Time, types.NullType, types.Regex, types.Timestamp: // all this types are treated as new fields value
 			projected.Set("_id", idValue)
 
@@ -552,21 +574,9 @@ func projectDocumentWithoutID(doc *types.Document, projection, filter *types.Doc
 				applyMetaProjection(key, metaType, projected)
 
 			default:
-				if !findProjectionAllowedOperators[opKey] {
-					return nil, handlererrors.NewCommandErrorMsg(
-						handlererrors.ErrCommandNotFound,
-						fmt.Sprintf("projection %s is not supported", types.FormatAnyValue(value)),
-					)
-				}
-				op, err := operators.NewOperator(value)
-				if err != nil {
+				if err = setComputed(projected, path, value, doc); err != nil {
 					return nil, err
 				}
-				result, err := op.Process(doc)
-				if err != nil {
-					return nil, err
-				}
-				projected.Set(key, result)
 			}
 
 		case string:
@@ -587,7 +597,12 @@ func projectDocumentWithoutID(doc *types.Document, projection, filter *types.Doc
 			}
 			projected.Set(key, value)
 
-		case *types.Array, types.Binary, types.ObjectID,
+		case *types.Array:
+			if err = setComputed(projected, path, value, doc); err != nil {
+				return nil, err
+			}
+
+		case types.Binary, types.ObjectID,
 			time.Time, types.NullType, types.Regex, types.Timestamp:
 			projected.Set(key, value)
 
@@ -609,6 +624,19 @@ func projectDocumentWithoutID(doc *types.Document, projection, filter *types.Doc
 	}
 
 	return projected, nil
+}
+
+// setComputed evaluates a computed projection value against doc and sets it at
+// path, leaving the field out when the value is missing.
+func setComputed(projected *types.Document, path types.Path, expr any, doc *types.Document) error {
+	res, missing, err := operators.EvalComputed(expr, doc)
+	if err != nil {
+		return translateExpressionError(err)
+	}
+	if missing {
+		return nil
+	}
+	return projected.SetByPath(path, res)
 }
 
 // validateSliceProjectionArg validates the $slice projection argument.
@@ -908,6 +936,7 @@ func applyMetaProjection(key, metaType string, projected *types.Document) {
 	case "indexKey":
 		projected.Set(key, types.MakeDocument(0))
 	}
+	// Other metadata is missing: DumboDB attaches none to documents.
 }
 
 // includeProjection copies the field on the path from source to projected.
@@ -1195,4 +1224,18 @@ func hasFindProjectionOperator(projection *types.Document) bool {
 		}
 	}
 	return false
+}
+
+// withoutProjectPrefix drops the "Invalid $project" context from an
+// expression error, which MongoDB reports without it in find projections.
+func withoutProjectPrefix(err error) error {
+	var ce *handlererrors.CommandError
+	if !errors.As(err, &ce) {
+		return err
+	}
+	msg, found := strings.CutPrefix(ce.Err().Error(), "Invalid $project :: caused by :: ")
+	if !found {
+		return err
+	}
+	return handlererrors.NewCommandErrorMsgWithArgument(ce.Code(), msg, "projection")
 }

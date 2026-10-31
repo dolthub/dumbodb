@@ -66,7 +66,7 @@ func buildViewPipelineStages(db backends.Database, viewPipeline *types.Array, cm
 				vs, err = stages.NewLookupStage(vd, fetcher)
 			}
 		case "$match":
-			vs, err = stages.NewMatchStage(vd, cmp)
+			vs, err = stages.NewMatchStage(vd, cmp, stages.SeesStoredDocuments(stageDocs, i))
 		case "$sort":
 			vs, err = stages.NewSortStage(vd, sortLimitBound(stageDocs, i), cmp)
 		default:
@@ -412,6 +412,7 @@ func viewSourceIterator(ctx context.Context, db backends.Database, viewName, vie
 	// rename or compute fields, making that unsound).
 	qp := &backends.QueryParams{Collated: cmp != nil}
 	filter, _ := aggregations.GetPushdownQuery(rawStages)
+	common.CanonicalizeFilter(filter)
 
 	if !disablePushdown {
 		qp.Filter = filter

@@ -102,7 +102,7 @@ func (h *Handler) MsgCreateIndexes(connCtx context.Context, msg *wire.OpMsg) (*w
 	if !ok {
 		if _, ok = v.(types.NullType); ok {
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrIndexesWrongType,
+				handlererrors.ErrExpectedObject,
 				"invalid parameter: expected an object (indexes)",
 				document.Command(),
 			)

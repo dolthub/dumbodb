@@ -33,12 +33,14 @@ type match struct {
 }
 
 func newMatch(stage *types.Document) (aggregations.Stage, error) {
-	return NewMatchStage(stage, nil)
+	return NewMatchStage(stage, nil, true)
 }
 
 // NewMatchStage builds a $match stage whose string comparisons honor cmp when
-// non-nil.
-func NewMatchStage(stage *types.Document, cmp *collation.Comparator) (aggregations.Stage, error) {
+// non-nil. storedInput reports whether the stage sees documents as stored
+// (see SeesStoredDocuments); only then are the document values it compares
+// against put in stored key order.
+func NewMatchStage(stage *types.Document, cmp *collation.Comparator, storedInput bool) (aggregations.Stage, error) {
 	filter, err := common.GetRequiredParam[*types.Document](stage, "$match")
 	if err != nil {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
@@ -52,22 +54,15 @@ func NewMatchStage(stage *types.Document, cmp *collation.Comparator) (aggregatio
 		return nil, err
 	}
 
-	return &match{
-		filter: filter,
-		cmp:    cmp,
-	}, nil
+	if storedInput {
+		common.CanonicalizeFilter(filter)
+	}
+	return &match{filter: filter, cmp: cmp}, nil
 }
 
 func (m *match) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
 	return common.FilterIteratorColl(iter, closer, m.filter, m.cmp), nil
 }
-
-// geoNearNotAllowedMsg is MongoDB's verbatim Location5626500 message
-// (including its "operationfor" typo) so the error compares equal.
-const geoNearNotAllowedMsg = "$geoNear, $near, and $nearSphere are not allowed in this context, " +
-	"as these operators require sorting geospatial data. If you do not need sort, consider using " +
-	"$geoWithin instead. Check out https://dochub.mongodb.org/core/near-sort-operation and " +
-	"https://dochub.mongodb.org/core/nearSphere-sort-operationfor more details."
 
 // validateMatch validates $expr field if any.
 func validateMatch(filter *types.Document) error {
@@ -84,7 +79,7 @@ func validateMatch(filter *types.Document) error {
 	if common.FindGeoSortKey(filter) != nil {
 		return handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrGeoNearNotAllowedInContext,
-			geoNearNotAllowedMsg,
+			common.GeoNearNotAllowedMsg,
 		)
 	}
 
@@ -94,3 +89,22 @@ func validateMatch(filter *types.Document) error {
 var (
 	_ aggregations.Stage = (*match)(nil)
 )
+
+// SeesStoredDocuments reports whether stage i of pipeline receives documents
+// exactly as stored: every stage before it passes its input on unchanged.
+// Stored documents have sorted keys; documents a stage builds keep the order
+// they were built in.
+func SeesStoredDocuments(pipeline []any, i int) bool {
+	for _, stage := range pipeline[:i] {
+		doc, ok := stage.(*types.Document)
+		if !ok || doc.Len() == 0 {
+			return false
+		}
+		switch doc.Command() {
+		case "$match", "$sort", "$limit", "$skip", "$sample":
+		default:
+			return false
+		}
+	}
+	return true
+}

@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/dolthub/dumbodb/internal/collation"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
@@ -25,9 +26,15 @@ import (
 // ValidateFilter returns the error MongoDB raises when it parses filter, which
 // evaluation alone misses when no document reaches the invalid predicate. Each
 // predicate is evaluated on its own against an empty document, so one that
-// does not match cannot hide a later invalid one. $expr is not evaluated:
-// MongoDB raises its errors per document.
+// does not match cannot hide a later invalid one. $expr is not evaluated, as
+// MongoDB raises its errors per document, but its constants are folded.
 func ValidateFilter(filter *types.Document, cmp *collation.Comparator) error {
+	return validateFilter(filter, cmp, true)
+}
+
+// validateFilter is ValidateFilter; foldExpr says whether $expr constants are
+// folded, which MongoDB does for queries but not for collection validators.
+func validateFilter(filter *types.Document, cmp *collation.Comparator, foldExpr bool) error {
 	empty := types.MakeDocument(0)
 	for _, key := range filter.Keys() {
 		value := must.NotFail(filter.Get(key))
@@ -39,12 +46,19 @@ func ValidateFilter(filter *types.Document, cmp *collation.Comparator) error {
 			branches, _ := value.(*types.Array)
 			for i := 0; i < branches.Len(); i++ {
 				if branch, ok := must.NotFail(branches.Get(i)).(*types.Document); ok {
-					if err := ValidateFilter(branch, cmp); err != nil {
+					if err := validateFilter(branch, cmp, foldExpr); err != nil {
 						return err
 					}
 				}
 			}
-		case "$expr", "$where", "$text", "$comment":
+		case "$expr":
+			if !foldExpr {
+				continue
+			}
+			if err := operators.CheckConstantSubexpressions(value); err != nil {
+				return err
+			}
+		case "$where", "$text", "$comment":
 		default:
 			if err := validateFieldPredicate(empty, key, value, cmp); err != nil {
 				return err
@@ -105,4 +119,31 @@ func isFieldOperatorExpression(doc *types.Document) bool {
 	default:
 		return strings.HasPrefix(first, "$")
 	}
+}
+
+// ValidateFilterExprs returns the error MongoDB raises while parsing each
+// $expr in filter: a malformed expression or a failing folded constant.
+func ValidateFilterExprs(filter *types.Document) error {
+	for _, key := range filter.Keys() {
+		value := must.NotFail(filter.Get(key))
+		switch key {
+		case "$expr":
+			if _, err := validatedExpr(value); err != nil {
+				return err
+			}
+		case "$and", "$or", "$nor":
+			branches, ok := value.(*types.Array)
+			if !ok {
+				continue
+			}
+			for i := range branches.Len() {
+				if branch, ok := must.NotFail(branches.Get(i)).(*types.Document); ok {
+					if err := ValidateFilterExprs(branch); err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
+	return nil
 }

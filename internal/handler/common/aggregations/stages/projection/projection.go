@@ -47,6 +47,17 @@ import (
 //   - `ErrAggregatePositionalProject` when positional projection contains empty path;
 //   - `ErrNotImplemented` when there is unimplemented projection operators and expressions.
 func ValidateProjection(projection *types.Document) (*types.Document, bool, error) {
+	validated, inclusion, err := validateProjectionShape(projection)
+	if err == nil {
+		err = operators.CheckConstantSubexpressions(projection)
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return validated, inclusion, nil
+}
+
+func validateProjectionShape(projection *types.Document) (*types.Document, bool, error) {
 	validated := types.MakeDocument(0)
 	if err := CheckPathCollisions(projection, "Invalid $project :: caused by :: ", "$project (stage)"); err != nil {
 		return nil, false, err
@@ -162,29 +173,8 @@ func ValidateProjection(projection *types.Document) (*types.Document, bool, erro
 				break
 			}
 
-			op, err := operators.NewOperator(value)
-			if err = processOperatorError(err); err != nil {
+			if err := ValidateExpression(value); err != nil {
 				return nil, false, err
-			}
-
-			// The operator runs against a placeholder document, so only errors
-			// describing its shape are meaningful here. Data-dependent outcomes
-			// (a missing field, a field name that resolves to a non-string)
-			// depend on the real document, and the placeholder cannot decide
-			// them. Discarding those is deliberate rather than lossy: MongoDB
-			// reports them when the stage runs too, so $getField with a
-			// non-string 'field' must parse here and fail later. They are not
-			// swallowed, since the runtime path returns every error that is not
-			// a missing value.
-			if _, err = op.Process(must.NotFail(types.NewDocument("key", "value"))); err != nil {
-				var opErr operators.OperatorError
-				var exErr *aggregations.ExpressionError
-
-				if errors.As(err, &opErr) || errors.As(err, &exErr) {
-					if err = processOperatorError(err); err != nil {
-						return nil, false, err
-					}
-				}
 			}
 
 			// validate operators later
@@ -749,6 +739,28 @@ func setBySourceOrder(key string, val any, source, projected *types.Document) {
 		projected.Set(key, must.NotFail(tmp.Get(tmp.Keys()[i])))
 		i++
 	}
+}
+
+// ValidateExpression reports the parse errors mongod reports for an
+// expression object used as a projection value.
+func ValidateExpression(value *types.Document) error {
+	op, err := operators.NewOperator(value)
+	if err = processOperatorError(err); err != nil {
+		return err
+	}
+
+	// Only shape errors matter against the placeholder document; data
+	// errors surface when the stage runs, as in MongoDB.
+	if _, err = op.Process(must.NotFail(types.NewDocument("key", "value"))); err != nil {
+		var opErr operators.OperatorError
+		var exErr *aggregations.ExpressionError
+
+		if errors.As(err, &opErr) || errors.As(err, &exErr) {
+			return processOperatorError(operators.AsNestedError(err))
+		}
+	}
+
+	return nil
 }
 
 // processOperatorError takes internal error related to operator evaluation and

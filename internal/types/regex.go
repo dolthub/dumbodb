@@ -17,27 +17,12 @@ package types
 import (
 	"fmt"
 	"log/slog"
-	"regexp"
-	"regexp/syntax"
+	"strings"
 	"time"
 
 	"github.com/dlclark/regexp2"
 
-	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
-)
-
-var (
-	ErrOptionNotImplemented = fmt.Errorf("regex: option not implemented")
-	ErrMissingParen         = fmt.Errorf("Regular expression is invalid: missing )")
-	ErrMissingBracket       = fmt.Errorf("Regular expression is invalid: missing terminating ] for character class")
-	ErrInvalidEscape        = fmt.Errorf("Regular expression is invalid: PCRE does not support \\L, \\l, \\N{name}, \\U, or \\u")
-	ErrMissingTerminator    = fmt.Errorf("Regular expression is invalid: syntax error in subpattern name (missing terminator)")
-	ErrUnmatchedParentheses = fmt.Errorf("Regular expression is invalid: unmatched parentheses")
-	ErrTrailingBackslash    = fmt.Errorf("Regular expression is invalid: \\ at end of pattern")
-	ErrNothingToRepeat      = fmt.Errorf("Regular expression is invalid: nothing to repeat")
-	ErrInvalidClassRange    = fmt.Errorf("Regular expression is invalid: range out of order in character class")
-	ErrUnsupportedPerlOp    = fmt.Errorf("Regular expression is invalid: unrecognized character after (? or (?-")
-	ErrInvalidRepeatSize    = fmt.Errorf("Regular expression is invalid: regular expression is too large")
+	"github.com/dolthub/dumbodb/internal/util/pcre"
 )
 
 // Matcher is implemented by compiled regular expressions returned by Regex.Compile.
@@ -46,10 +31,9 @@ type Matcher interface {
 	String() string
 }
 
-// fallbackMatchTimeout bounds one match by the backtracking regexp2 engine,
-// which unlike Go's regexp can take exponential time. A match that runs out
-// of time counts as no match.
-const fallbackMatchTimeout = 100 * time.Millisecond
+// filterMatchTimeout bounds one match; regexp2 backtracks and can take
+// exponential time. A match that runs out of time counts as no match.
+const filterMatchTimeout = 100 * time.Millisecond
 
 type regexp2Matcher struct {
 	re *regexp2.Regexp
@@ -70,134 +54,21 @@ type Regex struct {
 	Options string
 }
 
-// Compile returns a Matcher that can evaluate the regex pattern.
-// For patterns that require PCRE features (such as lookaheads) that Go's
-// regexp engine does not support, it falls back to the regexp2 engine.
+// Compile compiles the regex as PCRE2 does for mongod, with the same
+// translation the expression operators use. Options other than i, m, s and
+// x are ignored.
 func (r Regex) Compile() (Matcher, error) {
-	var opts string
-	extendedMode := false
-	for _, o := range r.Options {
-		switch o {
-		case 'i', 'm', 's':
-			opts += string(o)
-		case 'x':
-			extendedMode = true
-		default:
-			continue
-		}
+	re, err := pcre.Compile(r.Pattern, pcre.Options{
+		CaseInsensitive: strings.ContainsRune(r.Options, 'i'),
+		Multiline:       strings.ContainsRune(r.Options, 'm'),
+		DotAll:          strings.ContainsRune(r.Options, 's'),
+		Extended:        strings.ContainsRune(r.Options, 'x'),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("Regular expression is invalid: %w", err)
 	}
-
-	expr := r.Pattern
-	if extendedMode {
-		expr = stripExtendedWhitespace(expr)
-	}
-	if opts != "" {
-		expr = "(?" + opts + ")" + expr
-	}
-
-	re, err := regexp.Compile(expr)
-	if err == nil {
-		return re, nil
-	}
-
-	syntaxErr, ok := err.(*syntax.Error)
-	if !ok {
-		return nil, lazyerrors.Error(err)
-	}
-
-	//nolint:exhaustive // we don't need to handle all possible errors there
-	switch syntaxErr.Code {
-	case syntax.ErrInvalidCharRange:
-		return nil, ErrInvalidClassRange
-	case syntax.ErrInvalidEscape:
-		return nil, ErrInvalidEscape
-	case syntax.ErrInvalidNamedCapture:
-		return nil, ErrMissingTerminator
-	case syntax.ErrInvalidRepeatOp:
-		return nil, ErrNothingToRepeat
-	case syntax.ErrInvalidRepeatSize:
-		return nil, ErrInvalidRepeatSize
-	case syntax.ErrMissingBracket:
-		return nil, ErrMissingBracket
-	case syntax.ErrMissingParen:
-		return nil, ErrMissingParen
-	case syntax.ErrMissingRepeatArgument:
-		return nil, ErrNothingToRepeat
-	case syntax.ErrTrailingBackslash:
-		return nil, ErrTrailingBackslash
-	case syntax.ErrUnexpectedParen:
-		return nil, ErrUnmatchedParentheses
-
-	case syntax.ErrInvalidPerlOp:
-		// Go's regexp engine does not support PCRE features like lookaheads.
-		// Fall back to regexp2 which provides PCRE-compatible evaluation.
-		re2, err2 := regexp2.Compile(expr, 0)
-		if err2 != nil {
-			return nil, ErrUnsupportedPerlOp
-		}
-		re2.MatchTimeout = fallbackMatchTimeout
-		return &regexp2Matcher{re: re2}, nil
-
-	default:
-		return nil, lazyerrors.Error(syntaxErr)
-	}
-}
-
-// stripExtendedWhitespace preprocesses a regex pattern for the x flag (extended whitespace mode).
-// Unescaped whitespace outside of character classes is removed.
-// '#' outside of character classes starts a comment until end of line.
-func stripExtendedWhitespace(pattern string) string {
-	var result []rune
-	runes := []rune(pattern)
-	i := 0
-	inClass := false
-
-	for i < len(runes) {
-		ch := runes[i]
-
-		if ch == '\\' && i+1 < len(runes) {
-			result = append(result, ch, runes[i+1])
-			i += 2
-			continue
-		}
-
-		if ch == '[' && !inClass {
-			inClass = true
-			result = append(result, ch)
-			i++
-			continue
-		}
-
-		if ch == ']' && inClass {
-			inClass = false
-			result = append(result, ch)
-			i++
-			continue
-		}
-
-		if inClass {
-			result = append(result, ch)
-			i++
-			continue
-		}
-
-		if ch == '#' {
-			for i < len(runes) && runes[i] != '\n' {
-				i++
-			}
-			continue
-		}
-
-		if ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' || ch == '\f' || ch == '\v' {
-			i++
-			continue
-		}
-
-		result = append(result, ch)
-		i++
-	}
-
-	return string(result)
+	re.MatchTimeout = filterMatchTimeout
+	return &regexp2Matcher{re: re}, nil
 }
 
 func (r Regex) LogValue() slog.Value {

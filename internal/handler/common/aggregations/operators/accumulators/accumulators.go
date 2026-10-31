@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
@@ -128,30 +129,84 @@ func NewAccumulator(stage, key string, value any) (Accumulator, error) {
 
 	newAccumulator, ok := Accumulators[operator]
 	if !ok {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+		return nil, unknownAccumulatorError(stage, operator, expr)
+	}
+
+	if _, isArray := expr.(*types.Array); isArray {
+		return nil, unaryOperatorError(operator)
+	}
+
+	if err := operators.CheckConstantSubexpressions(expr); err != nil {
+		return nil, err
+	}
+
+	return newAccumulator(args...)
+}
+
+// unimplementedAccumulators are MongoDB 8.0 $group accumulators DumboDB lacks.
+var unimplementedAccumulators = map[string]bool{
+	"$accumulator": true,
+	"$bottom":      true,
+	"$bottomN":     true,
+	"$firstN":      true,
+	"$lastN":       true,
+	"$maxN":        true,
+	"$median":      true,
+	"$minN":        true,
+	"$percentile":  true,
+	"$top":         true,
+	"$topN":        true,
+}
+
+// unknownAccumulatorError is the error for an operator Accumulators lacks:
+// NotImplemented for a MongoDB accumulator, otherwise MongoDB's error for a
+// name $group does not accept. MongoDB registers the window-only covariance
+// functions as unary accumulators, so an array operand fails that check
+// first.
+func unknownAccumulatorError(stage, operator string, operand any) error {
+	if unimplementedAccumulators[operator] {
+		return handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrNotImplemented,
 			fmt.Sprintf("%s accumulator %q is not implemented yet", stage, operator),
 			operator+" (accumulator)",
 		)
 	}
 
-	return newAccumulator(args...)
+	if _, isArray := operand.(*types.Array); isArray && (operator == "$covariancePop" || operator == "$covarianceSamp") {
+		return unaryOperatorError(operator)
+	}
+
+	return handlererrors.NewCommandErrorMsgWithArgument(
+		handlererrors.ErrStageGroupUnknownOperator,
+		fmt.Sprintf("unknown group operator '%s'", operator),
+		operator+" (accumulator)",
+	)
+}
+
+// unaryOperatorError is MongoDB's error for an array operand: every $group
+// accumulator takes exactly one.
+func unaryOperatorError(operator string) error {
+	return handlererrors.NewCommandErrorMsgWithArgument(
+		handlererrors.ErrStageGroupUnaryOperator,
+		fmt.Sprintf("The %s accumulator is a unary operator", operator),
+		operator+" (accumulator)",
+	)
 }
 
 // Accumulators maps all aggregation accumulators.
 var Accumulators = map[string]newAccumulatorFunc{
 	// sorted alphabetically
-	"$addToSet":      newAddToSet,
-	"$avg":           newAvg,
-	"$count":         newCount,
-	"$first":         newFirst,
-	"$last":          newLast,
-	"$max":           newMax,
-	"$mergeObjects":  newMergeObjectsAccumulator,
-	"$min":           newMin,
-	"$push":          newPush,
-	"$stdDevPop":     newStdDevPop,
-	"$stdDevSamp":    newStdDevSamp,
-	"$sum":           newSum,
+	"$addToSet":     newAddToSet,
+	"$avg":          newAvg,
+	"$count":        newCount,
+	"$first":        newFirst,
+	"$last":         newLast,
+	"$max":          newMax,
+	"$mergeObjects": newMergeObjectsAccumulator,
+	"$min":          newMin,
+	"$push":         newPush,
+	"$stdDevPop":    newStdDevPop,
+	"$stdDevSamp":   newStdDevSamp,
+	"$sum":          newSum,
 	// please keep sorted alphabetically
 }

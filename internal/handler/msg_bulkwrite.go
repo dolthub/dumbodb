@@ -548,6 +548,7 @@ func execBulkWriteDelete(ctx context.Context, c backends.Collection, op *types.D
 		}
 	}
 
+	common.CanonicalizeFilter(filter)
 	if err := common.ValidateFilter(filter, nil); err != nil {
 		return bulkWriteOpResult{}, err
 	}

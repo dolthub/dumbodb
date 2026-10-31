@@ -228,6 +228,9 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 				"create",
 			)
 		}
+		if err := common.ValidateValidatorExpressions(validatorDoc); err != nil {
+			return nil, err
+		}
 		params.Validator = validatorDoc
 	}
 

@@ -26,6 +26,7 @@ import (
 
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
@@ -153,9 +154,9 @@ func NewLookupStage(stage *types.Document, fetcher CollectionFetcher) (aggregati
 		)
 	}
 
-	// "from" is required.
+	// "from" is required, unless the pipeline starts with $documents.
 	fromVal, err := specDoc.Get("from")
-	if err != nil {
+	if err != nil && !startsWithDocuments(specDoc) {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrFailedToParse,
 			"$lookup requires a 'from' option",
@@ -164,7 +165,7 @@ func NewLookupStage(stage *types.Document, fetcher CollectionFetcher) (aggregati
 	}
 
 	from, ok := fromVal.(string)
-	if !ok {
+	if err == nil && !ok {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrFailedToParse,
 			fmt.Sprintf("$lookup 'from' must be a string, got %s", types.FormatAnyValue(fromVal)),
@@ -425,7 +426,7 @@ func (l *lookup) Process(ctx context.Context, iter types.DocumentsIterator, clos
 	}
 
 	var fromDocs []*types.Document
-	if perDocField == "" {
+	if perDocField == "" && l.from != "" {
 		if fromDocs, err = fetcher.Fetch(ctx, l.from, fetchFilter); err != nil {
 			return nil, lazyerrors.Error(err)
 		}
@@ -433,7 +434,7 @@ func (l *lookup) Process(ctx context.Context, iter types.DocumentsIterator, clos
 
 	var eqIdx *equalityIndex
 	switch {
-	case l.localField == "":
+	case l.localField == "" || l.from == "":
 	case fetchFilter == nil:
 		// fromDocs is the cached whole collection; share its index with
 		// other lookups in this stage, such as nested ones.
@@ -524,7 +525,9 @@ func (l *lookup) letBindings(localDoc *types.Document) (map[string]any, error) {
 		if err != nil {
 			return nil, lazyerrors.Error(err)
 		}
-		vars[k] = evaluateLetExpr(v, localDoc)
+		if vars[k], err = evaluateLetExpr(v, localDoc); err != nil {
+			return nil, err
+		}
 	}
 }
 
@@ -564,10 +567,11 @@ func (l *lookup) runPipeline(ctx context.Context, fetcher CollectionFetcher, fro
 	}
 
 	// Execute each pipeline stage.
+	subStages := must.NotFail(iterator.ConsumeValues(l.pipeline.Iterator()))
 	pipeIter := l.pipeline.Iterator()
 	defer pipeIter.Close()
 
-	for {
+	for stageIndex := 0; ; stageIndex++ {
 		_, stageVal, err := pipeIter.Next()
 		if errors.Is(err, iterator.ErrIteratorDone) {
 			break
@@ -589,12 +593,27 @@ func (l *lookup) runPipeline(ctx context.Context, fetcher CollectionFetcher, fro
 		// Substitute let variables into the stage spec.
 		substituted := substituteVarsInDoc(stageDoc, vars)
 
+		if stageIndex == 0 && l.from == "" {
+			if current, err = evalDocuments(substituted); err != nil {
+				return nil, err
+			}
+			copied = true
+			continue
+		}
+
 		// Create the stage. $lookup is handled specially to pass the fetcher.
 		var stage aggregations.Stage
 
-		if substituted.Command() == "$lookup" {
+		switch substituted.Command() {
+		case "$lookup":
 			stage, err = NewLookupStage(substituted, fetcher)
-		} else {
+		case "$unionWith":
+			stage, err = NewUnionWithStage(substituted, fetcher)
+		case "$facet":
+			stage, err = NewFacetStage(substituted, fetcher)
+		case "$match":
+			stage, err = NewMatchStage(substituted, nil, SeesStoredDocuments(subStages, stageIndex))
+		default:
 			stage, err = NewStage(substituted)
 		}
 
@@ -707,35 +726,17 @@ func leadingExprEquality(pipeline *types.Array) (field string, other any, ok boo
 	return "", nil, false
 }
 
-// evaluateLetExpr evaluates a let variable expression against a local document.
-// Expressions of the form "$fieldName" are resolved to the field value from localDoc.
-// Non-expression values are returned as-is.
-func evaluateLetExpr(expr any, localDoc *types.Document) any {
-	s, ok := expr.(string)
-	if !ok {
-		return expr
+// evaluateLetExpr evaluates a $lookup let value, any expression, against
+// localDoc; a missing result binds null.
+func evaluateLetExpr(expr any, localDoc *types.Document) (any, error) {
+	v, missing, err := operators.EvalOperand(expr, localDoc)
+	if err != nil {
+		return nil, err
 	}
-
-	if !strings.HasPrefix(s, "$") {
-		return s
+	if missing {
+		return types.Null, nil
 	}
-
-	// $$ prefix would be a variable reference  -- not valid in let values.
-	if strings.HasPrefix(s, "$$") {
-		return types.Null
-	}
-
-	fieldName := strings.TrimPrefix(s, "$")
-	if fieldName == "" {
-		return types.Null
-	}
-
-	val := getFieldValue(localDoc, fieldName)
-	if val == nil {
-		return types.Null
-	}
-
-	return val
+	return v, nil
 }
 
 // substituteVarsInDoc recursively replaces $$varName references in a document
@@ -995,3 +996,40 @@ func equalityFetchFilter(docs []*types.Document, localField, foreignField string
 var (
 	_ aggregations.Stage = (*lookup)(nil)
 )
+
+// startsWithDocuments reports whether a $lookup spec's pipeline starts with
+// $documents, which supplies the documents instead of a collection.
+func startsWithDocuments(spec *types.Document) bool {
+	pipeline, _ := spec.Get("pipeline")
+	arr, ok := pipeline.(*types.Array)
+	if !ok || arr.Len() == 0 {
+		return false
+	}
+	first, ok := must.NotFail(arr.Get(0)).(*types.Document)
+	return ok && first.Command() == "$documents"
+}
+
+// evalDocuments evaluates a $documents stage as mongod's desugaring does:
+// the value must be an array (5858203) of documents (40228).
+func evalDocuments(stage *types.Document) ([]*types.Document, error) {
+	v, _, err := operators.EvalOperand(must.NotFail(stage.Get("$documents")), types.MakeDocument(0))
+	if err != nil {
+		return nil, err
+	}
+	arr, ok := v.(*types.Array)
+	if !ok {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrUnwindNotArray,
+			"an array is expected", "$documents (stage)")
+	}
+	docs := make([]*types.Document, arr.Len())
+	for i := range docs {
+		d, ok := must.NotFail(arr.Get(i)).(*types.Document)
+		if !ok {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrReplaceRootNotObject,
+				"'replacement document' must evaluate to an object, but resulting value was: "+
+					types.FormatAnyValue(must.NotFail(arr.Get(i))), "$documents (stage)")
+		}
+		docs[i] = d
+	}
+	return docs, nil
+}
