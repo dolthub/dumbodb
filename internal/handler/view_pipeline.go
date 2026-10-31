@@ -85,6 +85,22 @@ func buildViewPipelineStages(db backends.Database, viewPipeline *types.Array, cm
 
 type foreignViewDepthKey struct{}
 
+// newForeignCollectionStage builds a $lookup, $graphLookup, $unionWith or
+// $facet stage that reads other collections of db.
+func newForeignCollectionStage(stage *types.Document, db backends.Database) (aggregations.Stage, error) {
+	fetcher := foreignCollectionFetcher(db)
+	switch stage.Command() {
+	case "$graphLookup":
+		return stages.NewGraphLookupStage(stage, fetcher)
+	case "$unionWith":
+		return stages.NewUnionWithStage(stage, fetcher)
+	case "$facet":
+		return stages.NewFacetStage(stage, fetcher)
+	default:
+		return stages.NewLookupStage(stage, fetcher)
+	}
+}
+
 // foreignCollectionFetcher reads the "from" namespace of $lookup/$graphLookup
 // from db.
 func foreignCollectionFetcher(db backends.Database) stages.CollectionFetcher {
