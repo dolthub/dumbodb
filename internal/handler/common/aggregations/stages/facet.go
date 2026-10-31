@@ -43,6 +43,10 @@ type rawFacetPipeline struct {
 // Stage parsing is deferred to Process time to avoid circular initialization with NewStage.
 type facet struct {
 	pipelines []rawFacetPipeline
+
+	// fetcher reads other collections for $lookup, $graphLookup and
+	// $unionWith in the sub-pipelines; nil where none is available.
+	fetcher CollectionFetcher
 }
 
 // newFacet creates a new $facet stage.
@@ -125,7 +129,7 @@ func newFacet(stage *types.Document) (aggregations.Stage, error) {
 // parsePipelineArray parses an array of stage documents into a list of Stage instances.
 // This is a standalone function that calls NewStage; it must only be called from
 // Process() methods (not from newXxx constructors) to avoid initialization cycles.
-func parsePipelineArray(arr *types.Array) ([]aggregations.Stage, error) {
+func parsePipelineArray(arr *types.Array, fetcher CollectionFetcher) ([]aggregations.Stage, error) {
 	var stageList []aggregations.Stage
 	subStages := must.NotFail(iterator.ConsumeValues(arr.Iterator()))
 
@@ -143,9 +147,16 @@ func parsePipelineArray(arr *types.Array) ([]aggregations.Stage, error) {
 
 		var s aggregations.Stage
 		var err error
-		if stageDoc.Command() == "$match" {
+		switch cmd := stageDoc.Command(); {
+		case cmd == "$match":
 			s, err = NewMatchStage(stageDoc, nil, SeesStoredDocuments(subStages, i))
-		} else {
+		case fetcher != nil && cmd == "$lookup":
+			s, err = NewLookupStage(stageDoc, fetcher)
+		case fetcher != nil && cmd == "$graphLookup":
+			s, err = NewGraphLookupStage(stageDoc, fetcher)
+		case fetcher != nil && cmd == "$unionWith":
+			s, err = NewUnionWithStage(stageDoc, fetcher)
+		default:
 			s, err = NewStage(stageDoc)
 		}
 		if err != nil {
@@ -195,7 +206,7 @@ func (f *facet) Process(ctx context.Context, iter types.DocumentsIterator, close
 
 	for _, p := range f.pipelines {
 		// Parse stages at process time to avoid initialization cycle.
-		stageList, parseErr := parsePipelineArray(p.pipelineArr)
+		stageList, parseErr := parsePipelineArray(p.pipelineArr, f.fetcher)
 		if parseErr != nil {
 			return nil, parseErr
 		}
@@ -222,3 +233,15 @@ func (f *facet) Process(ctx context.Context, iter types.DocumentsIterator, close
 var (
 	_ aggregations.Stage = (*facet)(nil)
 )
+
+// NewFacetStage is $facet whose sub-pipelines can read other collections
+// through fetcher.
+func NewFacetStage(stage *types.Document, fetcher CollectionFetcher) (aggregations.Stage, error) {
+	s, err := newFacet(stage)
+	if err != nil {
+		return nil, err
+	}
+	f := s.(*facet)
+	f.fetcher = fetcher
+	return f, nil
+}

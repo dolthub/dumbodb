@@ -264,7 +264,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		var s aggregations.Stage
 
 		switch d.Command() {
-		case "$lookup", "$graphLookup", "$unionWith":
+		case "$lookup", "$graphLookup", "$unionWith", "$facet":
 			fetcher := foreignCollectionFetcher(db)
 
 			switch d.Command() {
@@ -272,6 +272,8 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 				s, err = stages.NewGraphLookupStage(d, fetcher)
 			case "$unionWith":
 				s, err = stages.NewUnionWithStage(d, fetcher)
+			case "$facet":
+				s, err = stages.NewFacetStage(d, fetcher)
 			default:
 				s, err = stages.NewLookupStage(d, fetcher)
 			}
@@ -885,15 +887,19 @@ func (h *Handler) aggregateDocuments(connCtx context.Context, document, firstSta
 		var s aggregations.Stage
 		var err error
 		switch sd.Command() {
-		case "$lookup", "$unionWith":
+		case "$lookup", "$unionWith", "$facet":
 			db, dbErr := h.b.Database(dbName)
 			if dbErr != nil {
 				return nil, lazyerrors.Error(dbErr)
 			}
-			if sd.Command() == "$lookup" {
-				s, err = stages.NewLookupStage(sd, foreignCollectionFetcher(db))
-			} else {
-				s, err = stages.NewUnionWithStage(sd, foreignCollectionFetcher(db))
+			fetcher := foreignCollectionFetcher(db)
+			switch sd.Command() {
+			case "$lookup":
+				s, err = stages.NewLookupStage(sd, fetcher)
+			case "$unionWith":
+				s, err = stages.NewUnionWithStage(sd, fetcher)
+			default:
+				s, err = stages.NewFacetStage(sd, fetcher)
 			}
 		default:
 			s, err = stages.NewStage(sd)
