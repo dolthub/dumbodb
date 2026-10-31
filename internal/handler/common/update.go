@@ -260,6 +260,26 @@ func processFilterEqualityCondition(doc, filter *types.Document) error {
 	}
 }
 
+// ValidateUpdatePipeline returns the parse errors MongoDB raises for the
+// expressions in an update pipeline's $set and $addFields stages.
+func ValidateUpdatePipeline(pipeline *types.Array) error {
+	for i := range pipeline.Len() {
+		stage, ok := must.NotFail(pipeline.Get(i)).(*types.Document)
+		if !ok || stage.Len() == 0 {
+			continue
+		}
+		name := stage.Command()
+		fields, ok := must.NotFail(stage.Get(name)).(*types.Document)
+		if !ok || (name != "$set" && name != "$addFields") {
+			continue
+		}
+		if err := ValidateAddFieldsExpressions(name, fields); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // processPipelineUpdate applies a pipeline-style update ([]bson.D / *types.Array) to the document.
 // Each element of the pipeline is a stage document with a single key like "$set", "$unset",
 // "$addFields", or "$project".

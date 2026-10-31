@@ -57,6 +57,10 @@ func newAddFields(stage *types.Document) (aggregations.Stage, error) {
 		return nil, err
 	}
 
+	if err := common.ValidateAddFieldsExpressions("$addFields", fieldsDoc); err != nil {
+		return nil, err
+	}
+
 	if err := operators.CheckConstantSubexpressions(fieldsDoc); err != nil {
 		return nil, err
 	}

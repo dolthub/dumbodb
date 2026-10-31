@@ -154,7 +154,7 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 		}
 	}
 
-	if err = common.CheckExprConstants(params.Filter); err != nil {
+	if err = common.ValidateFilterExprs(params.Filter); err != nil {
 		return nil, err
 	}
 

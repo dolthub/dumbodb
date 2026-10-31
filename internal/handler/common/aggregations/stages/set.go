@@ -59,6 +59,10 @@ func newSet(stage *types.Document) (aggregations.Stage, error) {
 		return nil, err
 	}
 
+	if err := common.ValidateAddFieldsExpressions("$set", fieldsDoc); err != nil {
+		return nil, err
+	}
+
 	if err := operators.CheckConstantSubexpressions(fieldsDoc); err != nil {
 		return nil, err
 	}

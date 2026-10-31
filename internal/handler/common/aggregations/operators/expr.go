@@ -76,23 +76,8 @@ func (e *expr) validateExpr(exprValue any) error {
 	switch exprValue := exprValue.(type) {
 	case *types.Document:
 		if IsOperator(exprValue) {
-			op, err := NewOperator(exprValue)
-			if err != nil {
+			if err := CheckExpressionShape(exprValue); err != nil {
 				return processExprOperatorErrors(err, e.errArgument)
-			}
-			if err = constructNestedOperators(exprValue); err != nil {
-				return processExprOperatorErrors(err, e.errArgument)
-			}
-
-			// Against no document only errors about the expression's shape are
-			// MongoDB's parse errors; errors that depend on values are raised
-			// per document, or by constant folding.
-			if _, err = op.Process(nil); err != nil {
-				var opErr OperatorError
-				var exErr *aggregations.ExpressionError
-				if errors.As(err, &opErr) || errors.As(err, &exErr) {
-					return processExprOperatorErrors(err, e.errArgument)
-				}
 			}
 
 			return nil
@@ -324,6 +309,28 @@ func processExprOperatorErrors(err error, argument string) error {
 	}
 
 	return lazyerrors.Error(err)
+}
+
+// CheckExpressionShape returns the parse errors MongoDB raises for an
+// operator expression: unknown operators, wrong argument counts and errors
+// from operator constructors, but not errors that depend on values, which
+// are raised per document or by constant folding.
+func CheckExpressionShape(expr *types.Document) error {
+	op, err := NewOperator(expr)
+	if err != nil {
+		return err
+	}
+	if err = constructNestedOperators(expr); err != nil {
+		return err
+	}
+	if _, err = op.Process(nil); err != nil {
+		var opErr OperatorError
+		var exErr *aggregations.ExpressionError
+		if errors.As(err, &opErr) || errors.As(err, &exErr) {
+			return err
+		}
+	}
+	return nil
 }
 
 // constructNestedOperators builds every known operator nested in op's

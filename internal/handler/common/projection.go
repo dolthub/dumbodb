@@ -299,7 +299,7 @@ func validateProjectionShape(projection *types.Document) (*types.Document, bool,
 					)
 				}
 				if err := stageProjection.ValidateExpression(value); err != nil {
-					return nil, false, err
+					return nil, false, withoutProjectPrefix(err)
 				}
 				if inclusion != nil && !*inclusion {
 					return nil, false, expressionInExclusionError()
@@ -1224,4 +1224,18 @@ func hasFindProjectionOperator(projection *types.Document) bool {
 		}
 	}
 	return false
+}
+
+// withoutProjectPrefix drops the "Invalid $project" context from an
+// expression error, which MongoDB reports without it in find projections.
+func withoutProjectPrefix(err error) error {
+	var ce *handlererrors.CommandError
+	if !errors.As(err, &ce) {
+		return err
+	}
+	msg, found := strings.CutPrefix(ce.Err().Error(), "Invalid $project :: caused by :: ")
+	if !found {
+		return err
+	}
+	return handlererrors.NewCommandErrorMsgWithArgument(ce.Code(), msg, "projection")
 }

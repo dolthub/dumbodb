@@ -121,14 +121,14 @@ func isFieldOperatorExpression(doc *types.Document) bool {
 	}
 }
 
-// CheckExprConstants returns the error MongoDB raises while parsing when a
-// constant folded in one of filter's $expr fails.
-func CheckExprConstants(filter *types.Document) error {
+// ValidateFilterExprs returns the error MongoDB raises while parsing each
+// $expr in filter: a malformed expression or a failing folded constant.
+func ValidateFilterExprs(filter *types.Document) error {
 	for _, key := range filter.Keys() {
 		value := must.NotFail(filter.Get(key))
 		switch key {
 		case "$expr":
-			if err := operators.CheckConstantSubexpressions(value); err != nil {
+			if _, err := validatedExpr(value); err != nil {
 				return err
 			}
 		case "$and", "$or", "$nor":
@@ -138,7 +138,7 @@ func CheckExprConstants(filter *types.Document) error {
 			}
 			for i := range branches.Len() {
 				if branch, ok := must.NotFail(branches.Get(i)).(*types.Document); ok {
-					if err := CheckExprConstants(branch); err != nil {
+					if err := ValidateFilterExprs(branch); err != nil {
 						return err
 					}
 				}
