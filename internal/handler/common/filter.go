@@ -202,11 +202,16 @@ func equalsOrHasElement(value, target any, cmp *collation.Comparator) bool {
 // expand the array such a path reaches, so it equals doc only if it is that
 // document. ok is false for other filters and paths.
 func positionalDocumentEquality(doc *types.Document, filterKey string, vals []any, filter *types.Document) (res, ok bool) {
-	path, err := types.NewPathFromString(filterKey)
-	if err != nil || path.Len() < 2 {
+	// Runs per document, so rule out a path without an index suffix cheaply.
+	dot := strings.LastIndexByte(filterKey, '.')
+	if dot < 0 {
 		return false, false
 	}
-	if _, err := strconv.Atoi(path.Suffix()); err != nil {
+	if _, err := strconv.Atoi(filterKey[dot+1:]); err != nil {
+		return false, false
+	}
+	path, err := types.NewPathFromString(filterKey)
+	if err != nil {
 		return false, false
 	}
 	parents, err := commonpath.FindValues(doc, path.TrimSuffix(), &commonpath.FindValuesOpts{
