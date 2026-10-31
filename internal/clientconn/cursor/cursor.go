@@ -168,7 +168,8 @@ func (c *Cursor) NextBatch(maxDocs, maxBytes int) (batch []*types.Document, done
 			return nil, false, lazyerrors.Error(err)
 		}
 
-		if exceedsOutputNesting(doc, 1) {
+		// A document unchanged since decoding was nested within the limit.
+		if !doc.HasRawBSON() && exceedsOutputNesting(doc, 1) {
 			c.Close()
 			return nil, false, handlererrors.NewCommandErrorMsg(handlererrors.ErrOverflow, fmt.Sprintf(
 				"cannot convert document to BSON because it exceeds the limit of %d levels of nesting",
