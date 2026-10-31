@@ -44,7 +44,16 @@ func TestNumericStringParsingIsLinear(t *testing.T) {
 			t.Run(parserName+"/"+inputName, func(t *testing.T) {
 				t.Parallel()
 
-				lineartest.Assert(t, 10000, func(n int) { parse(input(n)) })
+				// Build each input once, so only parsing is timed.
+				built := map[int]string{}
+				lineartest.Assert(t, 10000, func(n int) {
+					s, ok := built[n]
+					if !ok {
+						s = input(n)
+						built[n] = s
+					}
+					parse(s)
+				})
 			})
 		}
 	}
