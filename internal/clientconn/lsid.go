@@ -129,7 +129,8 @@ func abortedTransactionError(doc *types.Document) error {
 var writeErrorCommands = map[string]bool{"insert": true, "update": true, "delete": true, "bulkWrite": true}
 
 // replyHasWriteErrors reports whether a successful write command's reply
-// carries writeErrors, which also abort a transaction in mongod.
+// carries writeErrors, or a bulkWrite reply nErrors, which also abort a
+// transaction in mongod.
 func replyHasWriteErrors(resMsg *wire.OpMsg) bool {
 	if resMsg == nil {
 		return false
@@ -141,6 +142,14 @@ func replyHasWriteErrors(resMsg *wire.OpMsg) bool {
 	doc, err := bson.DecodeRawDocument(raw)
 	if err != nil {
 		return false
+	}
+	if nErrors, err := doc.Get("nErrors"); err == nil {
+		switch n := nErrors.(type) {
+		case int32:
+			return n > 0
+		case int64:
+			return n > 0
+		}
 	}
 	writeErrors, err := doc.Get("writeErrors")
 	if err != nil {
