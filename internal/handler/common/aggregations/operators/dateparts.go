@@ -162,42 +162,28 @@ type dateToStringOp struct {
 }
 
 func newDateToString(args ...any) (Operator, error) {
-	spec, ok := args[0].(*types.Document)
-	if len(args) != 1 || !ok {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDateToStringNotObject,
-			"$dateToString only supports an object as its argument", "$dateToString")
-	}
-
 	op := new(dateToStringOp)
-	var hasDate, hasTimeZone bool
+	var hasTimeZone bool
 	var timeZone any
-	iter := spec.Iterator()
-	defer iter.Close()
-	for {
-		key, value, err := iter.Next()
-		if errors.Is(err, iterator.ErrIteratorDone) {
-			break
-		}
-		if err != nil {
-			return nil, err
-		}
-		switch key {
-		case "date":
-			op.date, hasDate = value, true
-		case "format":
-			op.format, op.hasFormat = value, true
-		case "timezone":
-			timeZone, hasTimeZone = value, true
-		case "onNull":
-			op.onNull, op.hasOnNull = value, true
-		default:
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDateToStringUnknownField,
+	spec := argObject{
+		notObject: func(any) error {
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDateToStringNotObject,
+				"$dateToString only supports an object as its argument", "$dateToString")
+		},
+		unknown: func(key string) error {
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDateToStringUnknownField,
 				"Unrecognized argument to $dateToString: "+key, "$dateToString")
-		}
+		},
+		fields: []argField{
+			{name: "date", set: assign(&op.date, nil), missing: handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrDateToStringNoDate, "Missing 'date' parameter to $dateToString", "$dateToString")},
+			{name: "format", set: assign(&op.format, &op.hasFormat)},
+			{name: "timezone", set: assign(&timeZone, &hasTimeZone)},
+			{name: "onNull", set: assign(&op.onNull, &op.hasOnNull)},
+		},
 	}
-	if !hasDate {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDateToStringNoDate,
-			"Missing 'date' parameter to $dateToString", "$dateToString")
+	if err := spec.parse(args); err != nil {
+		return nil, err
 	}
 
 	var err error

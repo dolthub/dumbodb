@@ -15,13 +15,11 @@
 package operators
 
 import (
-	"errors"
 	"fmt"
 
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
-	"github.com/dolthub/dumbodb/internal/util/iterator"
 )
 
 // dateDiffOp is ExpressionDateDiff: { $dateDiff: { startDate, endDate, unit,
@@ -38,51 +36,31 @@ type dateDiffOp struct {
 }
 
 func newDateDiff(args ...any) (Operator, error) {
-	spec, ok := args[0].(*types.Document)
-	if len(args) != 1 || !ok {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDateDiffNotObject,
-			"$dateDiff only supports an object as its argument", "$dateDiff")
-	}
-
 	op := new(dateDiffOp)
-	var hasStart, hasEnd, hasUnit, hasTimeZone bool
+	var hasTimeZone bool
 	var timeZone any
-	iter := spec.Iterator()
-	defer iter.Close()
-	for {
-		key, value, err := iter.Next()
-		if errors.Is(err, iterator.ErrIteratorDone) {
-			break
-		}
-		if err != nil {
-			return nil, err
-		}
-		switch key {
-		case "startDate":
-			op.startDate, hasStart = value, true
-		case "endDate":
-			op.endDate, hasEnd = value, true
-		case "unit":
-			op.unit, hasUnit = value, true
-		case "timezone":
-			timeZone, hasTimeZone = value, true
-		case "startOfWeek":
-			op.startOfWeek, op.hasStartOfWeek = value, true
-		default:
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDateDiffBadField,
+	spec := argObject{
+		notObject: func(any) error {
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDateDiffNotObject,
+				"$dateDiff only supports an object as its argument", "$dateDiff")
+		},
+		unknown: func(key string) error {
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDateDiffBadField,
 				"Unrecognized argument to $dateDiff: "+key, "$dateDiff")
-		}
+		},
+		fields: []argField{
+			{name: "startDate", set: assign(&op.startDate, nil), missing: handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrDateDiffNoStartDate, "Missing 'startDate' parameter to $dateDiff", "$dateDiff")},
+			{name: "endDate", set: assign(&op.endDate, nil), missing: handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrDateDiffNoEndDate, "Missing 'endDate' parameter to $dateDiff", "$dateDiff")},
+			{name: "unit", set: assign(&op.unit, nil), missing: handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrDateDiffNoUnit, "Missing 'unit' parameter to $dateDiff", "$dateDiff")},
+			{name: "timezone", set: assign(&timeZone, &hasTimeZone)},
+			{name: "startOfWeek", set: assign(&op.startOfWeek, &op.hasStartOfWeek)},
+		},
 	}
-	switch {
-	case !hasStart:
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDateDiffNoStartDate,
-			"Missing 'startDate' parameter to $dateDiff", "$dateDiff")
-	case !hasEnd:
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDateDiffNoEndDate,
-			"Missing 'endDate' parameter to $dateDiff", "$dateDiff")
-	case !hasUnit:
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDateDiffNoUnit,
-			"Missing 'unit' parameter to $dateDiff", "$dateDiff")
+	if err := spec.parse(args); err != nil {
+		return nil, err
 	}
 
 	var err error

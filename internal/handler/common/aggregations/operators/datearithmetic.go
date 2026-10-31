@@ -15,7 +15,6 @@
 package operators
 
 import (
-	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -24,7 +23,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
-	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/timelib"
 )
 
@@ -199,42 +197,29 @@ func newDateArithmetic(opName string) func(args ...any) (Operator, error) {
 }
 
 func parseDateArithmetic(opName string, args ...any) (Operator, error) {
-	spec, ok := args[0].(*types.Document)
-	if len(args) != 1 || !ok {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDateArithmeticNotObject,
-			opName+" expects an object as its argument", opName)
-	}
-
 	op := &dateArithmeticOp{opName: opName}
-	var hasStart, hasUnit, hasAmount, hasTimeZone bool
+	var hasTimeZone bool
 	var timeZone any
-	iter := spec.Iterator()
-	defer iter.Close()
-	for {
-		key, value, err := iter.Next()
-		if errors.Is(err, iterator.ErrIteratorDone) {
-			break
-		}
-		if err != nil {
-			return nil, err
-		}
-		switch key {
-		case "startDate":
-			op.startDate, hasStart = value, true
-		case "unit":
-			op.unit, hasUnit = value, true
-		case "amount":
-			op.amount, hasAmount = value, true
-		case "timezone":
-			timeZone, hasTimeZone = value, true
-		default:
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDateArithmeticBadField,
+	missing := handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDateArithmeticNoField,
+		opName+" requires startDate, unit, and amount to be present", opName)
+	spec := argObject{
+		notObject: func(any) error {
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDateArithmeticNotObject,
+				opName+" expects an object as its argument", opName)
+		},
+		unknown: func(key string) error {
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDateArithmeticBadField,
 				fmt.Sprintf("Unrecognized argument to %s: %s. Expected arguments are startDate, unit, amount, and optionally timezone.", opName, key), opName)
-		}
+		},
+		fields: []argField{
+			{name: "startDate", set: assign(&op.startDate, nil), missing: missing},
+			{name: "unit", set: assign(&op.unit, nil), missing: missing},
+			{name: "amount", set: assign(&op.amount, nil), missing: missing},
+			{name: "timezone", set: assign(&timeZone, &hasTimeZone)},
+		},
 	}
-	if !hasStart || !hasUnit || !hasAmount {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDateArithmeticNoField,
-			opName+" requires startDate, unit, and amount to be present", opName)
+	if err := spec.parse(args); err != nil {
+		return nil, err
 	}
 
 	// MongoDB folds an expression with only constant operands by evaluating

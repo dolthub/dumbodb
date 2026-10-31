@@ -22,7 +22,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
-	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/timelib"
 )
 
@@ -59,44 +58,29 @@ type dateFromStringOp struct {
 }
 
 func newDateFromString(args ...any) (Operator, error) {
-	spec, ok := args[0].(*types.Document)
-	if len(args) != 1 || !ok {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDateFromStringNotObject,
-			"$dateFromString only supports an object as an argument", "$dateFromString")
-	}
-
 	op := new(dateFromStringOp)
-	var hasDateString, hasTimeZone bool
+	var hasTimeZone bool
 	var timeZone any
-	iter := spec.Iterator()
-	defer iter.Close()
-	for {
-		key, value, err := iter.Next()
-		if errors.Is(err, iterator.ErrIteratorDone) {
-			break
-		}
-		if err != nil {
-			return nil, err
-		}
-		switch key {
-		case "dateString":
-			op.dateString, hasDateString = value, true
-		case "format":
-			op.format, op.hasFormat = value, true
-		case "timezone":
-			timeZone, hasTimeZone = value, true
-		case "onNull":
-			op.onNull, op.hasOnNull = value, true
-		case "onError":
-			op.onError, op.hasOnError = value, true
-		default:
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDateFromStringBadField,
+	spec := argObject{
+		notObject: func(any) error {
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDateFromStringNotObject,
+				"$dateFromString only supports an object as an argument", "$dateFromString")
+		},
+		unknown: func(key string) error {
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDateFromStringBadField,
 				"Unrecognized argument to $dateFromString: "+key, "$dateFromString")
-		}
+		},
+		fields: []argField{
+			{name: "dateString", set: assign(&op.dateString, nil), missing: handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrDateFromStringNoInput, "Missing 'dateString' parameter to $dateFromString", "$dateFromString")},
+			{name: "format", set: assign(&op.format, &op.hasFormat)},
+			{name: "timezone", set: assign(&timeZone, &hasTimeZone)},
+			{name: "onNull", set: assign(&op.onNull, &op.hasOnNull)},
+			{name: "onError", set: assign(&op.onError, &op.hasOnError)},
+		},
 	}
-	if !hasDateString {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDateFromStringNoInput,
-			"Missing 'dateString' parameter to $dateFromString", "$dateFromString")
+	if err := spec.parse(args); err != nil {
+		return nil, err
 	}
 
 	var err error

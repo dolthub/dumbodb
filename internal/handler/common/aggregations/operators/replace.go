@@ -15,14 +15,12 @@
 package operators
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
-	"github.com/dolthub/dumbodb/internal/util/iterator"
 )
 
 // replaceOp represents { $replaceOne: { input, find, replacement } } and the
@@ -35,47 +33,27 @@ type replaceOp struct {
 // newReplace follows parseExpressionReplaceBase.
 func newReplace(opName string) func(args ...any) (Operator, error) {
 	return func(args ...any) (Operator, error) {
-		spec, ok := args[0].(*types.Document)
-		if len(args) != 1 || !ok {
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrReplaceNotObject,
-				fmt.Sprintf("%s requires an object as an argument, found: %s", opName, handlerparams.AliasFromType(args[0])), opName)
-		}
-
 		op := &replaceOp{opName: opName}
-		var hasInput, hasFind, hasReplacement bool
-		iter := spec.Iterator()
-		defer iter.Close()
-		for {
-			key, value, err := iter.Next()
-			if errors.Is(err, iterator.ErrIteratorDone) {
-				break
-			}
-			if err != nil {
-				return nil, err
-			}
-			switch key {
-			case "input":
-				op.input, hasInput = value, true
-			case "find":
-				op.find, hasFind = value, true
-			case "replacement":
-				op.replacement, hasReplacement = value, true
-			default:
-				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrReplaceUnknownField,
+		spec := argObject{
+			notObject: func(arg any) error {
+				return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrReplaceNotObject,
+					fmt.Sprintf("%s requires an object as an argument, found: %s", opName, handlerparams.AliasFromType(arg)), opName)
+			},
+			unknown: func(key string) error {
+				return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrReplaceUnknownField,
 					fmt.Sprintf("%s found an unknown argument: %s", opName, key), opName)
-			}
+			},
+			fields: []argField{
+				{name: "input", set: assign(&op.input, nil), missing: handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrReplaceNoInput, opName+" requires 'input' to be specified", opName)},
+				{name: "find", set: assign(&op.find, nil), missing: handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrReplaceNoFind, opName+" requires 'find' to be specified", opName)},
+				{name: "replacement", set: assign(&op.replacement, nil), missing: handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrReplaceNoReplacement, opName+" requires 'replacement' to be specified", opName)},
+			},
 		}
-
-		switch {
-		case !hasInput:
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrReplaceNoInput,
-				opName+" requires 'input' to be specified", opName)
-		case !hasFind:
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrReplaceNoFind,
-				opName+" requires 'find' to be specified", opName)
-		case !hasReplacement:
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrReplaceNoReplacement,
-				opName+" requires 'replacement' to be specified", opName)
+		if err := spec.parse(args); err != nil {
+			return nil, err
 		}
 		return op, nil
 	}

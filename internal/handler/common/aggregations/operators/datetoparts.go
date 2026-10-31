@@ -15,13 +15,11 @@
 package operators
 
 import (
-	"errors"
 	"fmt"
 
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
-	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
@@ -34,40 +32,27 @@ type dateToPartsOp struct {
 }
 
 func newDateToParts(args ...any) (Operator, error) {
-	spec, ok := args[0].(*types.Document)
-	if len(args) != 1 || !ok {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDateToPartsNotObject,
-			"$dateToParts only supports an object as its argument", "$dateToParts")
-	}
-
 	op := new(dateToPartsOp)
-	var hasDate, hasTimeZone bool
+	var hasTimeZone bool
 	var timeZone any
-	iter := spec.Iterator()
-	defer iter.Close()
-	for {
-		key, value, err := iter.Next()
-		if errors.Is(err, iterator.ErrIteratorDone) {
-			break
-		}
-		if err != nil {
-			return nil, err
-		}
-		switch key {
-		case "date":
-			op.date, hasDate = value, true
-		case "timezone":
-			timeZone, hasTimeZone = value, true
-		case "iso8601":
-			op.iso8601, op.hasISO = value, true
-		default:
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDateToPartsUnknownField,
+	spec := argObject{
+		notObject: func(any) error {
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDateToPartsNotObject,
+				"$dateToParts only supports an object as its argument", "$dateToParts")
+		},
+		unknown: func(key string) error {
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDateToPartsUnknownField,
 				"Unrecognized argument to $dateToParts: "+key, "$dateToParts")
-		}
+		},
+		fields: []argField{
+			{name: "date", set: assign(&op.date, nil), missing: handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrDateToPartsNoDate, "Missing 'date' parameter to $dateToParts", "$dateToParts")},
+			{name: "timezone", set: assign(&timeZone, &hasTimeZone)},
+			{name: "iso8601", set: assign(&op.iso8601, &op.hasISO)},
+		},
 	}
-	if !hasDate {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDateToPartsNoDate,
-			"Missing 'date' parameter to $dateToParts", "$dateToParts")
+	if err := spec.parse(args); err != nil {
+		return nil, err
 	}
 
 	var err error

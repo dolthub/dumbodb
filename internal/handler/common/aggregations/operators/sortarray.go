@@ -15,7 +15,6 @@
 package operators
 
 import (
-	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -24,7 +23,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
-	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/must"
 	"github.com/dolthub/dumbodb/internal/util/stdsort"
 )
@@ -45,44 +43,25 @@ type sortArrayField struct {
 
 // newSortArray follows ExpressionSortArray::parse.
 func newSortArray(args ...any) (Operator, error) {
-	spec, ok := args[0].(*types.Document)
-	if len(args) != 1 || !ok {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSortArrayNotObject,
-			"$sortArray requires an object as an argument, found: "+handlerparams.AliasFromType(args[0]), "$sortArray")
-	}
-
 	op := new(sortArrayOp)
-	var hasInput, hasSortBy bool
-	iter := spec.Iterator()
-	defer iter.Close()
-	for {
-		key, value, err := iter.Next()
-		if errors.Is(err, iterator.ErrIteratorDone) {
-			break
-		}
-		if err != nil {
-			return nil, err
-		}
-		switch key {
-		case "input":
-			op.input, hasInput = value, true
-		case "sortBy":
-			if err = op.parseSortBy(value); err != nil {
-				return nil, err
-			}
-			hasSortBy = true
-		default:
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSortArrayUnknownField,
+	spec := argObject{
+		notObject: func(arg any) error {
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSortArrayNotObject,
+				"$sortArray requires an object as an argument, found: "+handlerparams.AliasFromType(arg), "$sortArray")
+		},
+		unknown: func(key string) error {
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSortArrayUnknownField,
 				"$sortArray found an unknown argument: "+key, "$sortArray")
-		}
+		},
+		fields: []argField{
+			{name: "input", set: assign(&op.input, nil), missing: handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrSortArrayNoInput, "$sortArray requires 'input' to be specified", "$sortArray")},
+			{name: "sortBy", set: op.parseSortBy, missing: handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrSortArrayNoSortBy, "$sortArray requires 'sortBy' to be specified", "$sortArray")},
+		},
 	}
-	if !hasInput {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSortArrayNoInput,
-			"$sortArray requires 'input' to be specified", "$sortArray")
-	}
-	if !hasSortBy {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSortArrayNoSortBy,
-			"$sortArray requires 'sortBy' to be specified", "$sortArray")
+	if err := spec.parse(args); err != nil {
+		return nil, err
 	}
 	return op, nil
 }

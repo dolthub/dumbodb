@@ -26,7 +26,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
-	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/must"
 	"github.com/dolthub/dumbodb/internal/util/pcre"
 )
@@ -63,43 +62,26 @@ func (s *regexState) nullish() bool {
 // newRegex follows CommonRegexParse and ExpressionRegex::optimize.
 func newRegex(opName string) func(args ...any) (Operator, error) {
 	return func(args ...any) (Operator, error) {
-		spec, ok := args[0].(*types.Document)
-		if len(args) != 1 || !ok {
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrRegexNotObject,
-				fmt.Sprintf("%s expects an object of named arguments but found: %s", opName, handlerparams.AliasFromType(args[0])), opName)
-		}
-
 		op := &regexOp{opName: opName}
-		var hasInput, hasRegex bool
-		iter := spec.Iterator()
-		defer iter.Close()
-		for {
-			key, value, err := iter.Next()
-			if errors.Is(err, iterator.ErrIteratorDone) {
-				break
-			}
-			if err != nil {
-				return nil, err
-			}
-			switch key {
-			case "input":
-				op.input, hasInput = value, true
-			case "regex":
-				op.regex, hasRegex = value, true
-			case "options":
-				op.options, op.hasOptions = value, true
-			default:
-				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrRegexUnknownField,
+		spec := argObject{
+			notObject: func(arg any) error {
+				return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrRegexNotObject,
+					fmt.Sprintf("%s expects an object of named arguments but found: %s", opName, handlerparams.AliasFromType(arg)), opName)
+			},
+			unknown: func(key string) error {
+				return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrRegexUnknownField,
 					fmt.Sprintf("%s found an unknown argument: %s", opName, key), opName)
-			}
+			},
+			fields: []argField{
+				{name: "input", set: assign(&op.input, nil), missing: handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrRegexNoInput, opName+" requires 'input' parameter", opName)},
+				{name: "regex", set: assign(&op.regex, nil), missing: handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrRegexNoRegex, opName+" requires 'regex' parameter", opName)},
+				{name: "options", set: assign(&op.options, &op.hasOptions)},
+			},
 		}
-		if !hasInput {
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrRegexNoInput,
-				opName+" requires 'input' parameter", opName)
-		}
-		if !hasRegex {
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrRegexNoRegex,
-				opName+" requires 'regex' parameter", opName)
+		if err := spec.parse(args); err != nil {
+			return nil, err
 		}
 
 		if isConstantOperand(op.regex) && (!op.hasOptions || isConstantOperand(op.options)) {

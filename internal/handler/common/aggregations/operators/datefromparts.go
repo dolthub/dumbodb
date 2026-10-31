@@ -15,7 +15,6 @@
 package operators
 
 import (
-	"errors"
 	"fmt"
 	"math"
 	"time"
@@ -26,7 +25,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
-	"github.com/dolthub/dumbodb/internal/util/iterator"
 )
 
 // minDatePart and maxDatePart bound the month, day, hour, minute, isoWeek and
@@ -50,32 +48,22 @@ var dateFromPartsFields = []string{
 }
 
 func newDateFromParts(args ...any) (Operator, error) {
-	spec, ok := args[0].(*types.Document)
-	if len(args) != 1 || !ok {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDateFromPartsNotObject,
-			"$dateFromParts only supports an object as its argument", "$dateFromParts")
-	}
-
 	parts := map[string]any{}
-	iter := spec.Iterator()
-	defer iter.Close()
-	for {
-		key, value, err := iter.Next()
-		if errors.Is(err, iterator.ErrIteratorDone) {
-			break
-		}
-		if err != nil {
-			return nil, err
-		}
-		known := false
-		for _, field := range dateFromPartsFields {
-			known = known || key == field
-		}
-		if !known {
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDateFromPartsUnknownField,
+	spec := argObject{
+		notObject: func(any) error {
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDateFromPartsNotObject,
+				"$dateFromParts only supports an object as its argument", "$dateFromParts")
+		},
+		unknown: func(key string) error {
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDateFromPartsUnknownField,
 				"Unrecognized argument to $dateFromParts: "+key, "$dateFromParts")
-		}
-		parts[key] = value
+		},
+	}
+	for _, field := range dateFromPartsFields {
+		spec.fields = append(spec.fields, argField{name: field, set: func(v any) error { parts[field] = v; return nil }})
+	}
+	if err := spec.parse(args); err != nil {
+		return nil, err
 	}
 
 	has := func(field string) bool { _, ok := parts[field]; return ok }

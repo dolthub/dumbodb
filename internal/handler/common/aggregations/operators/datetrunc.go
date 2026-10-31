@@ -26,7 +26,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
-	"github.com/dolthub/dumbodb/internal/util/iterator"
 )
 
 // dateTruncOp is ExpressionDateTrunc: { $dateTrunc: { date, unit, binSize,
@@ -44,49 +43,31 @@ type dateTruncOp struct {
 }
 
 func newDateTrunc(args ...any) (Operator, error) {
-	spec, ok := args[0].(*types.Document)
-	if len(args) != 1 || !ok {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDateTruncNotObject,
-			"$dateTrunc only supports an object as its argument", "$dateTrunc")
-	}
-
 	op := new(dateTruncOp)
-	var hasDate, hasUnit, hasTimeZone bool
+	var hasTimeZone bool
 	var timeZone any
-	iter := spec.Iterator()
-	defer iter.Close()
-	for {
-		key, value, err := iter.Next()
-		if errors.Is(err, iterator.ErrIteratorDone) {
-			break
-		}
-		if err != nil {
-			return nil, err
-		}
-		switch key {
-		case "date":
-			op.date, hasDate = value, true
-		case "binSize":
-			op.binSize, op.hasBinSize = value, true
-		case "unit":
-			op.unit, hasUnit = value, true
-		case "timezone":
-			timeZone, hasTimeZone = value, true
-		case "startOfWeek":
-			op.startOfWeek, op.hasStartOfWeek = value, true
-		default:
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDateTruncBadField,
+	spec := argObject{
+		notObject: func(any) error {
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDateTruncNotObject,
+				"$dateTrunc only supports an object as its argument", "$dateTrunc")
+		},
+		unknown: func(key string) error {
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDateTruncBadField,
 				fmt.Sprintf("Unrecognized argument to $dateTrunc: %s. Expected arguments are date, unit, "+
 					"and optionally, binSize, timezone, startOfWeek", key), "$dateTrunc")
-		}
+		},
+		fields: []argField{
+			{name: "date", set: assign(&op.date, nil), missing: handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrDateTruncNoDate, "Missing 'date' parameter to $dateTrunc", "$dateTrunc")},
+			{name: "unit", set: assign(&op.unit, nil), missing: handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrDateTruncNoUnit, "Missing 'unit' parameter to $dateTrunc", "$dateTrunc")},
+			{name: "binSize", set: assign(&op.binSize, &op.hasBinSize)},
+			{name: "timezone", set: assign(&timeZone, &hasTimeZone)},
+			{name: "startOfWeek", set: assign(&op.startOfWeek, &op.hasStartOfWeek)},
+		},
 	}
-	if !hasDate {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDateTruncNoDate,
-			"Missing 'date' parameter to $dateTrunc", "$dateTrunc")
-	}
-	if !hasUnit {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDateTruncNoUnit,
-			"Missing 'unit' parameter to $dateTrunc", "$dateTrunc")
+	if err := spec.parse(args); err != nil {
+		return nil, err
 	}
 
 	var err error
