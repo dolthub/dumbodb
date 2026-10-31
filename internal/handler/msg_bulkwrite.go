@@ -530,7 +530,7 @@ func execBulkWriteUpdate(ctx context.Context, db backends.Database, c backends.C
 	defer closer.Close()
 	closer.Add(queryRes.Iter)
 
-	iter := common.FilterIterator(queryRes.Iter, closer, filter)
+	iter := common.FilterIterator(iterator.WithContext(ctx, queryRes.Iter), closer, filter)
 	if !multi {
 		iter = common.LimitIterator(iter, closer, 1)
 	}
@@ -586,6 +586,7 @@ func execBulkWriteDelete(ctx context.Context, c backends.Collection, op *types.D
 	if err != nil {
 		return bulkWriteOpResult{}, lazyerrors.Error(err)
 	}
+	queryRes.Iter = iterator.WithContext(ctx, queryRes.Iter)
 
 	var ids []any
 	for {
