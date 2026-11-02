@@ -1136,8 +1136,8 @@ func filterFieldRegex(fieldValue any, regex types.Regex) (bool, error) {
 		for i := 0; i < fieldValue.Len(); i++ {
 			switch arrValue := must.NotFail(fieldValue.Get(i)).(type) {
 			case string:
-				if re.MatchString(arrValue) {
-					return true, nil
+				if matched, err := re.MatchString(arrValue); err != nil || matched {
+					return matched, regexMatchError(err)
 				}
 			case types.Regex:
 				if types.Compare(arrValue, regex) == types.Equal {
@@ -1147,7 +1147,8 @@ func filterFieldRegex(fieldValue any, regex types.Regex) (bool, error) {
 		}
 
 	case string:
-		return re.MatchString(fieldValue), nil
+		matched, err := re.MatchString(fieldValue)
+		return matched, regexMatchError(err)
 
 	case types.Regex:
 		result := types.Compare(fieldValue, regex)
@@ -1155,6 +1156,19 @@ func filterFieldRegex(fieldValue any, regex types.Regex) (bool, error) {
 	}
 
 	return false, nil
+}
+
+// regexMatchError reports a filter regex that ran out of time. It must not
+// read as no match, which $not, $nin and $nor would turn into a match.
+func regexMatchError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return handlererrors.NewCommandErrorMsgWithArgument(
+		handlererrors.ErrRegexExecution,
+		"Error occurred while executing the regular expression in $regex: the match timed out",
+		"$regex",
+	)
 }
 
 // filterFieldExprRegex handles {field: {$regex: regexValue, $options: optionsValue}} filter.

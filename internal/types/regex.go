@@ -29,21 +29,22 @@ import (
 
 // Matcher is implemented by compiled regular expressions returned by Regex.Compile.
 type Matcher interface {
-	MatchString(s string) bool
+	// MatchString fails when the match runs out of time.
+	MatchString(s string) (bool, error)
 	String() string
 }
 
 // filterMatchTimeout bounds one match; regexp2 backtracks and can take
-// exponential time. A match that runs out of time counts as no match.
+// exponential time. mongod's PCRE2 match limit counts steps and reads as no
+// match; a wall-clock limit depends on load, so running out of it is an error.
 const filterMatchTimeout = 100 * time.Millisecond
 
 type regexp2Matcher struct {
 	re *regexp2.Regexp
 }
 
-func (m *regexp2Matcher) MatchString(s string) bool {
-	matched, _ := m.re.MatchString(s)
-	return matched
+func (m *regexp2Matcher) MatchString(s string) (bool, error) {
+	return m.re.MatchString(s)
 }
 
 func (m *regexp2Matcher) String() string {
