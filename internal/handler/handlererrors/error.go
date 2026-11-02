@@ -498,6 +498,10 @@ const (
 	// ErrConvertSubtypeColumn indicates a conversion to BinData subtype Column.
 	ErrConvertSubtypeColumn = ErrorCode(12910300) // Location12910300
 
+	// ErrRangeWindowDescendingSort indicates range-based window bounds over a
+	// descending sortBy.
+	ErrRangeWindowDescendingSort = ErrorCode(8947401) // Location8947401
+
 	// ErrSizeNotArray indicates that the argument to $size is not an array.
 	ErrSizeNotArray = ErrorCode(17124) // Location17124
 
