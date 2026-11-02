@@ -23,7 +23,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// Numeric strings parse in linear time (workspace-8tj.16, workspace-8tj.17).
+// Numeric strings parse in linear time.
 func TestNumericStringParsingIsLinear(t *testing.T) {
 	t.Parallel()
 
@@ -58,7 +58,7 @@ func TestNumericStringParsingIsLinear(t *testing.T) {
 	}
 }
 
-// Constant folding evaluates each operator once (workspace-8tj.20).
+// Constant folding evaluates each operator once.
 func TestConstantFoldingIsLinear(t *testing.T) {
 	t.Parallel()
 

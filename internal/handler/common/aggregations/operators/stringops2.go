@@ -191,7 +191,7 @@ func (op *substrCPOp) Process(doc *types.Document) (any, error) {
 	}
 
 	// A code point running past the end of s is invalid too; mongod reads
-	// beyond the string there (workspace-1eo).
+	// beyond the string there.
 	invalid := handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSubstrCPInvalidUTF8,
 		"$substrCP: invalid UTF-8 string", "$substrCP")
 	nextCodePoint := func(i int) (int, bool) {

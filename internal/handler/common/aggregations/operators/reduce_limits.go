@@ -35,7 +35,7 @@ const (
 	// maxReduceDepthCheckInterval caps the backoff, which mongod leaves
 	// unbounded. Without it an accumulator that holds its depth for a while
 	// can then nest millions of levels between checks and overflow the stack
-	// of later recursive comparisons (workspace-8tj.6).
+	// of later recursive comparisons.
 	maxReduceDepthCheckInterval = 1024
 )
 

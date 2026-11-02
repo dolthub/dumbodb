@@ -149,7 +149,7 @@ func (op *dateFromStringOp) Process(doc *types.Document) (any, error) {
 
 // maxDateStringLength bounds parsing cost. mongod has no limit, but a
 // string past it can only be valid by repeating tokens or padding, and the
-// parser costs about 3us per byte (workspace-8tj.11, deliberate deviation).
+// parser costs about 3us per byte.
 const maxDateStringLength = 4096
 
 func (op *dateFromStringOp) convert(dateString, format any, tz mongoTimeZone, tzNull bool) (any, error) {

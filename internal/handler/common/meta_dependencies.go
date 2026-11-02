@@ -49,8 +49,8 @@ func ValidatePipelineMetadata(stages []any) error {
 	hasText := first != nil && first.Command() == "$match" && filterHasText(must.NotFail(first.Get("$match")))
 	hasGeoNear := first != nil && first.Command() == "$geoNear"
 	if used["textScore"] && hasText {
-		// Fail rather than return a missing score that a client would sort on
-		// (workspace-gns).
+		// DumboDB has no text scoring. Fail rather than return a missing score
+		// that a client would sort on.
 		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrNotImplemented,
 			"text score metadata is not supported in aggregation", "$meta")
 	}

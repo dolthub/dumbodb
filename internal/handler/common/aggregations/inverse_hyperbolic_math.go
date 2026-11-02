@@ -27,7 +27,7 @@ import (
 //
 // glibc computes double asinh, acosh and atanh with fdlibm's formulas over
 // log1p, log and sqrt, ported here (math.Log1p is fdlibm's log1p; log is
-// correctly rounded, as glibc's nearly always is, see workspace-m8c.13).
+// correctly rounded, as glibc's nearly always is).
 // Decimal128 follows
 // bid128_asinh, bid128_acosh and bid128_atanh.
 

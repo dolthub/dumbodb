@@ -28,7 +28,7 @@ import (
 //
 // Doubles are correctly rounded from a high precision evaluation. glibc's
 // libm is nearly but not always correctly rounded, so a small fraction of
-// results differ from MongoDB's in the last digit (workspace-m8c.13). Decimal128
+// results differ from MongoDB's in the last digit. Decimal128
 // values follow the Intel decimal
 // floating point library MongoDB links (bid128_sin.c and friends): small
 // arguments take shortcuts, others are reduced modulo pi/2 in fixed point,

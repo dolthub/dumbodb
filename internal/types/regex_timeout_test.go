@@ -24,7 +24,7 @@ import (
 
 // Filter regexes run on a backtracking engine, so a pattern with
 // catastrophic backtracking is cut off by a time limit. Running out of time
-// is an error, never a result (workspace-8tj.21).
+// is an error, never a result.
 func TestRegexMatchIsTimeBounded(t *testing.T) {
 	m, err := Regex{Pattern: "^(?=(a+)+$)"}.Compile()
 	require.NoError(t, err)

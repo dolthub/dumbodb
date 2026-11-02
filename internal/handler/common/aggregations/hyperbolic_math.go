@@ -29,7 +29,7 @@ import (
 // glibc computes double sinh, cosh and tanh with fdlibm's formulas over expm1
 // and exp, which are not correctly rounded, so those formulas are ported here
 // (math.Expm1 is fdlibm's expm1; exp is correctly rounded, as glibc's nearly
-// always is, see workspace-m8c.13). Decimal128 follows bid128_sinh,
+// always is). Decimal128 follows bid128_sinh,
 // bid128_cosh and bid128_tanh.
 
 var (

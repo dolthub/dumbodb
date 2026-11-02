@@ -65,7 +65,7 @@ func TestSubstringOperatorsSurviveExtremeArguments(t *testing.T) {
 	}
 }
 
-// mongod reads past the string for a truncated code point (workspace-1eo);
+// mongod reads past the string for a truncated code point;
 // DumboDB reports invalid UTF-8 instead.
 func TestSubstrCPTruncatedCodePoint(t *testing.T) {
 	for _, tc := range []struct {

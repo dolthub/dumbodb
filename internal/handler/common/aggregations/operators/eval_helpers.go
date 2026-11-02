@@ -158,8 +158,7 @@ func checkConstantOperand(expr any) error {
 }
 
 // convertOperators are left unfolded: mongod's $project and find
-// projections do not report a failing constant conversion while parsing
-// (workspace-2vz).
+// projections do not report a failing constant conversion while parsing.
 var convertOperators = map[string]bool{
 	"$convert": true, "$toBool": true, "$toDate": true, "$toDecimal": true, "$toDouble": true,
 	"$toInt": true, "$toLong": true, "$toObjectId": true, "$toString": true, "$toUUID": true,
