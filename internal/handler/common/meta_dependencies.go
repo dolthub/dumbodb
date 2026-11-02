@@ -51,7 +51,7 @@ func ValidatePipelineMetadata(stages []any) error {
 		}
 		textScoreBeforeGroup = textScoreBeforeGroup || stageUsed["textScore"] && !grouped
 		switch doc.Command() {
-		case "$group", "$bucket", "$bucketAuto", "$sortByCount", "$count":
+		case "$group", "$bucket", "$bucketAuto", "$sortByCount", "$count", "$facet":
 			grouped = true
 		}
 	}
