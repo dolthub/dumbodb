@@ -749,7 +749,7 @@ func evaluateLetExpr(expr any, localDoc *types.Document) (any, error) {
 // A $match query only reads variables inside $expr.
 func substituteVarsInStage(stage *types.Document, vars map[string]any) *types.Document {
 	if len(vars) == 0 || stage.Len() != 1 || stage.Command() != "$match" {
-		return substituteVarsInDoc(stage, vars)
+		return substituteVarsInDoc(stage, vars, false)
 	}
 	query, ok := must.NotFail(stage.Get("$match")).(*types.Document)
 	if !ok {
@@ -764,7 +764,7 @@ func substituteVarsInQuery(query *types.Document, vars map[string]any) *types.Do
 		v := must.NotFail(query.Get(k))
 		switch k {
 		case "$expr":
-			v = substituteVarsInValue(v, vars)
+			v = substituteVarsInValue(v, vars, true)
 		case "$and", "$or", "$nor":
 			if arr, ok := v.(*types.Array); ok {
 				clauses := types.MakeArray(arr.Len())
@@ -786,7 +786,7 @@ func substituteVarsInQuery(query *types.Document, vars map[string]any) *types.Do
 // substituteVarsInDoc recursively replaces $$varName references in a document
 // with the corresponding values from vars, as literalOperand so that values
 // such as "$b" are not evaluated again.
-func substituteVarsInDoc(doc *types.Document, vars map[string]any) *types.Document {
+func substituteVarsInDoc(doc *types.Document, vars map[string]any, inExpr bool) *types.Document {
 	if len(vars) == 0 {
 		return doc
 	}
@@ -806,43 +806,46 @@ func substituteVarsInDoc(doc *types.Document, vars map[string]any) *types.Docume
 			break
 		}
 
-		result.Set(k, substituteVarsInValue(v, vars))
+		result.Set(k, substituteVarsInValue(v, vars, inExpr))
 	}
 
 	return result
 }
 
-// literalOperand returns an operand that evaluates to v. Only strings that
-// start with "$", documents and arrays need a $literal wrapper; evaluating
-// one costs a little on every document.
-func literalOperand(v any) any {
-	switch v := v.(type) {
-	case string:
-		if !strings.HasPrefix(v, "$") {
+// literalOperand returns an operand that evaluates to v. Inside $expr a bare
+// scalar other than a "$" string means itself, and skipping the $literal
+// saves an evaluation per document; elsewhere, such as in $project where 0
+// and true are flags, every value is wrapped.
+func literalOperand(v any, inExpr bool) any {
+	if inExpr {
+		switch v := v.(type) {
+		case string:
+			if !strings.HasPrefix(v, "$") {
+				return v
+			}
+		case *types.Document, *types.Array:
+		default:
 			return v
 		}
-	case *types.Document, *types.Array:
-	default:
-		return v
 	}
 	return must.NotFail(types.NewDocument("$literal", v))
 }
 
 // substituteVarsInValue recursively substitutes $$varName references in a value.
-func substituteVarsInValue(val any, vars map[string]any) any {
+func substituteVarsInValue(val any, vars map[string]any, inExpr bool) any {
 	switch v := val.(type) {
 	case string:
 		if strings.HasPrefix(v, "$$") {
 			varName := strings.TrimPrefix(v, "$$")
 			if resolved, ok := vars[varName]; ok {
-				return literalOperand(resolved)
+				return literalOperand(resolved, inExpr)
 			}
 		}
 
 		return v
 
 	case *types.Document:
-		return substituteVarsInDoc(v, vars)
+		return substituteVarsInDoc(v, vars, inExpr)
 
 	case *types.Array:
 		result := types.MakeArray(v.Len())
@@ -860,7 +863,7 @@ func substituteVarsInValue(val any, vars map[string]any) any {
 				break
 			}
 
-			result.Append(substituteVarsInValue(elem, vars))
+			result.Append(substituteVarsInValue(elem, vars, inExpr))
 		}
 
 		return result
