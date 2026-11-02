@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/FerretDB/wire"
 
@@ -125,10 +126,12 @@ func abortedTransactionError(doc *types.Document) error {
 }
 
 // isUncommittedChangesRefusal reports whether err is a version-control
-// command's refusal to run over uncommitted changes.
-func isUncommittedChangesRefusal(err error) bool {
+// command's refusal to run over uncommitted changes. Every dumbo* command and
+// its dolt* alias is a version-control command.
+func isUncommittedChangesRefusal(command string, err error) bool {
 	var ce *handlererrors.CommandError
-	return errors.As(err, &ce) && ce.Code() == handlererrors.ErrConflictingOperationInProgress
+	return (strings.HasPrefix(command, "dumbo") || strings.HasPrefix(command, "dolt")) &&
+		errors.As(err, &ce) && ce.Code() == handlererrors.ErrConflictingOperationInProgress
 }
 
 // writeErrorCommands are the commands whose ok replies can carry

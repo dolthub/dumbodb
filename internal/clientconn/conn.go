@@ -596,7 +596,7 @@ func (c *conn) route(connCtx context.Context, reqHeader *wire.MsgHeader, reqBody
 			// nothing it or earlier statements wrote can be committed. A
 			// version-control command refused over uncommitted changes wrote
 			// nothing, and the transaction's writes survive to its commit.
-			if !endsTxn && ci.InTransaction() && !isUncommittedChangesRefusal(err) &&
+			if !endsTxn && ci.InTransaction() && !isUncommittedChangesRefusal(command, err) &&
 				(err != nil || writeErrorCommands[command] && replyHasWriteErrors(resMsg)) {
 				c.h.AbortPendingTransaction(connCtx)
 			}
