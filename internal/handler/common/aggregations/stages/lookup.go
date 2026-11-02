@@ -454,6 +454,7 @@ func (l *lookup) Process(ctx context.Context, iter types.DocumentsIterator, clos
 
 	if l.pipeline != nil {
 		// Pipeline form: run the pipeline against the from collection for each input doc.
+		validatedMatches := map[int]bool{}
 		for _, doc := range docs {
 			candidates := fromDocs
 			if perDocField != "" {
@@ -465,7 +466,7 @@ func (l *lookup) Process(ctx context.Context, iter types.DocumentsIterator, clos
 				candidates = l.equalityMatches(doc, eqIdx)
 			}
 
-			matched, pErr := l.runPipeline(ctx, fetcher, candidates, doc)
+			matched, pErr := l.runPipeline(ctx, fetcher, candidates, doc, validatedMatches)
 			if pErr != nil {
 				return nil, pErr
 			}
@@ -552,7 +553,10 @@ func (l *lookup) perDocCandidates(ctx context.Context, fetcher CollectionFetcher
 	return fetcher.Fetch(ctx, l.from, must.NotFail(types.NewDocument(field, value)))
 }
 
-func (l *lookup) runPipeline(ctx context.Context, fetcher CollectionFetcher, fromDocs []*types.Document, localDoc *types.Document) ([]*types.Document, error) {
+// runPipeline runs the sub-pipeline for localDoc. validatedMatches, when not
+// nil, records the $match stages already validated for an earlier document;
+// let values cannot change a stage's shape, so those are not validated again.
+func (l *lookup) runPipeline(ctx context.Context, fetcher CollectionFetcher, fromDocs []*types.Document, localDoc *types.Document, validatedMatches map[int]bool) ([]*types.Document, error) {
 	vars, err := l.letBindings(localDoc)
 	if err != nil {
 		return nil, err
@@ -606,9 +610,17 @@ func (l *lookup) runPipeline(ctx context.Context, fetcher CollectionFetcher, fro
 			continue
 		}
 
-		stage, err := newSubPipelineStage(substituted, fetcher, SeesStoredDocuments(subStages, stageIndex))
-		if err != nil {
-			return nil, err
+		storedInput := SeesStoredDocuments(subStages, stageIndex)
+		var stage aggregations.Stage
+		if validatedMatches[stageIndex] {
+			stage = newValidatedMatchStage(substituted, storedInput)
+		} else {
+			if stage, err = newSubPipelineStage(substituted, fetcher, storedInput); err != nil {
+				return nil, err
+			}
+			if validatedMatches != nil && substituted.Command() == "$match" {
+				validatedMatches[stageIndex] = true
+			}
 		}
 
 		if !copied && substituted.Command() != "$match" {
@@ -772,7 +784,7 @@ func substituteVarsInQuery(query *types.Document, vars map[string]any) *types.Do
 }
 
 // substituteVarsInDoc recursively replaces $$varName references in a document
-// with the corresponding values from vars, wrapped in $literal so that values
+// with the corresponding values from vars, as literalOperand so that values
 // such as "$b" are not evaluated again.
 func substituteVarsInDoc(doc *types.Document, vars map[string]any) *types.Document {
 	if len(vars) == 0 {
@@ -800,6 +812,22 @@ func substituteVarsInDoc(doc *types.Document, vars map[string]any) *types.Docume
 	return result
 }
 
+// literalOperand returns an operand that evaluates to v. Only strings that
+// start with "$", documents and arrays need a $literal wrapper; evaluating
+// one costs a little on every document.
+func literalOperand(v any) any {
+	switch v := v.(type) {
+	case string:
+		if !strings.HasPrefix(v, "$") {
+			return v
+		}
+	case *types.Document, *types.Array:
+	default:
+		return v
+	}
+	return must.NotFail(types.NewDocument("$literal", v))
+}
+
 // substituteVarsInValue recursively substitutes $$varName references in a value.
 func substituteVarsInValue(val any, vars map[string]any) any {
 	switch v := val.(type) {
@@ -807,7 +835,7 @@ func substituteVarsInValue(val any, vars map[string]any) any {
 		if strings.HasPrefix(v, "$$") {
 			varName := strings.TrimPrefix(v, "$$")
 			if resolved, ok := vars[varName]; ok {
-				return must.NotFail(types.NewDocument("$literal", resolved))
+				return literalOperand(resolved)
 			}
 		}
 

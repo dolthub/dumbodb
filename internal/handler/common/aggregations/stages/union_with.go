@@ -119,7 +119,7 @@ func (u *unionWith) Process(ctx context.Context, iter types.DocumentsIterator, c
 			return nil, lazyerrors.Error(err)
 		}
 	}
-	unioned, err := u.sub.runPipeline(ctx, fetcher, fromDocs, types.MakeDocument(0))
+	unioned, err := u.sub.runPipeline(ctx, fetcher, fromDocs, types.MakeDocument(0), nil)
 	if err != nil {
 		return nil, err
 	}

@@ -24,6 +24,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // match represents $match stage.
@@ -58,6 +59,16 @@ func NewMatchStage(stage *types.Document, cmp *collation.Comparator, storedInput
 		common.CanonicalizeFilter(filter)
 	}
 	return &match{filter: filter, cmp: cmp}, nil
+}
+
+// newValidatedMatchStage is NewMatchStage for a $match stage whose filter
+// has already passed validation.
+func newValidatedMatchStage(stage *types.Document, storedInput bool) aggregations.Stage {
+	filter := must.NotFail(stage.Get("$match")).(*types.Document)
+	if storedInput {
+		common.CanonicalizeFilter(filter)
+	}
+	return &match{filter: filter}
 }
 
 func (m *match) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
