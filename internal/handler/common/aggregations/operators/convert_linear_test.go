@@ -41,9 +41,8 @@ func TestNumericStringParsingIsLinear(t *testing.T) {
 	}
 	for parserName, parse := range parsers {
 		for inputName, input := range inputs {
+			// Serial: parallel subtests holding large inputs skew each other's timings.
 			t.Run(parserName+"/"+inputName, func(t *testing.T) {
-				t.Parallel()
-
 				// Build each input once, so only parsing is timed.
 				built := map[int]string{}
 				lineartest.Assert(t, 10000, func(n int) {
