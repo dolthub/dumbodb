@@ -20,6 +20,7 @@ import (
 
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
@@ -34,6 +35,11 @@ type addFields struct {
 }
 
 func newAddFields(stage *types.Document) (aggregations.Stage, error) {
+	return newAddFieldsStage(stage, true)
+}
+
+// newAddFieldsStage folds constant subexpressions if fold is set.
+func newAddFieldsStage(stage *types.Document, fold bool) (aggregations.Stage, error) {
 	fields, err := stage.Get("$addFields")
 	if err != nil {
 		return nil, lazyerrors.Error(err)
@@ -54,6 +60,16 @@ func newAddFields(stage *types.Document) (aggregations.Stage, error) {
 
 	if err := validateExpression("$addFields", fieldsDoc); err != nil {
 		return nil, err
+	}
+
+	if err := common.ValidateAddFieldsExpressions("$addFields", fieldsDoc); err != nil {
+		return nil, err
+	}
+
+	if fold {
+		if err := operators.CheckConstantSubexpressions(fieldsDoc); err != nil {
+			return nil, err
+		}
 	}
 
 	return &addFields{

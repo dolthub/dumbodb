@@ -17,6 +17,7 @@ package operators
 import (
 	"fmt"
 
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
@@ -51,7 +52,7 @@ func (op *firstOp) Process(doc *types.Document) (any, error) {
 	}
 
 	if arr.Len() == 0 {
-		return types.Null, nil
+		return nil, aggregations.ErrMissingValue
 	}
 
 	first, err := arr.Get(0)
@@ -65,7 +66,7 @@ func (op *firstOp) Process(doc *types.Document) (any, error) {
 var _ Operator = (*firstOp)(nil)
 
 // When used outside of $group, $last acts as an array expression operator:
-//   - If the evaluated argument is an array, returns its last element (null if empty).
+//   - If the evaluated argument is an array, returns its last element (missing if empty).
 //   - If the evaluated argument is null/missing, returns null.
 //   - Otherwise returns the value as-is.
 type lastOp struct{ arg any }
@@ -96,7 +97,7 @@ func (op *lastOp) Process(doc *types.Document) (any, error) {
 
 	n := arr.Len()
 	if n == 0 {
-		return types.Null, nil
+		return nil, aggregations.ErrMissingValue
 	}
 
 	last, err := arr.Get(n - 1)

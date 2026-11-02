@@ -90,18 +90,11 @@ func (op *toLowerOp) Process(doc *types.Document) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	if isNullish(v) {
-		return types.Null, nil
+	s, err := coerceToString(v)
+	if err != nil {
+		return nil, err
 	}
-
-	s, ok := v.(string)
-	if !ok {
-		// non-string non-null: MongoDB returns ""
-		return "", nil
-	}
-
-	return strings.ToLower(s), nil
+	return asciiLower(s), nil
 }
 
 var _ Operator = (*toLowerOp)(nil)
@@ -132,18 +125,11 @@ func (op *toUpperOp) Process(doc *types.Document) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	if isNullish(v) {
-		return types.Null, nil
+	s, err := coerceToString(v)
+	if err != nil {
+		return nil, err
 	}
-
-	s, ok := v.(string)
-	if !ok {
-		// non-string non-null: MongoDB returns ""
-		return "", nil
-	}
-
-	return strings.ToUpper(s), nil
+	return asciiUpper(s), nil
 }
 
 var _ Operator = (*toUpperOp)(nil)

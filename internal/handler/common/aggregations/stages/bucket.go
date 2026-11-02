@@ -21,6 +21,7 @@ import (
 
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators/accumulators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -126,6 +127,10 @@ func newBucket(stage *types.Document) (aggregations.Stage, error) {
 				"$bucket (stage)",
 			)
 		}
+	}
+
+	if err := operators.CheckConstantSubexpressions(groupByVal); err != nil {
+		return nil, err
 	}
 
 	b := &bucket{

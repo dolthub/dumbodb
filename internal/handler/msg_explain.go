@@ -275,6 +275,7 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 		}
 
 		params.Filter, _ = aggregations.GetPushdownQuery(rawStages)
+		common.CanonicalizeFilter(params.Filter)
 		params.Aggregate = false
 		params.StagesDocs = nil
 	}
@@ -288,6 +289,7 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 
 	if params.Aggregate {
 		params.Filter, params.Sort = aggregations.GetPushdownQuery(params.StagesDocs)
+		common.CanonicalizeFilter(params.Filter)
 		params.Limit = pushdownLimit(params.StagesDocs)
 	}
 

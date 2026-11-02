@@ -257,17 +257,15 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			)
 		}
 
+		if err = documentsNotFirst(d, i); err != nil {
+			return nil, err
+		}
+
 		var s aggregations.Stage
 
 		switch d.Command() {
-		case "$lookup", "$graphLookup":
-			fetcher := foreignCollectionFetcher(db)
-
-			if d.Command() == "$graphLookup" {
-				s, err = stages.NewGraphLookupStage(d, fetcher)
-			} else {
-				s, err = stages.NewLookupStage(d, fetcher)
-			}
+		case "$lookup", "$graphLookup", "$unionWith", "$facet":
+			s, err = newForeignCollectionStage(d, db)
 
 		case "$out":
 			// $out requires database write access to replace a collection.
@@ -290,7 +288,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			// A stage doc with more than one field is invalid; defer to NewStage
 			// for that error rather than the single-field NewMatchStage.
 			if d.Len() == 1 {
-				s, err = stages.NewMatchStage(d, collCmp)
+				s, err = stages.NewMatchStage(d, collCmp, stages.SeesStoredDocuments(aggregationStages, i))
 			} else {
 				s, err = stages.NewStage(d)
 			}
@@ -323,6 +321,10 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			stagesDocuments = append(stagesDocuments, s)
 			collStatsDocuments = append(collStatsDocuments, s) // It's possible to apply any stage after $collStats stage
 		}
+	}
+
+	if err = common.ValidatePipelineMetadata(aggregationStages); err != nil {
+		return nil, err
 	}
 
 	// validate cursor after validating pipeline stages to keep compatibility
@@ -381,6 +383,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 
 	if len(collStatsDocuments) == len(stagesDocuments) {
 		filter, sort := aggregations.GetPushdownQuery(aggregationStages)
+		common.CanonicalizeFilter(filter)
 
 		// only documents stages or no stages - fetch documents from the DB and apply stages to them
 		qp := new(backends.QueryParams)
@@ -867,7 +870,21 @@ func (h *Handler) aggregateDocuments(connCtx context.Context, document, firstSta
 				document.Command(),
 			)
 		}
-		s, err := stages.NewStage(sd)
+		if err := documentsNotFirst(sd, i); err != nil {
+			return nil, err
+		}
+		var s aggregations.Stage
+		var err error
+		switch sd.Command() {
+		case "$lookup", "$graphLookup", "$unionWith", "$facet":
+			db, dbErr := h.b.Database(dbName)
+			if dbErr != nil {
+				return nil, lazyerrors.Error(dbErr)
+			}
+			s, err = newForeignCollectionStage(sd, db)
+		default:
+			s, err = stages.NewStage(sd)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -1044,7 +1061,9 @@ func processStagesDocuments(ctx context.Context, closer *iterator.MultiCloser, p
 
 	closer.Add(queryRes.Iter)
 
-	iter := queryRes.Iter
+	// Stages evaluate expressions per document; stop between documents once
+	// maxTimeMS expires or the client goes away.
+	iter := iterator.WithContext(ctx, queryRes.Iter)
 
 	for _, s := range p.stages {
 		if queryRes.Sorted && s == p.sortStage {
@@ -1464,4 +1483,16 @@ func buildMergeKey(doc *types.Document, fields []string) string {
 	}
 
 	return key
+}
+
+// documentsNotFirst is mongod's error for $documents after the first stage.
+func documentsNotFirst(stage *types.Document, i int) error {
+	if i == 0 || stage.Command() != "$documents" {
+		return nil
+	}
+	return handlererrors.NewCommandErrorMsgWithArgument(
+		handlererrors.ErrCollStatsIsNotFirstStage,
+		"$documents is only valid as the first stage in a pipeline",
+		"$documents",
+	)
 }

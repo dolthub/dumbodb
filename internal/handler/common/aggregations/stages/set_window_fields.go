@@ -24,6 +24,7 @@ import (
 
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
@@ -127,6 +128,9 @@ func newSetWindowFields(stage *types.Document) (aggregations.Stage, error) {
 	// Parse partitionBy (optional).
 	if spec.Has("partitionBy") {
 		pb := must.NotFail(spec.Get("partitionBy"))
+		if err := operators.CheckConstantSubexpressions(pb); err != nil {
+			return nil, err
+		}
 		swf.partitionBy = pb
 	}
 
@@ -180,6 +184,16 @@ func newSetWindowFields(stage *types.Document) (aggregations.Stage, error) {
 			return nil, parseErr
 		}
 
+		if wof.frame != nil && wof.frame.frameType == windowFrameRange && swf.sortBy != nil && swf.sortBy.Len() > 0 {
+			if order, _ := toFloat64(must.NotFail(swf.sortBy.Get(swf.sortBy.Keys()[0]))); order < 0 {
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrRangeWindowDescendingSort,
+					"Range-based bounds require an ascending sortBy",
+					"$setWindowFields (stage)",
+				)
+			}
+		}
+
 		swf.outputs = append(swf.outputs, wof)
 	}
 
@@ -210,6 +224,9 @@ func parseWindowOutputField(field string, spec *types.Document) (windowOutputFie
 
 		// This is the window operator.
 		wof.operator = k
+		if err = operators.CheckConstantSubexpressions(v); err != nil {
+			return wof, err
+		}
 
 		switch k {
 		case "$rank", "$denseRank", "$documentNumber", "$count", "$locf", "$linearFill":
@@ -614,7 +631,7 @@ func (s *setWindowFields) computeWindowValues(partition []*types.Document, wof w
 	switch wof.operator {
 	case "$documentNumber":
 		for i := range partition {
-			vals[i] = int64(i + 1)
+			vals[i] = windowCount(i + 1)
 		}
 
 	case "$rank":
@@ -639,7 +656,7 @@ func (s *setWindowFields) computeWindowValues(partition []*types.Document, wof w
 	case "$count":
 		for i := range partition {
 			window := s.windowDocs(wof.frame, i, partition)
-			vals[i] = int64(len(window))
+			vals[i] = windowCount(len(window))
 		}
 
 	case "$covariancePop", "$covarianceSamp":
@@ -805,7 +822,7 @@ func (s *setWindowFields) windowDocsRange(frame *windowFrame, i int, partition [
 	}
 
 	sortKey := s.sortBy.Keys()[0]
-	currentVal, _ := partition[i].Get(sortKey)
+	currentVal := sortByValue(partition[i], sortKey)
 
 	currentFloat, ok := toFloat64(currentVal)
 	if !ok {
@@ -839,7 +856,7 @@ func (s *setWindowFields) windowDocsRange(frame *windowFrame, i int, partition [
 	var result []*types.Document
 
 	for _, doc := range partition {
-		val, _ := doc.Get(sortKey)
+		val := sortByValue(doc, sortKey)
 
 		f, ok := toFloat64(val)
 		if !ok {
@@ -868,7 +885,7 @@ func (s *setWindowFields) validateSortByFieldIsDate(partition []*types.Document)
 	}
 
 	sortKey := s.sortBy.Keys()[0]
-	val, _ := partition[0].Get(sortKey)
+	val := sortByValue(partition[0], sortKey)
 
 	if _, ok := val.(time.Time); !ok {
 		return fmt.Errorf("not a date")
@@ -913,7 +930,7 @@ func (s *setWindowFields) validateSortByFieldIsNumericOrDate(partition []*types.
 	sortKey := s.sortBy.Keys()[0]
 
 	for _, doc := range partition {
-		val, _ := doc.Get(sortKey)
+		val := sortByValue(doc, sortKey)
 
 		switch val.(type) {
 		case float64, int32, int64, time.Time:
@@ -931,6 +948,15 @@ func (s *setWindowFields) validateSortByFieldIsNumericOrDate(partition []*types.
 	return nil
 }
 
+// windowCount returns a rank, document number or count the way mongod
+// emits it: int32, widening to int64 only past the int32 range.
+func windowCount(n int) any {
+	if n <= math.MaxInt32 {
+		return int32(n)
+	}
+	return int64(n)
+}
+
 // computeRank computes $rank or $denseRank values for all documents in a partition.
 func computeRank(partition []*types.Document, sortBy *types.Document, dense bool) []any {
 	n := len(partition)
@@ -940,33 +966,41 @@ func computeRank(partition []*types.Document, sortBy *types.Document, dense bool
 		return vals
 	}
 
-	rank := int64(1)
-	denseRankVal := int64(1)
-	vals[0] = int64(1)
+	denseRankVal := 1
+	vals[0] = windowCount(1)
 
 	for i := 1; i < n; i++ {
 		tied := isTied(partition[i-1], partition[i], sortBy)
 
 		if tied {
 			if dense {
-				vals[i] = denseRankVal
+				vals[i] = windowCount(denseRankVal)
 			} else {
 				vals[i] = vals[i-1]
 			}
 		} else {
-			// i+1 because rank is 1-based and i is 0-based current position.
-			rank = int64(i + 1)
 			denseRankVal++
 
 			if dense {
-				vals[i] = denseRankVal
+				vals[i] = windowCount(denseRankVal)
 			} else {
-				vals[i] = rank
+				// i+1 because rank is 1-based and i is 0-based current position.
+				vals[i] = windowCount(i + 1)
 			}
 		}
 	}
 
 	return vals
+}
+
+// sortByValue returns the value at the sortBy path key, or nil when missing.
+func sortByValue(doc *types.Document, key string) any {
+	path, err := types.NewPathFromString(key)
+	if err != nil {
+		return nil
+	}
+	v, _ := doc.GetByPath(path)
+	return v
 }
 
 // isTied returns true if two documents have the same sort key values.
@@ -976,8 +1010,8 @@ func isTied(a, b *types.Document, sortBy *types.Document) bool {
 	}
 
 	for _, key := range sortBy.Keys() {
-		aVal, _ := a.Get(key)
-		bVal, _ := b.Get(key)
+		aVal := sortByValue(a, key)
+		bVal := sortByValue(b, key)
 
 		if aVal == nil {
 			aVal = types.Null

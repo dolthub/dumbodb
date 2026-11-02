@@ -109,5 +109,7 @@ func GetFindParams(doc *types.Document, l *slog.Logger) (*FindParams, error) {
 		)
 	}
 
+	CanonicalizeFilter(params.Filter)
+
 	return &params, nil
 }

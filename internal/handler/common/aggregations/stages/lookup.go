@@ -26,6 +26,7 @@ import (
 
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
@@ -153,9 +154,9 @@ func NewLookupStage(stage *types.Document, fetcher CollectionFetcher) (aggregati
 		)
 	}
 
-	// "from" is required.
+	// "from" is required, unless the pipeline starts with $documents.
 	fromVal, err := specDoc.Get("from")
-	if err != nil {
+	if err != nil && !startsWithDocuments(specDoc) {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrFailedToParse,
 			"$lookup requires a 'from' option",
@@ -164,12 +165,17 @@ func NewLookupStage(stage *types.Document, fetcher CollectionFetcher) (aggregati
 	}
 
 	from, ok := fromVal.(string)
-	if !ok {
+	if err == nil && !ok {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrFailedToParse,
 			fmt.Sprintf("$lookup 'from' must be a string, got %s", types.FormatAnyValue(fromVal)),
 			"$lookup (stage)",
 		)
+	}
+	if err == nil {
+		if err = checkSubPipelineSource(from, specDoc, "$lookup"); err != nil {
+			return nil, err
+		}
 	}
 
 	// "as" is required.
@@ -425,7 +431,7 @@ func (l *lookup) Process(ctx context.Context, iter types.DocumentsIterator, clos
 	}
 
 	var fromDocs []*types.Document
-	if perDocField == "" {
+	if perDocField == "" && l.from != "" {
 		if fromDocs, err = fetcher.Fetch(ctx, l.from, fetchFilter); err != nil {
 			return nil, lazyerrors.Error(err)
 		}
@@ -433,7 +439,7 @@ func (l *lookup) Process(ctx context.Context, iter types.DocumentsIterator, clos
 
 	var eqIdx *equalityIndex
 	switch {
-	case l.localField == "":
+	case l.localField == "" || l.from == "":
 	case fetchFilter == nil:
 		// fromDocs is the cached whole collection; share its index with
 		// other lookups in this stage, such as nested ones.
@@ -448,6 +454,7 @@ func (l *lookup) Process(ctx context.Context, iter types.DocumentsIterator, clos
 
 	if l.pipeline != nil {
 		// Pipeline form: run the pipeline against the from collection for each input doc.
+		validatedMatches := map[int]bool{}
 		for _, doc := range docs {
 			candidates := fromDocs
 			if perDocField != "" {
@@ -459,7 +466,7 @@ func (l *lookup) Process(ctx context.Context, iter types.DocumentsIterator, clos
 				candidates = l.equalityMatches(doc, eqIdx)
 			}
 
-			matched, pErr := l.runPipeline(ctx, fetcher, candidates, doc)
+			matched, pErr := l.runPipeline(ctx, fetcher, candidates, doc, validatedMatches)
 			if pErr != nil {
 				return nil, pErr
 			}
@@ -524,7 +531,9 @@ func (l *lookup) letBindings(localDoc *types.Document) (map[string]any, error) {
 		if err != nil {
 			return nil, lazyerrors.Error(err)
 		}
-		vars[k] = evaluateLetExpr(v, localDoc)
+		if vars[k], err = evaluateLetExpr(v, localDoc); err != nil {
+			return nil, err
+		}
 	}
 }
 
@@ -537,14 +546,17 @@ func (l *lookup) perDocCandidates(ctx context.Context, fetcher CollectionFetcher
 		return nil, err
 	}
 	first := must.NotFail(l.pipeline.Get(0)).(*types.Document)
-	value, ok := leadingMatchEqualityValue(substituteVarsInDoc(first, vars), field)
+	value, ok := leadingMatchEqualityValue(substituteVarsInStage(first, vars), field)
 	if !ok {
 		return fetcher.Fetch(ctx, l.from, nil)
 	}
 	return fetcher.Fetch(ctx, l.from, must.NotFail(types.NewDocument(field, value)))
 }
 
-func (l *lookup) runPipeline(ctx context.Context, fetcher CollectionFetcher, fromDocs []*types.Document, localDoc *types.Document) ([]*types.Document, error) {
+// runPipeline runs the sub-pipeline for localDoc. validatedMatches, when not
+// nil, records the $match stages already validated for an earlier document;
+// let values cannot change a stage's shape, so those are not validated again.
+func (l *lookup) runPipeline(ctx context.Context, fetcher CollectionFetcher, fromDocs []*types.Document, localDoc *types.Document, validatedMatches map[int]bool) ([]*types.Document, error) {
 	vars, err := l.letBindings(localDoc)
 	if err != nil {
 		return nil, err
@@ -564,10 +576,11 @@ func (l *lookup) runPipeline(ctx context.Context, fetcher CollectionFetcher, fro
 	}
 
 	// Execute each pipeline stage.
+	subStages := must.NotFail(iterator.ConsumeValues(l.pipeline.Iterator()))
 	pipeIter := l.pipeline.Iterator()
 	defer pipeIter.Close()
 
-	for {
+	for stageIndex := 0; ; stageIndex++ {
 		_, stageVal, err := pipeIter.Next()
 		if errors.Is(err, iterator.ErrIteratorDone) {
 			break
@@ -587,19 +600,27 @@ func (l *lookup) runPipeline(ctx context.Context, fetcher CollectionFetcher, fro
 		}
 
 		// Substitute let variables into the stage spec.
-		substituted := substituteVarsInDoc(stageDoc, vars)
+		substituted := substituteVarsInStage(stageDoc, vars)
 
-		// Create the stage. $lookup is handled specially to pass the fetcher.
-		var stage aggregations.Stage
-
-		if substituted.Command() == "$lookup" {
-			stage, err = NewLookupStage(substituted, fetcher)
-		} else {
-			stage, err = NewStage(substituted)
+		if stageIndex == 0 && l.from == "" {
+			if current, err = evalDocuments(substituted); err != nil {
+				return nil, err
+			}
+			copied = true
+			continue
 		}
 
-		if err != nil {
-			return nil, err
+		storedInput := SeesStoredDocuments(subStages, stageIndex)
+		var stage aggregations.Stage
+		if validatedMatches[stageIndex] {
+			stage = newValidatedMatchStage(substituted, storedInput)
+		} else {
+			if stage, err = newSubPipelineStage(substituted, fetcher, storedInput); err != nil {
+				return nil, err
+			}
+			if validatedMatches != nil && substituted.Command() == "$match" {
+				validatedMatches[stageIndex] = true
+			}
 		}
 
 		if !copied && substituted.Command() != "$match" {
@@ -649,9 +670,13 @@ func leadingMatchEqualityValue(substitutedMatch *types.Document, field string) (
 	if !ok || gotField != field {
 		return nil, false
 	}
+	literal, isLiteral := value.(*types.Document)
+	if isLiteral = isLiteral && literal.Len() == 1 && literal.Command() == "$literal"; isLiteral {
+		value = must.NotFail(literal.Get("$literal"))
+	}
 	switch v := value.(type) {
 	case string:
-		if strings.HasPrefix(v, "$") {
+		if strings.HasPrefix(v, "$") && !isLiteral {
 			return nil, false
 		}
 	case int32, int64, bool, types.ObjectID, time.Time:
@@ -707,40 +732,61 @@ func leadingExprEquality(pipeline *types.Array) (field string, other any, ok boo
 	return "", nil, false
 }
 
-// evaluateLetExpr evaluates a let variable expression against a local document.
-// Expressions of the form "$fieldName" are resolved to the field value from localDoc.
-// Non-expression values are returned as-is.
-func evaluateLetExpr(expr any, localDoc *types.Document) any {
-	s, ok := expr.(string)
+// evaluateLetExpr evaluates a $lookup let value, any expression, against
+// localDoc; a missing result binds null.
+func evaluateLetExpr(expr any, localDoc *types.Document) (any, error) {
+	v, missing, err := operators.EvalOperand(expr, localDoc)
+	if err != nil {
+		return nil, err
+	}
+	if missing {
+		return types.Null, nil
+	}
+	return v, nil
+}
+
+// substituteVarsInStage substitutes let variables into a sub-pipeline stage.
+// A $match query only reads variables inside $expr.
+func substituteVarsInStage(stage *types.Document, vars map[string]any) *types.Document {
+	if len(vars) == 0 || stage.Len() != 1 || stage.Command() != "$match" {
+		return substituteVarsInDoc(stage, vars, false)
+	}
+	query, ok := must.NotFail(stage.Get("$match")).(*types.Document)
 	if !ok {
-		return expr
+		return stage
 	}
+	return must.NotFail(types.NewDocument("$match", substituteVarsInQuery(query, vars)))
+}
 
-	if !strings.HasPrefix(s, "$") {
-		return s
+func substituteVarsInQuery(query *types.Document, vars map[string]any) *types.Document {
+	result := types.MakeDocument(query.Len())
+	for _, k := range query.Keys() {
+		v := must.NotFail(query.Get(k))
+		switch k {
+		case "$expr":
+			v = substituteVarsInValue(v, vars, true)
+		case "$and", "$or", "$nor":
+			if arr, ok := v.(*types.Array); ok {
+				clauses := types.MakeArray(arr.Len())
+				for i := range arr.Len() {
+					clause := must.NotFail(arr.Get(i))
+					if d, isDoc := clause.(*types.Document); isDoc {
+						clause = substituteVarsInQuery(d, vars)
+					}
+					clauses.Append(clause)
+				}
+				v = clauses
+			}
+		}
+		result.Set(k, v)
 	}
-
-	// $$ prefix would be a variable reference  -- not valid in let values.
-	if strings.HasPrefix(s, "$$") {
-		return types.Null
-	}
-
-	fieldName := strings.TrimPrefix(s, "$")
-	if fieldName == "" {
-		return types.Null
-	}
-
-	val := getFieldValue(localDoc, fieldName)
-	if val == nil {
-		return types.Null
-	}
-
-	return val
+	return result
 }
 
 // substituteVarsInDoc recursively replaces $$varName references in a document
-// with the corresponding values from vars.
-func substituteVarsInDoc(doc *types.Document, vars map[string]any) *types.Document {
+// with the corresponding values from vars, as literalOperand so that values
+// such as "$b" are not evaluated again.
+func substituteVarsInDoc(doc *types.Document, vars map[string]any, inExpr bool) *types.Document {
 	if len(vars) == 0 {
 		return doc
 	}
@@ -760,27 +806,46 @@ func substituteVarsInDoc(doc *types.Document, vars map[string]any) *types.Docume
 			break
 		}
 
-		result.Set(k, substituteVarsInValue(v, vars))
+		result.Set(k, substituteVarsInValue(v, vars, inExpr))
 	}
 
 	return result
 }
 
+// literalOperand returns an operand that evaluates to v. Inside $expr a bare
+// scalar other than a "$" string means itself, and skipping the $literal
+// saves an evaluation per document; elsewhere, such as in $project where 0
+// and true are flags, every value is wrapped.
+func literalOperand(v any, inExpr bool) any {
+	if inExpr {
+		switch v := v.(type) {
+		case string:
+			if !strings.HasPrefix(v, "$") {
+				return v
+			}
+		case *types.Document, *types.Array:
+		default:
+			return v
+		}
+	}
+	return must.NotFail(types.NewDocument("$literal", v))
+}
+
 // substituteVarsInValue recursively substitutes $$varName references in a value.
-func substituteVarsInValue(val any, vars map[string]any) any {
+func substituteVarsInValue(val any, vars map[string]any, inExpr bool) any {
 	switch v := val.(type) {
 	case string:
 		if strings.HasPrefix(v, "$$") {
 			varName := strings.TrimPrefix(v, "$$")
 			if resolved, ok := vars[varName]; ok {
-				return resolved
+				return literalOperand(resolved, inExpr)
 			}
 		}
 
 		return v
 
 	case *types.Document:
-		return substituteVarsInDoc(v, vars)
+		return substituteVarsInDoc(v, vars, inExpr)
 
 	case *types.Array:
 		result := types.MakeArray(v.Len())
@@ -798,7 +863,7 @@ func substituteVarsInValue(val any, vars map[string]any) any {
 				break
 			}
 
-			result.Append(substituteVarsInValue(elem, vars))
+			result.Append(substituteVarsInValue(elem, vars, inExpr))
 		}
 
 		return result
@@ -995,3 +1060,54 @@ func equalityFetchFilter(docs []*types.Document, localField, foreignField string
 var (
 	_ aggregations.Stage = (*lookup)(nil)
 )
+
+// startsWithDocuments reports whether a $lookup spec's pipeline starts with
+// $documents, which supplies the documents instead of a collection.
+func startsWithDocuments(spec *types.Document) bool {
+	pipeline, _ := spec.Get("pipeline")
+	arr, ok := pipeline.(*types.Array)
+	if !ok || arr.Len() == 0 {
+		return false
+	}
+	first, ok := must.NotFail(arr.Get(0)).(*types.Document)
+	return ok && first.Command() == "$documents"
+}
+
+// checkSubPipelineSource rejects an explicitly named collection that is
+// empty or paired with a leading $documents, before any collection is read.
+func checkSubPipelineSource(coll string, spec *types.Document, stage string) error {
+	switch {
+	case coll == "":
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace,
+			"Invalid "+stage+" namespace: collection name cannot be empty", stage+" (stage)")
+	case startsWithDocuments(spec):
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace,
+			"'$documents' can only be run with {aggregate: 1}", "$documents (stage)")
+	}
+	return nil
+}
+
+// evalDocuments evaluates a $documents stage as mongod's desugaring does:
+// the value must be an array (5858203) of documents (40228).
+func evalDocuments(stage *types.Document) ([]*types.Document, error) {
+	v, _, err := operators.EvalOperand(must.NotFail(stage.Get("$documents")), types.MakeDocument(0))
+	if err != nil {
+		return nil, err
+	}
+	arr, ok := v.(*types.Array)
+	if !ok {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrUnwindNotArray,
+			"an array is expected", "$documents (stage)")
+	}
+	docs := make([]*types.Document, arr.Len())
+	for i := range docs {
+		d, ok := must.NotFail(arr.Get(i)).(*types.Document)
+		if !ok {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrReplaceRootNotObject,
+				"'replacement document' must evaluate to an object, but resulting value was: "+
+					types.FormatAnyValue(must.NotFail(arr.Get(i))), "$documents (stage)")
+		}
+		docs[i] = d
+	}
+	return docs, nil
+}

@@ -17,6 +17,7 @@ package operators
 import (
 	"fmt"
 	"math"
+	"strconv"
 	"time"
 
 	"github.com/cockroachdb/apd/v3"
@@ -38,26 +39,150 @@ func newAdd(args ...any) (Operator, error) {
 	return &addOp{args: args}, nil
 }
 
-// Process implements Operator. Returns the sum of all evaluated args.
-// Returns null if any arg evaluates to null.
-// Non-numeric values are ignored (treated as zero by SumNumbers).
+// Process follows ExpressionAdd::evaluate: arguments are checked left to
+// right, the first nullish one makes the sum null, and the first one that is
+// neither a number nor a date is an error.
 func (a *addOp) Process(doc *types.Document) (any, error) {
-	var values []any
-
+	var sum addState
 	for _, arg := range a.args {
 		v, err := evalArgValue(arg, doc)
 		if err != nil {
 			return nil, err
 		}
-
 		if isNullish(v) {
 			return types.Null, nil
 		}
+		if _, isDate := v.(time.Time); !isDate && !isNumber(v) {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrTypeMismatch,
+				fmt.Sprintf("$add only supports numeric or date types, not %s", handlerparams.AliasFromType(v)), "$add")
+		}
+		if err = sum.add(v); err != nil {
+			return nil, err
+		}
+	}
+	return sum.value(), nil
+}
 
-		values = append(values, v)
+// addState is MongoDB's AddState: long, double and decimal sums are kept so
+// the result has the narrowest type. Once a date is seen, the sum so far and
+// every later operand are added to its milliseconds.
+type addState struct {
+	longTotal    int64
+	doubleTotal  float64
+	decimalTotal *apd.Decimal
+	width        int
+	isDate       bool
+}
+
+func (s *addState) add(v any) error {
+	if d, ok := v.(time.Time); ok {
+		if s.isDate {
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrAddTwoDates,
+				"only one date allowed in an $add expression", "$add")
+		}
+		prior := s.value()
+		s.longTotal, s.isDate = 0, true
+		if err := s.addToDate(prior); err != nil {
+			return err
+		}
+		return s.addToDate(d.UnixMilli())
+	}
+	if s.isDate {
+		return s.addToDate(v)
 	}
 
-	return aggregations.SumNumbers(values...), nil
+	old := s.width
+	s.width = max(s.width, numericWidth(v))
+	if s.width != old {
+		switch {
+		case s.width == widthDouble:
+			s.doubleTotal = float64(s.longTotal)
+		case s.width == widthDecimal && old == widthDouble:
+			s.decimalTotal = aggregations.DoubleToAPD(s.doubleTotal)
+		case s.width == widthDecimal:
+			s.decimalTotal = apd.New(s.longTotal, 0)
+		}
+	}
+
+	switch s.width {
+	case widthDecimal:
+		operand, _ := aggregations.NumberToAPD(v)
+		s.decimalTotal = aggregations.DecimalAdd(s.decimalTotal, operand)
+	case widthDouble:
+		s.doubleTotal += toFloat64(v)
+	default:
+		n := toInt64(v)
+		if sum, overflowed := addInt64(s.longTotal, n); overflowed {
+			s.width = widthDouble
+			s.doubleTotal = float64(s.longTotal) + float64(n)
+		} else {
+			s.longTotal = sum
+		}
+	}
+	return nil
+}
+
+// addToDate is AddState::addToDateValue: doubles round half away from zero,
+// decimals half to even, and leaving the int64 range is an Overflow error.
+func (s *addState) addToDate(v any) error {
+	var n int64
+	switch v := v.(type) {
+	case int32:
+		n = int64(v)
+	case int64:
+		n = v
+	case float64:
+		if !(v >= math.MinInt64 && v < math.MaxInt64) {
+			return errDateOverflow()
+		}
+		n = int64(math.Round(v))
+	case types.Decimal128:
+		rounded := new(apd.Decimal)
+		ctx := aggregations.DecimalWorkContext()
+		ctx.Rounding = apd.RoundHalfEven
+		if _, err := ctx.RoundToIntegralValue(rounded, aggregations.DecimalToAPD(v)); err != nil {
+			return errDateOverflow()
+		}
+		var err error
+		if n, err = rounded.Int64(); err != nil {
+			return errDateOverflow()
+		}
+	}
+
+	sum, overflowed := addInt64(s.longTotal, n)
+	if overflowed {
+		return errDateOverflow()
+	}
+	s.longTotal = sum
+	return nil
+}
+
+func errDateOverflow() error {
+	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrOverflow, "date overflow", "$add")
+}
+
+func (s *addState) value() any {
+	if s.isDate {
+		return time.UnixMilli(s.longTotal).UTC()
+	}
+	switch s.width {
+	case widthDecimal:
+		return aggregations.APDToDecimal128(s.decimalTotal)
+	case widthDouble:
+		return s.doubleTotal
+	case widthLong:
+		return s.longTotal
+	default:
+		if s.longTotal >= math.MinInt32 && s.longTotal <= math.MaxInt32 {
+			return int32(s.longTotal)
+		}
+		return s.longTotal
+	}
+}
+
+func addInt64(a, b int64) (int64, bool) {
+	sum := a + b
+	return sum, (b > 0 && sum < a) || (b < 0 && sum > a)
 }
 
 var _ Operator = (*addOp)(nil)
@@ -257,6 +382,13 @@ func toFloat64(v any) float64 {
 		return float64(n)
 	case int64:
 		return float64(n)
+	case types.Decimal128:
+		if f, err := decimalToDouble(n); err == nil {
+			return f.(float64)
+		}
+		// Out of double range: saturate to an infinity or zero.
+		f, _ := strconv.ParseFloat(aggregations.DecimalToAPD(n).String(), 64)
+		return f
 	}
 
 	return 0

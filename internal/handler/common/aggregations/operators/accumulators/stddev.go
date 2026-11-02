@@ -16,6 +16,7 @@ package accumulators
 
 import (
 	"math"
+	"strconv"
 
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
@@ -23,8 +24,7 @@ import (
 )
 
 type stdDevPopAccumulator struct {
-	expression *aggregations.Expression
-	number     any
+	arg operand
 }
 
 func newStdDevPop(args ...any) (Accumulator, error) {
@@ -36,30 +36,20 @@ func newStdDevPop(args ...any) (Accumulator, error) {
 		)
 	}
 
-	accumulator := new(stdDevPopAccumulator)
-
-	switch arg := args[0].(type) {
-	case string:
-		var err error
-		if accumulator.expression, err = aggregations.NewExpression(arg, nil); err != nil {
-			accumulator.number = int32(0)
-		}
-	case float64, int32, int64:
-		accumulator.number = arg
-	default:
-		accumulator.number = int32(0)
+	arg, err := newOperand(args[0])
+	if err != nil {
+		return nil, err
 	}
 
-	return accumulator, nil
+	return &stdDevPopAccumulator{arg: arg}, nil
 }
 
 func (s *stdDevPopAccumulator) New() Accumulation {
-	return &stdDevState{expression: s.expression, number: s.number, sample: false}
+	return &stdDevState{arg: s.arg, sample: false}
 }
 
 type stdDevSampAccumulator struct {
-	expression *aggregations.Expression
-	number     any
+	arg operand
 }
 
 func newStdDevSamp(args ...any) (Accumulator, error) {
@@ -71,25 +61,16 @@ func newStdDevSamp(args ...any) (Accumulator, error) {
 		)
 	}
 
-	accumulator := new(stdDevSampAccumulator)
-
-	switch arg := args[0].(type) {
-	case string:
-		var err error
-		if accumulator.expression, err = aggregations.NewExpression(arg, nil); err != nil {
-			accumulator.number = int32(0)
-		}
-	case float64, int32, int64:
-		accumulator.number = arg
-	default:
-		accumulator.number = int32(0)
+	arg, err := newOperand(args[0])
+	if err != nil {
+		return nil, err
 	}
 
-	return accumulator, nil
+	return &stdDevSampAccumulator{arg: arg}, nil
 }
 
 func (s *stdDevSampAccumulator) New() Accumulation {
-	return &stdDevState{expression: s.expression, number: s.number, sample: true}
+	return &stdDevState{arg: s.arg, sample: true}
 }
 
 // stdDevState collects numeric values for a group and computes the standard
@@ -97,24 +78,15 @@ func (s *stdDevSampAccumulator) New() Accumulation {
 // numerical parity, so this accumulator holds the group's numeric values (not
 // its documents). A numerically-stable online variant is a future optimization.
 type stdDevState struct {
-	expression *aggregations.Expression
-	number     any
-	sample     bool
-	nums       []float64
+	arg    operand
+	sample bool
+	nums   []float64
 }
 
 func (s *stdDevState) Accumulate(doc *types.Document) error {
-	var val any
-
-	if s.expression != nil {
-		v, evalErr := s.expression.Evaluate(doc)
-		if evalErr != nil {
-			return nil
-		}
-
-		val = v
-	} else {
-		val = s.number
+	val, missing, err := s.arg.evaluate(doc)
+	if err != nil || missing {
+		return err
 	}
 
 	switch v := val.(type) {
@@ -124,6 +96,9 @@ func (s *stdDevState) Accumulate(doc *types.Document) error {
 		s.nums = append(s.nums, float64(v))
 	case int64:
 		s.nums = append(s.nums, float64(v))
+	case types.Decimal128:
+		f, _ := strconv.ParseFloat(aggregations.DecimalToAPD(v).String(), 64)
+		s.nums = append(s.nums, f)
 	}
 
 	return nil

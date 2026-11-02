@@ -15,20 +15,12 @@
 package accumulators
 
 import (
-	"strings"
-
-	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
-	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
-	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 type pushAccumulator struct {
-	expression *aggregations.Expression
-	constant   any
-	isConst    bool
-	docExpr    *types.Document // non-nil when $push arg is a document template expression
+	arg operand
 }
 
 func newPush(args ...any) (Accumulator, error) {
@@ -40,25 +32,12 @@ func newPush(args ...any) (Accumulator, error) {
 		)
 	}
 
-	accumulator := new(pushAccumulator)
-
-	switch arg := args[0].(type) {
-	case string:
-		var err error
-		if accumulator.expression, err = aggregations.NewExpression(arg, nil); err != nil {
-			accumulator.constant = arg
-			accumulator.isConst = true
-		}
-	case *types.Document:
-		// Document expressions (e.g. { amount: "$price", date: "$ord_date" }) must be
-		// evaluated per input document, not stored as a constant.
-		accumulator.docExpr = arg
-	default:
-		accumulator.constant = arg
-		accumulator.isConst = true
+	arg, err := newOperand(args[0])
+	if err != nil {
+		return nil, err
 	}
 
-	return accumulator, nil
+	return &pushAccumulator{arg: arg}, nil
 }
 
 func (p *pushAccumulator) New() Accumulation {
@@ -72,24 +51,11 @@ type pushState struct {
 	result *types.Array
 }
 
+// Accumulate appends the operand's value; MongoDB's $push skips a missing one.
 func (s *pushState) Accumulate(doc *types.Document) error {
-	p := s.spec
-
-	if p.docExpr != nil {
-		s.result.Append(evalDocTemplateExpr(p.docExpr, doc))
-		return nil
-	}
-
-	if p.isConst {
-		s.result.Append(p.constant)
-		return nil
-	}
-
-	val, evalErr := p.expression.Evaluate(doc)
-	if evalErr != nil {
-		// missing field: push null
-		s.result.Append(types.Null)
-		return nil
+	val, missing, err := s.spec.arg.evaluate(doc)
+	if err != nil || missing {
+		return err
 	}
 
 	s.result.Append(val)
@@ -99,64 +65,6 @@ func (s *pushState) Accumulate(doc *types.Document) error {
 
 func (s *pushState) Result() (any, error) {
 	return s.result, nil
-}
-
-// evalDocTemplateExpr evaluates a document template expression against an input document.
-// Each value in the template is evaluated:
-//   - Operator documents (e.g. {$add: [...]}) are processed via the operator.
-//   - String field references (e.g. "$price") are resolved against doc.
-//   - All other values are used as literals.
-//
-// Missing field references result in a null entry (MongoDB behavior).
-func evalDocTemplateExpr(tmpl, doc *types.Document) *types.Document {
-	if operators.IsOperator(tmpl) {
-		op, err := operators.NewOperator(tmpl)
-		if err != nil {
-			return types.MakeDocument(0)
-		}
-
-		val, err := op.Process(doc)
-		if err != nil {
-			return types.MakeDocument(0)
-		}
-
-		if d, ok := val.(*types.Document); ok {
-			return d
-		}
-
-		return types.MakeDocument(0)
-	}
-
-	result := types.MakeDocument(0)
-
-	for _, key := range tmpl.Keys() {
-		val := must.NotFail(tmpl.Get(key))
-
-		switch v := val.(type) {
-		case string:
-			if strings.HasPrefix(v, "$") {
-				expr, err := aggregations.NewExpression(v, nil)
-				if err == nil {
-					evaluated, evalErr := expr.Evaluate(doc)
-					if evalErr == nil {
-						result.Set(key, evaluated)
-					} else {
-						result.Set(key, types.Null)
-					}
-
-					continue
-				}
-			}
-
-			result.Set(key, val)
-		case *types.Document:
-			result.Set(key, evalDocTemplateExpr(v, doc))
-		default:
-			result.Set(key, val)
-		}
-	}
-
-	return result
 }
 
 var (

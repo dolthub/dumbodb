@@ -92,6 +92,11 @@ func (iter *addFieldsIterator) Next() (struct{}, *types.Document, error) {
 			}
 
 			val, err = op.Process(doc)
+			if errors.Is(err, operators.ErrMissingValue) {
+				// A missing value removes the field, as in MongoDB.
+				doc.Remove(key)
+				continue
+			}
 			if err = processAddFieldsError(err); err != nil {
 				return unused, nil, err
 			}
@@ -105,7 +110,8 @@ func (iter *addFieldsIterator) Next() (struct{}, *types.Document, error) {
 					if evalErr == nil {
 						val = evaluated
 					} else {
-						// Field not found: omit this field (MongoDB $set/$addFields behavior).
+						// A missing value removes the field, as in MongoDB.
+						doc.Remove(key)
 						continue
 					}
 				}
@@ -126,6 +132,11 @@ func (iter *addFieldsIterator) Close() {
 // processAddFieldsError takes internal error related to operator evaluation and
 // returns proper CommandError that can be returned by $addFields aggregation stage.
 func processAddFieldsError(err error) error {
+	return stageExpressionError(err, "$addFields")
+}
+
+// stageExpressionError is processAddFieldsError for stage, $addFields or $set.
+func stageExpressionError(err error, stage string) error {
 	if err == nil {
 		return nil
 	}
@@ -140,33 +151,33 @@ func processAddFieldsError(err error) error {
 	case operators.ErrTooManyFields:
 		return handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrAddFieldsExpressionWrongAmountOfArgs,
-			"Invalid $addFields :: caused by :: FieldPath field names may not start with '$'."+
+			"Invalid "+stage+" :: caused by :: FieldPath field names may not start with '$'."+
 				" Consider using $getField or $setField.",
-			"$addFields (stage)",
+			stage+" (stage)",
 		)
 	case operators.ErrNotImplemented:
 		return handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrNotImplemented,
-			"Invalid $addFields :: caused by :: "+opErr.Error(),
-			"$addFields (stage)",
+			"Invalid "+stage+" :: caused by :: "+opErr.Error(),
+			stage+" (stage)",
 		)
 	case operators.ErrArgsInvalidLen:
 		return handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrOperatorWrongLenOfArgs,
-			"Invalid $addFields :: caused by :: "+opErr.Error(),
-			"$addFields (stage)",
+			"Invalid "+stage+" :: caused by :: "+opErr.Error(),
+			stage+" (stage)",
 		)
 	case operators.ErrInvalidExpression:
 		return handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrInvalidPipelineOperator,
-			"Invalid $addFields :: caused by :: "+opErr.Error(),
-			"$addFields (stage)",
+			"Invalid "+stage+" :: caused by :: "+opErr.Error(),
+			stage+" (stage)",
 		)
 	case operators.ErrInvalidNestedExpression:
 		return handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrInvalidPipelineOperator,
-			"Invalid $addFields :: caused by :: "+opErr.Error(),
-			"$addFields (stage)",
+			"Invalid "+stage+" :: caused by :: "+opErr.Error(),
+			stage+" (stage)",
 		)
 	default:
 		return lazyerrors.Error(err)
@@ -176,3 +187,31 @@ func processAddFieldsError(err error) error {
 var (
 	_ types.DocumentsIterator = (*addFieldsIterator)(nil)
 )
+
+// ValidateAddFieldsExpressions returns the parse errors MongoDB raises for the
+// operator expressions in a $addFields or $set specification.
+func ValidateAddFieldsExpressions(stage string, spec *types.Document) error {
+	for _, v := range spec.Values() {
+		if err := validateSpecValue(stage, v); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateSpecValue(stage string, v any) error {
+	switch v := v.(type) {
+	case *types.Array:
+		for i := range v.Len() {
+			if err := validateSpecValue(stage, must.NotFail(v.Get(i))); err != nil {
+				return err
+			}
+		}
+	case *types.Document:
+		if operators.IsOperator(v) {
+			return stageExpressionError(operators.CheckExpressionShape(v), stage)
+		}
+		return ValidateAddFieldsExpressions(stage, v)
+	}
+	return nil
+}

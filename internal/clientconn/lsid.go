@@ -18,8 +18,14 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"strings"
 
+	"github.com/FerretDB/wire"
+
+	"github.com/dolthub/dumbodb/internal/bson"
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
@@ -103,4 +109,62 @@ func extractAndSetTransactionFlag(ctx context.Context, doc *types.Document) (sta
 	}
 
 	return started
+}
+
+// abortedTransactionError is mongod's error for a statement in a
+// transaction that an earlier failure aborted.
+func abortedTransactionError(doc *types.Document) error {
+	msg := "Transaction has been aborted."
+	if n, err := doc.Get("txnNumber"); err == nil {
+		msg = fmt.Sprintf("Transaction with { txnNumber: %v } has been aborted.", n)
+	}
+	return handlererrors.NewCommandErrorWithLabels(
+		handlererrors.ErrNoSuchTransaction,
+		errors.New(msg),
+		handlererrors.TransientTransactionErrorLabel,
+	)
+}
+
+// isUncommittedChangesRefusal reports whether err is a version-control
+// command's refusal to run over uncommitted changes. Every dumbo* command and
+// its dolt* alias is a version-control command.
+func isUncommittedChangesRefusal(command string, err error) bool {
+	var ce *handlererrors.CommandError
+	return (strings.HasPrefix(command, "dumbo") || strings.HasPrefix(command, "dolt")) &&
+		errors.As(err, &ce) && ce.Code() == handlererrors.ErrConflictingOperationInProgress
+}
+
+// writeErrorCommands are the commands whose ok replies can carry
+// writeErrors.
+var writeErrorCommands = map[string]bool{"insert": true, "update": true, "delete": true, "bulkWrite": true}
+
+// replyHasWriteErrors reports whether a successful write command's reply
+// carries writeErrors, or a bulkWrite reply nErrors, which also abort a
+// transaction in mongod.
+func replyHasWriteErrors(resMsg *wire.OpMsg) bool {
+	if resMsg == nil {
+		return false
+	}
+	raw, err := resMsg.RawDocument()
+	if err != nil {
+		return false
+	}
+	doc, err := bson.DecodeRawDocument(raw)
+	if err != nil {
+		return false
+	}
+	if nErrors, err := doc.Get("nErrors"); err == nil {
+		switch n := nErrors.(type) {
+		case int32:
+			return n > 0
+		case int64:
+			return n > 0
+		}
+	}
+	writeErrors, err := doc.Get("writeErrors")
+	if err != nil {
+		return false
+	}
+	arr, ok := writeErrors.(*types.Array)
+	return ok && arr.Len() > 0
 }

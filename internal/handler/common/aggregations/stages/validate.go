@@ -87,21 +87,39 @@ func validateArrayExpression(stage string, arr *types.Array) error {
 	}
 }
 
-// validateFieldPath validates each key of fields, it returns error if a field name starts with `$`.
-// Command Errors:
-//   - ErrFieldPathInvalidName
+// validateFieldPath checks the field names of a $set or $addFields stage.
 func validateFieldPath(stage string, fieldsDoc *types.Document) error {
 	for _, key := range fieldsDoc.Keys() {
-		if strings.HasPrefix(key, "$") {
-			return handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrFieldPathInvalidName,
-				fmt.Sprintf(
-					"Invalid %s :: caused by :: FieldPath field names may not start with '$'. "+
-						"Consider using $getField or $setField.",
-					stage,
-				),
-				fmt.Sprintf("%s (stage)", stage),
-			)
+		if err := checkFieldPath(stage, key); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// checkFieldPath returns the error mongod's FieldPath raises for field, in
+// the order it checks.
+func checkFieldPath(stage, field string) error {
+	fail := func(code handlererrors.ErrorCode, reason string) error {
+		return handlererrors.NewCommandErrorMsgWithArgument(code,
+			fmt.Sprintf("Invalid %s :: caused by :: %s", stage, reason), stage+" (stage)")
+	}
+
+	switch {
+	case field == "":
+		return fail(handlererrors.ErrEmptyFieldPath, "FieldPath cannot be constructed with empty string")
+	case strings.HasSuffix(field, "."):
+		return fail(handlererrors.ErrInvalidFieldPath, "FieldPath must not end with a '.'.")
+	}
+
+	for _, name := range strings.Split(field, ".") {
+		switch {
+		case name == "":
+			return fail(handlererrors.ErrPathContainsEmptyElement, "FieldPath field names may not be empty strings.")
+		case strings.HasPrefix(name, "$"):
+			return fail(handlererrors.ErrFieldPathInvalidName,
+				"FieldPath field names may not start with '$'. Consider using $getField or $setField.")
 		}
 	}
 

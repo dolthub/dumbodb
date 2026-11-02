@@ -27,7 +27,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
-	stageProjection "github.com/dolthub/dumbodb/internal/handler/common/aggregations/stages/projection"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -129,7 +128,7 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 		var mutations []backends.FieldMutation
 
 		if param.IsPipeline {
-			modified, err = processPipelineUpdate(doc, param.Pipeline)
+			modified, err = processPipelineUpdate(ctx, doc, param.PipelineStages)
 			// Like other errors applying an update, an expression error is a
 			// write error of update and a command error of findAndModify.
 			var cmdErr *handlererrors.CommandError
@@ -260,217 +259,83 @@ func processFilterEqualityCondition(doc, filter *types.Document) error {
 	}
 }
 
-// processPipelineUpdate applies a pipeline-style update ([]bson.D / *types.Array) to the document.
-// Each element of the pipeline is a stage document with a single key like "$set", "$unset",
-// "$addFields", or "$project".
+// parseUpdatePipeline builds the aggregation stages of a pipeline-style
+// update. The stages package registers it, as it imports this one.
+var parseUpdatePipeline func(pipeline *types.Array) ([]aggregations.Stage, error)
+
+// RegisterUpdatePipelineParser sets the parser ParseUpdatePipeline uses.
+func RegisterUpdatePipelineParser(parse func(pipeline *types.Array) ([]aggregations.Stage, error)) {
+	parseUpdatePipeline = parse
+}
+
+// ParseUpdatePipeline returns the stages of a pipeline-style update, or the
+// parse error MongoDB raises for it.
+func ParseUpdatePipeline(pipeline *types.Array) ([]aggregations.Stage, error) {
+	return parseUpdatePipeline(pipeline)
+}
+
+// processPipelineUpdate runs doc through the stages of a pipeline-style
+// update, replacing its fields with the result.
 // Returns true if the document is changed.
-func processPipelineUpdate(doc *types.Document, pipeline *types.Array) (bool, error) {
+func processPipelineUpdate(ctx context.Context, doc *types.Document, stages []aggregations.Stage) (bool, error) {
 	before := doc.DeepCopy()
 
-	for i := range pipeline.Len() {
-		stage := must.NotFail(pipeline.Get(i)).(*types.Document)
-		stageName := stage.Keys()[0]
-		stageVal := must.NotFail(stage.Get(stageName))
+	closer := iterator.NewMultiCloser()
+	defer closer.Close()
 
-		switch stageName {
-		case "$set", "$addFields":
-			fieldsDoc, ok := stageVal.(*types.Document)
-			if !ok {
-				return false, fmt.Errorf("pipeline stage %q must be an object", stageName)
-			}
-
-			for _, key := range fieldsDoc.Keys() {
-				val := must.NotFail(fieldsDoc.Get(key))
-
-				if valDoc, ok := val.(*types.Document); ok {
-					if operators.IsOperator(valDoc) {
-						op, err := operators.NewOperator(valDoc)
-						if err != nil {
-							return false, lazyerrors.Error(err)
-						}
-
-						val, err = op.Process(doc)
-						if err != nil {
-							return false, lazyerrors.Error(err)
-						}
-					}
-				}
-
-				path := must.NotFail(types.NewPathFromString(key))
-				if err := doc.SetByPath(path, val); err != nil {
-					return false, lazyerrors.Error(err)
-				}
-			}
-
-		case "$unset":
-			var fields []string
-
-			switch u := stageVal.(type) {
-			case string:
-				fields = []string{u}
-			case *types.Array:
-				for j := range u.Len() {
-					f, ok := must.NotFail(u.Get(j)).(string)
-					if !ok {
-						return false, fmt.Errorf("$unset array elements must be strings")
-					}
-
-					fields = append(fields, f)
-				}
-			default:
-				return false, fmt.Errorf("$unset stage value must be a string or array")
-			}
-
-			for _, field := range fields {
-				path := must.NotFail(types.NewPathFromString(field))
-				doc.RemoveByPath(path)
-			}
-
-		case "$project":
-			projDoc, ok := stageVal.(*types.Document)
-			if !ok {
-				return false, fmt.Errorf("$project stage must be an object")
-			}
-
-			validated, inclusion, err := stageProjection.ValidateProjection(projDoc)
-			if err != nil {
-				return false, lazyerrors.Error(err)
-			}
-
-			projected, err := stageProjection.ProjectDocument(doc, validated, inclusion)
-			if err != nil {
-				return false, lazyerrors.Error(err)
-			}
-
-			// Replace doc fields with projected result.
-			for _, key := range doc.Keys() {
-				doc.Remove(key)
-			}
-
-			for _, key := range projected.Keys() {
-				doc.Set(key, must.NotFail(projected.Get(key)))
-			}
-
-		case "$replaceWith":
-			replaced, err := evaluateReplaceExpr(stageVal, doc)
-			if err != nil {
-				return false, lazyerrors.Error(err)
-			}
-
-			for _, key := range doc.Keys() {
-				doc.Remove(key)
-			}
-
-			for _, key := range replaced.Keys() {
-				doc.Set(key, must.NotFail(replaced.Get(key)))
-			}
-
-		case "$replaceRoot":
-			specDoc, ok := stageVal.(*types.Document)
-			if !ok {
-				return false, fmt.Errorf("$replaceRoot stage must be an object")
-			}
-
-			newRootVal, err := specDoc.Get("newRoot")
-			if err != nil {
-				return false, fmt.Errorf("$replaceRoot requires a 'newRoot' option")
-			}
-
-			replaced, err := evaluateReplaceExpr(newRootVal, doc)
-			if err != nil {
-				return false, lazyerrors.Error(err)
-			}
-
-			for _, key := range doc.Keys() {
-				doc.Remove(key)
-			}
-
-			for _, key := range replaced.Keys() {
-				doc.Set(key, must.NotFail(replaced.Get(key)))
-			}
+	var iter types.DocumentsIterator = iterator.Values(iterator.ForSlice([]*types.Document{doc.DeepCopy()}))
+	closer.Add(iter)
+	for _, stage := range stages {
+		var err error
+		if iter, err = stage.Process(ctx, iter, closer); err != nil {
+			return false, err
 		}
+	}
+
+	_, updated, err := iter.Next()
+	if err != nil {
+		return false, err
+	}
+	for _, key := range doc.Keys() {
+		doc.Remove(key)
+	}
+	for _, key := range updated.Keys() {
+		doc.Set(key, must.NotFail(updated.Get(key)))
+	}
+
+	if err := keepPipelineID(before, doc); err != nil {
+		return false, err
 	}
 
 	return types.Compare(before, doc) != types.Equal, nil
 }
 
-// evaluateReplaceExpr evaluates a $replaceWith/$replaceRoot expression against doc
-// and returns the resulting document. expr may be a field-path string (e.g. "$sub")
-// or an operator document (e.g. {$mergeObjects: [...]}).
-func evaluateReplaceExpr(expr any, doc *types.Document) (*types.Document, error) {
-	switch e := expr.(type) {
-	case string:
-		val, err := operators.EvalArgValue(e, doc)
-		if err != nil {
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrFailedToParse,
-				fmt.Sprintf("invalid expression for $replaceWith: %s", e),
-				"$replaceWith (stage)",
-			)
-		}
-
-		result, ok := val.(*types.Document)
-		if !ok {
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrOperationFailed,
-				fmt.Sprintf(
-					"'newRoot' expression for $replaceWith must evaluate to an object, got %s",
-					types.FormatAnyValue(val),
-				),
-				"$replaceWith (stage)",
-			)
-		}
-
-		return result.DeepCopy(), nil
-
-	case *types.Document:
-		if operators.IsOperator(e) {
-			op, err := operators.NewOperator(e)
-			if err != nil {
-				return nil, handlererrors.NewCommandErrorMsgWithArgument(
-					handlererrors.ErrOperationFailed,
-					fmt.Sprintf("'newRoot' expression for $replaceWith failed: %s", err.Error()),
-					"$replaceWith (stage)",
-				)
-			}
-
-			val, err := op.Process(doc)
-			if err != nil {
-				return nil, handlererrors.NewCommandErrorMsgWithArgument(
-					handlererrors.ErrOperationFailed,
-					fmt.Sprintf("'newRoot' expression for $replaceWith failed: %s", err.Error()),
-					"$replaceWith (stage)",
-				)
-			}
-
-			result, ok := val.(*types.Document)
-			if !ok {
-				return nil, handlererrors.NewCommandErrorMsgWithArgument(
-					handlererrors.ErrOperationFailed,
-					fmt.Sprintf(
-						"'newRoot' expression for $replaceWith must evaluate to an object, got %s",
-						types.FormatAnyValue(val),
-					),
-					"$replaceWith (stage)",
-				)
-			}
-
-			return result, nil
-		}
-
-		// Literal document template  -- evaluate field path expressions in values.
-		return evaluateReplaceDocTemplate(e, doc)
-
-	default:
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrOperationFailed,
-			fmt.Sprintf(
-				"'newRoot' expression for $replaceWith must evaluate to an object, got %s",
-				types.FormatAnyValue(expr),
-			),
-			"$replaceWith (stage)",
-		)
+// keepPipelineID restores the _id a pipeline dropped, first, as MongoDB
+// does, and refuses one it changed.
+func keepPipelineID(before, doc *types.Document) error {
+	id, err := before.Get("_id")
+	if err != nil {
+		return nil
 	}
+
+	newID, err := doc.Get("_id")
+	if err == nil {
+		if types.Compare(newID, id) != types.Equal {
+			return handlererrors.NewCommandErrorMsg(handlererrors.ErrImmutableField,
+				"Performing an update on the path '_id' would modify the immutable field '_id'")
+		}
+		return nil
+	}
+
+	keys, values := doc.Keys(), doc.Values()
+	for _, key := range keys {
+		doc.Remove(key)
+	}
+	doc.Set("_id", id)
+	for i, key := range keys {
+		doc.Set(key, values[i])
+	}
+	return nil
 }
 
 // evaluateReplaceDocTemplate evaluates a literal document template against doc,

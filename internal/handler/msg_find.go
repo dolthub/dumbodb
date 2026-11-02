@@ -154,7 +154,15 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 		}
 	}
 
+	if err = common.ValidateFilterExprs(params.Filter); err != nil {
+		return nil, err
+	}
+
 	if err = common.ValidateGeoFilter(params.Filter); err != nil {
+		return nil, err
+	}
+
+	if err = common.ValidateFindMetadata(params.Filter, params.Projection, params.Sort); err != nil {
 		return nil, err
 	}
 
@@ -210,7 +218,7 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 		return nil, handleMaxTimeMSError(err, params.MaxTimeMS, "find")
 	}
 
-	iter, err := h.makeFindIter(srcIter, closer, params, sorted)
+	iter, err := h.makeFindIter(iterator.WithContext(ctx, srcIter), closer, params, sorted)
 	if err != nil {
 		return nil, handleMaxTimeMSError(err, params.MaxTimeMS, "find")
 	}
@@ -567,13 +575,21 @@ var executorWrapSkip = map[handlererrors.ErrorCode]bool{
 	handlererrors.ErrTypeMismatch: true,
 }
 
+// withMaxTimeMS bounds ctx by maxTimeMS, if it is set.
+func withMaxTimeMS(ctx context.Context, maxTimeMS int64) (context.Context, context.CancelFunc) {
+	if maxTimeMS == 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, time.Duration(maxTimeMS)*time.Millisecond)
+}
+
 // handleMaxTimeMSError returns the MaxTimeMSExpired error if provided error is a result of context cancellation.
 // The MaxTimeMSExpired error won't be returned if maxTimeMS wasn't set.
 func handleMaxTimeMSError(err error, maxTimeMS int64, cmd string) error {
 	switch {
 	case err == nil:
 		return nil
-	case maxTimeMS != 0 && errors.Is(err, context.Canceled):
+	case maxTimeMS != 0 && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)):
 		return handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrMaxTimeMSExpired,
 			"Executor error during "+cmd+" command :: caused by :: operation exceeded time limit",

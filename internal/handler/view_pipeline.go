@@ -66,7 +66,7 @@ func buildViewPipelineStages(db backends.Database, viewPipeline *types.Array, cm
 				vs, err = stages.NewLookupStage(vd, fetcher)
 			}
 		case "$match":
-			vs, err = stages.NewMatchStage(vd, cmp)
+			vs, err = stages.NewMatchStage(vd, cmp, stages.SeesStoredDocuments(stageDocs, i))
 		case "$sort":
 			vs, err = stages.NewSortStage(vd, sortLimitBound(stageDocs, i), cmp)
 		default:
@@ -84,6 +84,22 @@ func buildViewPipelineStages(db backends.Database, viewPipeline *types.Array, cm
 }
 
 type foreignViewDepthKey struct{}
+
+// newForeignCollectionStage builds a $lookup, $graphLookup, $unionWith or
+// $facet stage that reads other collections of db.
+func newForeignCollectionStage(stage *types.Document, db backends.Database) (aggregations.Stage, error) {
+	fetcher := foreignCollectionFetcher(db)
+	switch stage.Command() {
+	case "$graphLookup":
+		return stages.NewGraphLookupStage(stage, fetcher)
+	case "$unionWith":
+		return stages.NewUnionWithStage(stage, fetcher)
+	case "$facet":
+		return stages.NewFacetStage(stage, fetcher)
+	default:
+		return stages.NewLookupStage(stage, fetcher)
+	}
+}
 
 // foreignCollectionFetcher reads the "from" namespace of $lookup/$graphLookup
 // from db.
@@ -412,6 +428,7 @@ func viewSourceIterator(ctx context.Context, db backends.Database, viewName, vie
 	// rename or compute fields, making that unsound).
 	qp := &backends.QueryParams{Collated: cmp != nil}
 	filter, _ := aggregations.GetPushdownQuery(rawStages)
+	common.CanonicalizeFilter(filter)
 
 	if !disablePushdown {
 		qp.Filter = filter

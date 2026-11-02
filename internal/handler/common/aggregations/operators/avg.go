@@ -15,21 +15,13 @@
 package operators
 
 import (
-	"errors"
-
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/types"
-	"github.com/dolthub/dumbodb/internal/util/iterator"
-	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 )
 
-// avgOp represents the $avg expression operator.
-//
-// When used outside of $group (e.g., in $addFields or $project), $avg computes
-// the average of numeric values. It accepts:
-//   - a single field path: averages elements of an array field, or returns the value if numeric
-//   - an array literal: averages all elements
-//   - multiple arguments: averages all values
+// avgOp represents { $avg: <operands> }: a single operand that evaluates to
+// an array averages its elements; non-numeric values are ignored, and null
+// is returned when none are numeric.
 type avgOp struct {
 	args []any
 }
@@ -39,44 +31,18 @@ func newAvgOp(args ...any) (Operator, error) {
 }
 
 // Process implements Operator interface.
-// It evaluates all arguments, collects numeric values, and returns their average.
-// Non-numeric values are ignored. Returns null when no numeric values are found.
-func (a *avgOp) Process(doc *types.Document) (any, error) {
-	var numbers []any
-
-	for _, arg := range a.args {
-		val, err := evalArgValue(arg, doc)
-		if err != nil {
-			// skip args that fail to evaluate
-			continue
-		}
-
-		switch v := val.(type) {
-		case *types.Array:
-			// When the argument evaluates to an array, average the array elements.
-			iter := v.Iterator()
-			defer iter.Close()
-
-			for {
-				_, elem, iterErr := iter.Next()
-				if errors.Is(iterErr, iterator.ErrIteratorDone) {
-					break
-				}
-
-				if iterErr != nil {
-					return nil, lazyerrors.Error(iterErr)
-				}
-
-				numbers = append(numbers, elem)
-			}
-		default:
-			numbers = append(numbers, val)
-		}
+func (op *avgOp) Process(doc *types.Document) (any, error) {
+	values, err := accumulatorValues(op.args, doc)
+	if err != nil {
+		return nil, err
 	}
 
-	return aggregations.AvgNumbers(numbers...), nil
+	avg := aggregations.NewNumberAvg()
+	for _, v := range values {
+		avg.Add(v)
+	}
+
+	return avg.Result(), nil
 }
 
-var (
-	_ Operator = (*avgOp)(nil)
-)
+var _ Operator = (*avgOp)(nil)

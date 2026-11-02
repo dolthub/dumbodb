@@ -101,12 +101,12 @@ func (op *switchOp) Process(doc *types.Document) (any, error) {
 		}
 
 		if !isFalsy(caseResult) {
-			return evalArgValue(branch.thenExpr, doc)
+			return evalBranch(branch.thenExpr, doc)
 		}
 	}
 
 	if op.defaultArg != nil {
-		return evalArgValue(op.defaultArg, doc)
+		return evalBranch(op.defaultArg, doc)
 	}
 
 	return nil, newOperatorError(ErrArgsInvalidLen, "$switch",

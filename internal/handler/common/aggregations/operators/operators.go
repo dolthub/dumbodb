@@ -101,7 +101,8 @@ func NewOperator(doc *types.Document) (Operator, error) {
 
 	var args []any
 
-	if arr, ok := expr.(*types.Array); ok {
+	_, wholeArgument := wholeArgumentOperators[operator]
+	if arr, ok := expr.(*types.Array); ok && !wholeArgument {
 		iter := arr.Iterator()
 		defer iter.Close()
 
@@ -120,7 +121,14 @@ func NewOperator(doc *types.Document) (Operator, error) {
 
 	switch {
 	case supported:
-		return newOperator(args...)
+		op, err := newOperator(args...)
+		if err != nil || operator == "$literal" {
+			return op, err
+		}
+		if err = parseNested(nestedExpressions(operator, args)); err != nil {
+			return nil, AsNestedError(err)
+		}
+		return op, nil
 	case unsupported:
 		return nil, newOperatorError(
 			ErrNotImplemented,
@@ -136,175 +144,254 @@ func NewOperator(doc *types.Document) (Operator, error) {
 	}
 }
 
+// nonExpressionFields are argument fields that hold data, not expressions.
+var nonExpressionFields = map[string]string{
+	"$sortArray": "sortBy",
+}
+
+// nestedExpressions returns the arguments of operator that are expressions.
+func nestedExpressions(operator string, args []any) []any {
+	field, ok := nonExpressionFields[operator]
+	if !ok || len(args) != 1 {
+		return args
+	}
+	spec, ok := args[0].(*types.Document)
+	if !ok {
+		return args
+	}
+	var exprs []any
+	for _, key := range spec.Keys() {
+		if key != field {
+			exprs = append(exprs, must.NotFail(spec.Get(key)))
+		}
+	}
+	return exprs
+}
+
+// parseNested builds every operator nested in args, as mongod parses and
+// constant-folds a whole expression before evaluating any of it: a branch
+// that never runs still reports its parse errors.
+func parseNested(args []any) error {
+	for _, arg := range args {
+		switch v := arg.(type) {
+		case *types.Document:
+			if IsOperator(v) {
+				if _, err := cachedOperator(v); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := parseNested(v.Values()); err != nil {
+				return err
+			}
+		case *types.Array:
+			vals := make([]any, v.Len())
+			for i := range vals {
+				vals[i] = must.NotFail(v.Get(i))
+			}
+			if err := parseNested(vals); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// wholeArgumentOperators take a single argument as written: an array is
+// passed through whole, not as a list of arguments, so $literal keeps it and
+// the object-argument operators can reject it.
+var wholeArgumentOperators = map[string]struct{}{
+	"$convert":        {},
+	"$dateAdd":        {},
+	"$dateDiff":       {},
+	"$dateFromParts":  {},
+	"$dateFromString": {},
+	"$dateSubtract":   {},
+	"$dateToParts":    {},
+	"$dateToString":   {},
+	"$dateTrunc":      {},
+	"$dayOfMonth":     {},
+	"$dayOfWeek":      {},
+	"$dayOfYear":      {},
+	"$hour":           {},
+	"$isoDayOfWeek":   {},
+	"$isoWeek":        {},
+	"$isoWeekYear":    {},
+	"$literal":        {},
+	"$meta":           {},
+	"$millisecond":    {},
+	"$minute":         {},
+	"$month":          {},
+	"$rand":           {},
+	"$regexFind":      {},
+	"$regexFindAll":   {},
+	"$regexMatch":     {},
+	"$replaceAll":     {},
+	"$replaceOne":     {},
+	"$second":         {},
+	"$sortArray":      {},
+	"$week":           {},
+	"$year":           {},
+}
+
 // Operators maps all standard aggregation operators.
 var Operators = map[string]newOperatorFunc{
 	// sorted alphabetically
-	"$abs":             newAbs,
-	"$add":             newAdd,
-	"$allElementsTrue": newAllElementsTrue,
-	"$and":             newAnd,
-	"$arrayToObject":   newArrayToObject,
-	"$avg":             newAvgOp,
-	"$anyElementTrue":  newAnyElementTrue,
-	"$arrayElemAt":     newArrayElemAt,
-	"$bsonSize":        newBsonSize,
-	"$ceil":            newCeil,
-	"$cmp":             newCmp,
-	"$concat":          newConcat,
-	"$concatArrays":    newConcatArrays,
-	"$cond":            newCond,
-	"$convert":         newConvert,
-	"$dateAdd":         newDateAdd,
-	"$dateDiff":        newDateDiff,
-	"$dateTrunc":       newDateTrunc,
-	"$dateToString":    newDateToString,
-	"$dayOfMonth":      newDatePartOp("$dayOfMonth"),
-	"$dayOfWeek":       newDatePartOp("$dayOfWeek"),
-	"$dayOfYear":       newDatePartOp("$dayOfYear"),
-	"$divide":          newDivide,
-	"$eq":              newCmpOperator("$eq", compEq),
-	"$exp":             newExp,
-	"$filter":          newFilter,
-	"$first":           newFirstOp,
-	"$firstN":          newNOpFunc("$firstN"),
-	"$floor":           newFloor,
-	"$getField":        newGetField,
-	"$gt":              newCmpOperator("$gt", compGt),
-	"$gte":             newCmpOperator("$gte", compGte),
-	"$hour":            newDatePartOp("$hour"),
-	"$ifNull":          newIfNull,
-	"$in":              newInArray,
-	"$indexOfArray":    newIndexOfArray,
-	"$indexOfBytes":    newIndexOfBytes,
-	"$indexOfCP":       newIndexOfCP,
-	"$isArray":         newIsArray,
-	"$isDate":          newIsDate,
-	"$isNumber":        newIsNumber,
-	"$isObjectId":      newIsObjectId,
-	"$isString":        newIsString,
-	"$isoDayOfWeek":    newDatePartOp("$isoDayOfWeek"),
-	"$isoWeek":         newDatePartOp("$isoWeek"),
-	"$isoWeekYear":     newDatePartOp("$isoWeekYear"),
-	"$last":            newLastOp,
-	"$lastN":           newNOpFunc("$lastN"),
-	"$let":             newLet,
-	"$literal":         newLiteral,
-	"$ln":              newLn,
-	"$log":             newLog,
-	"$log10":           newLog10,
-	"$lt":              newCmpOperator("$lt", compLt),
-	"$ltrim":           newLtrim,
-	"$lte":             newCmpOperator("$lte", compLte),
-	"$map":             newMap,
-	"$max":             newMaxOp,
-	"$maxN":            newNOpFunc("$maxN"),
-	"$median":          newPercentileFunc("$median", true),
-	"$mergeObjects":    newMergeObjects,
-	"$millisecond":     newDatePartOp("$millisecond"),
-	"$min":             newMinOp,
-	"$minN":            newNOpFunc("$minN"),
-	"$minute":          newDatePartOp("$minute"),
-	"$mod":             newMod,
-	"$month":           newDatePartOp("$month"),
-	"$multiply":        newMultiply,
-	"$ne":              newCmpOperator("$ne", compNe),
-	"$not":             newNot,
-	"$objectToArray":   newObjectToArray,
-	"$or":              newOr,
-	"$percentile":      newPercentileFunc("$percentile", false),
-	"$pow":             newPow,
-	"$range":           newRange,
-	"$reduce":          newReduce,
-	"$regexFind":       newRegexFind,
-	"$regexMatch":      newRegexMatch,
-	"$reverseArray":    newReverseArray,
-	"$round":           newRound,
-	"$rtrim":           newRtrim,
-	"$second":          newDatePartOp("$second"),
-	"$setField":        newSetField,
-	"$setDifference":   newSetDifference,
-	"$setEquals":       newSetEquals,
-	"$setIntersection": newSetIntersection,
-	"$setIsSubset":     newSetIsSubset,
-	"$setUnion":        newSetUnion,
-	"$size":            newSize,
-	"$slice":           newSlice,
-	"$split":           newSplit,
-	"$sqrt":            newSqrt,
-	"$stdDevPop":       newStdDevPopOp,
-	"$stdDevSamp":      newStdDevSampOp,
-	"$strcasecmp":      newStrcasecmp,
-	"$strLenBytes":     newStrLenBytes,
-	"$strLenCP":        newStrLenCP,
-	"$substr":          newSubstr,
-	"$substrBytes":     newSubstrBytesOp,
-	"$substrCP":        newSubstrCP,
-	"$subtract":        newSubtract,
-	"$sum":             newSum,
-	"$switch":          newSwitch,
-	"$toBool":          newToBool,
-	"$toDate":          newToDate,
-	"$toDecimal":       newToDecimal,
-	"$toDouble":        newToDouble,
-	"$toInt":           newToInt,
-	"$toLong":          newToLong,
-	"$toLower":         newToLower,
-	"$toString":        newToString,
-	"$toUpper":         newToUpper,
-	"$unsetField":      newUnsetField,
-	"$trim":            newTrim,
-	"$trunc":           newTrunc,
-	"$tsIncrement":     newTsIncrement,
-	"$tsSecond":        newTsSecond,
-	"$type":            newType,
-	"$week":            newDatePartOp("$week"),
-	"$year":            newDatePartOp("$year"),
-	"$zip":             newZip,
+	"$abs":              newAbs,
+	"$acos":             newAcos,
+	"$acosh":            newAcosh,
+	"$add":              newAdd,
+	"$allElementsTrue":  newAllElementsTrue,
+	"$and":              newAnd,
+	"$arrayToObject":    newArrayToObject,
+	"$asin":             newAsin,
+	"$asinh":            newAsinh,
+	"$atan":             newAtan,
+	"$atan2":            newAtan2,
+	"$atanh":            newAtanh,
+	"$avg":              newAvgOp,
+	"$anyElementTrue":   newAnyElementTrue,
+	"$arrayElemAt":      newArrayElemAt,
+	"$binarySize":       newBinarySize,
+	"$bsonSize":         newBsonSize,
+	"$ceil":             newCeil,
+	"$cmp":              newCmp,
+	"$concat":           newConcat,
+	"$concatArrays":     newConcatArrays,
+	"$cond":             newCond,
+	"$convert":          newConvert,
+	"$cos":              newCos,
+	"$cosh":             newCosh,
+	"$dateAdd":          newDateArithmetic("$dateAdd"),
+	"$dateDiff":         newDateDiff,
+	"$dateFromParts":    newDateFromParts,
+	"$dateFromString":   newDateFromString,
+	"$dateSubtract":     newDateArithmetic("$dateSubtract"),
+	"$dateToParts":      newDateToParts,
+	"$dateTrunc":        newDateTrunc,
+	"$dateToString":     newDateToString,
+	"$degreesToRadians": newDegreesToRadians,
+	"$dayOfMonth":       newDatePartOp("$dayOfMonth"),
+	"$dayOfWeek":        newDatePartOp("$dayOfWeek"),
+	"$dayOfYear":        newDatePartOp("$dayOfYear"),
+	"$divide":           newDivide,
+	"$eq":               newCmpOperator("$eq", compEq),
+	"$exp":              newExp,
+	"$filter":           newFilter,
+	"$first":            newFirstOp,
+	"$firstN":           newNOpFunc("$firstN"),
+	"$floor":            newFloor,
+	"$getField":         newGetField,
+	"$gt":               newCmpOperator("$gt", compGt),
+	"$gte":              newCmpOperator("$gte", compGte),
+	"$hour":             newDatePartOp("$hour"),
+	"$ifNull":           newIfNull,
+	"$in":               newInArray,
+	"$indexOfArray":     newIndexOfArray,
+	"$indexOfBytes":     newIndexOfBytes,
+	"$indexOfCP":        newIndexOfCP,
+	"$isArray":          newIsArray,
+	"$isDate":           newIsDate,
+	"$isNumber":         newIsNumber,
+	"$isObjectId":       newIsObjectId,
+	"$isString":         newIsString,
+	"$isoDayOfWeek":     newDatePartOp("$isoDayOfWeek"),
+	"$isoWeek":          newDatePartOp("$isoWeek"),
+	"$isoWeekYear":      newDatePartOp("$isoWeekYear"),
+	"$last":             newLastOp,
+	"$lastN":            newNOpFunc("$lastN"),
+	"$let":              newLet,
+	"$literal":          newLiteral,
+	"$ln":               newLn,
+	"$log":              newLog,
+	"$log10":            newLog10,
+	"$lt":               newCmpOperator("$lt", compLt),
+	"$ltrim":            newLtrim,
+	"$lte":              newCmpOperator("$lte", compLte),
+	"$map":              newMap,
+	"$max":              newMaxOp,
+	"$maxN":             newNOpFunc("$maxN"),
+	"$median":           newPercentileFunc("$median", true),
+	"$mergeObjects":     newMergeObjects,
+	"$meta":             newMeta,
+	"$millisecond":      newDatePartOp("$millisecond"),
+	"$min":              newMinOp,
+	"$minN":             newNOpFunc("$minN"),
+	"$minute":           newDatePartOp("$minute"),
+	"$mod":              newMod,
+	"$month":            newDatePartOp("$month"),
+	"$multiply":         newMultiply,
+	"$ne":               newCmpOperator("$ne", compNe),
+	"$not":              newNot,
+	"$objectToArray":    newObjectToArray,
+	"$or":               newOr,
+	"$percentile":       newPercentileFunc("$percentile", false),
+	"$pow":              newPow,
+	"$radiansToDegrees": newRadiansToDegrees,
+	"$rand":             newRand,
+	"$range":            newRange,
+	"$reduce":           newReduce,
+	"$regexFind":        newRegex("$regexFind"),
+	"$regexFindAll":     newRegex("$regexFindAll"),
+	"$regexMatch":       newRegex("$regexMatch"),
+	"$replaceAll":       newReplace("$replaceAll"),
+	"$replaceOne":       newReplace("$replaceOne"),
+	"$reverseArray":     newReverseArray,
+	"$round":            newRound,
+	"$rtrim":            newRtrim,
+	"$second":           newDatePartOp("$second"),
+	"$setField":         newSetField,
+	"$setDifference":    newSetDifference,
+	"$setEquals":        newSetEquals,
+	"$setIntersection":  newSetIntersection,
+	"$setIsSubset":      newSetIsSubset,
+	"$setUnion":         newSetUnion,
+	"$sin":              newSin,
+	"$sinh":             newSinh,
+	"$size":             newSize,
+	"$slice":            newSlice,
+	"$sortArray":        newSortArray,
+	"$split":            newSplit,
+	"$sqrt":             newSqrt,
+	"$stdDevPop":        newStdDevPopOp,
+	"$stdDevSamp":       newStdDevSampOp,
+	"$strcasecmp":       newStrcasecmp,
+	"$strLenBytes":      newStrLenBytes,
+	"$strLenCP":         newStrLenCP,
+	"$substr":           newSubstr,
+	"$substrBytes":      newSubstrBytesOp,
+	"$substrCP":         newSubstrCP,
+	"$subtract":         newSubtract,
+	"$sum":              newSum,
+	"$switch":           newSwitch,
+	"$tan":              newTan,
+	"$tanh":             newTanh,
+	"$toBool":           newConversionAlias("$toBool", "bool", nil),
+	"$toDate":           newConversionAlias("$toDate", "date", nil),
+	"$toDecimal":        newConversionAlias("$toDecimal", "decimal", nil),
+	"$toDouble":         newConversionAlias("$toDouble", "double", nil),
+	"$toInt":            newConversionAlias("$toInt", "int", nil),
+	"$toLong":           newConversionAlias("$toLong", "long", nil),
+	"$toLower":          newToLower,
+	"$toObjectId":       newConversionAlias("$toObjectId", "objectId", nil),
+	"$toString":         newConversionAlias("$toString", "string", "auto"),
+	"$toUUID":           newConversionAlias("$toUUID", must.NotFail(types.NewDocument("type", "binData", "subtype", int32(4))), "uuid"),
+	"$toUpper":          newToUpper,
+	"$unsetField":       newUnsetField,
+	"$trim":             newTrim,
+	"$trunc":            newTrunc,
+	"$tsIncrement":      newTsIncrement,
+	"$tsSecond":         newTsSecond,
+	"$type":             newType,
+	"$week":             newDatePartOp("$week"),
+	"$year":             newDatePartOp("$year"),
+	"$zip":              newZip,
 	// please keep sorted alphabetically
 }
 
 // unsupportedOperators maps all unsupported yet operators.
 var unsupportedOperators = map[string]struct{}{
 	// sorted alphabetically
-	"$acos":             {},
-	"$acosh":            {},
-	"$asin":             {},
-	"$asinh":            {},
-	"$atan":             {},
-	"$atan2":            {},
-	"$atanh":            {},
-	"$binarySize":       {},
-	"$cos":              {},
-	"$cosh":             {},
-	"$covariancePop":    {},
-	"$covarianceSamp":   {},
-	"$dateFromParts":    {},
-	"$dateSubtract":     {},
-	"$dateToParts":      {},
-	"$dateFromString":   {},
-	"$degreesToRadians": {},
-	"$denseRank":        {},
-	"$derivative":       {},
-	"$documentNumber":   {},
-	"$expMovingAvg":     {},
-	"$function":         {},
-	"$integral":         {},
-	"$linearFill":       {},
-	"$locf":             {},
-	"$meta":             {},
-	"$radiansToDegrees": {},
-	"$rand":             {},
-	"$rank":             {},
-	"$regexFindAll":     {},
-	"$replaceOne":       {},
-	"$replaceAll":       {},
-	"$sampleRate":       {},
-	"$shift":            {},
-	"$sin":              {},
-	"$sinh":             {},
-	"$sortArray":        {},
-	"$tan":              {},
-	"$tanh":             {},
-	"$toObjectId":       {},
+	"$function": {},
 	// please keep sorted alphabetically
 }

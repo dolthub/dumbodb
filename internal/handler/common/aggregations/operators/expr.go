@@ -38,6 +38,19 @@ type expr struct {
 //
 // It returns CommandError for invalid value of $expr operator.
 func NewExpr(exprValue *types.Document, errArgument string) (Operator, error) {
+	e, err := ParseExpr(exprValue, errArgument)
+	if err != nil {
+		return nil, err
+	}
+	if err = CheckConstantSubexpressions(must.NotFail(exprValue.Get("$expr"))); err != nil {
+		return nil, err
+	}
+	return e, nil
+}
+
+// ParseExpr is NewExpr without constant folding, which MongoDB skips for
+// collection validators.
+func ParseExpr(exprValue *types.Document, errArgument string) (Operator, error) {
 	v := must.NotFail(exprValue.Get("$expr"))
 	e := &expr{
 		exprValue:   v,
@@ -63,13 +76,7 @@ func (e *expr) validateExpr(exprValue any) error {
 	switch exprValue := exprValue.(type) {
 	case *types.Document:
 		if IsOperator(exprValue) {
-			op, err := NewOperator(exprValue)
-			if err != nil {
-				return processExprOperatorErrors(err, e.errArgument)
-			}
-
-			_, err = op.Process(nil)
-			if err != nil {
+			if err := CheckExpressionShape(exprValue); err != nil {
 				return processExprOperatorErrors(err, e.errArgument)
 			}
 
@@ -302,6 +309,67 @@ func processExprOperatorErrors(err error, argument string) error {
 	}
 
 	return lazyerrors.Error(err)
+}
+
+// CheckExpressionShape returns the parse errors MongoDB raises for an
+// operator expression: unknown operators, wrong argument counts and errors
+// from operator constructors, but not errors that depend on values, which
+// are raised per document or by constant folding.
+func CheckExpressionShape(expr *types.Document) error {
+	op, err := NewOperator(expr)
+	if err != nil {
+		return err
+	}
+	if err = constructNestedOperators(expr); err != nil {
+		return err
+	}
+	if _, err = op.Process(nil); err != nil {
+		var opErr OperatorError
+		var exErr *aggregations.ExpressionError
+		if errors.As(err, &opErr) || errors.As(err, &exErr) {
+			return err
+		}
+	}
+	return nil
+}
+
+// constructNestedOperators builds every known operator nested in op's
+// operands, which reports the errors their constructors raise; operators
+// build their operands lazily. Unknown names are left to evaluation, as they
+// may not be expressions, such as $sortArray's sortBy {"$a": 1}.
+func constructNestedOperators(op *types.Document) error {
+	for _, v := range op.Values() {
+		if err := constructOperatorsIn(v); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func constructOperatorsIn(v any) error {
+	switch v := v.(type) {
+	case *types.Array:
+		for i := range v.Len() {
+			if err := constructOperatorsIn(must.NotFail(v.Get(i))); err != nil {
+				return err
+			}
+		}
+	case *types.Document:
+		if IsOperator(v) {
+			if _, known := Operators[v.Command()]; !known || v.Command() == "$literal" {
+				return nil
+			}
+			if _, err := NewOperator(v); err != nil {
+				return err
+			}
+		}
+		for _, value := range v.Values() {
+			if err := constructOperatorsIn(value); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 var (

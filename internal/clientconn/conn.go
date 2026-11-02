@@ -577,6 +577,12 @@ func (c *conn) route(connCtx context.Context, reqHeader *wire.MsgHeader, reqBody
 			)
 		}
 
+		ci := conninfo.Get(connCtx)
+		endsTxn := command == "commitTransaction" || command == "abortTransaction"
+		if err == nil && !endsTxn && ci.InTransaction() && ci.TxnAborted() {
+			err = abortedTransactionError(typedDoc)
+		}
+
 		if err == nil {
 			// do not store typed nil in interface, it makes it non-nil
 			var resMsg *wire.OpMsg
@@ -584,6 +590,15 @@ func (c *conn) route(connCtx context.Context, reqHeader *wire.MsgHeader, reqBody
 
 			if resMsg != nil {
 				resBody = resMsg
+			}
+
+			// Like mongod, any failed statement aborts the transaction, so
+			// nothing it or earlier statements wrote can be committed. A
+			// version-control command refused over uncommitted changes wrote
+			// nothing, and the transaction's writes survive to its commit.
+			if !endsTxn && ci.InTransaction() && !isUncommittedChangesRefusal(command, err) &&
+				(err != nil || writeErrorCommands[command] && replyHasWriteErrors(resMsg)) {
+				c.h.AbortPendingTransaction(connCtx)
 			}
 		}
 

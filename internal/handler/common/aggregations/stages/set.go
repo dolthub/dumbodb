@@ -20,6 +20,7 @@ import (
 
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
@@ -36,6 +37,11 @@ type set struct {
 }
 
 func newSet(stage *types.Document) (aggregations.Stage, error) {
+	return newSetStage(stage, true)
+}
+
+// newSetStage folds constant subexpressions if fold is set.
+func newSetStage(stage *types.Document, fold bool) (aggregations.Stage, error) {
 	fields, err := stage.Get("$set")
 	if err != nil {
 		return nil, lazyerrors.Error(err)
@@ -56,6 +62,16 @@ func newSet(stage *types.Document) (aggregations.Stage, error) {
 
 	if err := validateExpression("$set", fieldsDoc); err != nil {
 		return nil, err
+	}
+
+	if err := common.ValidateAddFieldsExpressions("$set", fieldsDoc); err != nil {
+		return nil, err
+	}
+
+	if fold {
+		if err := operators.CheckConstantSubexpressions(fieldsDoc); err != nil {
+			return nil, err
+		}
 	}
 
 	return &set{

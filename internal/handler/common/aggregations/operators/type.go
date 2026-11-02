@@ -18,13 +18,9 @@ package operators
 import (
 	"errors"
 	"fmt"
-	"strings"
-	"time"
 
-	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
-	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 )
 
 type typeOp struct {
@@ -45,79 +41,22 @@ func newType(args ...any) (Operator, error) {
 	}, nil
 }
 
+// Process returns the type alias of the evaluated argument, "missing" for
+// the missing value.
 func (t *typeOp) Process(doc *types.Document) (any, error) {
-	typeParam := t.param
-
-	var paramEvaluated bool
-
-	var res any
-
-	for !paramEvaluated {
-		paramEvaluated = true
-
-		switch param := typeParam.(type) {
-		case *types.Document:
-			if !IsOperator(param) {
-				res = param
-				break
-			}
-
-			operator, err := NewOperator(param)
-			if err != nil {
-				var opErr OperatorError
-				if !errors.As(err, &opErr) {
-					return nil, lazyerrors.Error(err)
-				}
-
-				if opErr.Code() == ErrInvalidExpression {
-					opErr.code = ErrInvalidNestedExpression
-				}
-
-				return nil, opErr
-			}
-
-			if typeParam, err = operator.Process(doc); err != nil {
-				var opErr OperatorError
-				if !errors.As(err, &opErr) {
-					return nil, lazyerrors.Error(err)
-				}
-
-				return nil, err
-			}
-
-			// the result of nested operator needs to be evaluated
-			paramEvaluated = false
-
-		case *types.Array, float64, types.Binary, types.ObjectID, bool, time.Time,
-			types.NullType, types.Regex, int32, types.Timestamp, int64,
-			types.Decimal128, types.MinKeyType, types.MaxKeyType, types.UndefinedType:
-			res = param
-
-		case string:
-			if strings.HasPrefix(param, "$") {
-				expression, err := aggregations.NewExpression(param, nil)
-				if err != nil {
-					return nil, err
-				}
-
-				value, err := expression.Evaluate(doc)
-				if err != nil {
-					return "missing", nil
-				}
-
-				res = value
-
-				continue
-			}
-
-			res = param
-
-		default:
-			panic(fmt.Sprint("wrong type of value: ", typeParam))
+	v, missing, err := EvalOperand(t.param, doc)
+	if err != nil {
+		var opErr OperatorError
+		if errors.As(err, &opErr) && opErr.Code() == ErrInvalidExpression {
+			opErr.code = ErrInvalidNestedExpression
+			return nil, opErr
 		}
+		return nil, err
 	}
-
-	return handlerparams.AliasFromType(res), nil
+	if missing {
+		return "missing", nil
+	}
+	return handlerparams.AliasFromType(v), nil
 }
 
 var (

@@ -69,6 +69,13 @@ func emptyIndexAM(ns tree.NodeStore) (prolly.AddressMap, error) {
 	return actual.(prolly.AddressMap), nil
 }
 
+// forgetEmptyIndexAM evicts ns from emptyIndexAMCache. The cached map
+// references ns, so without eviction a closed database's chunk store,
+// journal buffers included, stays reachable for the life of the process.
+func forgetEmptyIndexAM(ns tree.NodeStore) {
+	emptyIndexAMCache.Delete(ns)
+}
+
 // dtblHashForColl returns the DTBL hash for collName under rv. Returns
 // the zero hash if the collection is not in the root's ADRM.
 func dtblHashForColl(ctx context.Context, ns tree.NodeStore, rv doltdb.RootValue, collName string) (hash.Hash, error) {

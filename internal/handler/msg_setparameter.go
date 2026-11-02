@@ -91,8 +91,14 @@ func (h *Handler) MsgSetParameter(connCtx context.Context, msg *wire.OpMsg) (*wi
 		if setParameterEnvelopeFields[k] {
 			continue
 		}
-		prev, code := h.paramStore.Set(k, v)
+		prev, code, reason := h.paramStore.Set(k, v)
 		switch code {
+		case ParamSetBadValue:
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrBadValue,
+				fmt.Sprintf("Failed validating %s: %s", k, reason),
+				k,
+			)
 		case ParamSetUnknown:
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrInvalidOptions,

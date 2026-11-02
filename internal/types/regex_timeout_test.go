@@ -22,28 +22,52 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Patterns Go's engine rejects as Perl syntax (lookaround) fall back to a
-// backtracking engine. Before the fix it had no time limit, so a pattern with
-// catastrophic backtracking pinned a CPU for exponential time per document.
-func TestRegexFallbackMatchIsTimeBounded(t *testing.T) {
+// Filter regexes run on a backtracking engine, so a pattern with
+// catastrophic backtracking is cut off by a time limit. Running out of time
+// is an error, never a result.
+func TestRegexMatchIsTimeBounded(t *testing.T) {
 	m, err := Regex{Pattern: "^(?=(a+)+$)"}.Compile()
 	require.NoError(t, err)
 
 	input := strings.Repeat("a", 40) + "!"
-	done := make(chan bool, 1)
-	go func() { done <- m.MatchString(input) }()
+	done := make(chan error, 1)
+	go func() {
+		_, err := m.MatchString(input)
+		done <- err
+	}()
 
 	select {
-	case matched := <-done:
-		require.False(t, matched)
+	case err := <-done:
+		require.Error(t, err)
 	case <-time.After(10 * time.Second):
-		t.Fatal("fallback regex match did not finish within 10s")
+		t.Fatal("regex match did not finish within 10s")
 	}
 }
 
-func TestRegexFallbackStillMatches(t *testing.T) {
+func TestRegexLookaheadMatches(t *testing.T) {
 	m, err := Regex{Pattern: "^(?=.*foo)bar"}.Compile()
 	require.NoError(t, err)
-	require.True(t, m.MatchString("barfoo"))
-	require.False(t, m.MatchString("barbaz"))
+	matched, err := m.MatchString("barfoo")
+	require.NoError(t, err)
+	require.True(t, matched)
+	matched, err = m.MatchString("barbaz")
+	require.NoError(t, err)
+	require.False(t, matched)
+}
+
+func TestRegexCompileIsCached(t *testing.T) {
+	a, err := Regex{Pattern: "^ab+c", Options: "im"}.Compile()
+	require.NoError(t, err)
+	b, err := Regex{Pattern: "^ab+c", Options: "mi"}.Compile()
+	require.NoError(t, err)
+	require.Same(t, a, b)
+
+	c, err := Regex{Pattern: "^ab+c"}.Compile()
+	require.NoError(t, err)
+	require.NotSame(t, a, c)
+
+	_, err = Regex{Pattern: "("}.Compile()
+	require.Error(t, err)
+	_, err = Regex{Pattern: "("}.Compile()
+	require.Error(t, err)
 }

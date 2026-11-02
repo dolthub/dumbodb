@@ -15,13 +15,12 @@
 package common
 
 import (
-	"fmt"
 	"log/slog"
 
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
-	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 //nolint:vet // for readability
@@ -61,10 +60,11 @@ type Update struct {
 	Upsert    bool            `dumbo:"upsert,opt,numericBool"`
 
 	// Populated by GetUpdateParams from UpdateRaw.
-	Update             *types.Document `dumbo:"-"`
-	Pipeline           *types.Array    `dumbo:"-"`
-	HasUpdateOperators bool            `dumbo:"-"`
-	IsPipeline         bool            `dumbo:"-"`
+	Update             *types.Document      `dumbo:"-"`
+	Pipeline           *types.Array         `dumbo:"-"`
+	PipelineStages     []aggregations.Stage `dumbo:"-"`
+	HasUpdateOperators bool                 `dumbo:"-"`
+	IsPipeline         bool                 `dumbo:"-"`
 
 	// Validator is nil when no active validator applies (absent, or
 	// validationLevel "off"). ValidationLevel is "strict" or "moderate";
@@ -145,35 +145,6 @@ func GetUpdateParams(document *types.Document, l *slog.Logger) (*UpdateParams, e
 			case *types.Array:
 				update.IsPipeline = true
 				update.Pipeline = u
-
-				// Validate each pipeline stage is a supported operator.
-				for j := range u.Len() {
-					stage, ok := must.NotFail(u.Get(j)).(*types.Document)
-					if !ok {
-						return nil, handlererrors.NewWriteErrorMsg(
-							handlererrors.ErrFailedToParse,
-							"A pipeline stage specification must be an object",
-						)
-					}
-
-					if stage.Len() != 1 {
-						return nil, handlererrors.NewWriteErrorMsg(
-							handlererrors.ErrFailedToParse,
-							"A pipeline stage specification object must contain exactly one field",
-						)
-					}
-
-					stageName := stage.Keys()[0]
-					switch stageName {
-					case "$set", "$unset", "$addFields", "$project", "$replaceWith", "$replaceRoot":
-						// supported pipeline stages for updates
-					default:
-						return nil, handlererrors.NewWriteErrorMsg(
-							handlererrors.ErrNotImplemented,
-							fmt.Sprintf("Unrecognized pipeline stage name: '%s'", stageName),
-						)
-					}
-				}
 
 			default:
 				return nil, handlererrors.NewWriteErrorMsg(

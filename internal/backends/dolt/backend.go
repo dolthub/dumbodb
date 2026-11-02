@@ -557,6 +557,7 @@ func (b *Backend) Close() {
 			b.l.Error("closing database", "db", name, "err", err)
 		}
 		db.mu.Unlock()
+		forgetEmptyIndexAM(db.ns)
 	}
 
 	b.dbs = make(map[string]*dbState)
@@ -730,6 +731,7 @@ func (b *Backend) dropDatabaseLocked(params *backends.DropDatabaseParams) error 
 		db.mu.Lock()
 		_ = db.doltDB.Close()
 		db.mu.Unlock()
+		forgetEmptyIndexAM(db.ns)
 		delete(b.dbs, params.Name)
 	}
 	b.provider.forgetDatabase(params.Name)

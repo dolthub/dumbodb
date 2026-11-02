@@ -54,7 +54,7 @@ func TestValidateFilter(t *testing.T) {
 		doc("$or", arr(doc("a", int32(1)), doc("b", doc("$gt", int32(2))))),
 		doc("f", doc("$elemMatch", doc("a", int32(1), "b", doc("$lt", int32(2))))),
 		doc("f", doc("$not", doc("$regex", "^a"))),
-		doc("$expr", doc("$divide", arr(int32(1), int32(0)))),
+		doc("$expr", doc("$divide", arr("$a", int32(0)))),
 		doc("f", doc("a", int32(1))),
 	} {
 		require.NoError(t, ValidateFilter(filter, nil), "filter %v", filter)

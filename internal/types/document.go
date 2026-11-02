@@ -93,6 +93,12 @@ func (d *Document) rawBSON() []byte {
 	return d.extra.raw
 }
 
+// HasRawBSON reports whether the document is unchanged since it was decoded
+// from BSON, which bounded its nesting.
+func (d *Document) HasRawBSON() bool {
+	return d.rawBSON() != nil
+}
+
 // modify loads the document and drops its raw encoding ahead of a change.
 func (d *Document) modify() {
 	d.load()

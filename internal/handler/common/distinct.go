@@ -47,6 +47,7 @@ type DistinctParams struct {
 	Query any `dumbo:"query,opt"`
 
 	Collation *types.Document `dumbo:"collation,opt"`
+	MaxTimeMS int64           `dumbo:"maxTimeMS,opt,wholePositiveNumber"`
 
 	ReadConcern    *types.Document `dumbo:"readConcern,ignored"`
 	LSID           any             `dumbo:"lsid,ignored"`
@@ -68,6 +69,7 @@ func GetDistinctParams(document *types.Document, l *slog.Logger) (*DistinctParam
 
 	switch filter := dp.Query.(type) {
 	case *types.Document:
+		CanonicalizeFilter(filter)
 		dp.Filter = filter
 	case types.NullType, nil:
 		dp.Filter = types.MakeDocument(0)

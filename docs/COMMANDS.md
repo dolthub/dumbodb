@@ -77,6 +77,9 @@ Inside a client transaction, the transaction's own writes count too. An
 operation run in a transaction that has written to the branch is refused the
 same way, and so are `dumboReset`, `dumboResolveConflict`, and the `continue`
 and `abort` forms. A transaction that has written nothing does not stop them.
+Unlike other failed statements, which abort the transaction, this refusal
+leaves the transaction open: its writes are kept, and it can be committed or
+aborted as usual.
 
 A branch that is written to continuously is rarely clean, so these operations
 may never get to start on it. Pause the writers first.

@@ -15,14 +15,12 @@
 package accumulators
 
 import (
-	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
 type minAccumulator struct {
-	expression *aggregations.Expression
-	number     any
+	arg operand
 }
 
 func newMin(args ...any) (Accumulator, error) {
@@ -34,56 +32,38 @@ func newMin(args ...any) (Accumulator, error) {
 		)
 	}
 
-	accumulator := new(minAccumulator)
-
-	switch arg := args[0].(type) {
-	case string:
-		var err error
-		if accumulator.expression, err = aggregations.NewExpression(arg, nil); err != nil {
-			// non-expression string: treat as constant
-			accumulator.number = arg
-		}
-	default:
-		accumulator.number = arg
+	arg, err := newOperand(args[0])
+	if err != nil {
+		return nil, err
 	}
 
-	return accumulator, nil
+	return &minAccumulator{arg: arg}, nil
 }
 
 func (m *minAccumulator) New() Accumulation {
-	return &extremeState{expression: m.expression, number: m.number, want: types.Less}
+	return &extremeState{arg: m.arg, want: types.Less}
 }
 
 func (m *maxAccumulator) New() Accumulation {
-	return &extremeState{expression: m.expression, number: m.number, want: types.Greater}
+	return &extremeState{arg: m.arg, want: types.Greater}
 }
 
 // extremeState folds the running $min or $max. want is the comparison result
 // (types.Less for $min, types.Greater for $max) that replaces the running value.
 type extremeState struct {
-	expression *aggregations.Expression
-	number     any
-	want       types.CompareResult
-	result     any
+	arg    operand
+	want   types.CompareResult
+	result any
 }
 
 func (s *extremeState) Accumulate(doc *types.Document) error {
-	var val any
-
-	if s.expression != nil {
-		v, evalErr := s.expression.Evaluate(doc)
-		if evalErr != nil {
-			// missing field: skip (treat as absent)
-			return nil
-		}
-
-		val = v
-	} else {
-		val = s.number
+	val, missing, err := s.arg.evaluate(doc)
+	if err != nil {
+		return err
 	}
 
-	// Skip null values ($min/$max ignore nulls)
-	if _, isNull := val.(types.NullType); isNull {
+	// $min and $max ignore missing and null values.
+	if _, isNull := val.(types.NullType); missing || isNull {
 		return nil
 	}
 
@@ -108,8 +88,7 @@ func (s *extremeState) Result() (any, error) {
 }
 
 type maxAccumulator struct {
-	expression *aggregations.Expression
-	number     any
+	arg operand
 }
 
 func newMax(args ...any) (Accumulator, error) {
@@ -121,19 +100,12 @@ func newMax(args ...any) (Accumulator, error) {
 		)
 	}
 
-	accumulator := new(maxAccumulator)
-
-	switch arg := args[0].(type) {
-	case string:
-		var err error
-		if accumulator.expression, err = aggregations.NewExpression(arg, nil); err != nil {
-			accumulator.number = arg
-		}
-	default:
-		accumulator.number = arg
+	arg, err := newOperand(args[0])
+	if err != nil {
+		return nil, err
 	}
 
-	return accumulator, nil
+	return &maxAccumulator{arg: arg}, nil
 }
 
 var (

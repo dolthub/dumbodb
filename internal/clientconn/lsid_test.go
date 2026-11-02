@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
@@ -104,4 +105,14 @@ func TestExtractAndSetLSIDNilDocIsNoop(t *testing.T) {
 	ctx, ci := makeCtx()
 	extractAndSetLSID(ctx, nil)
 	assert.Equal(t, "", ci.LSID())
+}
+
+// Only a version-control command's 117 keeps the transaction open.
+func TestIsUncommittedChangesRefusal(t *testing.T) {
+	refusal := handlererrors.NewCommandErrorMsg(handlererrors.ErrConflictingOperationInProgress, "uncommitted changes")
+	assert.True(t, isUncommittedChangesRefusal("dumboCommit", refusal))
+	assert.True(t, isUncommittedChangesRefusal("doltMerge", refusal))
+	assert.False(t, isUncommittedChangesRefusal("insert", refusal))
+	assert.False(t, isUncommittedChangesRefusal("dumboCommit", handlererrors.NewCommandErrorMsg(handlererrors.ErrBadValue, "x")))
+	assert.False(t, isUncommittedChangesRefusal("dumboCommit", nil))
 }

@@ -50,7 +50,7 @@ func appendFilterRootFields(filter *types.Document, roots *[]string) bool {
 					return false
 				}
 			}
-		case "$comment":
+		case "$comment", "$sampleRate":
 		default:
 			if strings.HasPrefix(key, "$") {
 				return false

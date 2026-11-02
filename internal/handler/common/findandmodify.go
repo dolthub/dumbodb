@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -36,8 +37,9 @@ type FindAndModifyParams struct {
 	ReturnNewDocument bool            `dumbo:"new,opt,numericBool"`
 	MaxTimeMS         int64           `dumbo:"maxTimeMS,opt,wholePositiveNumber"`
 
-	Update      *types.Document `dumbo:"-"`
-	Aggregation *types.Array    `dumbo:"-"`
+	Update         *types.Document      `dumbo:"-"`
+	Pipeline       *types.Array         `dumbo:"-"`
+	PipelineStages []aggregations.Stage `dumbo:"-"`
 
 	HasUpdateOperators bool `dumbo:"-"`
 
@@ -98,11 +100,12 @@ func GetFindAndModifyParams(doc *types.Document, l *slog.Logger) (*FindAndModify
 		case *types.Document:
 			params.Update = updateParam
 		case *types.Array:
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrNotImplemented,
-				"Aggregation pipelines are not supported yet",
-				"update",
-			)
+			stages, err := ParseUpdatePipeline(updateParam)
+			if err != nil {
+				return nil, err
+			}
+			params.Pipeline = updateParam
+			params.PipelineStages = stages
 		default:
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrFailedToParse,
@@ -112,7 +115,7 @@ func GetFindAndModifyParams(doc *types.Document, l *slog.Logger) (*FindAndModify
 		}
 	}
 
-	if params.Update != nil && params.Remove {
+	if (params.Update != nil || params.Pipeline != nil) && params.Remove {
 		return nil, handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrFailedToParse,
 			"Cannot specify both an update and remove=true",
@@ -132,6 +135,8 @@ func GetFindAndModifyParams(doc *types.Document, l *slog.Logger) (*FindAndModify
 	}
 
 	params.HasUpdateOperators = hasUpdateOperators
+
+	CanonicalizeFilter(params.Query)
 
 	return &params, nil
 }

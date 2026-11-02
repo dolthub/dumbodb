@@ -20,20 +20,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// isBoolFalsy returns true when v is falsy in MongoDB aggregation boolean context:
-// false (bool) or null. All other values  -- including 0, empty string, empty array  -- are truthy.
-func isBoolFalsy(v any) bool {
-	switch val := v.(type) {
-	case bool:
-		return !val
-	case types.NullType, types.UndefinedType:
-		return true
-	default:
-		_ = val
-		return false
-	}
-}
-
 // andOp represents { $and: [ <expr1>, <expr2>, ... ] }.
 // Returns true if all expressions are truthy (non-false, non-null).
 type andOp struct{ args []any }
@@ -49,7 +35,7 @@ func (op *andOp) Process(doc *types.Document) (any, error) {
 			return nil, err
 		}
 
-		if isBoolFalsy(v) {
+		if isFalsy(v) {
 			return false, nil
 		}
 	}
@@ -74,7 +60,7 @@ func (op *orOp) Process(doc *types.Document) (any, error) {
 			return nil, err
 		}
 
-		if !isBoolFalsy(v) {
+		if !isFalsy(v) {
 			return true, nil
 		}
 	}
@@ -103,7 +89,7 @@ func (op *notOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	return isBoolFalsy(v), nil
+	return isFalsy(v), nil
 }
 
 var _ Operator = (*notOp)(nil)

@@ -49,8 +49,13 @@ func TestSubstringOperatorsSurviveExtremeArguments(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			res, err := processOperator(t, newOp, strings.Repeat("x", 2000)+"hello", int32(2000), nearMaxInt)
-			require.NoError(t, err)
-			require.Equal(t, "hello", res)
+			if name == "$substrCP" {
+				// Its length must fit in 32 bits, as in MongoDB.
+				requireCode(t, err, handlererrors.ErrSubstrCPLengthNotInt)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, "hello", res)
+			}
 
 			for _, extreme := range []any{math.Inf(1), math.Inf(-1), math.NaN(), 1e300, -1e300, int64(math.MaxInt64), int64(math.MinInt64)} {
 				_, _ = processOperator(t, newOp, "hello", extreme, int32(1))
@@ -60,6 +65,28 @@ func TestSubstringOperatorsSurviveExtremeArguments(t *testing.T) {
 	}
 }
 
+// mongod reads past the string for a truncated code point;
+// DumboDB reports invalid UTF-8 instead.
+func TestSubstrCPTruncatedCodePoint(t *testing.T) {
+	for _, tc := range []struct {
+		s             string
+		start, length int32
+	}{
+		{"\xE0", 1, 0},
+		{"\xE0", 0, 1},
+		{"a\xF0\x9F", 1, 1},
+		{"a\xF0\x9F", 2, 0},
+		{"\xC3", 1, 5},
+	} {
+		_, err := processOperator(t, newSubstrCP, tc.s, tc.start, tc.length)
+		requireCode(t, err, handlererrors.ErrSubstrCPInvalidUTF8)
+	}
+
+	res, err := processOperator(t, newSubstrCP, "a\xC3\xA9b", int32(1), int32(1))
+	require.NoError(t, err)
+	require.Equal(t, "\xC3\xA9", res)
+}
+
 func TestSliceSurvivesExtremeArguments(t *testing.T) {
 	items := func() *types.Array { return must.NotFail(types.NewArray(int32(1), int32(2), int32(3))) }
 
@@ -67,9 +94,13 @@ func TestSliceSurvivesExtremeArguments(t *testing.T) {
 	for i := range 2003 {
 		long.Append(int32(i))
 	}
-	res, err := processOperator(t, newSlice, long, int32(2000), nearMaxInt)
+	res, err := processOperator(t, newSlice, long, int32(2000), int32(math.MaxInt32))
 	require.NoError(t, err)
 	require.Equal(t, []any{int32(2000), int32(2001), int32(2002)}, arrayValues(res.(*types.Array)))
+
+	// A count that does not fit in 32 bits is rejected, as in MongoDB.
+	_, err = processOperator(t, newSlice, long, int32(2000), nearMaxInt)
+	requireCode(t, err, handlererrors.ErrSliceThirdNotInt)
 
 	_, err = processOperator(t, newSlice, items(), int32(1), int32(-1))
 	requireCode(t, err, handlererrors.ErrSliceThirdArgNotPositive)

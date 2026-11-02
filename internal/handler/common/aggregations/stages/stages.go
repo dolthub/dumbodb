@@ -29,33 +29,34 @@ type newStageFunc func(stage *types.Document) (aggregations.Stage, error)
 // Stages maps all supported aggregation Stages.
 var Stages = map[string]newStageFunc{
 	// sorted alphabetically
-	"$addFields":    newAddFields,
-	"$bucket":       newBucket,
-	"$changeStream": newChangeStream,
-	"$bucketAuto":  newBucketAuto,
-	"$collStats":   newCollStats,
-	"$count":       newCount,
-	"$densify":     newDensify,
-	"$facet":       newFacet,
-	"$fill":        newFill,
-	"$geoNear":     newGeoNear,
-	"$group":       newGroup,
-	"$limit":       newLimit,
-	"$match":       newMatch,
-	"$project":     newProject,
-	"$redact":      newRedact,
-	"$replaceRoot": newReplaceRoot,
-	"$replaceWith": newReplaceWith,
+	"$addFields":         newAddFields,
+	"$bucket":            newBucket,
+	"$changeStream":      newChangeStream,
+	"$bucketAuto":        newBucketAuto,
+	"$collStats":         newCollStats,
+	"$count":             newCount,
+	"$densify":           newDensify,
+	"$documents":         newDocumentsOnCollection,
+	"$facet":             newFacet,
+	"$fill":              newFill,
+	"$geoNear":           newGeoNear,
+	"$group":             newGroup,
+	"$limit":             newLimit,
+	"$match":             newMatch,
+	"$project":           newProject,
+	"$redact":            newRedact,
+	"$replaceRoot":       newReplaceRoot,
+	"$replaceWith":       newReplaceWith,
 	"$listSearchIndexes": newListSearchIndexes,
-	"$search":           newSearch,
-	"$set":              newSet,
-	"$sample":           newSample,
-	"$setWindowFields":  newSetWindowFields,
-	"$skip":             newSkip,
-	"$sort":             newSort,
-	"$sortByCount":      newSortByCount,
-	"$unset":            newUnset,
-	"$unwind":           newUnwind,
+	"$search":            newSearch,
+	"$set":               newSet,
+	"$sample":            newSample,
+	"$setWindowFields":   newSetWindowFields,
+	"$skip":              newSkip,
+	"$sort":              newSort,
+	"$sortByCount":       newSortByCount,
+	"$unset":             newUnset,
+	"$unwind":            newUnwind,
 	// please keep sorted alphabetically
 }
 
@@ -63,20 +64,19 @@ var Stages = map[string]newStageFunc{
 var unsupportedStages = map[string]struct{}{
 	// sorted alphabetically
 	// $changeStream is handled in Stages above (returns ChangeStreamNotSupported error)
-	"$currentOp":              {},
-	"$documents":              {},
+	"$currentOp": {},
 	// $densify is handled in Stages above (validates required fields before returning error)
 	// $fill is handled in Stages above (validates required fields before returning error)
 	// $geoNear is now implemented in stages.go
 	// $graphLookup is handled specially in msg_aggregate.go via NewGraphLookupStage
 	// $indexStats is handled specially in msg_aggregate.go via NewIndexStatsStage
-	"$listLocalSessions":      {},
-	"$listSessions":           {},
-	"$lookup": {}, // handled specially in msg_aggregate.go via NewLookupStage
+	"$listLocalSessions": {},
+	"$listSessions":      {},
+	"$lookup":            {}, // handled specially in msg_aggregate.go via NewLookupStage
 	// $merge and $out handled specially in msg_aggregate.go via NewMergeStage/NewOutStage
 	// $planCacheStats is handled specially in msg_aggregate.go via NewPlanCacheStatsStage
 	// $search is handled in Stages above (returns SearchNotEnabled error)
-	"$searchMeta":             {},
+	"$searchMeta": {},
 	// "$setWindowFields" is now implemented above
 
 	"$sharedDataDistribution": {},
@@ -121,4 +121,15 @@ func NewStage(stage *types.Document) (aggregations.Stage, error) {
 	}
 
 	panic("not reached")
+}
+
+// newDocumentsOnCollection is mongod's error for $documents where a
+// collection supplies the input; the database-level aggregate handles a
+// leading $documents before stages are built.
+func newDocumentsOnCollection(*types.Document) (aggregations.Stage, error) {
+	return nil, handlererrors.NewCommandErrorMsgWithArgument(
+		handlererrors.ErrInvalidNamespace,
+		"'$documents' can only be run with {aggregate: 1}",
+		"$documents (stage)",
+	)
 }

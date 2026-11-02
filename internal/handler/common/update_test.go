@@ -12,14 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package common
+package common_test
 
 import (
+	"context"
 	"testing"
 
+	"github.com/dolthub/dumbodb/internal/handler/common"
+	_ "github.com/dolthub/dumbodb/internal/handler/common/aggregations/stages"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
+
+func processPipelineUpdate(doc *types.Document, pipeline *types.Array) (bool, error) {
+	stages, err := common.ParseUpdatePipeline(pipeline)
+	if err != nil {
+		return false, err
+	}
+	return common.ProcessPipelineUpdate(context.Background(), doc, stages)
+}
 
 // TestPipelineUpdate_replaceWith tests $replaceWith as a stage in an update pipeline.
 // MongoDB allows UpdateOne/UpdateMany with a pipeline argument where $replaceWith
@@ -32,7 +43,7 @@ func TestPipelineUpdate_replaceWith(t *testing.T) {
 
 		// Document: {_id: 1, a: 1, sub: {x: 10, y: 20}}
 		// Pipeline: [{$replaceWith: "$sub"}]
-		// Expected: {x: 10, y: 20}
+		// Expected: {_id: 1, x: 10, y: 20}; MongoDB keeps the _id a stage drops.
 		sub := must.NotFail(types.NewDocument("x", int32(10), "y", int32(20)))
 		doc := must.NotFail(types.NewDocument("_id", int32(1), "a", int32(1), "sub", sub))
 
@@ -48,8 +59,8 @@ func TestPipelineUpdate_replaceWith(t *testing.T) {
 			t.Fatal("expected document to be changed")
 		}
 
-		if doc.Has("_id") {
-			t.Error("expected _id to be removed after $replaceWith")
+		if id, err := doc.Get("_id"); err != nil || id != int32(1) || doc.Keys()[0] != "_id" {
+			t.Errorf("expected _id 1 kept first after $replaceWith, got %v", doc)
 		}
 
 		if doc.Has("a") {

@@ -23,7 +23,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
-	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 )
 
 // replaceRoot represents $replaceRoot stage.
@@ -34,6 +33,11 @@ type replaceRoot struct {
 }
 
 func newReplaceRoot(stage *types.Document) (aggregations.Stage, error) {
+	return newReplaceRootStage(stage, true)
+}
+
+// newReplaceRootStage folds constant subexpressions if fold is set.
+func newReplaceRootStage(stage *types.Document, fold bool) (aggregations.Stage, error) {
 	spec, err := stage.Get("$replaceRoot")
 	if err != nil {
 		return nil, err
@@ -57,6 +61,12 @@ func newReplaceRoot(stage *types.Document) (aggregations.Stage, error) {
 		)
 	}
 
+	if fold {
+		if err := operators.CheckConstantSubexpressions(newRootVal); err != nil {
+			return nil, err
+		}
+	}
+
 	return &replaceRoot{newRoot: newRootVal}, nil
 }
 
@@ -64,9 +74,20 @@ func newReplaceRoot(stage *types.Document) (aggregations.Stage, error) {
 //
 //	{ $replaceWith: <replacement document expression> }
 func newReplaceWith(stage *types.Document) (aggregations.Stage, error) {
+	return newReplaceWithStage(stage, true)
+}
+
+// newReplaceWithStage folds constant subexpressions if fold is set.
+func newReplaceWithStage(stage *types.Document, fold bool) (aggregations.Stage, error) {
 	newRootVal, err := stage.Get("$replaceWith")
 	if err != nil {
 		return nil, err
+	}
+
+	if fold {
+		if err := operators.CheckConstantSubexpressions(newRootVal); err != nil {
+			return nil, err
+		}
 	}
 
 	return &replaceRoot{newRoot: newRootVal}, nil
@@ -152,8 +173,12 @@ func evaluateReplaceExpression(expr any, doc *types.Document) (*types.Document, 
 			return result, nil
 		}
 
-		// Literal document template  -- evaluate field path expressions in values.
-		return evaluateDocumentExpression(e, doc)
+		// A document literal, evaluated as MongoDB's ExpressionObject.
+		v, _, err := operators.EvalOperand(e, doc)
+		if err != nil {
+			return nil, err
+		}
+		return v.(*types.Document), nil
 
 	default:
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
@@ -165,78 +190,6 @@ func evaluateReplaceExpression(expr any, doc *types.Document) (*types.Document, 
 			"$replaceRoot (stage)",
 		)
 	}
-}
-
-// evaluateDocumentExpression processes a document where values may be field path expressions.
-// For each value that is a string starting with "$", it evaluates the expression against doc.
-// Other values are copied as literals.
-func evaluateDocumentExpression(templateDoc *types.Document, doc *types.Document) (*types.Document, error) {
-	result, err := types.NewDocument()
-	if err != nil {
-		return nil, lazyerrors.Error(err)
-	}
-
-	iter := templateDoc.Iterator()
-	defer iter.Close()
-
-	for {
-		k, v, iterErr := iter.Next()
-		if iterErr != nil {
-			break
-		}
-
-		var outVal any
-
-		switch val := v.(type) {
-		case string:
-			if len(val) > 0 && val[0] == '$' {
-				fieldExpr, exprErr := aggregations.NewExpression(val, nil)
-				if exprErr != nil {
-					outVal = val // treat as literal if not a valid expression
-				} else {
-					evaluated, evalErr := fieldExpr.Evaluate(doc)
-					if evalErr != nil {
-						outVal = types.Null
-					} else {
-						outVal = evaluated
-					}
-				}
-			} else {
-				outVal = val
-			}
-
-		case *types.Document:
-			// Operator expression (e.g. {$mergeObjects: [...]})  -- evaluate it.
-			if operators.IsOperator(val) {
-				op, opErr := operators.NewOperator(val)
-				if opErr != nil {
-					return nil, lazyerrors.Error(opErr)
-				}
-
-				evaluated, opErr := op.Process(doc)
-				if opErr != nil {
-					return nil, lazyerrors.Error(opErr)
-				}
-
-				outVal = evaluated
-			} else {
-				// Recursively evaluate nested literal documents.
-				nested, evalErr := evaluateDocumentExpression(val, doc)
-				if evalErr != nil {
-					return nil, evalErr
-				}
-
-				outVal = nested
-			}
-
-		default:
-			outVal = v
-		}
-
-		result.Set(k, outVal)
-	}
-
-	return result, nil
 }
 
 var (
