@@ -145,20 +145,7 @@ func parsePipelineArray(arr *types.Array, fetcher CollectionFetcher) ([]aggregat
 			)
 		}
 
-		var s aggregations.Stage
-		var err error
-		switch cmd := stageDoc.Command(); {
-		case cmd == "$match":
-			s, err = NewMatchStage(stageDoc, nil, SeesStoredDocuments(subStages, i))
-		case fetcher != nil && cmd == "$lookup":
-			s, err = NewLookupStage(stageDoc, fetcher)
-		case fetcher != nil && cmd == "$graphLookup":
-			s, err = NewGraphLookupStage(stageDoc, fetcher)
-		case fetcher != nil && cmd == "$unionWith":
-			s, err = NewUnionWithStage(stageDoc, fetcher)
-		default:
-			s, err = NewStage(stageDoc)
-		}
+		s, err := newSubPipelineStage(stageDoc, fetcher, SeesStoredDocuments(subStages, i))
 		if err != nil {
 			return nil, err
 		}
@@ -167,6 +154,28 @@ func parsePipelineArray(arr *types.Array, fetcher CollectionFetcher) ([]aggregat
 	}
 
 	return stageList, nil
+}
+
+// newSubPipelineStage builds one stage of a $facet, $lookup or $unionWith
+// sub-pipeline, giving fetcher to the stages that read other collections.
+func newSubPipelineStage(stage *types.Document, fetcher CollectionFetcher, seesStoredDocuments bool) (aggregations.Stage, error) {
+	cmd := stage.Command()
+	if cmd == "$match" {
+		return NewMatchStage(stage, nil, seesStoredDocuments)
+	}
+	if fetcher != nil {
+		switch cmd {
+		case "$lookup":
+			return NewLookupStage(stage, fetcher)
+		case "$graphLookup":
+			return NewGraphLookupStage(stage, fetcher)
+		case "$unionWith":
+			return NewUnionWithStage(stage, fetcher)
+		case "$facet":
+			return NewFacetStage(stage, fetcher)
+		}
+	}
+	return NewStage(stage)
 }
 
 // runSubPipeline runs a set of stages on the given input documents and returns the result.

@@ -606,22 +606,7 @@ func (l *lookup) runPipeline(ctx context.Context, fetcher CollectionFetcher, fro
 			continue
 		}
 
-		// Create the stage. $lookup is handled specially to pass the fetcher.
-		var stage aggregations.Stage
-
-		switch substituted.Command() {
-		case "$lookup":
-			stage, err = NewLookupStage(substituted, fetcher)
-		case "$unionWith":
-			stage, err = NewUnionWithStage(substituted, fetcher)
-		case "$facet":
-			stage, err = NewFacetStage(substituted, fetcher)
-		case "$match":
-			stage, err = NewMatchStage(substituted, nil, SeesStoredDocuments(subStages, stageIndex))
-		default:
-			stage, err = NewStage(substituted)
-		}
-
+		stage, err := newSubPipelineStage(substituted, fetcher, SeesStoredDocuments(subStages, stageIndex))
 		if err != nil {
 			return nil, err
 		}
