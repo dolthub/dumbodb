@@ -68,6 +68,7 @@ type regexCacheKey struct {
 }
 
 // compiledRegexes keeps filters from compiling a pattern once per document.
+// It is shared by every database; owning it per database is workspace-cew.
 var compiledRegexes = must.NotFail(lru.New[regexCacheKey, compiledRegex](1024))
 
 // Compile compiles the regex as PCRE2 does for mongod, with the same
