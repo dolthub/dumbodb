@@ -27,13 +27,15 @@ const minBaseline = 20 * time.Millisecond
 // maxRatio separates linear growth (4x for 4x the input) from quadratic (16x).
 const maxRatio = 8.0
 
-// attempts is how many times the ratio is measured before failing. Load from
-// other tests can inflate one measurement; superlinear growth inflates all.
+// attempts is how many times both sizes are measured before failing. Load
+// from other tests only slows a run down, so the fastest run of each size is
+// kept across attempts: noise cannot hide superlinear growth, and the ratio
+// settles once both sizes have had an unloaded run.
 const attempts = 3
 
 // Assert fails t when run(4n) takes more than maxRatio times as long as
-// run(n) on every attempt. n is doubled first until run(n) takes at least
-// minBaseline.
+// run(n), comparing the fastest runs seen of each. n is doubled first until
+// run(n) takes at least minBaseline.
 func Assert(t testing.TB, n int, run func(n int)) {
 	t.Helper()
 
@@ -43,18 +45,14 @@ func Assert(t testing.TB, n int, run func(n int)) {
 		base = fastest(n, run)
 	}
 
-	var ratio float64
-	var quadrupled time.Duration
-	for attempt := range attempts {
-		if attempt > 0 {
-			base = fastest(n, run)
-		}
-		quadrupled = fastest(4*n, run)
-		if ratio = float64(quadrupled) / float64(base); ratio <= maxRatio {
-			return
-		}
+	quadrupled := fastest(4*n, run)
+	for attempt := 1; float64(quadrupled) > maxRatio*float64(base) && attempt < attempts; attempt++ {
+		base = min(base, fastest(n, run))
+		quadrupled = min(quadrupled, fastest(4*n, run))
 	}
-	t.Errorf("4x input (n=%d) took %.1fx as long (%v vs %v); want about 4x", n, ratio, quadrupled, base)
+	if ratio := float64(quadrupled) / float64(base); ratio > maxRatio {
+		t.Errorf("4x input (n=%d) took %.1fx as long (%v vs %v); want about 4x", n, ratio, quadrupled, base)
+	}
 }
 
 // fastest returns the best of three runs, to discount scheduler noise.
