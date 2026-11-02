@@ -29,8 +29,8 @@ import (
 )
 
 type rawFacetPipeline struct {
-	name         string
-	pipelineArr  *types.Array
+	name        string
+	pipelineArr *types.Array
 }
 
 // facet represents $facet stage.
@@ -47,6 +47,22 @@ type facet struct {
 	// fetcher reads other collections for $lookup, $graphLookup and
 	// $unionWith in the sub-pipelines; nil where none is available.
 	fetcher CollectionFetcher
+}
+
+// notAllowedInFacet are the stages mongod refuses in a $facet sub-pipeline.
+var notAllowedInFacet = map[string]bool{
+	"$collStats":         true,
+	"$documents":         true,
+	"$facet":             true,
+	"$geoNear":           true,
+	"$indexStats":        true,
+	"$merge":             true,
+	"$out":               true,
+	"$planCacheStats":    true,
+	"$changeStream":      true,
+	"$listSessions":      true,
+	"$currentOp":         true,
+	"$listLocalSessions": true,
 }
 
 // newFacet creates a new $facet stage.
@@ -111,10 +127,10 @@ func newFacet(stage *types.Document) (aggregations.Stage, error) {
 					"$facet (stage)",
 				)
 			}
-			if stage.Command() == "$documents" {
+			if cmd := stage.Command(); notAllowedInFacet[cmd] {
 				return nil, handlererrors.NewCommandErrorMsgWithArgument(
 					handlererrors.ErrStageNotAllowedInFacet,
-					"$documents is not allowed to be used within a $facet stage",
+					cmd+" is not allowed to be used within a $facet stage",
 					"$facet (stage)",
 				)
 			}
