@@ -147,6 +147,9 @@ func checkProjectionConstants(value any) error {
 	return nil
 }
 
+// validateProjectionShape is find's form of projection.ValidateProjectionShape:
+// it also accepts positional, $elemMatch and $slice projections, and its
+// errors have no "Invalid $project" prefix. Merging the two is workspace-ybk.
 func validateProjectionShape(projection *types.Document) (*types.Document, bool, error) {
 	validated := types.MakeDocument(0)
 
