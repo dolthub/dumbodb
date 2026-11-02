@@ -34,6 +34,7 @@ func ValidatePipelineMetadata(stages []any) error {
 	}
 
 	used := map[string]bool{}
+	var textScoreBeforeGroup, grouped bool
 	for _, stage := range stages {
 		doc, ok := stage.(*types.Document)
 		if !ok || doc.Len() == 0 {
@@ -43,14 +44,23 @@ func ValidatePipelineMetadata(stages []any) error {
 		case "$lookup", "$graphLookup", "$unionWith":
 			continue
 		}
-		collectMetaNames(doc, used)
+		stageUsed := map[string]bool{}
+		collectMetaNames(doc, stageUsed)
+		for name := range stageUsed {
+			used[name] = true
+		}
+		textScoreBeforeGroup = textScoreBeforeGroup || stageUsed["textScore"] && !grouped
+		switch doc.Command() {
+		case "$group", "$bucket", "$bucketAuto", "$sortByCount", "$count":
+			grouped = true
+		}
 	}
 
 	hasText := first != nil && first.Command() == "$match" && filterHasText(must.NotFail(first.Get("$match")))
 	hasGeoNear := first != nil && first.Command() == "$geoNear"
-	if used["textScore"] && hasText {
+	if textScoreBeforeGroup && hasText {
 		// DumboDB has no text scoring. Fail rather than return a missing score
-		// that a client would sort on.
+		// that a client would sort on; grouping stages drop the score anyway.
 		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrNotImplemented,
 			"text score metadata is not supported in aggregation", "$meta")
 	}
