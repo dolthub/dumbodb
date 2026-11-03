@@ -25,13 +25,13 @@ import (
 )
 
 // Index ranges are read lazily and sized before they are read
-// (dolthub/dumbodb#139, #140): a limit stops the reads, a hint uses the index
+// (dolthub/dumbodb#139): a limit stops the reads, a hint uses the index
 // however wide its range, and a range over half the collection is declined
-// for a scan without reading its keys.
+// for a scan after a short read-ahead, with no keys counted as examined.
 func TestIndexRangeReads(t *testing.T) {
 	var docs []*types.Document
 	for i := int32(1); i < 1000; i++ {
-		docs = append(docs, must.NotFail(types.NewDocument("_id", i, "g", i%10)))
+		docs = append(docs, must.NotFail(types.NewDocument("_id", i, "g", i%10, "o", i%2)))
 	}
 	c := newSortWalkCollection(t, backends.IndexInfo{Name: "g", Key: []backends.IndexKeyPair{{Field: "g"}}}, docs...)
 	doc := func(pairs ...any) *types.Document { return must.NotFail(types.NewDocument(pairs...)) }
@@ -73,6 +73,12 @@ func TestIndexRangeReads(t *testing.T) {
 	t.Run("hint reads a wide range from the index", func(t *testing.T) {
 		if w, _ := run(&backends.QueryParams{Filter: wide, Hint: "g"}, -1); w.keys != 900 || w.docs != 900 {
 			t.Fatalf("hinted wide range read %d keys and %d documents, want 900 and 900", w.keys, w.docs)
+		}
+	})
+	t.Run("hint streams a sorted wide range with a filter field outside the index", func(t *testing.T) {
+		params := &backends.QueryParams{Filter: doc("g", doc("$gte", int32(1)), "o", int32(1)), Sort: sortOn("g", 1), LimitHint: 3, Hint: "g"}
+		if w, _ := run(params, 3); w.keys != 3 || w.docs != 3 {
+			t.Fatalf("hinted sorted wide range read %d keys and %d documents, want 3 and 3", w.keys, w.docs)
 		}
 	})
 	t.Run("wide range scans without reading the index", func(t *testing.T) {
