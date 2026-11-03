@@ -180,6 +180,7 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 			}
 		}
 
+		var plan *indexLookupPlan
 		if !fieldSort {
 			iter, ok, err := streamIndexRanges(ctx, state, m, idxInfos, idxMaps, params)
 			if err != nil {
@@ -189,10 +190,11 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 				return &backends.QueryResult{Iter: iter}, nil
 			}
 		}
-
-		plan, err := planIndexLookupIn(ctx, m, idxInfos, idxMaps, params.Filter, params.Hint, params.Collation, fieldSort)
-		if err != nil {
-			return nil, err
+		// The stream has already sized and declined any other filter.
+		if fieldSort || isLoneOr(params.Filter) {
+			if plan, err = planIndexLookupIn(ctx, m, idxInfos, idxMaps, params.Filter, params.Hint, params.Collation, fieldSort); err != nil {
+				return nil, err
+			}
 		}
 		if plan != nil {
 			if reverse, ok := indexScanSortOrder(plan.info, params.Filter, params.Sort, params.Collation); fieldSort && !plan.union && ok {
@@ -629,7 +631,7 @@ func readIndexLookup(ctx context.Context, primary prolly.Map, idxInfos []backend
 	if filter == nil || filter.Len() == 0 || len(idxInfos) == 0 {
 		return nil, nil
 	}
-	if filter.Len() == 1 && filter.Keys()[0] == "$or" {
+	if isLoneOr(filter) {
 		if hint != nil {
 			return nil, nil
 		}
@@ -950,6 +952,11 @@ func unionIndexChoices(ctx context.Context, idxInfos []backends.IndexInfo, idxMa
 	return union, nil
 }
 
+// isLoneOr reports whether filter is a single top-level $or.
+func isLoneOr(filter *types.Document) bool {
+	return filter.Len() == 1 && filter.Keys()[0] == "$or"
+}
+
 // flattenOrBranches returns the documents of an $or array, with the branches
 // of any branch that is itself a lone $or in its place.
 func flattenOrBranches(branches any) ([]*types.Document, bool) {
@@ -963,7 +970,7 @@ func flattenOrBranches(branches any) ([]*types.Document, bool) {
 		if !ok {
 			return nil, false
 		}
-		if branch.Len() == 1 && branch.Keys()[0] == "$or" {
+		if isLoneOr(branch) {
 			nested, ok := flattenOrBranches(must.NotFail(branch.Get("$or")))
 			if !ok {
 				return nil, false
