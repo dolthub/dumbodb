@@ -48,7 +48,7 @@ func TestFilterImpliesPartialRange(t *testing.T) {
 		{"string range", doc("s", doc("$gte", "b", "$lt", "c")), doc("s", doc("$gte", "a")), true},
 		{"field missing from filter", doc("k", int32(1)), lt100, false},
 		{"unsupported operator in filter", doc("grp", doc("$in", must.NotFail(types.NewArray(int32(1))))), lt100, false},
-		{"unsupported operator in pfe", lt100, doc("grp", doc("$exists", true)), false},
+		{"unsupported operator in pfe", lt100, doc("grp", doc("$type", "int")), false},
 		{"mixed brackets in pfe", lt100, doc("grp", doc("$lt", int32(100), "$gt", "a")), false},
 		{"NaN", doc("grp", doc("$lt", math.NaN())), lt100, false},
 		{"scalar equality", doc("grp", int32(5)), doc("grp", int32(5)), true},

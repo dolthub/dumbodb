@@ -1,0 +1,214 @@
+// Copyright 2026 Dolthub, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package dolt
+
+import (
+	"context"
+
+	"github.com/dolthub/dolt/go/store/prolly"
+	"github.com/dolthub/dolt/go/store/prolly/tree"
+
+	"github.com/dolthub/dumbodb/internal/backends"
+	idxpkg "github.com/dolthub/dumbodb/internal/index"
+	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/iterator"
+)
+
+// streamIndexRanges serves params' filter by reading its index ranges lazily,
+// so a downstream limit stops the reads. It declines when no index serves the
+// filter or the ranges are not worth reading (indexStreamWorthReading).
+func streamIndexRanges(ctx context.Context, state *dbState, primary prolly.Map, idxInfos []backends.IndexInfo, idxMaps []prolly.Map, params *backends.QueryParams) (types.DocumentsIterator, bool, error) {
+	if params.Filter.Len() == 0 || params.Filter.Has("$or") {
+		return nil, false, nil
+	}
+	choice, ok := chooseIndexRange(idxInfos, params.Filter, params.Hint, params.Collation)
+	if !ok {
+		return nil, false, nil
+	}
+	info, idxMap := idxInfos[choice.mapIdx], idxMaps[choice.mapIdx]
+	ids := newIndexIDStream(ctx, idxMap, choice.ranges(), false, info.Multikey)
+	worth, err := indexStreamWorthReading(ctx, primary, idxMaps, choice, info, params, ids)
+	if err != nil || !worth {
+		return nil, false, err
+	}
+	return &indexRangeIter{
+		ctx:     ctx,
+		ns:      state.ns,
+		primary: primary,
+		ids:     ids,
+		fields:  params.Fields,
+		release: pinRoots(state, primary, idxMap),
+	}, true, nil
+}
+
+// indexStreamWorthReading reports whether streaming choice's ranges, one point
+// lookup per entry, beats a collection scan: always under a hint, or under a
+// limit when every filter field is a key of the index so each entry read is
+// a match; otherwise only when the ranges hold at most half the collection.
+// It reads ahead into ids to size a narrow range.
+func indexStreamWorthReading(ctx context.Context, primary prolly.Map, idxMaps []prolly.Map, choice indexRangeChoice, info backends.IndexInfo, params *backends.QueryParams, ids *indexIDStream) (bool, error) {
+	if params.Hint != nil || (params.LimitHint > 0 && filterFieldsAreIndexKeys(params.Filter, info)) {
+		return true, nil
+	}
+	return indexRangesWithinHalf(primary, ids.holdsAtMost, func() (uint64, error) {
+		return indexRangeEntries(ctx, idxMaps, choice)
+	})
+}
+
+// pinRoots keeps maps' chunks from background GC until the returned release
+// runs; it returns nil when nothing collects them.
+func pinRoots(state *dbState, maps ...prolly.Map) func() {
+	if state.backend == nil || state.backend.backgroundRP == nil {
+		return nil
+	}
+	releases := make([]func(), len(maps))
+	for i, m := range maps {
+		releases[i] = state.backend.backgroundRP.pinRoot(state.name, m.HashOf())
+	}
+	return func() {
+		for _, release := range releases {
+			release()
+		}
+	}
+}
+
+// indexRangeIter fetches the documents of an index id stream, one point
+// lookup per id as it is read.
+type indexRangeIter struct {
+	ctx     context.Context
+	ns      tree.NodeStore
+	primary prolly.Map
+	ids     *indexIDStream
+	fields  []string
+	release func()
+}
+
+func (it *indexRangeIter) Next() (struct{}, *types.Document, error) {
+	for {
+		id, err := it.ids.next()
+		if err != nil {
+			return struct{}{}, nil, err
+		}
+		if id == nil {
+			return struct{}{}, nil, iterator.ErrIteratorDone
+		}
+		doc, err := lookupDocFromPrimary(it.ctx, it.primary, it.ns, id, it.fields)
+		if err != nil {
+			return struct{}{}, nil, err
+		}
+		if doc != nil {
+			doc.SetRecordID(keyBytesToRecordID(id))
+			return struct{}{}, doc, nil
+		}
+	}
+}
+
+func (it *indexRangeIter) Close() {
+	if it.release != nil {
+		it.release()
+		it.release = nil
+	}
+}
+
+// indexIDStream yields the primary ids of index ranges lazily, in index order
+// or reversed, counting each index key as it is consumed.
+type indexIDStream struct {
+	ctx     context.Context
+	idxMap  prolly.Map
+	ranges  [][2][]byte
+	reverse bool
+	current *idxpkg.RangeIDIter
+	// buffered holds ids read ahead by holdsAtMost, yielded before current's.
+	buffered [][]byte
+	// seen holds the ids already yielded when an id can repeat: a multikey
+	// index, or more than one range.
+	seen map[string]struct{}
+}
+
+func newIndexIDStream(ctx context.Context, idxMap prolly.Map, ranges [][2][]byte, reverse, multikey bool) *indexIDStream {
+	s := &indexIDStream{ctx: ctx, idxMap: idxMap, ranges: ranges, reverse: reverse}
+	if multikey || len(ranges) > 1 {
+		s.seen = make(map[string]struct{})
+	}
+	return s
+}
+
+// holdsAtMost reads ahead up to n+1 entries and reports whether the ranges
+// end within n.
+func (s *indexIDStream) holdsAtMost(n int) (bool, error) {
+	for len(s.buffered) <= n {
+		id, err := s.readID()
+		if err != nil || id == nil {
+			return id == nil, err
+		}
+		s.buffered = append(s.buffered, id)
+	}
+	return false, nil
+}
+
+// next returns the next id not yet yielded, or nil after the last.
+func (s *indexIDStream) next() ([]byte, error) {
+	for {
+		var id []byte
+		if len(s.buffered) > 0 {
+			id = s.buffered[0]
+			s.buffered = s.buffered[1:]
+		} else {
+			var err error
+			if id, err = s.readID(); err != nil {
+				return nil, err
+			}
+		}
+		if id == nil {
+			return nil, nil
+		}
+		countKeysExamined(1)
+		if s.seen == nil {
+			return id, nil
+		}
+		if _, dup := s.seen[string(id)]; !dup {
+			s.seen[string(id)] = struct{}{}
+			return id, nil
+		}
+	}
+}
+
+// readID reads the next entry's primary id across the ranges, or nil after
+// the last.
+func (s *indexIDStream) readID() ([]byte, error) {
+	for {
+		if s.current == nil {
+			if len(s.ranges) == 0 {
+				return nil, nil
+			}
+			var r [2][]byte
+			if s.reverse {
+				r, s.ranges = s.ranges[len(s.ranges)-1], s.ranges[:len(s.ranges)-1]
+			} else {
+				r, s.ranges = s.ranges[0], s.ranges[1:]
+			}
+			current, err := idxpkg.NewRangeIDIter(s.ctx, s.idxMap, r[0], r[1], s.reverse)
+			if err != nil {
+				return nil, err
+			}
+			s.current = current
+		}
+		id, err := s.current.Next(s.ctx)
+		if err != nil || id != nil {
+			return id, err
+		}
+		s.current = nil
+	}
+}

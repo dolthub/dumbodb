@@ -443,36 +443,19 @@ func tryStreamSortedRange(ctx context.Context, state *dbState, primary prolly.Ma
 	if !ok || choice.pointRanges != nil {
 		return nil, false, nil
 	}
-	info := idxInfos[choice.mapIdx]
+	info, idxMap := idxInfos[choice.mapIdx], idxMaps[choice.mapIdx]
 	reverse, ok := indexScanSortOrder(info, params.Filter, params.Sort, params.Collation)
 	if !ok {
 		return nil, false, nil
 	}
-	// A filter field outside the index may reject most of the range, which
-	// the stream would then fetch document by document; past half the
-	// collection the sequential scan is cheaper.
-	if !filterFieldsAreIndexKeys(params.Filter, info) {
-		entries, err := idxpkg.RangeCardinality(ctx, idxMaps[choice.mapIdx], choice.startKey, choice.stopKey)
-		if err != nil {
-			return nil, false, err
-		}
-		docs, err := primary.Count()
-		if err != nil {
-			return nil, false, err
-		}
-		if entries > uint64(docs)/2 {
-			return nil, false, nil
-		}
-	}
-	stream, err := idxpkg.NewRangeIDIter(ctx, idxMaps[choice.mapIdx], choice.startKey, choice.stopKey, reverse)
-	if err != nil {
+	ids := newIndexIDStream(ctx, idxMap, choice.ranges(), reverse, info.Multikey)
+	worth, err := indexStreamWorthReading(ctx, primary, idxMaps, choice, info, params, ids)
+	if err != nil || !worth {
 		return nil, false, err
 	}
 	it := newPlanSortedIter(ctx, state, primary, nil, params.Sort, false, params.Fields).(*planSortedIter)
-	it.stream = stream
-	if it.release != nil {
-		releasePrimary := it.release
-		releaseIndex := state.backend.backgroundRP.pinRoot(state.name, idxMaps[choice.mapIdx].HashOf())
+	it.stream = ids
+	if releasePrimary, releaseIndex := it.release, pinRoots(state, idxMap); releasePrimary != nil {
 		it.release = func() {
 			releasePrimary()
 			releaseIndex()
@@ -561,7 +544,7 @@ type planSortedIter struct {
 	ns      tree.NodeStore
 	primary prolly.Map
 	ids     [][]byte
-	stream  *idxpkg.RangeIDIter
+	stream  *indexIDStream
 	path    types.Path
 	order   types.SortType
 	fields  []string
@@ -594,11 +577,7 @@ func (it *planSortedIter) nextFetched() (*types.Document, error) {
 
 func (it *planSortedIter) nextID() ([]byte, error) {
 	if it.stream != nil {
-		id, err := it.stream.Next(it.ctx)
-		if id != nil {
-			countKeysExamined(1)
-		}
-		return id, err
+		return it.stream.next()
 	}
 	if len(it.ids) == 0 {
 		return nil, nil

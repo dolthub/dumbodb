@@ -97,3 +97,48 @@ func TestTryIndexLookup_In(t *testing.T) {
 		})
 	}
 }
+
+// $in on the leading field of a compound index reads one key range per value
+// (dolthub/dumbodb#131), including when the leading field holds arrays.
+func TestTryIndexLookup_InOnCompoundLeadingField(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	b := newTestBackend(t)
+	db := must.NotFail(b.Database("testdb"))
+	coll := must.NotFail(db.Collection("testcoll"))
+
+	var docs []*types.Document
+	for i := int32(0); i < 100; i++ {
+		docs = append(docs, must.NotFail(types.NewDocument("_id", i, "bucket", i%10, "k", i)))
+	}
+	docs = append(docs, must.NotFail(types.NewDocument("_id", int32(200), "bucket", must.NotFail(types.NewArray(int32(1), int32(3))), "k", int32(200))))
+	_, err := coll.InsertAll(ctx, &backends.InsertAllParams{Docs: docs})
+	must.NoError(err)
+	_, err = coll.CreateIndexes(ctx, &backends.CreateIndexesParams{
+		Indexes: []backends.IndexInfo{{Name: "bucket_1_k_1", Key: []backends.IndexKeyPair{{Field: "bucket"}, {Field: "k"}}}},
+	})
+	must.NoError(err)
+
+	c := &collection{db: &database{backend: b, name: "testdb", rootish: defaultBranch}, name: "testcoll"}
+	m, _, state, err := c.getMap(ctx)
+	must.NoError(err)
+
+	filter := must.NotFail(types.NewDocument("bucket", must.NotFail(types.NewDocument("$in", must.NotFail(types.NewArray(int32(1), int32(3)))))))
+	got, used, err := c.tryIndexLookup(ctx, state, m, filter, nil, nil)
+	if err != nil {
+		t.Fatalf("tryIndexLookup: %v", err)
+	}
+	if !used {
+		t.Fatal("compound-prefix $in must use the index")
+	}
+	var ids []int32
+	for _, d := range got {
+		ids = append(ids, must.NotFail(d.Get("_id")).(int32))
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	want := []int32{1, 3, 11, 13, 21, 23, 31, 33, 41, 43, 51, 53, 61, 63, 71, 73, 81, 83, 91, 93, 200}
+	if !reflect.DeepEqual(ids, want) {
+		t.Fatalf("ids = %v, want %v (the array document once)", ids, want)
+	}
+}
