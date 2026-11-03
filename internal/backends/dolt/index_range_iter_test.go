@@ -92,6 +92,12 @@ func TestIndexRangeReads(t *testing.T) {
 			t.Fatalf("wide $or read %d keys, want a scan", w.keys)
 		}
 	})
+	t.Run("$or beside an indexed field reads that field's index", func(t *testing.T) {
+		filter := doc("g", int32(3), "$or", must.NotFail(types.NewArray(doc("o", int32(0)), doc("o", int32(1)))))
+		if w, _ := run(&backends.QueryParams{Filter: filter}, -1); w.keys != 100 || w.docs != 100 {
+			t.Fatalf("$or beside g read %d keys and %d documents, want 100 and 100", w.keys, w.docs)
+		}
+	})
 	t.Run("nested $or is a union of index scans", func(t *testing.T) {
 		nested := doc("$or", must.NotFail(types.NewArray(doc("g", int32(1)), doc("$or", must.NotFail(types.NewArray(doc("g", int32(2))))))))
 		if w, _ := run(&backends.QueryParams{Filter: nested}, -1); w.keys != 200 || w.docs != 200 {

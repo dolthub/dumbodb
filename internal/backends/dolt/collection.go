@@ -190,8 +190,8 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 				return &backends.QueryResult{Iter: iter}, nil
 			}
 		}
-		// The stream has already sized and declined any other filter.
-		if fieldSort || isLoneOr(params.Filter) {
+		// The stream has already sized and declined any filter without $or.
+		if fieldSort || params.Filter.Has("$or") {
 			if plan, err = planIndexLookupIn(ctx, m, idxInfos, idxMaps, params.Filter, params.Hint, params.Collation, fieldSort); err != nil {
 				return nil, err
 			}
