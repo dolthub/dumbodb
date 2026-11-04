@@ -132,25 +132,6 @@ func (c *collection) trySortWalk(ctx context.Context, state *dbState, primary pr
 	return it, true, nil
 }
 
-// sortWalkWinsTrial returns the index Query walks for params when its trial
-// prefers that walk to the index serving the filter.
-func (c *collection) sortWalkWinsTrial(ctx context.Context, params *backends.QueryParams) (string, bool) {
-	primary, exists, state, err := c.getMap(ctx)
-	if err != nil || !exists {
-		return "", false
-	}
-	plan, err := c.planIndexLookup(ctx, state, primary, params.Filter, params.Hint, params.Collation, false)
-	if err != nil || plan == nil {
-		return "", false
-	}
-	iter, outcome, err := c.trySortWalkTrial(ctx, state, primary, params, plan)
-	if err != nil || outcome != trialWalkWon {
-		return "", false
-	}
-	iter.Close()
-	return iter.rest.index, true
-}
-
 // trialMaxResults is the result count at which MongoDB's multi-planner ends
 // its trial period.
 const trialMaxResults = 101
@@ -368,23 +349,23 @@ func (it *sortWalkIter) Close() {
 // tryStreamSortedRange serves a limited single-field sort from the range of
 // the index chosen for the filter when that range is already in sort order,
 // reading index entries and documents only as the limit consumes them.
-func tryStreamSortedRange(ctx context.Context, state *dbState, primary prolly.Map, idxInfos []backends.IndexInfo, idxMaps []prolly.Map, params *backends.QueryParams) (types.DocumentsIterator, bool, error) {
+func tryStreamSortedRange(ctx context.Context, state *dbState, primary prolly.Map, idxInfos []backends.IndexInfo, idxMaps []prolly.Map, params *backends.QueryParams) (types.DocumentsIterator, backends.IndexInfo, bool, error) {
 	if params.LimitHint <= 0 || params.Filter == nil || params.Filter.Has("$or") {
-		return nil, false, nil
+		return nil, backends.IndexInfo{}, false, nil
 	}
 	choice, ok := chooseIndexRange(idxInfos, params.Filter, params.Hint, params.Collation)
 	if !ok || choice.pointRanges != nil {
-		return nil, false, nil
+		return nil, backends.IndexInfo{}, false, nil
 	}
 	info, idxMap := idxInfos[choice.mapIdx], idxMaps[choice.mapIdx]
 	reverse, ok := indexScanSortOrder(info, params.Filter, params.Sort, params.Collation)
 	if !ok {
-		return nil, false, nil
+		return nil, backends.IndexInfo{}, false, nil
 	}
 	ids := newIndexIDStream(ctx, idxMap, choice.ranges(), reverse, info.Multikey)
 	worth, err := indexStreamWorthReading(ctx, primary, idxMaps, choice, info, params, ids)
 	if err != nil || !worth {
-		return nil, false, err
+		return nil, backends.IndexInfo{}, false, err
 	}
 	it := newPlanSortedIter(ctx, state, primary, nil, params.Sort, false, params.Fields).(*planSortedIter)
 	it.stream = ids
@@ -394,7 +375,7 @@ func tryStreamSortedRange(ctx context.Context, state *dbState, primary prolly.Ma
 			releaseIndex()
 		}
 	}
-	return it, true, nil
+	return it, info, true, nil
 }
 
 func filterFieldsAreIndexKeys(filter *types.Document, idx backends.IndexInfo) bool {

@@ -213,6 +213,9 @@ func cloneExecutionStage(node *types.Document, run explainRun, root, aboveMatch 
 		d.Set("keysExamined", int32(run.keys))
 	case "FETCH", "COLLSCAN":
 		d.Set("docsExamined", int32(run.docs))
+	case "EXPRESS_IXSCAN", "EXPRESS_UPDATE", "EXPRESS_DELETE":
+		d.Set("keysExamined", int32(run.keys))
+		d.Set("docsExamined", int32(run.docs))
 	}
 	if v, _ := node.Get("indexName"); v != nil {
 		d.Set("indexName", v)
@@ -368,6 +371,7 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 	qp.Command = params.CommandName
 	qp.DistinctKey = params.DistinctKey
 	qp.Multi = params.Multi
+	qp.Remove = params.Remove
 
 	var opCollation *types.Document
 	if params.Command != nil {

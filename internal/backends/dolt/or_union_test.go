@@ -57,7 +57,8 @@ func TestOrUnionReadsOnlyBranchMatches(t *testing.T) {
 }
 
 func TestOrUnionFallsBackToScan(t *testing.T) {
-	c := newSortVsFilterCollection(t, 100)
+	// Past twice narrowRangeEntries, so a union over half is not narrow.
+	c := newSortVsFilterCollection(t, 300)
 	for _, tc := range []struct {
 		name   string
 		filter *types.Document
@@ -68,9 +69,9 @@ func TestOrUnionFallsBackToScan(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ids, _ := sortWalkQuery(t, c, &backends.QueryParams{Filter: tc.filter})
-			// 101: the fixture's seed document plus 1..100.
-			if len(ids) != 101 {
-				t.Fatalf("returned %d documents, want a scan of all 101", len(ids))
+			// 301: the fixture's seed document plus 1..300.
+			if len(ids) != 301 {
+				t.Fatalf("returned %d documents, want a scan of all 301", len(ids))
 			}
 		})
 	}

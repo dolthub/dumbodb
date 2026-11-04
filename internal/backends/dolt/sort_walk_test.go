@@ -477,8 +477,10 @@ func TestIndexKeysSortedBeforeFetch(t *testing.T) {
 }
 
 func TestStreamSortedRangeCapsOtherPredicates(t *testing.T) {
+	// grp 0 holds 300 of 400 documents: wider than narrowRangeEntries and
+	// than half the collection.
 	var docs []*types.Document
-	for i := int32(1); i <= 100; i++ {
+	for i := int32(1); i <= 400; i++ {
 		grp := int32(0)
 		if i%4 == 0 {
 			grp = 1
@@ -490,14 +492,14 @@ func TestStreamSortedRangeCapsOtherPredicates(t *testing.T) {
 		return sortWalkQuery(t, c, &backends.QueryParams{Filter: filter, Sort: sortOn("k", -1), LimitHint: 3})
 	}
 	ids, sorted := query(must.NotFail(types.NewDocument("grp", int32(0))))
-	if !sorted || !slices.Equal(ids[:3], []int32{99, 98, 97}) {
-		t.Fatalf("index-bound filter: ids %v sorted %v, want a sorted stream from 99", ids, sorted)
+	if !sorted || !slices.Equal(ids[:3], []int32{399, 398, 397}) {
+		t.Fatalf("index-bound filter: ids %v sorted %v, want a sorted stream from 399", ids, sorted)
 	}
 	if _, sorted := query(must.NotFail(types.NewDocument("grp", int32(0), "odd", true))); sorted {
 		t.Fatal("a predicate outside the index over most of the collection must not stream")
 	}
-	if ids, sorted := query(must.NotFail(types.NewDocument("grp", int32(1), "odd", false))); !sorted || !slices.Equal(ids[:3], []int32{100, 96, 92}) {
-		t.Fatalf("narrow range with another predicate: ids %v sorted %v, want a sorted stream from 100", ids, sorted)
+	if ids, sorted := query(must.NotFail(types.NewDocument("grp", int32(1), "odd", false))); !sorted || !slices.Equal(ids[:3], []int32{400, 396, 392}) {
+		t.Fatalf("narrow range with another predicate: ids %v sorted %v, want a sorted stream from 400", ids, sorted)
 	}
 }
 

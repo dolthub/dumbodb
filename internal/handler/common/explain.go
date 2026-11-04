@@ -53,6 +53,9 @@ type ExplainParams struct {
 	// document.
 	Multi bool `dumbo:"-"`
 
+	// Remove is set for a findAndModify that deletes its document.
+	Remove bool `dumbo:"-"`
+
 	// Verbosity controls what explain returns:
 	// "queryPlanner" (default), "executionStats", or "allPlansExecution".
 	Verbosity string
@@ -220,6 +223,12 @@ func GetExplainParams(document *types.Document, l *slog.Logger) (*ExplainParams,
 		}
 	}
 
+	var remove bool
+	if commandName == "findAndModify" {
+		v, _ := explain.Get("remove")
+		remove, _ = v.(bool)
+	}
+
 	CanonicalizeFilter(filter)
 
 	return &ExplainParams{
@@ -238,6 +247,7 @@ func GetExplainParams(document *types.Document, l *slog.Logger) (*ExplainParams,
 		Verbosity:   verbosity,
 		Hint:        hint,
 		Multi:       multi,
+		Remove:      remove,
 	}, nil
 }
 
