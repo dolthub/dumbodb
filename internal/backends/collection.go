@@ -276,6 +276,10 @@ type ExplainParams struct {
 	// Fields names the only top-level fields the explained read returns, as
 	// QueryParams.Fields.
 	Fields []string
+
+	// CountOnly is set for a pipeline that only counts the documents Filter
+	// matches in a $group, which MongoDB plans as a GROUP over a scan.
+	CountOnly bool
 }
 
 type ExplainResult struct {
