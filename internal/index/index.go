@@ -305,11 +305,12 @@ func ValDescriptor() *val.TupleDesc {
 // RangeIDIter yields the primary ids of the entries in [startKey, stopKey),
 // reading the index only as far as the caller consumes.
 type RangeIDIter struct {
-	m        prolly.Map
-	reverse  bool
-	entries  prolly.MapIter
-	lo, hi   uint64
-	chunk    uint64
+	m       prolly.Map
+	reverse bool
+	entries prolly.MapIter
+	lo, hi  uint64
+	chunk   uint64
+	// buffered holds composite keys read backward, yielded last first.
 	buffered [][]byte
 }
 
@@ -347,30 +348,40 @@ func NewRangeIDIter(ctx context.Context, m prolly.Map, startKey, stopKey []byte,
 
 // Next returns the next primary id, or nil at the end of the range.
 func (it *RangeIDIter) Next(ctx context.Context) ([]byte, error) {
+	_, id, err := it.NextEntry(ctx)
+	return id, err
+}
+
+// NextEntry returns the next entry's encoded index values and primary id, or
+// a nil id at the end of the range.
+func (it *RangeIDIter) NextEntry(ctx context.Context) (values, id []byte, err error) {
 	for {
 		if it.reverse {
 			if len(it.buffered) > 0 {
-				id := it.buffered[len(it.buffered)-1]
+				composite := it.buffered[len(it.buffered)-1]
 				it.buffered = it.buffered[:len(it.buffered)-1]
-				return id, nil
+				values, id, _ = splitComposite(composite)
+				return values, id, nil
 			}
 			if it.hi <= it.lo {
-				return nil, nil
+				return nil, nil, nil
 			}
 			if err := it.fillBackward(ctx); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			continue
 		}
 		k, _, err := it.entries.Next(ctx)
 		if err == io.EOF || (err == nil && k == nil) {
-			return nil, nil
+			return nil, nil, nil
 		}
 		if err != nil {
-			return nil, fmt.Errorf("index: reading secondary index: %w", err)
+			return nil, nil, fmt.Errorf("index: reading secondary index: %w", err)
 		}
-		if id, ok := entryPrimaryID(k); ok {
-			return id, nil
+		if composite, ok := idxKeyDesc.GetBytes(0, k); ok {
+			if values, id, ok := splitComposite(composite); ok {
+				return values, id, nil
+			}
 		}
 	}
 }
@@ -394,8 +405,10 @@ func (it *RangeIDIter) fillBackward(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("index: reading secondary index: %w", err)
 		}
-		if id, ok := entryPrimaryID(k); ok {
-			it.buffered = append(it.buffered, id)
+		if composite, ok := idxKeyDesc.GetBytes(0, k); ok {
+			if _, _, ok := splitComposite(composite); ok {
+				it.buffered = append(it.buffered, bytes.Clone(composite))
+			}
 		}
 	}
 	it.hi = from
@@ -428,6 +441,13 @@ func SplitEntry(compositeKey []byte) (values, primaryKey []byte, ok bool) {
 		i += l
 	}
 	return nil, nil, false
+}
+
+// splitComposite splits an entry's composite key into its encoded index
+// values and a copy of its primary id.
+func splitComposite(compositeKey []byte) (values, id []byte, ok bool) {
+	values, id, ok = SplitEntry(compositeKey)
+	return bytes.Clone(values), bytes.Clone(id), ok
 }
 
 // IterKeyRange iterates the entries in [startKey, stopKey); a nil or empty

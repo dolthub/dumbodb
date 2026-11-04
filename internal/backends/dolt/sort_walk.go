@@ -446,6 +446,11 @@ func newPlanSortedIter(ctx context.Context, state *dbState, primary prolly.Map, 
 	return it
 }
 
+// idStream yields document ids from an index, nil after the last.
+type idStream interface {
+	next() ([]byte, error)
+}
+
 // planSortedIter yields documents in id order. Subdocument sort values share
 // one index key, so a run of them is read whole and ordered by value.
 type planSortedIter struct {
@@ -453,7 +458,7 @@ type planSortedIter struct {
 	ns      tree.NodeStore
 	primary prolly.Map
 	ids     [][]byte
-	stream  *indexIDStream
+	stream  idStream
 	fields  []string
 	release func()
 }

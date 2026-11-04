@@ -16,6 +16,7 @@ package backends
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 )
 
@@ -25,11 +26,29 @@ import (
 type ExaminedCounts struct {
 	keys atomic.Int64
 	docs atomic.Int64
+
+	mu       sync.Mutex
+	branches []ExplainBranchCounts
 }
 
 func (e *ExaminedCounts) Keys() int64 { return e.keys.Load() }
 
 func (e *ExaminedCounts) Docs() int64 { return e.docs.Load() }
+
+// Branches returns the counts of each index scan under an OR or SORT_MERGE
+// stage, in plan order.
+func (e *ExaminedCounts) Branches() []ExplainBranchCounts {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]ExplainBranchCounts(nil), e.branches...)
+}
+
+// ExplainBranchCounts are the index keys one scan under an OR or SORT_MERGE
+// stage read and the entries it returned.
+type ExplainBranchCounts struct {
+	KeysExamined int64
+	NReturned    int64
+}
 
 type examinedCountsKey struct{}
 
@@ -45,6 +64,22 @@ func AddKeysExamined(ctx context.Context, n int) {
 	if e, ok := ctx.Value(examinedCountsKey{}).(*ExaminedCounts); ok {
 		e.keys.Add(int64(n))
 	}
+}
+
+// AddBranchExamined counts keys read and returned entries for the branch'th
+// index scan under an OR or SORT_MERGE stage run under ctx.
+func AddBranchExamined(ctx context.Context, branch int, keys, returned int64) {
+	e, ok := ctx.Value(examinedCountsKey{}).(*ExaminedCounts)
+	if !ok {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for len(e.branches) <= branch {
+		e.branches = append(e.branches, ExplainBranchCounts{})
+	}
+	e.branches[branch].KeysExamined += keys
+	e.branches[branch].NReturned += returned
 }
 
 // AddDocsExamined counts n documents read under ctx.
