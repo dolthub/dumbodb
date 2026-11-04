@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
 )
 
 // assertExplainResponse checks that the explain response contains the expected
@@ -125,6 +126,51 @@ func TestExplain_Aggregate(t *testing.T) {
 	require.NotNil(t, res)
 
 	assertExplainResponse(t, res, "queryPlanner")
+}
+
+// TestExplain_LookupForeignIndex checks explain names the foreign index a
+// $lookup joins through: on an EQ_LOOKUP stage of the query plan for an
+// equality join, and in the $lookup stage's indexesUsed for a join with a
+// sub-pipeline.
+func TestExplain_LookupForeignIndex(t *testing.T) {
+	env := startDumboDB(t)
+	ctx := context.Background()
+	coll := env.Collection(t)
+	foreign := coll.Database().Collection(coll.Name() + "_f")
+
+	insertDocs(t, coll, bson.D{{Key: "fk", Value: int32(1)}})
+	insertDocs(t, foreign, bson.D{{Key: "ref", Value: int32(1)}})
+	_, err := foreign.Indexes().CreateOne(ctx, mongo.IndexModel{Keys: bson.D{{Key: "ref", Value: 1}}})
+	require.NoError(t, err)
+
+	explain := func(lookup bson.D, verbosity string) bson.M {
+		var res bson.M
+		require.NoError(t, coll.Database().RunCommand(ctx, bson.D{
+			{Key: "explain", Value: bson.D{
+				{Key: "aggregate", Value: coll.Name()},
+				{Key: "pipeline", Value: bson.A{bson.D{{Key: "$lookup", Value: lookup}}}},
+				{Key: "cursor", Value: bson.D{}},
+			}},
+			{Key: "verbosity", Value: verbosity},
+		}).Decode(&res))
+		return res
+	}
+
+	res := explain(bson.D{{Key: "from", Value: foreign.Name()}, {Key: "localField", Value: "fk"}, {Key: "foreignField", Value: "ref"}, {Key: "as", Value: "j"}}, "queryPlanner")
+	plan := res["queryPlanner"].(bson.M)["winningPlan"].(bson.M)["queryPlan"].(bson.M)
+	assert.Equal(t, "EQ_LOOKUP", plan["stage"])
+	assert.Equal(t, "IndexedLoopJoin", plan["strategy"])
+	assert.Equal(t, "ref_1", plan["indexName"])
+
+	res = explain(bson.D{
+		{Key: "from", Value: foreign.Name()},
+		{Key: "let", Value: bson.D{{Key: "r", Value: "$fk"}}},
+		{Key: "pipeline", Value: bson.A{bson.D{{Key: "$match", Value: bson.D{{Key: "$expr", Value: bson.D{{Key: "$eq", Value: bson.A{"$ref", "$$r"}}}}}}}}},
+		{Key: "as", Value: "j"},
+	}, "executionStats")
+	stages := res["stages"].(bson.A)
+	require.Len(t, stages, 2)
+	assert.Equal(t, bson.A{"ref_1"}, stages[1].(bson.M)["indexesUsed"])
 }
 
 // TestExplain_Count tests explain for count command. (DumboDBFull)

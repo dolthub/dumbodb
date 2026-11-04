@@ -477,6 +477,10 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 		response.Set("executionStats", executionStats)
 	}
 
+	if params.Aggregate && !viaView {
+		explainLookups(connCtx, db, params.DB, params.StagesDocs, response, params.Verbosity != "queryPlanner")
+	}
+
 	if params.Verbosity == "allPlansExecution" {
 		response.Set("allPlansExecution", types.MakeArray(0))
 	}
