@@ -35,7 +35,7 @@ func streamIndexRanges(ctx context.Context, state *dbState, primary prolly.Map, 
 	if params.Filter.Len() == 0 || params.Filter.Has("$or") {
 		return nil, backends.IndexInfo{}, false, nil
 	}
-	choice, ok := chooseIndexRange(idxInfos, params.Filter, params.Hint, params.Collation)
+	choice, ok := chooseIndexRange(idxInfos, params.Filter, params.Hint, params.Collation, params.Fields)
 	if !ok {
 		return nil, backends.IndexInfo{}, false, nil
 	}
@@ -139,6 +139,8 @@ func entryDocument(ctx context.Context, primary prolly.Map, ns tree.NodeStore, e
 // type tags, and its document's primary id, nil after the last entry.
 type indexEntry struct {
 	values, tags, id []byte
+	// gapKeys are the keys examined outside the ranges before this entry.
+	gapKeys int
 }
 
 // coveredKeys builds a document's requested fields from its index entry, as
@@ -220,10 +222,16 @@ type indexIDStream struct {
 	// seen holds the ids already yielded when an id can repeat: a multikey
 	// index, or more than one range.
 	seen map[string]struct{}
+	gaps *intervalGaps
+	// reading is the range current reads.
+	reading [2][]byte
+	// gapKeys are keys examined outside the ranges, carried by the next
+	// entry read.
+	gapKeys int
 }
 
 func newIndexIDStream(ctx context.Context, idxMap prolly.Map, ranges [][2][]byte, reverse, multikey bool) *indexIDStream {
-	s := &indexIDStream{ctx: ctx, idxMap: idxMap, ranges: ranges, reverse: reverse}
+	s := &indexIDStream{ctx: ctx, idxMap: idxMap, ranges: ranges, reverse: reverse, gaps: newIntervalGaps(ctx, idxMap, ranges, reverse)}
 	if multikey || len(ranges) > 1 {
 		s.seen = make(map[string]struct{})
 	}
@@ -236,6 +244,7 @@ func (s *indexIDStream) holdsAtMost(n int) (bool, error) {
 	for len(s.buffered) <= n {
 		e, err := s.readEntry()
 		if err != nil || e.id == nil {
+			s.gapKeys += e.gapKeys
 			return e.id == nil, err
 		}
 		s.buffered = append(s.buffered, e)
@@ -257,6 +266,7 @@ func (s *indexIDStream) next() (indexEntry, error) {
 				return indexEntry{}, err
 			}
 		}
+		countKeysExamined(s.ctx, e.gapKeys)
 		if e.id == nil {
 			return e, nil
 		}
@@ -277,7 +287,7 @@ func (s *indexIDStream) readEntry() (indexEntry, error) {
 	for {
 		if s.current == nil {
 			if len(s.ranges) == 0 {
-				return indexEntry{}, nil
+				return s.takeGapKeys(indexEntry{}), nil
 			}
 			var r [2][]byte
 			if s.reverse {
@@ -289,12 +299,24 @@ func (s *indexIDStream) readEntry() (indexEntry, error) {
 			if err != nil {
 				return indexEntry{}, err
 			}
-			s.current = current
+			s.current, s.reading = current, r
 		}
 		values, tags, id, err := s.current.NextEntry(s.ctx)
 		if err != nil || id != nil {
-			return indexEntry{values: values, tags: tags, id: id}, err
+			return s.takeGapKeys(indexEntry{values: values, tags: tags, id: id}), err
 		}
 		s.current = nil
+		outside, err := s.gaps.after(s.ctx, s.reading, s.ranges)
+		if err != nil {
+			return indexEntry{}, err
+		}
+		if outside {
+			s.gapKeys++
+		}
 	}
+}
+
+func (s *indexIDStream) takeGapKeys(e indexEntry) indexEntry {
+	e.gapKeys, s.gapKeys = s.gapKeys, 0
+	return e
 }

@@ -539,3 +539,41 @@ func RangeCardinality(ctx context.Context, m prolly.Map, startKey, stopKey []byt
 	}
 	return m.GetKeyRangeCardinality(ctx, startTup, stopTup)
 }
+
+// AdjacentKey returns the composite key of the first entry at or after bound,
+// or with before, of the last entry before it; ok is false when there is none.
+func AdjacentKey(ctx context.Context, m prolly.Map, bound []byte, before bool) (composite []byte, ok bool, err error) {
+	tup, err := boundTuple(bound)
+	if err != nil {
+		return nil, false, err
+	}
+	ord, err := m.GetOrdinalForKey(ctx, tup)
+	if err != nil {
+		return nil, false, err
+	}
+	n, err := m.Count()
+	if err != nil {
+		return nil, false, err
+	}
+	if before {
+		if ord == 0 {
+			return nil, false, nil
+		}
+		ord--
+	} else if ord >= uint64(n) {
+		return nil, false, nil
+	}
+	entries, err := m.IterOrdinalRange(ctx, ord, ord+1)
+	if err != nil {
+		return nil, false, err
+	}
+	k, _, err := entries.Next(ctx)
+	if err == io.EOF || (err == nil && len(k) == 0) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("index: reading secondary index: %w", err)
+	}
+	composite, ok = idxKeyDesc.GetBytes(0, k)
+	return bytes.Clone(composite), ok, nil
+}

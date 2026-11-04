@@ -34,7 +34,7 @@ func tryStreamMergedRanges(ctx context.Context, state *dbState, primary prolly.M
 	if params.Filter == nil || params.Filter.Has("$or") {
 		return nil, nil, false, nil
 	}
-	choice, ok := chooseIndexRange(idxInfos, params.Filter, params.Hint, params.Collation)
+	choice, ok := chooseIndexRange(idxInfos, params.Filter, params.Hint, params.Collation, params.Fields)
 	if !ok || len(choice.pointRanges) < 2 {
 		return nil, nil, false, nil
 	}

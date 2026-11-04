@@ -44,10 +44,13 @@ func (e *ExaminedCounts) Branches() []ExplainBranchCounts {
 }
 
 // ExplainBranchCounts are the index keys one scan under an OR or SORT_MERGE
-// stage read and the entries it returned.
+// stage read and the entries it returned, and for a scan whose documents are
+// fetched and filtered under the OR, those fetched and those matching.
 type ExplainBranchCounts struct {
 	KeysExamined int64
 	NReturned    int64
+	DocsExamined int64
+	Matched      int64
 }
 
 type examinedCountsKey struct{}
@@ -82,9 +85,39 @@ func AddBranchExamined(ctx context.Context, branch int, keys, returned int64) {
 	e.branches[branch].NReturned += returned
 }
 
+// AddBranchFetched counts the documents the branch'th scan under an OR fetched
+// and those matching its filter.
+func AddBranchFetched(ctx context.Context, branch int, docs, matched int64) {
+	e, ok := ctx.Value(examinedCountsKey{}).(*ExaminedCounts)
+	if !ok {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for len(e.branches) <= branch {
+		e.branches = append(e.branches, ExplainBranchCounts{})
+	}
+	e.branches[branch].DocsExamined += docs
+	e.branches[branch].Matched += matched
+}
+
 // AddDocsExamined counts n documents read under ctx.
 func AddDocsExamined(ctx context.Context, n int) {
 	if e, ok := ctx.Value(examinedCountsKey{}).(*ExaminedCounts); ok {
 		e.docs.Add(int64(n))
 	}
+}
+
+type seekEachRangeKey struct{}
+
+// WithSeekEachRange returns a context whose index scans of several ranges
+// seek each one, as MongoDB's SBE engine does, examining no key between them.
+func WithSeekEachRange(ctx context.Context) context.Context {
+	return context.WithValue(ctx, seekEachRangeKey{}, true)
+}
+
+// SeeksEachRange reports whether ctx is from WithSeekEachRange.
+func SeeksEachRange(ctx context.Context) bool {
+	seeks, _ := ctx.Value(seekEachRangeKey{}).(bool)
+	return seeks
 }

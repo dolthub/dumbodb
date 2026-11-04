@@ -50,6 +50,15 @@ type explainRun struct {
 	branches []backends.ExplainBranchCounts
 }
 
+// outerDocs are the documents run read outside the fetches under an OR.
+func (run explainRun) outerDocs() int64 {
+	docs := run.docs
+	for _, b := range run.branches {
+		docs -= b.DocsExamined
+	}
+	return docs
+}
+
 // runExplained runs the explained command's read the way the command itself
 // runs it, counting the index keys and documents it reads. A backend error
 // leaves the counts reached so far, so the caller still produces a
@@ -198,7 +207,7 @@ func cloneExecutionStage(node *types.Document, run explainRun, root, aboveMatch 
 	case childArr != nil:
 		// An OR or SORT_MERGE returns each document its branches found once,
 		// all fetched.
-		nReturned = int32(run.docs)
+		nReturned = int32(run.outerDocs())
 	case stage == "FETCH" || stage == "COLLSCAN":
 		nReturned = run.matched
 	case childDoc == nil || !aboveMatch:
@@ -215,7 +224,7 @@ func cloneExecutionStage(node *types.Document, run explainRun, root, aboveMatch 
 	case "IXSCAN", "COUNT_SCAN", "DISTINCT_SCAN":
 		d.Set("keysExamined", int32(run.keys))
 	case "FETCH", "COLLSCAN":
-		d.Set("docsExamined", int32(run.docs))
+		d.Set("docsExamined", int32(run.outerDocs()))
 	case "EXPRESS_IXSCAN", "EXPRESS_UPDATE", "EXPRESS_DELETE":
 		d.Set("keysExamined", int32(run.keys))
 		d.Set("docsExamined", int32(run.docs))
@@ -235,7 +244,7 @@ func cloneExecutionStage(node *types.Document, run explainRun, root, aboveMatch 
 			var branch explainRun
 			if i < len(run.branches) {
 				b := run.branches[i]
-				branch = explainRun{scanned: int32(b.NReturned), keys: b.KeysExamined}
+				branch = explainRun{scanned: int32(b.NReturned), keys: b.KeysExamined, docs: b.DocsExamined, matched: int32(b.Matched)}
 			}
 			c, _ := childArr.Get(i)
 			if cd, ok := c.(*types.Document); ok {
@@ -387,6 +396,10 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 	case params.Aggregate && !viaView:
 		qp.Fields, _ = pipelineRootFields(params.StagesDocs)
 	}
+	var afterCount []any
+	if params.Aggregate && !viaView && !h.DisablePushdown {
+		afterCount, qp.CountOnly = countingPipeline(params.StagesDocs)
+	}
 
 	var opCollation *types.Document
 	if params.Command != nil {
@@ -471,7 +484,14 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 			}
 		}
 
-		run := h.runExplained(connCtx, coll, params, qp, viaView)
+		runCtx := connCtx
+		if qp.CountOnly {
+			runCtx = backends.WithSeekEachRange(connCtx)
+		}
+		run := h.runExplained(runCtx, coll, params, qp, viaView)
+		if qp.CountOnly {
+			run.returned = min(run.returned, 1)
+		}
 
 		executionStages := buildExecutionStages(winningPlanDoc, execStage, run)
 		executionStats := must.NotFail(types.NewDocument(
@@ -483,6 +503,10 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 			"executionStages", executionStages,
 		))
 		response.Set("executionStats", executionStats)
+	}
+
+	if qp.CountOnly {
+		explainCountingGroup(response, afterCount)
 	}
 
 	if params.Aggregate && !viaView {

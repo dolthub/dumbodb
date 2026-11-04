@@ -210,7 +210,7 @@ func resolveIndexes(ctx context.Context, c *collection, state *dbState) ([]backe
 }
 
 // resolveBranchIndexState is the write-path counterpart to resolveIndexes:
-// returns the per-branch index state as (infos in name-sorted order, name
+// returns the per-branch index state as (infos in name order, name
 // -> map). It reads from the session's working root via the resolver
 // chain. Mutating these maps is safe: they are immutable prolly.Map
 // values, so .Mutate() / .Map(ctx) round-trips do not touch any shared
