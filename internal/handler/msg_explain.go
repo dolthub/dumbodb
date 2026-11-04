@@ -65,11 +65,7 @@ func (h *Handler) runExplained(ctx context.Context, coll backends.Collection, pa
 	case qp.Command == "update" || qp.Command == "delete" || qp.Command == "findAndModify":
 		run = runExplainedWrite(ctx, coll, qp)
 	default:
-		var fields []string
-		if qp.Command == "find" {
-			fields, _ = findRootFields(&common.FindParams{Filter: qp.Filter, Sort: qp.Sort, Projection: qp.Projection})
-		}
-		run = runExplainedFind(ctx, coll, qp, fields)
+		run = runExplainedFind(ctx, coll, qp)
 	}
 	run.keys, run.docs, run.branches = examined.Keys(), examined.Docs(), examined.Branches()
 	return run
@@ -115,12 +111,12 @@ func runExplainedWrite(ctx context.Context, coll backends.Collection, qp *backen
 }
 
 // runExplainedFind pulls documents the way the query pipeline does, reading
-// only fields when set: when no blocking sort is needed (no sort, or the
+// only qp's fields when set: when no blocking sort is needed (no sort, or the
 // backend walked an index in sort order) a limit stops the pass, otherwise
 // every candidate is examined and the limit only caps what is returned.
-func runExplainedFind(ctx context.Context, coll backends.Collection, qp *backends.ExplainParams, fields []string) explainRun {
+func runExplainedFind(ctx context.Context, coll backends.Collection, qp *backends.ExplainParams) explainRun {
 	limit := int32(max(qp.Limit, -qp.Limit))
-	query := &backends.QueryParams{Filter: qp.Filter, Collated: qp.Collated, Collation: qp.Collation, Hint: qp.Hint, Fields: fields}
+	query := &backends.QueryParams{Filter: qp.Filter, Collated: qp.Collated, Collation: qp.Collation, Hint: qp.Hint, Fields: qp.Fields}
 	if limit > 0 {
 		query.LimitHint = qp.Skip + int64(limit)
 	}
@@ -384,6 +380,13 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 	qp.DistinctKey = params.DistinctKey
 	qp.Multi = params.Multi
 	qp.Remove = params.Remove
+	switch {
+	case h.DisablePushdown:
+	case params.CommandName == "find":
+		qp.Fields, _ = findRootFields(&common.FindParams{Filter: params.Filter, Sort: params.Sort, Projection: params.Projection})
+	case params.Aggregate && !viaView:
+		qp.Fields, _ = pipelineRootFields(params.StagesDocs)
+	}
 
 	var opCollation *types.Document
 	if params.Command != nil {

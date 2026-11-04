@@ -80,6 +80,12 @@ func TestCoveredReadsFromIndexEntries(t *testing.T) {
 		t.Errorf("null: k %v, %d fetched; want the null and the seed document, both fetched", ks, fetched)
 	}
 
+	// A covered read looks nothing up, so even a range over the whole
+	// collection streams the index.
+	if ks, fetched = read(&backends.QueryParams{Filter: gte(int32(0)), Fields: []string{"k"}}); len(ks) != 302 || fetched != 0 {
+		t.Errorf("whole range: %d values, %d fetched; want 302, none fetched", len(ks), fetched)
+	}
+
 	if _, fetched = read(&backends.QueryParams{Filter: gte(int32(1000)), Fields: []string{"k", "pad"}}); fetched != 2 {
 		t.Errorf("a field outside the index: %d fetched, want 2", fetched)
 	}

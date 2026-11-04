@@ -272,6 +272,10 @@ type ExplainParams struct {
 
 	// Remove is set for a findAndModify that deletes its document.
 	Remove bool
+
+	// Fields names the only top-level fields the explained read returns, as
+	// QueryParams.Fields.
+	Fields []string
 }
 
 type ExplainResult struct {
