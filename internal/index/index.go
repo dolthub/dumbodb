@@ -68,7 +68,7 @@ func BuildIndexEntry(fieldValues []any, primaryIDBytes []byte) (val.Tuple, val.T
 	}
 
 	vtb := val.NewTupleBuilder(idxValDesc, nil)
-	vtb.PutByteString(0, []byte{})
+	vtb.PutByteString(0, TypeTags(fieldValues))
 	valTuple, err := vtb.Build(context.Background(), idxBufPool)
 	if err != nil {
 		return nil, nil, fmt.Errorf("index: building val tuple: %w", err)
@@ -310,8 +310,12 @@ type RangeIDIter struct {
 	entries prolly.MapIter
 	lo, hi  uint64
 	chunk   uint64
-	// buffered holds composite keys read backward, yielded last first.
-	buffered [][]byte
+	// buffered holds entries read backward, yielded last first.
+	buffered []rangeEntry
+}
+
+type rangeEntry struct {
+	composite, tags []byte
 }
 
 // NewRangeIDIter iterates [startKey, stopKey) forward, or backward when
@@ -348,42 +352,49 @@ func NewRangeIDIter(ctx context.Context, m prolly.Map, startKey, stopKey []byte,
 
 // Next returns the next primary id, or nil at the end of the range.
 func (it *RangeIDIter) Next(ctx context.Context) ([]byte, error) {
-	_, id, err := it.NextEntry(ctx)
+	_, _, id, err := it.NextEntry(ctx)
 	return id, err
 }
 
-// NextEntry returns the next entry's encoded index values and primary id, or
-// a nil id at the end of the range.
-func (it *RangeIDIter) NextEntry(ctx context.Context) (values, id []byte, err error) {
+// NextEntry returns the next entry's encoded index values, their type tags
+// (empty in an entry written before tags), and its primary id, or a nil id
+// at the end of the range.
+func (it *RangeIDIter) NextEntry(ctx context.Context) (values, tags, id []byte, err error) {
 	for {
 		if it.reverse {
 			if len(it.buffered) > 0 {
-				composite := it.buffered[len(it.buffered)-1]
+				e := it.buffered[len(it.buffered)-1]
 				it.buffered = it.buffered[:len(it.buffered)-1]
-				values, id, _ = splitComposite(composite)
-				return values, id, nil
+				values, id, _ = splitComposite(e.composite)
+				return values, e.tags, id, nil
 			}
 			if it.hi <= it.lo {
-				return nil, nil, nil
+				return nil, nil, nil, nil
 			}
 			if err := it.fillBackward(ctx); err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			continue
 		}
-		k, _, err := it.entries.Next(ctx)
+		k, v, err := it.entries.Next(ctx)
 		if err == io.EOF || (err == nil && k == nil) {
-			return nil, nil, nil
+			return nil, nil, nil, nil
 		}
 		if err != nil {
-			return nil, nil, fmt.Errorf("index: reading secondary index: %w", err)
+			return nil, nil, nil, fmt.Errorf("index: reading secondary index: %w", err)
 		}
 		if composite, ok := idxKeyDesc.GetBytes(0, k); ok {
 			if values, id, ok := splitComposite(composite); ok {
-				return values, id, nil
+				return values, entryTags(v), id, nil
 			}
 		}
 	}
+}
+
+// entryTags returns a copy of the type tags in an entry's value tuple.
+func entryTags(v val.Tuple) []byte {
+	tags, _ := idxValDesc.GetBytes(0, v)
+	return bytes.Clone(tags)
 }
 
 // fillBackward buffers the ids of the chunk of entries ending at hi, doubling
@@ -398,7 +409,7 @@ func (it *RangeIDIter) fillBackward(ctx context.Context) error {
 		return err
 	}
 	for {
-		k, _, err := entries.Next(ctx)
+		k, v, err := entries.Next(ctx)
 		if err == io.EOF || (err == nil && k == nil) {
 			break
 		}
@@ -407,7 +418,7 @@ func (it *RangeIDIter) fillBackward(ctx context.Context) error {
 		}
 		if composite, ok := idxKeyDesc.GetBytes(0, k); ok {
 			if _, _, ok := splitComposite(composite); ok {
-				it.buffered = append(it.buffered, bytes.Clone(composite))
+				it.buffered = append(it.buffered, rangeEntry{composite: bytes.Clone(composite), tags: entryTags(v)})
 			}
 		}
 	}

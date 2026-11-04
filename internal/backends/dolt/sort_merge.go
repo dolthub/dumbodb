@@ -53,6 +53,7 @@ func tryStreamMergedRanges(ctx context.Context, state *dbState, primary prolly.M
 	}
 	it := newPlanSortedIter(ctx, state, primary, nil, params.Sort, false, params.Fields).(*planSortedIter)
 	it.stream = stream
+	it.covered = coveredKeysFor(info, params.Fields)
 	if releasePrimary, releaseIndex := it.release, pinRoots(state, idxMap); releasePrimary != nil {
 		it.release = func() {
 			releasePrimary()
@@ -106,7 +107,7 @@ type mergeHead struct {
 	branch  int
 	iter    *idxpkg.RangeIDIter
 	sortKey []byte
-	id      []byte
+	entry   indexEntry
 }
 
 func newMergedIDStream(ctx context.Context, idxMap prolly.Map, ranges [][2][]byte, keys int, reverse bool) (*mergedIDStream, error) {
@@ -120,7 +121,7 @@ func newMergedIDStream(ctx context.Context, idxMap prolly.Map, ranges [][2][]byt
 		if err := s.advance(&head); err != nil {
 			return nil, err
 		}
-		if head.id != nil {
+		if head.entry.id != nil {
 			s.heads = append(s.heads, head)
 		}
 	}
@@ -129,9 +130,9 @@ func newMergedIDStream(ctx context.Context, idxMap prolly.Map, ranges [][2][]byt
 
 // advance reads head's next entry, leaving a nil id at its end.
 func (s *mergedIDStream) advance(head *mergeHead) error {
-	values, id, err := head.iter.NextEntry(s.ctx)
+	values, tags, id, err := head.iter.NextEntry(s.ctx)
 	if err != nil || id == nil {
-		head.id = nil
+		head.entry = indexEntry{}
 		return err
 	}
 	countKeysExamined(s.ctx, 1)
@@ -140,24 +141,24 @@ func (s *mergedIDStream) advance(head *mergeHead) error {
 	if !ok {
 		split = [][]byte{nil, nil}
 	}
-	head.sortKey, head.id = split[1], id
+	head.sortKey, head.entry = split[1], indexEntry{values: values, tags: tags, id: id}
 	return nil
 }
 
-// next returns the next id in sort order, or nil after the last. Equal sort
-// keys keep range order, so a run of them stays together.
-func (s *mergedIDStream) next() ([]byte, error) {
+// next returns the next entry in sort order, with a nil id after the last.
+// Equal sort keys keep range order, so a run of them stays together.
+func (s *mergedIDStream) next() (indexEntry, error) {
 	if s.taken >= 0 {
 		if err := s.advance(&s.heads[s.taken]); err != nil {
-			return nil, err
+			return indexEntry{}, err
 		}
-		if s.heads[s.taken].id == nil {
+		if s.heads[s.taken].entry.id == nil {
 			s.heads = append(s.heads[:s.taken], s.heads[s.taken+1:]...)
 		}
 		s.taken = -1
 	}
 	if len(s.heads) == 0 {
-		return nil, nil
+		return indexEntry{}, nil
 	}
 	best := 0
 	for i := 1; i < len(s.heads); i++ {
@@ -167,5 +168,5 @@ func (s *mergedIDStream) next() ([]byte, error) {
 		}
 	}
 	s.taken = best
-	return s.heads[best].id, nil
+	return s.heads[best].entry, nil
 }
