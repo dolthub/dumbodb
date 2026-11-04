@@ -57,12 +57,14 @@ func streamIndexRanges(ctx context.Context, state *dbState, primary prolly.Map, 
 }
 
 // indexStreamWorthReading reports whether streaming choice's ranges, one point
-// lookup per entry, beats a collection scan: always under a hint, or under a
-// limit when every filter field is a key of the index so each entry read is
-// a match; otherwise only when the ranges hold at most half the collection.
-// It reads ahead into ids to size a narrow range.
+// lookup per entry, beats a collection scan: always under a hint, when the
+// read is covered by the index so it looks nothing up, or under a limit when
+// every filter field is a key of the index so each entry read is a match;
+// otherwise only when the ranges hold at most half the collection. It reads
+// ahead into ids to size a narrow range.
 func indexStreamWorthReading(ctx context.Context, primary prolly.Map, idxMaps []prolly.Map, choice indexRangeChoice, info backends.IndexInfo, params *backends.QueryParams, ids *indexIDStream) (bool, error) {
-	if params.Hint != nil || (params.LimitHint > 0 && filterFieldsAreIndexKeys(params.Filter, info)) {
+	if params.Hint != nil || coveredKeysFor(info, params.Fields) != nil ||
+		(params.LimitHint > 0 && filterFieldsAreIndexKeys(params.Filter, info)) {
 		return true, nil
 	}
 	return indexRangesWithinHalf(primary, ids.holdsAtMost, func() (uint64, error) {

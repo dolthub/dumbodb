@@ -1999,7 +1999,7 @@ func (c *collection) Explain(ctx context.Context, params *backends.ExplainParams
 
 // explainQueryParams is the QueryParams the explained command runs with.
 func explainQueryParams(params *backends.ExplainParams) *backends.QueryParams {
-	qp := &backends.QueryParams{Filter: params.Filter, Sort: params.Sort, Hint: params.Hint, Collated: params.Collated, Collation: params.Collation}
+	qp := &backends.QueryParams{Filter: params.Filter, Sort: params.Sort, Hint: params.Hint, Collated: params.Collated, Collation: params.Collation, Fields: params.Fields}
 	if params.Limit != 0 {
 		qp.LimitHint = params.Skip + max(params.Limit, -params.Limit)
 	}
