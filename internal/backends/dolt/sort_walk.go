@@ -304,7 +304,7 @@ func (it *sortWalkIter) nextEntry() (*sortWalkEntry, error) {
 		if err != nil {
 			return nil, err
 		}
-		countKeysExamined(1)
+		countKeysExamined(it.ctx, 1)
 		composite, ok := keyDesc.GetBytes(0, k)
 		if !ok {
 			continue

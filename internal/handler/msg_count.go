@@ -135,12 +135,28 @@ func (h *Handler) MsgCount(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMs
 		)
 	}
 
+	n, err := h.execCount(connCtx, c, params, cmp)
+	if err != nil {
+		return nil, err
+	}
+
+	return documentOpMsg(
+		must.NotFail(types.NewDocument(
+			"n", n,
+			"ok", float64(1),
+		)),
+	)
+}
+
+// execCount counts the documents of collection c that match params, by the
+// fastest path available. cmp is params' collation comparator, nil when simple.
+func (h *Handler) execCount(ctx context.Context, c backends.Collection, params *common.CountParams, cmp *collation.Comparator) (int32, error) {
 	// Fast path: unfiltered count. The backend can return the entry count from
 	// tree metadata in O(1) instead of scanning every document.
 	if params.Filter.Len() == 0 {
-		countRes, err := c.Count(connCtx, &backends.CountParams{})
+		countRes, err := c.Count(ctx, &backends.CountParams{})
 		if err != nil {
-			return nil, lazyerrors.Error(err)
+			return 0, lazyerrors.Error(err)
 		}
 
 		total := countRes.Count
@@ -154,12 +170,7 @@ func (h *Handler) MsgCount(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMs
 			total = params.Limit
 		}
 
-		return documentOpMsg(
-			must.NotFail(types.NewDocument(
-				"n", int32(total),
-				"ok", float64(1),
-			)),
-		)
+		return int32(total), nil
 	}
 
 	// Fast path: ask the backend whether it can satisfy the filtered count
@@ -167,9 +178,9 @@ func (h *Handler) MsgCount(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMs
 	// The backend signals success via Filtered=true; otherwise we fall
 	// through to the scan path below.
 	if !h.DisablePushdown && cmp == nil {
-		countRes, cerr := c.Count(connCtx, &backends.CountParams{Filter: params.Filter, Collation: params.Collation})
+		countRes, cerr := c.Count(ctx, &backends.CountParams{Filter: params.Filter, Collation: params.Collation})
 		if cerr != nil {
-			return nil, lazyerrors.Error(cerr)
+			return 0, lazyerrors.Error(cerr)
 		}
 		if countRes.Filtered {
 			total := countRes.Count
@@ -183,12 +194,7 @@ func (h *Handler) MsgCount(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMs
 				total = params.Limit
 			}
 
-			return documentOpMsg(
-				must.NotFail(types.NewDocument(
-					"n", int32(total),
-					"ok", float64(1),
-				)),
-			)
+			return int32(total), nil
 		}
 	}
 
@@ -198,12 +204,12 @@ func (h *Handler) MsgCount(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMs
 		qp.Filter = params.Filter
 	}
 
-	queryRes, err := c.Query(connCtx, &qp)
+	queryRes, err := c.Query(ctx, &qp)
 	if err != nil {
-		return nil, lazyerrors.Error(err)
+		return 0, lazyerrors.Error(err)
 	}
 
-	iter := iterator.WithContext(connCtx, queryRes.Iter)
+	iter := iterator.WithContext(ctx, queryRes.Iter)
 
 	closer := iterator.NewMultiCloser(queryRes.Iter)
 	defer closer.Close()
@@ -222,16 +228,10 @@ func (h *Handler) MsgCount(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMs
 	}
 
 	if err != nil {
-		return nil, handleMaxTimeMSError(err, params.MaxTimeMS, "count")
+		return 0, handleMaxTimeMSError(err, params.MaxTimeMS, "count")
 	}
 
 	count, _ := res.Get("count")
 	n, _ := count.(int32)
-
-	return documentOpMsg(
-		must.NotFail(types.NewDocument(
-			"n", n,
-			"ok", float64(1),
-		)),
-	)
+	return n, nil
 }

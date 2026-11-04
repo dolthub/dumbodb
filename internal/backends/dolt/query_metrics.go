@@ -14,7 +14,12 @@
 
 package dolt
 
-import "sync/atomic"
+import (
+	"context"
+	"sync/atomic"
+
+	"github.com/dolthub/dumbodb/internal/backends"
+)
 
 // queryExecutorCounters totals the index keys and documents read to answer
 // queries, reported by serverStatus as metrics.queryExecutor.scanned and
@@ -24,6 +29,16 @@ var queryExecutorCounters struct {
 	docs atomic.Int64
 }
 
-func countKeysExamined(n int) { queryExecutorCounters.keys.Add(int64(n)) }
+// countKeysExamined counts n index keys read, server-wide and for ctx's
+// operation.
+func countKeysExamined(ctx context.Context, n int) {
+	queryExecutorCounters.keys.Add(int64(n))
+	backends.AddKeysExamined(ctx, n)
+}
 
-func countDocsExamined(n int) { queryExecutorCounters.docs.Add(int64(n)) }
+// countDocsExamined counts n documents read, server-wide and for ctx's
+// operation.
+func countDocsExamined(ctx context.Context, n int) {
+	queryExecutorCounters.docs.Add(int64(n))
+	backends.AddDocsExamined(ctx, n)
+}

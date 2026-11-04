@@ -174,7 +174,7 @@ func (s *indexIDStream) next() ([]byte, error) {
 		if id == nil {
 			return nil, nil
 		}
-		countKeysExamined(1)
+		countKeysExamined(s.ctx, 1)
 		if s.seen == nil {
 			return id, nil
 		}
