@@ -49,6 +49,10 @@ type ExplainParams struct {
 	Aggregate  bool            `dumbo:"-"`
 	Command    *types.Document `dumbo:"-"`
 
+	// Multi is set for an update or delete that may write more than one
+	// document.
+	Multi bool `dumbo:"-"`
+
 	// Verbosity controls what explain returns:
 	// "queryPlanner" (default), "executionStats", or "allPlansExecution".
 	Verbosity string
@@ -125,28 +129,13 @@ func GetExplainParams(document *types.Document, l *slog.Logger) (*ExplainParams,
 	}
 	// update / delete carry the predicate inside the first element of the
 	// updates / deletes array as "q", not as a top-level filter.
+	var multi bool
 	if filter == nil {
-		var writeArrayKey string
-		switch commandName {
-		case "update":
-			writeArrayKey = "updates"
-		case "delete":
-			writeArrayKey = "deletes"
-		}
-		if writeArrayKey != "" {
-			if arrVal, _ := explain.Get(writeArrayKey); arrVal != nil {
-				if arr, ok := arrVal.(*types.Array); ok && arr.Len() > 0 {
-					if first, ferr := arr.Get(0); ferr == nil {
-						if fd, ok := first.(*types.Document); ok {
-							if q, qerr := fd.Get("q"); qerr == nil {
-								if qd, ok := q.(*types.Document); ok {
-									filter = qd
-								}
-							}
-						}
-					}
-				}
+		if write := firstWriteStatement(explain, commandName); write != nil {
+			if q, _ := write.Get("q"); q != nil {
+				filter, _ = q.(*types.Document)
 			}
+			multi = writeIsMulti(write, commandName)
 		}
 	}
 
@@ -248,5 +237,36 @@ func GetExplainParams(document *types.Document, l *slog.Logger) (*ExplainParams,
 		Command:     cmd,
 		Verbosity:   verbosity,
 		Hint:        hint,
+		Multi:       multi,
 	}, nil
+}
+
+// firstWriteStatement returns the first statement of an update's updates or
+// a delete's deletes, which is the one explain plans.
+func firstWriteStatement(explain *types.Document, commandName string) *types.Document {
+	key := map[string]string{"update": "updates", "delete": "deletes"}[commandName]
+	if key == "" {
+		return nil
+	}
+	v, _ := explain.Get(key)
+	arr, _ := v.(*types.Array)
+	if arr == nil || arr.Len() == 0 {
+		return nil
+	}
+	v, _ = arr.Get(0)
+	first, _ := v.(*types.Document)
+	return first
+}
+
+// writeIsMulti reports whether an update with multi: true or a delete with
+// limit: 0 may write more than one document.
+func writeIsMulti(write *types.Document, commandName string) bool {
+	if commandName == "update" {
+		multi, _ := write.Get("multi")
+		b, _ := multi.(bool)
+		return b
+	}
+	limit, _ := write.Get("limit")
+	n, err := handlerparams.GetWholeNumberParam(limit)
+	return err == nil && n == 0
 }

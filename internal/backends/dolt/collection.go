@@ -211,6 +211,11 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 				}
 				switch outcome {
 				case trialWalkWon:
+					// The filter plan's keys were read to plan, not by the
+					// winning walk, so the operation's own counts drop them
+					// as MongoDB's executionStats leave out a losing plan's
+					// trial work.
+					backends.AddKeysExamined(ctx, -plan.keys)
 					c.db.backend.planCache.put(cacheKey, newPlanCacheEntry(idxInfos, params, iter.rest.index, "", len(iter.docs)))
 					return &backends.QueryResult{Iter: iter, Sorted: true}, nil
 				case trialFilterWon:
@@ -340,7 +345,7 @@ func (c *collection) sparseMembers(ctx context.Context, state *dbState, primary 
 	if err != nil {
 		return nil, err
 	}
-	countKeysExamined(len(entries))
+	countKeysExamined(ctx, len(entries))
 	plan := &indexLookupPlan{info: idx, index: idx.Name, keys: len(entries)}
 	seen := make(map[string]struct{}, len(entries))
 	for _, id := range entries {
@@ -515,8 +520,8 @@ func pointLookupByID(ctx context.Context, ns tree.NodeStore, m prolly.Map, idVal
 		if v == nil {
 			return nil
 		}
-		countKeysExamined(1)
-		countDocsExamined(1)
+		countKeysExamined(ctx, 1)
+		countDocsExamined(ctx, 1)
 
 		keyBytes, ok := keyDesc.GetBytes(0, k)
 		if !ok {
@@ -621,7 +626,7 @@ func (c *collection) planIndexLookup(ctx context.Context, state *dbState, primar
 func planIndexLookupIn(ctx context.Context, primary prolly.Map, idxInfos []backends.IndexInfo, idxMaps []prolly.Map, filter *types.Document, hint any, queryCollation *types.Document, keepValues bool) (*indexLookupPlan, error) {
 	plan, err := readIndexLookup(ctx, primary, idxInfos, idxMaps, filter, hint, queryCollation, keepValues)
 	if plan != nil {
-		countKeysExamined(plan.keys)
+		countKeysExamined(ctx, plan.keys)
 	}
 	return plan, err
 }
@@ -997,7 +1002,7 @@ func (plan *indexLookupPlan) fetch(ctx context.Context, state *dbState, primary 
 			if v == nil {
 				return nil
 			}
-			countDocsExamined(1)
+			countDocsExamined(ctx, 1)
 			stored, err := getBSONStoredBytes(ctx, state.ns, v)
 			if err != nil {
 				return err
@@ -2143,7 +2148,10 @@ func buildExplainPlan(command string, params *backends.ExplainParams, picked bac
 		// inner scan follows the same index-vs-collection choice as find.
 		inner := buildFindExplainPlan(params, picked, indexPicked, sortBy, covered)
 		stage := "UPDATE"
-		if command == "delete" {
+		switch {
+		case command == "delete" && params.Multi:
+			stage = "BATCHED_DELETE"
+		case command == "delete":
 			stage = "DELETE"
 		}
 		return &explainStage{stage: stage, input: inner}
@@ -3324,7 +3332,7 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 	if err != nil {
 		return 0, false, err
 	}
-	countKeysExamined(int(n))
+	countKeysExamined(ctx, int(n))
 	return n, true, nil
 }
 
@@ -3545,7 +3553,7 @@ func scanDistinctFromIndex(
 			break
 		}
 
-		countKeysExamined(1)
+		countKeysExamined(ctx, 1)
 		composite, ok := idxKeyDesc.GetBytes(0, k)
 		if !ok {
 			continue
@@ -3604,7 +3612,7 @@ func lookupDocFromPrimary(
 		if v == nil {
 			return nil
 		}
-		countDocsExamined(1)
+		countDocsExamined(ctx, 1)
 		stored, err := getBSONStoredBytes(ctx, ns, v)
 		if err != nil {
 			return err
@@ -4425,7 +4433,7 @@ func (it *mapIter) Next() (struct{}, *types.Document, error) {
 		if v == nil {
 			return struct{}{}, nil, iterator.ErrIteratorDone
 		}
-		countDocsExamined(1)
+		countDocsExamined(it.ctx, 1)
 
 		keyBytes, ok := keyDesc.GetBytes(0, k)
 		if !ok {

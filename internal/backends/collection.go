@@ -265,6 +265,10 @@ type ExplainParams struct {
 	// pattern, or a single-string value naming an index by name (the latter
 	// is left to the backend to interpret).
 	Hint any
+
+	// Multi is set for an update or delete that may write more than one
+	// document.
+	Multi bool
 }
 
 type ExplainResult struct {
