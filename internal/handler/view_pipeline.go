@@ -171,25 +171,31 @@ func (f *foreignFetcher) Fetch(ctx context.Context, collName string, filter *typ
 // IndexedField reports whether collName has a single-field index on field that
 // the backend can use for an equality or $in filter without a collation.
 func (f *foreignFetcher) IndexedField(ctx context.Context, collName, field string) bool {
+	_, ok := f.indexOn(ctx, collName, field)
+	return ok
+}
+
+// indexOn returns the index IndexedField finds.
+func (f *foreignFetcher) indexOn(ctx context.Context, collName, field string) (backends.IndexInfo, bool) {
 	info, err := lookupCollectionInfo(ctx, f.db, collName)
 	if err != nil || info == nil || info.IsView {
-		return false
+		return backends.IndexInfo{}, false
 	}
 	coll, err := f.db.Collection(collName)
 	if err != nil {
-		return false
+		return backends.IndexInfo{}, false
 	}
 	res, err := coll.ListIndexes(ctx, new(backends.ListIndexesParams))
 	if err != nil {
-		return false
+		return backends.IndexInfo{}, false
 	}
 	for _, idx := range res.Indexes {
 		if len(idx.Key) == 1 && idx.Key[0].Field == field && !idx.Lossy &&
 			idx.PartialFilterExpression == nil && collation.Parse(idx.Collation).IsSimple() {
-			return true
+			return idx, true
 		}
 	}
-	return false
+	return backends.IndexInfo{}, false
 }
 
 // viewReadCollation returns the collation a read on a view runs under: the
