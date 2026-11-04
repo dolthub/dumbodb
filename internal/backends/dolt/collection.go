@@ -24,6 +24,7 @@ import (
 	"io"
 	"math"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/dolthub/dolt/go/store/hash"
@@ -1254,12 +1255,32 @@ func isNullEquality(v any) bool {
 	return false
 }
 
-// nullEqualityIndexable reports whether idx's null entries are exactly the
-// documents a null equality on its leading field matches: missing values are
-// indexed as null, and no array element or dotted path can match null without
-// a null entry.
+// nullEqualityIndexable reports whether idx holds a null entry for every
+// document a null equality on its leading field matches: missing values are
+// indexed as null, and a dotted path without positional segments, as on
+// MongoDB, indexes null for each array element or branch it does not reach.
+// A multikey top-level field is not served.
 func nullEqualityIndexable(idx backends.IndexInfo) bool {
-	return !idx.Sparse && !idx.Multikey && !strings.Contains(idx.Key[0].Field, ".")
+	if idx.Sparse {
+		return false
+	}
+	field := idx.Key[0].Field
+	if !strings.Contains(field, ".") {
+		return !idx.Multikey
+	}
+	path, err := types.NewPathFromString(field)
+	return err == nil && !hasPositionalSegment(path)
+}
+
+// hasPositionalSegment reports whether a segment of path is numeric, which
+// may name an array position.
+func hasPositionalSegment(path types.Path) bool {
+	for _, seg := range path.Slice() {
+		if _, err := strconv.Atoi(seg); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // isExistsTrue reports whether v, a filter field's condition, is
@@ -4043,6 +4064,17 @@ func indexFieldValue(doc *types.Document, field string) any {
 	path, err := types.NewPathFromString(field)
 	if err != nil {
 		return types.Null
+	}
+	if !hasPositionalSegment(path) {
+		// MongoDB's keys: null for each array element or branch the path
+		// does not reach.
+		vals := commonpath.IndexKeyValues(doc, path)
+		if len(vals) == 1 {
+			if _, isArray := vals[0].(*types.Array); !isArray {
+				return vals[0]
+			}
+		}
+		return must.NotFail(types.NewArray(vals...))
 	}
 	vals, err := commonpath.FindValues(doc, path, &commonpath.FindValuesOpts{
 		FindArrayDocuments: true,
