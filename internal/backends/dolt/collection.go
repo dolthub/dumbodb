@@ -3454,15 +3454,14 @@ func (c *collection) DistinctScan(ctx context.Context, params *backends.Distinct
 	return &backends.DistinctResult{Values: values}, nil
 }
 
-// scanDistinctFromIndex walks idxMap in key order and emits one primary lookup
-// per unique KeyString prefix. The secondary index key layout is
-// `[KeyString(value)][0x04][primary key]`; values with the same
-// KeyString prefix share a distinct value, so a single doc fetch per group
-// suffices to recover the original typed value. Each fetched doc contributes
-// its MongoDB index keys, including null for a missing field and undefined for
-// an empty array, as MongoDB's DISTINCT_SCAN does. Only entries in
-// [start, stop) are read, and a group counts only when its fetched document
-// matches filter, when set.
+// scanDistinctFromIndex returns the distinct values of field among idxMap's
+// entries in [start, stop), as MongoDB's DISTINCT_SCAN does: it reads one
+// entry per value, restoring the value from the entry and skipping past the
+// rest of its entries. An entry that cannot restore its value costs one
+// document fetch for its group. A fetched document contributes its MongoDB
+// index keys, including
+// null for a missing field and undefined for an empty array. A value counts
+// only when it, or its fetched document, matches filter, when set.
 func scanDistinctFromIndex(
 	ctx context.Context,
 	idxMap prolly.Map,
@@ -3477,69 +3476,76 @@ func scanDistinctFromIndex(
 		return nil, err
 	}
 
-	iter, err := idxpkg.IterKeyRange(ctx, idxMap, start, stop)
-	if err != nil {
-		return nil, fmt.Errorf("distinct scan iterating index: %w", err)
+	var out []any
+	emitDoc := func(id []byte) error {
+		doc, err := lookupDocFromPrimary(ctx, primary, ns, id, nil)
+		if err != nil || doc == nil {
+			return err
+		}
+		if filter != nil {
+			if match, err := backends.MatchPartialFilter(doc, filter); err != nil || !match {
+				return err
+			}
+		}
+		out = append(out, commonpath.IndexKeyValues(doc, path)...)
+		return nil
 	}
 
-	idxKeyDesc := idxpkg.KeyDescriptor()
-
-	var (
-		prevPrefix []byte
-		havePrev   bool
-		out        []any
-	)
-
-	for {
-		k, _, err := iter.Next(ctx)
+	for cursor := start; ; {
+		iter, ok, err := idxpkg.SeekKeyRange(ctx, idxMap, cursor, stop)
 		if err != nil {
-			if err == io.EOF {
-				break
+			return nil, fmt.Errorf("distinct scan iterating index: %w", err)
+		}
+		if !ok {
+			return out, nil
+		}
+		values, id, tags, done, err := nextDistinctEntry(ctx, iter)
+		if err != nil || done {
+			return out, err
+		}
+
+		if v, ok := decodeDistinctValue(values, tags); ok {
+			match := filter == nil
+			if !match {
+				if match, err = backends.MatchPartialFilter(must.NotFail(types.NewDocument(field, v)), filter); err != nil {
+					return nil, err
+				}
 			}
-			return nil, fmt.Errorf("distinct scan reading index: %w", err)
-		}
-		if k == nil {
-			break
-		}
-
-		countKeysExamined(ctx, 1)
-		composite, ok := idxKeyDesc.GetBytes(0, k)
-		if !ok {
-			continue
-		}
-		prefix, id, ok := idxpkg.SplitEntry(composite)
-		if !ok {
-			continue
-		}
-
-		if havePrev && bytes.Equal(prefix, prevPrefix) {
-			continue
-		}
-
-		idBytes := bytes.Clone(id)
-
-		doc, err := lookupDocFromPrimary(ctx, primary, ns, idBytes, nil)
-		if err != nil {
+			if match {
+				out = append(out, v)
+			}
+		} else if err := emitDoc(id); err != nil {
 			return nil, err
 		}
-		if doc != nil && filter != nil {
-			match, err := backends.MatchPartialFilter(doc, filter)
-			if err != nil {
-				return nil, err
-			}
-			if !match {
-				doc = nil
-			}
-		}
-		if doc != nil {
-			out = append(out, commonpath.IndexKeyValues(doc, path)...)
-		}
-
-		prevPrefix = append(prevPrefix[:0], prefix...)
-		havePrev = true
+		cursor = idxpkg.SkipValues(values)
 	}
+}
 
-	return out, nil
+// nextDistinctEntry reads iter's next entry, counting its key; done is set at
+// the end of the range.
+func nextDistinctEntry(ctx context.Context, iter prolly.MapIter) (values, id, tags []byte, done bool, err error) {
+	for {
+		k, v, err := iter.Next(ctx)
+		if err == io.EOF || (err == nil && len(k) == 0) {
+			return nil, nil, nil, true, nil
+		}
+		if err != nil {
+			return nil, nil, nil, false, fmt.Errorf("distinct scan reading index: %w", err)
+		}
+		countKeysExamined(ctx, 1)
+		if values, tags, id, ok := idxpkg.DecodeEntry(k, v); ok {
+			return values, id, tags, false, nil
+		}
+	}
+}
+
+// decodeDistinctValue restores a single-field entry's value from values and
+// tags.
+func decodeDistinctValue(values, tags []byte) (any, bool) {
+	if len(tags) != 1 {
+		return nil, false
+	}
+	return idxpkg.DecodeValue(values, tags[0])
 }
 
 // lookupDocFromPrimary fetches the primary document by encoded _id bytes, or

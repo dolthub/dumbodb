@@ -331,7 +331,10 @@ func NewRangeIDIter(ctx context.Context, m prolly.Map, startKey, stopKey []byte,
 	}
 	it := &RangeIDIter{m: m, reverse: reverse}
 	if !reverse {
-		it.entries, err = m.IterKeyRange(ctx, startTup, stopTup)
+		var ok bool
+		if it.entries, ok, err = SeekKeyRange(ctx, m, startKey, stopKey); !ok {
+			it.entries = nil
+		}
 		return it, err
 	}
 	if startTup != nil {
@@ -376,8 +379,11 @@ func (it *RangeIDIter) NextEntry(ctx context.Context) (values, tags, id []byte, 
 			}
 			continue
 		}
+		if it.entries == nil {
+			return nil, nil, nil, nil
+		}
 		k, v, err := it.entries.Next(ctx)
-		if err == io.EOF || (err == nil && k == nil) {
+		if err == io.EOF || (err == nil && len(k) == 0) {
 			return nil, nil, nil, nil
 		}
 		if err != nil {
@@ -391,8 +397,28 @@ func (it *RangeIDIter) NextEntry(ctx context.Context) (values, tags, id []byte, 
 	}
 }
 
+// DecodeEntry splits an index map entry into its encoded index values, their
+// type tags, and its primary id.
+func DecodeEntry(k, v val.Tuple) (values, tags, id []byte, ok bool) {
+	composite, ok := idxKeyDesc.GetBytes(0, k)
+	if !ok {
+		return nil, nil, nil, false
+	}
+	values, id, ok = splitComposite(composite)
+	return values, entryTags(v), id, ok
+}
+
+// SkipValues returns the key just past every entry of the encoded values
+// prefix, whatever their primary ids.
+func SkipValues(values []byte) []byte {
+	return append(bytes.Clone(values), discriminator+1)
+}
+
 // entryTags returns a copy of the type tags in an entry's value tuple.
 func entryTags(v val.Tuple) []byte {
+	if len(v) == 0 {
+		return nil
+	}
 	tags, _ := idxValDesc.GetBytes(0, v)
 	return bytes.Clone(tags)
 }
@@ -410,7 +436,7 @@ func (it *RangeIDIter) fillBackward(ctx context.Context) error {
 	}
 	for {
 		k, v, err := entries.Next(ctx)
-		if err == io.EOF || (err == nil && k == nil) {
+		if err == io.EOF || (err == nil && len(k) == 0) {
 			break
 		}
 		if err != nil {
@@ -473,6 +499,31 @@ func IterKeyRange(ctx context.Context, m prolly.Map, startKey, stopKey []byte) (
 		return nil, err
 	}
 	return m.IterKeyRange(ctx, startTup, stopTup)
+}
+
+// SeekKeyRange is IterKeyRange for a range that may start after every entry,
+// where a prolly iterator reads past the end of the map: ok is false then,
+// and there is nothing to iterate.
+func SeekKeyRange(ctx context.Context, m prolly.Map, startKey, stopKey []byte) (iter prolly.MapIter, ok bool, err error) {
+	if len(startKey) > 0 {
+		startTup, err := boundTuple(startKey)
+		if err != nil {
+			return nil, false, err
+		}
+		ord, err := m.GetOrdinalForKey(ctx, startTup)
+		if err != nil {
+			return nil, false, err
+		}
+		n, err := m.Count()
+		if err != nil {
+			return nil, false, err
+		}
+		if ord >= uint64(n) {
+			return nil, false, nil
+		}
+	}
+	iter, err = IterKeyRange(ctx, m, startKey, stopKey)
+	return iter, err == nil, err
 }
 
 // RangeCardinality returns the number of entries in [startKey, stopKey)
