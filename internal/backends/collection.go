@@ -279,6 +279,17 @@ type ExplainResult struct {
 	FilterPushdown bool
 	SortPushdown   bool
 	LimitPushdown  bool
+
+	// UnionBranches holds, in plan order, the counts of each index scan
+	// under the winning plan's OR stage, which are read whole while planning.
+	UnionBranches []ExplainBranchCounts
+}
+
+// ExplainBranchCounts are the index keys one scan under an OR stage read and
+// the documents it returned.
+type ExplainBranchCounts struct {
+	KeysExamined int64
+	NReturned    int64
 }
 
 // Explain return a backend-specific execution plan for the given query.
