@@ -269,6 +269,9 @@ type ExplainParams struct {
 	// Multi is set for an update or delete that may write more than one
 	// document.
 	Multi bool
+
+	// Remove is set for a findAndModify that deletes its document.
+	Remove bool
 }
 
 type ExplainResult struct {

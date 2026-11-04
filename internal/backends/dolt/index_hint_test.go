@@ -23,10 +23,8 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// The runtime index choice is not observable over the wire (results are
-// identical and executionStats derives from the explain planner, not from
-// execution), so this is a white-box assertion on tryIndexLookup's "used"
-// return.
+// This is a white-box assertion on tryIndexLookup's "used" return and the
+// documents it reads.
 func TestTryIndexLookup_HonorsHint(t *testing.T) {
 	t.Parallel()
 
@@ -79,15 +77,16 @@ func TestTryIndexLookup_HonorsHint(t *testing.T) {
 	filter := must.NotFail(types.NewDocument("a", int32(3)))
 	keyPatternB := must.NotFail(types.NewDocument("b", int32(1)))
 
+	// A hinted index the filter does not bound is read whole, as on MongoDB.
 	cases := []struct {
 		name     string
 		hint     any
-		wantUsed bool
+		wantDocs int
 	}{
-		{"no hint uses an index", nil, true},
-		{"hint covering index (by name) is used", "a_1", true},
-		{"hint non-covering index (by name) forces scan", "b_1", false},
-		{"hint non-covering index (by key pattern) forces scan", keyPatternB, false},
+		{"no hint uses an index", nil, 1},
+		{"hint covering index (by name) is used", "a_1", 1},
+		{"hint non-covering index (by name) is read whole", "b_1", 6},
+		{"hint non-covering index (by key pattern) is read whole", keyPatternB, 6},
 	}
 
 	for _, tc := range cases {
@@ -96,15 +95,14 @@ func TestTryIndexLookup_HonorsHint(t *testing.T) {
 			if err != nil {
 				t.Fatalf("tryIndexLookup: %v", err)
 			}
-			if used != tc.wantUsed {
-				t.Fatalf("used = %v, want %v", used, tc.wantUsed)
+			if !used {
+				t.Fatal("used = false, want the index")
 			}
-			if used {
-				if len(gotDocs) != 1 {
-					t.Fatalf("index path returned %d docs, want 1", len(gotDocs))
-				}
-				id, _ := gotDocs[0].Get("_id")
-				if id != int32(3) {
+			if len(gotDocs) != tc.wantDocs {
+				t.Fatalf("index path returned %d docs, want %d", len(gotDocs), tc.wantDocs)
+			}
+			if tc.wantDocs == 1 {
+				if id, _ := gotDocs[0].Get("_id"); id != int32(3) {
 					t.Fatalf("matched _id = %v, want 3", id)
 				}
 			}

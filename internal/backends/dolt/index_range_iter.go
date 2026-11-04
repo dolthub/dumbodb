@@ -29,19 +29,19 @@ import (
 // streamIndexRanges serves params' filter by reading its index ranges lazily,
 // so a downstream limit stops the reads. It declines when no index serves the
 // filter or the ranges are not worth reading (indexStreamWorthReading).
-func streamIndexRanges(ctx context.Context, state *dbState, primary prolly.Map, idxInfos []backends.IndexInfo, idxMaps []prolly.Map, params *backends.QueryParams) (types.DocumentsIterator, bool, error) {
+func streamIndexRanges(ctx context.Context, state *dbState, primary prolly.Map, idxInfos []backends.IndexInfo, idxMaps []prolly.Map, params *backends.QueryParams) (types.DocumentsIterator, backends.IndexInfo, bool, error) {
 	if params.Filter.Len() == 0 || params.Filter.Has("$or") {
-		return nil, false, nil
+		return nil, backends.IndexInfo{}, false, nil
 	}
 	choice, ok := chooseIndexRange(idxInfos, params.Filter, params.Hint, params.Collation)
 	if !ok {
-		return nil, false, nil
+		return nil, backends.IndexInfo{}, false, nil
 	}
 	info, idxMap := idxInfos[choice.mapIdx], idxMaps[choice.mapIdx]
 	ids := newIndexIDStream(ctx, idxMap, choice.ranges(), false, info.Multikey)
 	worth, err := indexStreamWorthReading(ctx, primary, idxMaps, choice, info, params, ids)
 	if err != nil || !worth {
-		return nil, false, err
+		return nil, backends.IndexInfo{}, false, err
 	}
 	return &indexRangeIter{
 		ctx:     ctx,
@@ -50,7 +50,7 @@ func streamIndexRanges(ctx context.Context, state *dbState, primary prolly.Map, 
 		ids:     ids,
 		fields:  params.Fields,
 		release: pinRoots(state, primary, idxMap),
-	}, true, nil
+	}, info, true, nil
 }
 
 // indexStreamWorthReading reports whether streaming choice's ranges, one point

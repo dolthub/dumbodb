@@ -97,15 +97,22 @@ func (c *collection) getMap(ctx context.Context) (prolly.Map, bool, *dbState, er
 }
 
 func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*backends.QueryResult, error) {
+	res, _, err := c.query(ctx, params)
+	return res, err
+}
+
+// query is Query, also returning the stage tree of the scan that serves
+// params, as explain shows it.
+func (c *collection) query(ctx context.Context, params *backends.QueryParams) (*backends.QueryResult, *explainStage, error) {
 	m, exists, state, err := c.getMap(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	if !exists {
 		return &backends.QueryResult{
 			Iter: newEmptyIter(),
-		}, nil
+		}, collscanStage(), nil
 	}
 
 	// A {$natural: ...} hint forces a collection scan: skip both the secondary
@@ -114,33 +121,45 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 
 	sparseHint, err := c.hintedSparseIndex(ctx, state, params)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if sparseHint != nil && !sparseHint.Lossy {
 		docs, err := c.sparseMembers(ctx, state, m, *sparseHint, params.Fields)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		return &backends.QueryResult{Iter: newSliceIter(docs)}, nil
+		return &backends.QueryResult{Iter: newSliceIter(docs)}, fetchStage(ixscanStage(*sparseHint)), nil
 	}
 	if sparseHint != nil {
 		res, err := c.queryUnhintedSparse(ctx, params)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		res.Iter = newSparseMemberIter(res.Iter, *sparseHint)
-		return res, nil
+		return res, fetchStage(ixscanStage(*sparseHint)), nil
+	}
+
+	// An _id equality is one primary-key read, cheaper than any index range,
+	// so without a hint it is tried first, as MongoDB prefers _id_.
+	if !naturalHint && params != nil && params.Hint == nil && !params.Collated && params.Filter != nil {
+		if idVal, ok := simpleIDEquality(params.Filter); ok {
+			if iter, err := pointLookupByID(ctx, state.ns, m, idVal, params.OnlyRecordIDs); err == nil {
+				return &backends.QueryResult{Iter: iter}, idPointStage(), nil
+			}
+		}
 	}
 
 	fieldSort := params != nil && sortIsSingleField(params.Sort)
+	var idxInfos []backends.IndexInfo
 
 	if !naturalHint && params != nil && params.Filter != nil && (params.Sort.Len() == 0 || fieldSort) &&
 		(!params.Collated || params.Collation != nil) {
 		state.mu.RLock()
-		idxInfos, idxMaps, err := resolveIndexes(ctx, c, state)
+		var idxMaps []prolly.Map
+		idxInfos, idxMaps, err = resolveIndexes(ctx, c, state)
 		state.mu.RUnlock()
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		var cacheKey string
@@ -153,15 +172,15 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 		if hit && cached.walkIndex != "" {
 			walk, ok, err := c.trySortWalk(ctx, state, m, params)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			if ok && walk.index == cached.walkIndex {
 				iter, run, err := runWalkWithin(walk, params, cached.budget(params))
 				if err != nil {
-					return nil, err
+					return nil, nil, err
 				}
 				if run == walkReachedTarget {
-					return &backends.QueryResult{Iter: iter, Sorted: true}, nil
+					return &backends.QueryResult{Iter: iter, Sorted: true}, walkStage(idxInfos, walk.index), nil
 				}
 			} else if ok {
 				walk.Close()
@@ -171,34 +190,34 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 		}
 
 		if fieldSort {
-			iter, ok, err := tryStreamSortedRange(ctx, state, m, idxInfos, idxMaps, params)
+			iter, info, ok, err := tryStreamSortedRange(ctx, state, m, idxInfos, idxMaps, params)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			if ok {
-				return &backends.QueryResult{Iter: iter, Sorted: true}, nil
+				return &backends.QueryResult{Iter: iter, Sorted: true}, fetchStage(ixscanStage(info)), nil
 			}
 		}
 
 		var plan *indexLookupPlan
 		if !fieldSort {
-			iter, ok, err := streamIndexRanges(ctx, state, m, idxInfos, idxMaps, params)
+			iter, info, ok, err := streamIndexRanges(ctx, state, m, idxInfos, idxMaps, params)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			if ok {
-				return &backends.QueryResult{Iter: iter}, nil
+				return &backends.QueryResult{Iter: iter}, fetchStage(ixscanStage(info)), nil
 			}
 		}
 		// The stream has already sized and declined any filter without $or.
 		if fieldSort || params.Filter.Has("$or") {
 			if plan, err = planIndexLookupIn(ctx, m, idxInfos, idxMaps, params.Filter, params.Hint, params.Collation, fieldSort); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 		}
 		if plan != nil {
 			if reverse, ok := indexScanSortOrder(plan.info, params.Filter, params.Sort, params.Collation); fieldSort && !plan.union && ok {
-				return &backends.QueryResult{Iter: plan.sortedIter(ctx, state, m, params.Sort, reverse, params.Fields), Sorted: true}, nil
+				return &backends.QueryResult{Iter: plan.sortedIter(ctx, state, m, params.Sort, reverse, params.Fields), Sorted: true}, plan.stage(), nil
 			}
 			if hit && filterPlanWorks(plan, params) > cached.budget(params) {
 				c.db.backend.planCache.evict(cacheKey)
@@ -207,7 +226,7 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 			if fieldSort && !hit {
 				iter, outcome, err := c.trySortWalkTrial(ctx, state, m, params, plan)
 				if err != nil {
-					return nil, err
+					return nil, nil, err
 				}
 				switch outcome {
 				case trialWalkWon:
@@ -217,7 +236,7 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 					// trial work.
 					backends.AddKeysExamined(ctx, -plan.keys)
 					c.db.backend.planCache.put(cacheKey, newPlanCacheEntry(idxInfos, params, iter.rest.index, "", len(iter.docs)))
-					return &backends.QueryResult{Iter: iter, Sorted: true}, nil
+					return &backends.QueryResult{Iter: iter, Sorted: true}, walkStage(idxInfos, iter.rest.index), nil
 				case trialFilterWon:
 					c.db.backend.planCache.put(cacheKey, newPlanCacheEntry(idxInfos, params, "", plan.index, filterPlanWorks(plan, params)))
 				}
@@ -225,17 +244,17 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 			if pos, ok := indexKeySortPosition(plan.info, params.Filter, params.Sort, params.Collation); fieldSort && !plan.union && ok {
 				iter, err := plan.keySortedIter(ctx, state, m, params.Sort, pos, params.Fields)
 				if err != nil {
-					return nil, err
+					return nil, nil, err
 				}
-				return &backends.QueryResult{Iter: iter, Sorted: true}, nil
+				return &backends.QueryResult{Iter: iter, Sorted: true}, fetchStage(&explainStage{stage: "SORT", input: ixscanStage(plan.info)}), nil
 			}
 			docs, err := plan.fetch(ctx, state, m, params.Fields)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			return &backends.QueryResult{
 				Iter: newSliceIter(docs),
-			}, nil
+			}, plan.stage(), nil
 		}
 	}
 
@@ -244,10 +263,19 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 	if !naturalHint && fieldSort && (params.LimitHint > 0 || params.Filter.Len() == 0) {
 		iter, ok, err := c.trySortWalk(ctx, state, m, params)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if ok {
-			return &backends.QueryResult{Iter: iter, Sorted: true}, nil
+			if idxInfos == nil {
+				state.mu.RLock()
+				idxInfos, _, err = resolveIndexes(ctx, c, state)
+				state.mu.RUnlock()
+				if err != nil {
+					iter.Close()
+					return nil, nil, err
+				}
+			}
+			return &backends.QueryResult{Iter: iter, Sorted: true}, walkStage(idxInfos, iter.index), nil
 		}
 	}
 
@@ -271,7 +299,7 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 		if idVal, ok := simpleIDEquality(params.Filter); ok {
 			iter, err := pointLookupByID(ctx, state.ns, m, idVal, onlyRecordIDs)
 			if err == nil {
-				return &backends.QueryResult{Iter: iter}, nil
+				return &backends.QueryResult{Iter: iter}, idPointStage(), nil
 			}
 			// Fall back to full scan on any error (e.g. unsupported _id type).
 		}
@@ -305,7 +333,7 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 			mi.release = state.backend.backgroundRP.pinRoot(state.name, m.HashOf())
 		}
 	}
-	return &backends.QueryResult{Iter: iter}, nil
+	return &backends.QueryResult{Iter: iter}, collscanStage(), nil
 }
 
 // hintedSparseIndex returns the sparse index params hints, or nil.
@@ -599,6 +627,8 @@ type indexLookupPlan struct {
 	// union is set when ids are the union of one index scan per $or branch;
 	// info and index are then empty, and ids are not in any index order.
 	union bool
+	// branches are a union's index scans, without their ids.
+	branches []*indexLookupPlan
 	// keys is the number of index entries scanned; ids holds each matched
 	// document once and, when kept, values its entry's encoded index values.
 	keys   int
@@ -665,13 +695,14 @@ func readIndexLookup(ctx context.Context, primary prolly.Map, idxInfos []backend
 }
 
 // narrowRangeEntries is how many entries of a range are read before counting
-// it: a range that ends within them costs less to read than to count.
+// it: a range that ends within them costs less to read than to count, and so
+// little either way that it is always read.
 const narrowRangeEntries = 128
 
-// indexRangesWithinHalf reports whether some index ranges hold at most half
-// of primary's documents; past that, one point lookup per entry loses to a
-// sequential scan. readsAtMost(n) reads up to n entries and reports whether
-// the ranges end within them, so narrow ranges are never counted;
+// indexRangesWithinHalf reports whether some index ranges are narrow or hold
+// at most half of primary's documents; past that, one point lookup per entry
+// loses to a sequential scan. readsAtMost(n) reads up to n entries and reports
+// whether the ranges end within them, so narrow ranges are never counted;
 // countEntries counts them from the index tree.
 func indexRangesWithinHalf(primary prolly.Map, readsAtMost func(n int) (bool, error), countEntries func() (uint64, error)) (bool, error) {
 	docs, err := primary.Count()
@@ -679,12 +710,11 @@ func indexRangesWithinHalf(primary prolly.Map, readsAtMost func(n int) (bool, er
 		return false, fmt.Errorf("index lookup counting primary: %w", err)
 	}
 	half := docs / 2
-	probe := min(narrowRangeEntries, half)
-	narrow, err := readsAtMost(probe)
+	narrow, err := readsAtMost(narrowRangeEntries)
 	if err != nil || narrow {
 		return narrow, err
 	}
-	if probe == half {
+	if half <= narrowRangeEntries {
 		return false, nil
 	}
 	entries, err := countEntries()
@@ -772,9 +802,8 @@ func chooseIndexRange(idxInfos []backends.IndexInfo, filter *types.Document, hin
 	queryCmp := queryColl.Comparator()
 
 	// A hint naming a specific index forces selection: only that index is a
-	// candidate, matching what Explain reports (and MongoDB). When the hinted
-	// index does not cover the filter with a usable range, selection falls
-	// through to a collection scan -- results are unaffected either way.
+	// candidate, as on MongoDB. When the filter gives the hinted index no
+	// range, the whole index is scanned.
 	hintedName := backends.MatchHintedIndex(hint, idxInfos)
 
 	// Single-field indexes are preferred (tighter scan range); compound
@@ -897,6 +926,11 @@ func chooseIndexRange(idxInfos []backends.IndexInfo, filter *types.Document, hin
 	}
 
 	if !usable {
+		if hintedName != "" {
+			for _, entry := range indexedField {
+				return indexRangeChoice{mapIdx: entry.mapIdx}, true
+			}
+		}
 		return indexRangeChoice{}, false
 	}
 	return indexRangeChoice{mapIdx: chosenMapIdx, startKey: startKey, stopKey: stopKey, pointRanges: pointRanges}, true
@@ -946,6 +980,7 @@ func unionIndexChoices(ctx context.Context, idxInfos []backends.IndexInfo, idxMa
 			return nil, err
 		}
 		union.keys += plan.keys
+		union.branches = append(union.branches, &indexLookupPlan{info: plan.info, index: plan.index, keys: plan.keys})
 		for _, id := range plan.ids {
 			if _, dup := seen[string(id)]; dup {
 				continue
@@ -1501,8 +1536,15 @@ type explainStage struct {
 	stage      string
 	indexName  string
 	keyPattern *types.Document
-	input      *explainStage
-	inputs     []*explainStage
+	// keyPatternText replaces keyPattern for an EXPRESS stage, which MongoDB
+	// reports as a string.
+	keyPatternText string
+	input          *explainStage
+	inputs         []*explainStage
+	// index is the index an IXSCAN reads.
+	index backends.IndexInfo
+	// idPoint marks the _id point lookup's IXSCAN.
+	idPoint bool
 }
 
 func (s *explainStage) toDoc() *types.Document {
@@ -1510,7 +1552,10 @@ func (s *explainStage) toDoc() *types.Document {
 	if s.indexName != "" {
 		d.Set("indexName", s.indexName)
 	}
-	if s.keyPattern != nil {
+	switch {
+	case s.keyPatternText != "":
+		d.Set("keyPattern", s.keyPatternText)
+	case s.keyPattern != nil:
 		d.Set("keyPattern", s.keyPattern)
 	}
 	if len(s.inputs) > 0 {
@@ -1523,78 +1568,6 @@ func (s *explainStage) toDoc() *types.Document {
 		d.Set("inputStage", s.input.toDoc())
 	}
 	return d
-}
-
-// buildOrUnionPlan recognises the {$or: [<clauseDoc>, ...]} filter
-// shape and builds an OR union plan when every clause is matchable
-// to a single-field index. Each clause must be a single-field
-// equality/range predicate whose field has an index; otherwise
-// MongoDB cannot do an indexed OR-union and would fall back to a
-// COLLSCAN, so we do the same.
-//
-// Returns the outer FETCH stage (wrapping OR which wraps the
-// per-branch IXSCAN nodes) and ok=true on a match. Returns ok=false
-// for unsupported shapes (the caller falls through to the normal
-// index-pick or COLLSCAN plan).
-func buildOrUnionPlan(params *backends.ExplainParams, idxInfos []backends.IndexInfo) (*explainStage, bool) {
-	if params == nil || params.Filter == nil || params.Filter.Len() != 1 {
-		return nil, false
-	}
-	if params.Filter.Keys()[0] != "$or" {
-		return nil, false
-	}
-	v, err := params.Filter.Get("$or")
-	if err != nil {
-		return nil, false
-	}
-	arr, ok := v.(*types.Array)
-	if !ok || arr.Len() < 2 {
-		return nil, false
-	}
-	branches := make([]*explainStage, 0, arr.Len())
-	for i := 0; i < arr.Len(); i++ {
-		clauseAny, err := arr.Get(i)
-		if err != nil {
-			return nil, false
-		}
-		clause, ok := clauseAny.(*types.Document)
-		if !ok || clause.Len() != 1 {
-			return nil, false
-		}
-		field := clause.Keys()[0]
-		if strings.HasPrefix(field, "$") {
-			return nil, false
-		}
-		val, err := clause.Get(field)
-		if err != nil {
-			return nil, false
-		}
-		if _, _, ok := indexBoundsForFilterValue(val); !ok {
-			return nil, false
-		}
-		var idx backends.IndexInfo
-		var found bool
-		for _, candidate := range idxInfos {
-			if len(candidate.Key) == 1 && candidate.Key[0].Field == field {
-				idx = candidate
-				found = true
-				break
-			}
-		}
-		if !found {
-			return nil, false
-		}
-		branches = append(branches, &explainStage{
-			stage:      "IXSCAN",
-			indexName:  idx.Name,
-			keyPattern: keyPatternOf(idx),
-		})
-	}
-	or := &explainStage{stage: "OR", inputs: branches}
-	fetch := &explainStage{stage: "FETCH", input: or}
-	// MongoDB wraps the indexed-OR plan in a SUBPLAN node (one plan
-	// per $or branch, unioned). Match that shape.
-	return &explainStage{stage: "SUBPLAN", input: fetch}, true
 }
 
 // partialFilterScalar extracts the scalar a condition pins a field to:
@@ -1922,12 +1895,10 @@ func isOperatorDoc(doc *types.Document) bool {
 }
 
 func (c *collection) Explain(ctx context.Context, params *backends.ExplainParams) (*backends.ExplainResult, error) {
-	var parsedQuery *types.Document
-	if params != nil {
-		parsedQuery = canonicalizeParsedQuery(params.Filter)
-	} else {
-		parsedQuery = types.MakeDocument(0)
+	if params == nil {
+		params = new(backends.ExplainParams)
 	}
+	parsedQuery := canonicalizeParsedQuery(params.Filter)
 
 	var idxInfos []backends.IndexInfo
 	if state, err := c.db.backend.getOrOpenDB(ctx, c.db.name, false); err == nil && state != nil {
@@ -1939,118 +1910,41 @@ func (c *collection) Explain(ctx context.Context, params *backends.ExplainParams
 		}
 	}
 
-	// Picked index: explicit hint wins; otherwise an equality / range
-	// filter on a single-field index. A {$natural: ...} hint forces a
-	// collection scan and short-circuits all index selection -- MongoDB
-	// treats $natural as "ignore the indexes, walk the storage in
-	// natural order."
-	var picked backends.IndexInfo
-	var indexPicked bool
-	naturalHint := params != nil && hintIsNatural(params.Hint)
-	if !naturalHint && params != nil {
-		if hintName := pickHintedIndex(params.Hint, idxInfos); hintName != "" {
-			for _, idx := range idxInfos {
-				if idx.Name == hintName {
-					picked = idx
-					indexPicked = true
-					break
-				}
-			}
-		}
-	}
-	if !naturalHint && !indexPicked && params != nil {
-		picked, indexPicked = pickIndexForFilter(params.Filter, idxInfos, params.Collation)
-	}
-	if !naturalHint && !indexPicked && params != nil && params.Command == "distinct" && params.DistinctKey != "" {
-		// distinct uses a covered index on its key when one exists; the
-		// filter (if any) does not drive selection.
-		for _, idx := range idxInfos {
-			if len(idx.Key) == 1 && idx.Key[0].Field == params.DistinctKey {
-				picked = idx
-				indexPicked = true
-				break
-			}
-		}
-	}
-	// Covered-query detection: a find with a single-field IXSCAN whose
-	// projection only references the indexed field with _id explicitly
-	// excluded ({field:1, _id:0}). When covered, the explain tree omits
-	// the FETCH stage and wraps IXSCAN in PROJECTION_COVERED.
-	//
-	// Today this is an explain-shape signal only: the runtime
-	// (tryIndexLookup) still primary-fetches every matching doc. A
-	// runtime "skip the fetch and decode field values from the index
-	// key" optimization is a real performance win but requires
-	// KeyString decoding (workspace-cdq, future). The explain output
-	// stays honest about which queries COULD be covered; users can rely
-	// on PROJECTION_COVERED appearing iff the index key contains all
-	// projected data.
-	covered := false
-
-	// Sort-via-index: when no filter-driven index was chosen and the
-	// query has a single-field non-natural sort, an index on that field
-	// can drive the scan in sorted order without a SORT stage.
-	sortBy := sortInMemory
-	if walked, ok := c.explainSortWalkTrial(ctx, params, naturalHint, indexPicked, idxInfos); ok {
-		picked = walked
-		sortBy = sortByIndexOrder
-	} else if !naturalHint && !indexPicked && params != nil && sortIsSingleField(params.Sort) {
-		if i, ok := sortWalkIndex(idxInfos, params.Sort, params.Collation); ok {
-			picked = idxInfos[i]
-			indexPicked = true
-			sortBy = sortByIndexOrder
-		}
-	} else if indexPicked && params != nil && sortIsSingleField(params.Sort) {
-		if _, ok := indexScanSortOrder(picked, params.Filter, params.Sort, params.Collation); ok {
-			sortBy = sortByIndexOrder
-		} else if _, ok := indexKeySortPosition(picked, params.Filter, params.Sort, params.Collation); ok {
-			sortBy = sortByIndexKeys
-		}
-	}
-
-	if indexPicked && params != nil && !picked.Multikey {
-		covered = projectionIsCoveredBy(params.Projection, picked)
-	}
-
-	command := ""
-	if params != nil {
-		command = params.Command
-	}
-
-	// $or multi-index: when the filter is top-level $or with every
-	// clause matchable to a single-field index, MongoDB builds a union
-	// plan: FETCH -> OR -> [IXSCAN, IXSCAN, ...]. Build that shape
-	// here for explain. Runtime tryIndexLookup currently bails on $or
-	// and falls back to COLLSCAN -- the perf optimization (actually
-	// running the OR-union) is a separate ticket.
-	if orStage, ok := buildOrUnionPlan(params, idxInfos); ok {
-		winningDoc := orStage.toDoc()
-		qp := must.NotFail(types.NewDocument(
-			"namespace", c.db.name+"."+c.name,
-			"parsedQuery", parsedQuery,
-		))
-		c.planCacheExplain(params, idxInfos, qp, winningDoc)
-		qp.Set("winningPlan", winningDoc)
-		qp.Set("rejectedPlans", types.MakeArray(0))
-		return &backends.ExplainResult{QueryPlanner: qp}, nil
-	}
-
-	winningDoc := buildExplainPlan(command, params, picked, indexPicked, sortBy, covered).toDoc()
-
 	qp := must.NotFail(types.NewDocument(
 		"namespace", c.db.name+"."+c.name,
 		"parsedQuery", parsedQuery,
 	))
-	c.planCacheExplain(params, idxInfos, qp, winningDoc)
+	// The plan cache is read before planning, which may fill it.
+	shapeHash, keyHash, cached := c.planCacheState(params, idxInfos)
+
+	var winning *explainStage
+	switch params.Command {
+	case "count", "distinct":
+		winning = buildCountOrDistinctPlan(params, idxInfos)
+	default:
+		res, scan, err := c.query(ctx, explainQueryParams(params))
+		if err != nil {
+			return nil, err
+		}
+		res.Iter.Close()
+		winning = wrapScanPlan(params, scan, res.Sorted)
+		// MongoDB plans each branch of a lone $or separately, under SUBPLAN.
+		if (params.Command == "find" || params.Command == "aggregate") && params.Filter != nil && isLoneOr(params.Filter) &&
+			scan.input != nil && scan.input.stage == "OR" {
+			winning = &explainStage{stage: "SUBPLAN", input: winning}
+		}
+	}
+
+	winningDoc := winning.toDoc()
+	winningDoc.Set("isCached", cached)
+	qp.Set("queryHash", shapeHash)
+	qp.Set("planCacheShapeHash", shapeHash)
+	qp.Set("planCacheKey", keyHash)
 	qp.Set("winningPlan", winningDoc)
 	qp.Set("rejectedPlans", types.MakeArray(0))
-	return &backends.ExplainResult{
-		QueryPlanner: qp,
-	}, nil
+	return &backends.ExplainResult{QueryPlanner: qp}, nil
 }
 
-// explainSortWalkTrial returns the sort index Query walks in place of the
-// filter's index for params, as decided by trySortWalkTrial.
 // explainQueryParams is the QueryParams the explained command runs with.
 func explainQueryParams(params *backends.ExplainParams) *backends.QueryParams {
 	qp := &backends.QueryParams{Filter: params.Filter, Sort: params.Sort, Hint: params.Hint, Collated: params.Collated, Collation: params.Collation}
@@ -2060,157 +1954,172 @@ func explainQueryParams(params *backends.ExplainParams) *backends.QueryParams {
 	return qp
 }
 
-// planCacheExplain adds the plan cache fields MongoDB reports to an explain:
-// the hashes on queryPlanner, and whether the winning plan is cached.
-func (c *collection) planCacheExplain(params *backends.ExplainParams, idxInfos []backends.IndexInfo, queryPlanner, winningPlan *types.Document) {
-	if params == nil {
-		params = new(backends.ExplainParams)
-	}
+// planCacheState returns the plan cache hashes MongoDB reports for params, and
+// whether a plan for them is cached.
+func (c *collection) planCacheState(params *backends.ExplainParams, idxInfos []backends.IndexInfo) (shapeHash, keyHash string, cached bool) {
 	qp := explainQueryParams(params)
-	shapeHash, keyHash := planCacheHashes(idxInfos, qp)
-	_, cached := c.db.backend.planCache.get(c.planCacheKey(idxInfos, qp))
-	winningPlan.Set("isCached", cached)
-	queryPlanner.Set("queryHash", shapeHash)
-	queryPlanner.Set("planCacheShapeHash", shapeHash)
-	queryPlanner.Set("planCacheKey", keyHash)
+	shapeHash, keyHash = planCacheHashes(idxInfos, qp)
+	_, cached = c.db.backend.planCache.get(c.planCacheKey(idxInfos, qp))
+	return shapeHash, keyHash, cached
 }
 
-func (c *collection) explainSortWalkTrial(ctx context.Context, params *backends.ExplainParams, naturalHint, indexPicked bool, idxInfos []backends.IndexInfo) (backends.IndexInfo, bool) {
-	if naturalHint || !indexPicked || params == nil || params.Hint != nil || params.Collated || !sortIsSingleField(params.Sort) {
-		return backends.IndexInfo{}, false
-	}
-	name, ok := c.sortWalkWinsTrial(ctx, explainQueryParams(params))
-	if !ok {
-		return backends.IndexInfo{}, false
-	}
-	for _, idx := range idxInfos {
-		if idx.Name == name {
-			return idx, true
+func collscanStage() *explainStage { return &explainStage{stage: "COLLSCAN"} }
+
+func fetchStage(input *explainStage) *explainStage {
+	return &explainStage{stage: "FETCH", input: input}
+}
+
+func ixscanStage(info backends.IndexInfo) *explainStage {
+	return &explainStage{stage: "IXSCAN", indexName: info.Name, keyPattern: keyPatternOf(info), index: info}
+}
+
+// idPointStage is the _id point lookup, a FETCH of one _id_ index entry.
+func idPointStage() *explainStage {
+	return fetchStage(&explainStage{
+		stage:      "IXSCAN",
+		indexName:  "_id_",
+		keyPattern: must.NotFail(types.NewDocument("_id", int32(1))),
+		idPoint:    true,
+	})
+}
+
+// walkStage is a sort walk of the index named name, fetching each document.
+func walkStage(idxInfos []backends.IndexInfo, name string) *explainStage {
+	for _, info := range idxInfos {
+		if info.Name == name {
+			return fetchStage(ixscanStage(info))
 		}
 	}
-	return backends.IndexInfo{}, false
+	return fetchStage(&explainStage{stage: "IXSCAN", indexName: name})
 }
 
-// buildExplainPlan composes the stage tree for the given command and
-// planning choice. Only shapes the planner choices DumboDB already makes
-// (workspace-bbg scope) -- no new planner capabilities (covered queries,
-// compound indexes, OR/AND multi-index, sort via index) are introduced
-// here; those land in their own follow-ups.
-// sortSource is where a plan's sort order comes from.
-type sortSource int
+// stage is the scan plan reads: its index, or an OR of a union's branches,
+// fetching each document.
+func (plan *indexLookupPlan) stage() *explainStage {
+	if !plan.union {
+		return fetchStage(ixscanStage(plan.info))
+	}
+	or := &explainStage{stage: "OR"}
+	for _, branch := range plan.branches {
+		or.inputs = append(or.inputs, ixscanStage(branch.info))
+	}
+	return fetchStage(or)
+}
 
-const (
-	// sortInMemory sorts fetched documents in a SORT stage above FETCH.
-	sortInMemory sortSource = iota
-	// sortByIndexOrder reads the index already in sort order: no SORT stage.
-	sortByIndexOrder
-	// sortByIndexKeys sorts the scanned index keys before FETCH.
-	sortByIndexKeys
-)
-
-func buildExplainPlan(command string, params *backends.ExplainParams, picked backends.IndexInfo, indexPicked bool, sortBy sortSource, covered bool) *explainStage {
-	switch command {
-	case "count":
-		var leaf *explainStage
-		if indexPicked {
-			leaf = &explainStage{
-				stage:      "COUNT_SCAN",
-				indexName:  picked.Name,
-				keyPattern: keyPatternOf(picked),
+// buildCountOrDistinctPlan composes the stage tree for a count or distinct.
+func buildCountOrDistinctPlan(params *backends.ExplainParams, idxInfos []backends.IndexInfo) *explainStage {
+	var picked backends.IndexInfo
+	var indexPicked bool
+	if !hintIsNatural(params.Hint) {
+		if hintName := pickHintedIndex(params.Hint, idxInfos); hintName != "" {
+			for _, idx := range idxInfos {
+				if idx.Name == hintName {
+					picked, indexPicked = idx, true
+					break
+				}
 			}
-		} else {
-			leaf = &explainStage{stage: "COLLSCAN"}
+		}
+		if !indexPicked {
+			picked, indexPicked = pickIndexForFilter(params.Filter, idxInfos, params.Collation)
+		}
+	}
+	if params.Command == "count" {
+		leaf := collscanStage()
+		if indexPicked {
+			leaf = &explainStage{stage: "COUNT_SCAN", indexName: picked.Name, keyPattern: keyPatternOf(picked)}
 		}
 		return &explainStage{stage: "COUNT", input: leaf}
-
-	case "distinct":
-		// MongoDB emits PROJECTION_COVERED above DISTINCT_SCAN for a top-level
-		// key and PROJECTION_DEFAULT for a dotted one. DumboDB's DistinctScan
-		// path uses the index covering the distinct key; if no usable index,
-		// fall back to COLLSCAN (rare in practice; the parity test always
-		// provides one).
-		if indexPicked {
-			leaf := &explainStage{
-				stage:      "DISTINCT_SCAN",
-				indexName:  picked.Name,
-				keyPattern: keyPatternOf(picked),
-			}
-			projection := "PROJECTION_COVERED"
-			if strings.ContainsRune(params.DistinctKey, '.') {
-				projection = "PROJECTION_DEFAULT"
-			}
-			return &explainStage{stage: projection, input: leaf}
-		}
-		return &explainStage{stage: "COLLSCAN"}
-
-	case "update", "delete":
-		// MongoDB wraps the query plan in an UPDATE / DELETE stage. The
-		// inner scan follows the same index-vs-collection choice as find.
-		inner := buildFindExplainPlan(params, picked, indexPicked, sortBy, covered)
-		stage := "UPDATE"
-		switch {
-		case command == "delete" && params.Multi:
-			stage = "BATCHED_DELETE"
-		case command == "delete":
-			stage = "DELETE"
-		}
-		return &explainStage{stage: stage, input: inner}
-
-	default:
-		// "find" and "aggregate" (the latter via pushed-down $match) share
-		// the same shape rules.
-		return buildFindExplainPlan(params, picked, indexPicked, sortBy, covered)
 	}
+
+	// distinct uses a covered index on its key when one exists; the filter
+	// (if any) does not drive selection. MongoDB emits PROJECTION_COVERED
+	// above DISTINCT_SCAN for a top-level key and PROJECTION_DEFAULT for a
+	// dotted one.
+	if !indexPicked && !hintIsNatural(params.Hint) && params.DistinctKey != "" {
+		for _, idx := range idxInfos {
+			if len(idx.Key) == 1 && idx.Key[0].Field == params.DistinctKey {
+				picked, indexPicked = idx, true
+				break
+			}
+		}
+	}
+	if !indexPicked {
+		return collscanStage()
+	}
+	leaf := &explainStage{stage: "DISTINCT_SCAN", indexName: picked.Name, keyPattern: keyPatternOf(picked)}
+	projection := "PROJECTION_COVERED"
+	if strings.ContainsRune(params.DistinctKey, '.') {
+		projection = "PROJECTION_DEFAULT"
+	}
+	return &explainStage{stage: projection, input: leaf}
 }
 
-// buildFindExplainPlan composes the stage tree for a find-like query
-// (also used for aggregate with pushed-down $match). Wrapping order
-// from inner to outer: leaf -> FETCH (if IXSCAN) -> SORT -> SKIP ->
-// LIMIT (only when no SORT, because SORT absorbs LIMIT into a TopK
-// internally) -> PROJECTION_SIMPLE. Covered-query (PROJECTION_COVERED
-// without FETCH) is bucket B and not handled here.
-func buildFindExplainPlan(params *backends.ExplainParams, picked backends.IndexInfo, indexPicked bool, sortBy sortSource, covered bool) *explainStage {
-	var node *explainStage
-	if indexPicked {
-		node = &explainStage{
-			stage:      "IXSCAN",
-			indexName:  picked.Name,
-			keyPattern: keyPatternOf(picked),
-		}
-		if sortBy == sortByIndexKeys {
-			node = &explainStage{stage: "SORT", input: node}
-		}
-		if !covered {
-			node = &explainStage{stage: "FETCH", input: node}
-		}
-	} else {
-		node = &explainStage{stage: "COLLSCAN"}
+// wrapScanPlan composes the stage tree for a find, aggregate or write around
+// scan, the scan Query runs; sorted reports that scan returns the requested
+// sort order. Wrapping order from inner to outer: SORT (unless sorted), SKIP,
+// LIMIT (only when no SORT, because SORT absorbs LIMIT into a TopK), the
+// projection, then the write.
+func wrapScanPlan(params *backends.ExplainParams, scan *explainStage, sorted bool) *explainStage {
+	if express, ok := expressStage(params, scan); ok {
+		return express
 	}
 
-	if params == nil {
-		return node
+	// A projection of only indexed fields is answered from the index keys:
+	// PROJECTION_COVERED replaces the FETCH. DumboDB still fetches each
+	// document (dolthub/dumbodb#142); the shape shows the query could be
+	// covered.
+	node := scan
+	covered := false
+	if scan.stage == "FETCH" && scan.input != nil && scan.input.stage == "IXSCAN" && !scan.input.idPoint &&
+		!scan.input.index.Multikey && projectionIsCoveredBy(params.Projection, scan.input.index) {
+		node, covered = scan.input, true
 	}
 
-	sortPresent := params.Sort != nil && params.Sort.Len() > 0 && !sortIsNatural(params.Sort) && sortBy != sortByIndexOrder
-	if sortPresent && sortBy == sortInMemory {
+	sortPresent := params.Sort.Len() > 0 && !sortIsNatural(params.Sort) && !sorted
+	if sortPresent {
 		node = &explainStage{stage: "SORT", input: node}
 	}
 	if params.Skip > 0 {
 		node = &explainStage{stage: "SKIP", input: node}
 	}
-	// MongoDB absorbs LIMIT into SORT (TopK), so it does not emit a
-	// separate LIMIT stage when sort is present.
-	if params.Limit > 0 && !sortPresent {
+	// A scan that sorts its index keys also absorbs the limit.
+	keysSorted := scan.input != nil && scan.input.stage == "SORT"
+	if params.Limit > 0 && !sortPresent && !keysSorted {
 		node = &explainStage{stage: "LIMIT", input: node}
 	}
-	if params.Projection != nil && params.Projection.Len() > 0 {
+	if params.Projection.Len() > 0 {
 		projStage := "PROJECTION_SIMPLE"
 		if covered {
 			projStage = "PROJECTION_COVERED"
 		}
 		node = &explainStage{stage: projStage, input: node}
 	}
+
+	switch {
+	case params.Command == "update" || params.Command == "findAndModify" && !params.Remove:
+		return &explainStage{stage: "UPDATE", input: node}
+	case params.Command == "delete" && params.Multi:
+		return &explainStage{stage: "BATCHED_DELETE", input: node}
+	case params.Command == "delete" || params.Command == "findAndModify":
+		return &explainStage{stage: "DELETE", input: node}
+	}
 	return node
+}
+
+// expressStage returns the single EXPRESS stage MongoDB explains an _id point
+// lookup with when the filter is the _id equality alone.
+func expressStage(params *backends.ExplainParams, scan *explainStage) (*explainStage, bool) {
+	if scan.input == nil || !scan.input.idPoint || params.Filter.Len() != 1 {
+		return nil, false
+	}
+	stage := "EXPRESS_IXSCAN"
+	switch {
+	case params.Command == "update" || params.Command == "findAndModify" && !params.Remove:
+		stage = "EXPRESS_UPDATE"
+	case params.Command == "delete" || params.Command == "findAndModify":
+		stage = "EXPRESS_DELETE"
+	}
+	return &explainStage{stage: stage, indexName: "_id_", keyPatternText: "{ _id: 1 }"}, true
 }
 
 // projectionIsCoveredBy reports whether projection only references
