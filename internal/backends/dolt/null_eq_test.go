@@ -59,7 +59,10 @@ func TestNullEqualityIndexable(t *testing.T) {
 		{backends.IndexInfo{Key: key}, true},
 		{backends.IndexInfo{Key: key, Sparse: true}, false},
 		{backends.IndexInfo{Key: key, Multikey: true}, false},
-		{backends.IndexInfo{Key: []backends.IndexKeyPair{{Field: "a.n"}}}, false},
+		{backends.IndexInfo{Key: []backends.IndexKeyPair{{Field: "a.n"}}}, true},
+		{backends.IndexInfo{Key: []backends.IndexKeyPair{{Field: "a.n"}}, Multikey: true}, true},
+		{backends.IndexInfo{Key: []backends.IndexKeyPair{{Field: "a.n"}}, Sparse: true}, false},
+		{backends.IndexInfo{Key: []backends.IndexKeyPair{{Field: "a.0.n"}}}, false},
 	} {
 		if got := nullEqualityIndexable(tc.idx); got != tc.want {
 			t.Errorf("nullEqualityIndexable(%+v) = %v, want %v", tc.idx, got, tc.want)
