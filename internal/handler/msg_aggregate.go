@@ -1060,7 +1060,7 @@ func stageInt64(d *types.Document, key string, parse func(any) (int64, error)) (
 }
 
 func processStagesDocuments(ctx context.Context, closer *iterator.MultiCloser, p *stagesDocumentsParams) (types.DocumentsIterator, error) { //nolint:lll // for readability
-	queryRes, err := p.c.Query(ctx, p.qp)
+	queryRes, err := stagesSource(ctx, p)
 	if err != nil {
 		closer.Close()
 		return nil, lazyerrors.Error(err)
@@ -1082,6 +1082,26 @@ func processStagesDocuments(ctx context.Context, closer *iterator.MultiCloser, p
 	}
 
 	return iter, nil
+}
+
+// stagesSource reads the pipeline's input: nearest first from a geo index
+// when it starts with a $geoNear one serves, otherwise by p.qp.
+func stagesSource(ctx context.Context, p *stagesDocumentsParams) (*backends.QueryResult, error) {
+	if len(p.stages) > 0 {
+		near, isNear := p.stages[0].(stages.GeoNearStage)
+		scanner, canScan := p.c.(backends.GeoNearScanner)
+		if isNear && canScan {
+			res, err := scanner.GeoNear(ctx, near.NearParams())
+			if err != nil {
+				return nil, err
+			}
+			if res != nil {
+				near.ReadsSorted(res.Field)
+				return &backends.QueryResult{Iter: res.Iter}, nil
+			}
+		}
+	}
+	return p.c.Query(ctx, p.qp)
 }
 
 type stagesStatsParams struct {

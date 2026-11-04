@@ -850,7 +850,8 @@ func chooseIndexRange(idxInfos []backends.IndexInfo, filter *types.Document, hin
 		// index is usable only when the filter implies its partial condition,
 		// so every matching doc lies within it; otherwise it drops non-member
 		// matches. (Sparse is fine: no admitted operator matches a missing field.)
-		if idx.Lossy || len(idx.Key) == 0 || idx.Key[0].Field == "" {
+		// A geo index's leading key is its point's cell, not the field's value.
+		if idx.Lossy || len(idx.Key) == 0 || idx.Key[0].Field == "" || isGeoKey(idx.Key[0]) {
 			continue
 		}
 		if collation.Parse(idx.Collation).Identity() != queryIdentity {
@@ -4018,6 +4019,9 @@ func extractIndexFieldValues(doc *types.Document, idx backends.IndexInfo) []any 
 	vals := make([]any, len(idx.Key))
 	for i, kp := range idx.Key {
 		vals[i] = indexFieldValue(doc, kp.Field)
+		if isGeoKey(kp) {
+			vals[i] = geoIndexValue(vals[i], kp)
+		}
 	}
 	return vals
 }

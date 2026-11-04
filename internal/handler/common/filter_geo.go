@@ -63,6 +63,24 @@ type GeoSortKey struct {
 	Lon       float64 // query-point longitude
 	Lat       float64 // query-point latitude
 	Spherical bool    // true => haversine; false => Euclidean (2d index)
+	// MaxDistance is the $maxDistance bound, +Inf when none.
+	MaxDistance float64
+}
+
+// Distance returns doc's distance from the query point, the order
+// GeoDistanceSortIterator sorts by.
+func (g *GeoSortKey) Distance(doc *types.Document) float64 {
+	return docDistanceFromField(doc, g.Field, g.Lon, g.Lat, g.Spherical)
+}
+
+// geoMaxDistance returns the numeric $maxDistance of doc, +Inf when absent.
+func geoMaxDistance(doc *types.Document) float64 {
+	if v, err := doc.Get("$maxDistance"); err == nil {
+		if d, err := toFloat64(v); err == nil {
+			return d
+		}
+	}
+	return math.Inf(1)
 }
 
 // FindGeoSortKey scans a filter document for a top-level $near or $nearSphere
@@ -110,11 +128,17 @@ func FindGeoSortKey(filter *types.Document) *GeoSortKey {
 				if err != nil {
 					continue
 				}
+				maxDistance := geoMaxDistance(expr)
+				if opKey == "$nearSphere" {
+					// Legacy $nearSphere bounds are radians; distances are metres.
+					maxDistance *= earthRadiusMeters
+				}
 				return &GeoSortKey{
-					Field:     field,
-					Lon:       lon,
-					Lat:       lat,
-					Spherical: opKey == "$nearSphere",
+					Field:       field,
+					Lon:         lon,
+					Lat:         lat,
+					Spherical:   opKey == "$nearSphere",
+					MaxDistance: maxDistance,
 				}
 			}
 
@@ -132,10 +156,11 @@ func FindGeoSortKey(filter *types.Document) *GeoSortKey {
 				continue
 			}
 			return &GeoSortKey{
-				Field:     field,
-				Lon:       lon,
-				Lat:       lat,
-				Spherical: true,
+				Field:       field,
+				Lon:         lon,
+				Lat:         lat,
+				Spherical:   true,
+				MaxDistance: geoMaxDistance(opDoc),
 			}
 		}
 	}

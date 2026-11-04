@@ -206,6 +206,10 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 	if isView {
 		viewCmp := collation.Parse(params.Collation).Comparator()
 		srcIter, err = viewSourceIterator(ctx, db, viewName, viewOn, viewPipeline, viewCmp, closer, h.DisablePushdown)
+	} else if near, nerr := geoNearSource(ctx, coll, params.Filter, h.DisablePushdown); nerr != nil || near != nil {
+		if err = nerr; near != nil {
+			srcIter, sorted = near.Iter, true
+		}
 	} else {
 		var queryRes *backends.QueryResult
 		if queryRes, err = coll.Query(ctx, qp); err != nil {
@@ -370,10 +374,29 @@ func (h *Handler) makeFindQueryParams(ctx context.Context, params *common.FindPa
 	return qp, nil
 }
 
+// geoNearSource reads, nearest first, the documents of a filter with $near or
+// $nearSphere from coll's geo index, or returns nil when there is none to read.
+func geoNearSource(ctx context.Context, coll backends.Collection, filter *types.Document, disablePushdown bool) (*backends.GeoNearResult, error) {
+	geoSort := common.FindGeoSortKey(filter)
+	scanner, ok := coll.(backends.GeoNearScanner)
+	if geoSort == nil || !ok || disablePushdown {
+		return nil, nil
+	}
+	return scanner.GeoNear(ctx, &backends.GeoNearParams{
+		Field:       geoSort.Field,
+		X:           geoSort.Lon,
+		Y:           geoSort.Lat,
+		Spherical:   geoSort.Spherical,
+		MaxDistance: geoSort.MaxDistance,
+		Distance:    geoSort.Distance,
+	})
+}
+
 // makeFindIter builds the find iterator chain. All iterators, including the
 // initial one, are added to the passed closer, and the returned iterator is
 // wrapped with it. sorted reports that iter already yields params.Sort order,
-// so no blocking sort is needed and a limit stops reading early.
+// or for a $near filter distance order, so no blocking sort is needed and a
+// limit stops reading early.
 //
 //nolint:lll // for readability
 func (h *Handler) makeFindIter(iter types.DocumentsIterator, closer *iterator.MultiCloser, params *common.FindParams, sorted bool) (types.DocumentsIterator, error) {
@@ -395,7 +418,9 @@ func (h *Handler) makeFindIter(iter types.DocumentsIterator, closer *iterator.Mu
 	// Otherwise use the regular sort (with collation-aware comparison if needed).
 	var sortErr error
 	if geoSort := common.FindGeoSortKey(filterDoc); geoSort != nil {
-		iter, sortErr = common.GeoDistanceSortIterator(iter, closer, geoSort)
+		if !sorted {
+			iter, sortErr = common.GeoDistanceSortIterator(iter, closer, geoSort)
+		}
 	} else if !sorted {
 		iter, sortErr = common.SortIteratorWithCollation(iter, closer, params.Sort, cmp)
 	}
