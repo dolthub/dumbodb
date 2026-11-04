@@ -45,7 +45,8 @@ type explainRun struct {
 	// scanned is what the leaf index scan returned.
 	scanned    int32
 	keys, docs int64
-	// branches are the counts of the index scans under an OR stage.
+	// branches are the counts of the index scans under an OR or SORT_MERGE
+	// stage.
 	branches []backends.ExplainBranchCounts
 }
 
@@ -66,7 +67,7 @@ func (h *Handler) runExplained(ctx context.Context, coll backends.Collection, pa
 	default:
 		run = runExplainedFind(ctx, coll, qp)
 	}
-	run.keys, run.docs = examined.Keys(), examined.Docs()
+	run.keys, run.docs, run.branches = examined.Keys(), examined.Docs(), examined.Branches()
 	return run
 }
 
@@ -195,7 +196,8 @@ func cloneExecutionStage(node *types.Document, run explainRun, root, aboveMatch 
 	case root:
 		nReturned = run.returned
 	case childArr != nil:
-		// An OR returns each document its branches found once, all fetched.
+		// An OR or SORT_MERGE returns each document its branches found once,
+		// all fetched.
 		nReturned = int32(run.docs)
 	case stage == "FETCH" || stage == "COLLSCAN":
 		nReturned = run.matched
@@ -463,7 +465,6 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 		}
 
 		run := h.runExplained(connCtx, coll, params, qp, viaView)
-		run.branches = res.UnionBranches
 
 		executionStages := buildExecutionStages(winningPlanDoc, execStage, run)
 		executionStats := must.NotFail(types.NewDocument(
