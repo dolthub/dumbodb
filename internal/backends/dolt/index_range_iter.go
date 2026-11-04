@@ -157,6 +157,12 @@ func coveredKeysFor(info backends.IndexInfo, fields []string) *coveredKeys {
 	if len(fields) == 0 || info.Multikey {
 		return nil
 	}
+	// Geo, hashed and text keys hold no value the field had.
+	for _, k := range info.Key {
+		if isGeoKey(k) || k.Hashed || k.Text {
+			return nil
+		}
+	}
 	c := &coveredKeys{keys: len(info.Key), fields: fields}
 	for _, f := range fields {
 		pos := slices.IndexFunc(info.Key, func(k backends.IndexKeyPair) bool { return k.Field == f })
