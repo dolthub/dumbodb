@@ -369,6 +369,7 @@ func tryStreamSortedRange(ctx context.Context, state *dbState, primary prolly.Ma
 	}
 	it := newPlanSortedIter(ctx, state, primary, nil, params.Sort, false, params.Fields).(*planSortedIter)
 	it.stream = ids
+	it.covered = coveredKeysFor(info, params.Fields)
 	if releasePrimary, releaseIndex := it.release, pinRoots(state, idxMap); releasePrimary != nil {
 		it.release = func() {
 			releasePrimary()
@@ -446,9 +447,9 @@ func newPlanSortedIter(ctx context.Context, state *dbState, primary prolly.Map, 
 	return it
 }
 
-// idStream yields document ids from an index, nil after the last.
+// idStream yields index entries, with a nil id after the last.
 type idStream interface {
-	next() ([]byte, error)
+	next() (indexEntry, error)
 }
 
 // planSortedIter yields documents in id order. Subdocument sort values share
@@ -459,37 +460,38 @@ type planSortedIter struct {
 	primary prolly.Map
 	ids     [][]byte
 	stream  idStream
+	// covered, when set, builds the stream's documents from their entries.
+	covered *coveredKeys
 	fields  []string
 	release func()
 }
 
 func (it *planSortedIter) nextFetched() (*types.Document, error) {
 	for {
-		id, err := it.nextID()
-		if err != nil || id == nil {
+		e, err := it.nextEntry()
+		if err != nil || e.id == nil {
 			return nil, err
 		}
-		doc, err := lookupDocFromPrimary(it.ctx, it.primary, it.ns, id, it.fields)
+		doc, err := entryDocument(it.ctx, it.primary, it.ns, e, it.fields, it.covered)
 		if err != nil {
 			return nil, err
 		}
 		if doc != nil {
-			doc.SetRecordID(keyBytesToRecordID(id))
 			return doc, nil
 		}
 	}
 }
 
-func (it *planSortedIter) nextID() ([]byte, error) {
+func (it *planSortedIter) nextEntry() (indexEntry, error) {
 	if it.stream != nil {
 		return it.stream.next()
 	}
 	if len(it.ids) == 0 {
-		return nil, nil
+		return indexEntry{}, nil
 	}
 	id := it.ids[0]
 	it.ids = it.ids[1:]
-	return id, nil
+	return indexEntry{id: id}, nil
 }
 
 func (it *planSortedIter) Next() (struct{}, *types.Document, error) {

@@ -16,6 +16,8 @@ package dolt
 
 import (
 	"context"
+	"slices"
+	"strings"
 
 	"github.com/dolthub/dolt/go/store/prolly"
 	"github.com/dolthub/dolt/go/store/prolly/tree"
@@ -49,6 +51,7 @@ func streamIndexRanges(ctx context.Context, state *dbState, primary prolly.Map, 
 		primary: primary,
 		ids:     ids,
 		fields:  params.Fields,
+		covered: coveredKeysFor(info, params.Fields),
 		release: pinRoots(state, primary, idxMap),
 	}, info, true, nil
 }
@@ -92,27 +95,100 @@ type indexRangeIter struct {
 	primary prolly.Map
 	ids     *indexIDStream
 	fields  []string
+	// covered, when set, builds documents from their index entries.
+	covered *coveredKeys
 	release func()
 }
 
 func (it *indexRangeIter) Next() (struct{}, *types.Document, error) {
 	for {
-		id, err := it.ids.next()
+		e, err := it.ids.next()
 		if err != nil {
 			return struct{}{}, nil, err
 		}
-		if id == nil {
+		if e.id == nil {
 			return struct{}{}, nil, iterator.ErrIteratorDone
 		}
-		doc, err := lookupDocFromPrimary(it.ctx, it.primary, it.ns, id, it.fields)
+		doc, err := entryDocument(it.ctx, it.primary, it.ns, e, it.fields, it.covered)
 		if err != nil {
 			return struct{}{}, nil, err
 		}
 		if doc != nil {
-			doc.SetRecordID(keyBytesToRecordID(id))
 			return struct{}{}, doc, nil
 		}
 	}
+}
+
+// entryDocument returns the document of index entry e: built from the entry
+// when covered can, otherwise fetched, nil when it is gone.
+func entryDocument(ctx context.Context, primary prolly.Map, ns tree.NodeStore, e indexEntry, fields []string, covered *coveredKeys) (*types.Document, error) {
+	doc, ok := covered.document(e)
+	if !ok {
+		var err error
+		if doc, err = lookupDocFromPrimary(ctx, primary, ns, e.id, fields); err != nil || doc == nil {
+			return nil, err
+		}
+	}
+	doc.SetRecordID(keyBytesToRecordID(e.id))
+	return doc, nil
+}
+
+// indexEntry is an index entry as streams yield it: its encoded values, their
+// type tags, and its document's primary id, nil after the last entry.
+type indexEntry struct {
+	values, tags, id []byte
+}
+
+// coveredKeys builds a document's requested fields from its index entry, as
+// MongoDB's PROJECTION_COVERED reads no document.
+type coveredKeys struct {
+	keys   int
+	fields []string
+	// positions holds each field's position among the index keys.
+	positions []int
+}
+
+// coveredKeysFor returns the coveredKeys for reading fields, top-level fields
+// the caller reads, from info's entries, or nil when some field is not a key
+// or info is multikey.
+func coveredKeysFor(info backends.IndexInfo, fields []string) *coveredKeys {
+	if len(fields) == 0 || info.Multikey {
+		return nil
+	}
+	c := &coveredKeys{keys: len(info.Key), fields: fields}
+	for _, f := range fields {
+		pos := slices.IndexFunc(info.Key, func(k backends.IndexKeyPair) bool { return k.Field == f })
+		if pos < 0 || strings.Contains(f, ".") {
+			return nil
+		}
+		c.positions = append(c.positions, pos)
+	}
+	return c
+}
+
+// document builds e's document, or reports false when its entry cannot
+// restore every field. A null key cannot tell a null from a missing field.
+func (c *coveredKeys) document(e indexEntry) (*types.Document, bool) {
+	if c == nil || len(e.tags) != c.keys {
+		return nil, false
+	}
+	split, ok := idxpkg.SplitKeyValues(e.values, c.keys)
+	if !ok {
+		return nil, false
+	}
+	doc := types.MakeDocument(len(c.fields))
+	for i, f := range c.fields {
+		v, ok := idxpkg.DecodeValue(split[c.positions[i]], e.tags[c.positions[i]])
+		switch v.(type) {
+		case types.NullType, types.UndefinedType:
+			ok = false
+		}
+		if !ok {
+			return nil, false
+		}
+		doc.Set(f, v)
+	}
+	return doc, true
 }
 
 func (it *indexRangeIter) Close() {
@@ -130,8 +206,9 @@ type indexIDStream struct {
 	ranges  [][2][]byte
 	reverse bool
 	current *idxpkg.RangeIDIter
-	// buffered holds ids read ahead by holdsAtMost, yielded before current's.
-	buffered [][]byte
+	// buffered holds entries read ahead by holdsAtMost, yielded before
+	// current's.
+	buffered []indexEntry
 	// seen holds the ids already yielded when an id can repeat: a multikey
 	// index, or more than one range.
 	seen map[string]struct{}
@@ -149,49 +226,50 @@ func newIndexIDStream(ctx context.Context, idxMap prolly.Map, ranges [][2][]byte
 // end within n.
 func (s *indexIDStream) holdsAtMost(n int) (bool, error) {
 	for len(s.buffered) <= n {
-		id, err := s.readID()
-		if err != nil || id == nil {
-			return id == nil, err
+		e, err := s.readEntry()
+		if err != nil || e.id == nil {
+			return e.id == nil, err
 		}
-		s.buffered = append(s.buffered, id)
+		s.buffered = append(s.buffered, e)
 	}
 	return false, nil
 }
 
-// next returns the next id not yet yielded, or nil after the last.
-func (s *indexIDStream) next() ([]byte, error) {
+// next returns the next entry whose id is not yet yielded, with a nil id
+// after the last.
+func (s *indexIDStream) next() (indexEntry, error) {
 	for {
-		var id []byte
+		var e indexEntry
 		if len(s.buffered) > 0 {
-			id = s.buffered[0]
+			e = s.buffered[0]
 			s.buffered = s.buffered[1:]
 		} else {
 			var err error
-			if id, err = s.readID(); err != nil {
-				return nil, err
+			if e, err = s.readEntry(); err != nil {
+				return indexEntry{}, err
 			}
 		}
-		if id == nil {
-			return nil, nil
+		if e.id == nil {
+			return e, nil
 		}
 		countKeysExamined(s.ctx, 1)
 		if s.seen == nil {
-			return id, nil
+			return e, nil
 		}
-		if _, dup := s.seen[string(id)]; !dup {
-			s.seen[string(id)] = struct{}{}
-			return id, nil
+		if _, dup := s.seen[string(e.id)]; !dup {
+			s.seen[string(e.id)] = struct{}{}
+			return e, nil
 		}
 	}
 }
 
-// readID reads the next entry's primary id across the ranges, or nil after
-// the last.
-func (s *indexIDStream) readID() ([]byte, error) {
+// readEntry reads the next entry across the ranges, with a nil id after the
+// last.
+func (s *indexIDStream) readEntry() (indexEntry, error) {
 	for {
 		if s.current == nil {
 			if len(s.ranges) == 0 {
-				return nil, nil
+				return indexEntry{}, nil
 			}
 			var r [2][]byte
 			if s.reverse {
@@ -201,13 +279,13 @@ func (s *indexIDStream) readID() ([]byte, error) {
 			}
 			current, err := idxpkg.NewRangeIDIter(s.ctx, s.idxMap, r[0], r[1], s.reverse)
 			if err != nil {
-				return nil, err
+				return indexEntry{}, err
 			}
 			s.current = current
 		}
-		id, err := s.current.Next(s.ctx)
+		values, tags, id, err := s.current.NextEntry(s.ctx)
 		if err != nil || id != nil {
-			return id, err
+			return indexEntry{values: values, tags: tags, id: id}, err
 		}
 		s.current = nil
 	}

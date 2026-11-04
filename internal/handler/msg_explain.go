@@ -65,7 +65,11 @@ func (h *Handler) runExplained(ctx context.Context, coll backends.Collection, pa
 	case qp.Command == "update" || qp.Command == "delete" || qp.Command == "findAndModify":
 		run = runExplainedWrite(ctx, coll, qp)
 	default:
-		run = runExplainedFind(ctx, coll, qp)
+		var fields []string
+		if qp.Command == "find" {
+			fields, _ = findRootFields(&common.FindParams{Filter: qp.Filter, Sort: qp.Sort, Projection: qp.Projection})
+		}
+		run = runExplainedFind(ctx, coll, qp, fields)
 	}
 	run.keys, run.docs, run.branches = examined.Keys(), examined.Docs(), examined.Branches()
 	return run
@@ -110,13 +114,13 @@ func runExplainedWrite(ctx context.Context, coll backends.Collection, qp *backen
 	return run
 }
 
-// runExplainedFind pulls documents the way the query pipeline does: when no
-// blocking sort is needed (no sort, or the backend walked an index in sort
-// order) a limit stops the pass, otherwise every candidate is examined and the
-// limit only caps what is returned.
-func runExplainedFind(ctx context.Context, coll backends.Collection, qp *backends.ExplainParams) explainRun {
+// runExplainedFind pulls documents the way the query pipeline does, reading
+// only fields when set: when no blocking sort is needed (no sort, or the
+// backend walked an index in sort order) a limit stops the pass, otherwise
+// every candidate is examined and the limit only caps what is returned.
+func runExplainedFind(ctx context.Context, coll backends.Collection, qp *backends.ExplainParams, fields []string) explainRun {
 	limit := int32(max(qp.Limit, -qp.Limit))
-	query := &backends.QueryParams{Filter: qp.Filter, Collated: qp.Collated, Collation: qp.Collation, Hint: qp.Hint}
+	query := &backends.QueryParams{Filter: qp.Filter, Collated: qp.Collated, Collation: qp.Collation, Hint: qp.Hint, Fields: fields}
 	if limit > 0 {
 		query.LimitHint = qp.Skip + int64(limit)
 	}

@@ -33,7 +33,9 @@ func findRootFields(params *common.FindParams) ([]string, bool) {
 	if !ok {
 		return nil, false
 	}
-	roots = appendRoot(roots, "_id")
+	if !projectionExcludesID(params.Projection) {
+		roots = appendRoot(roots, "_id")
+	}
 
 	if params.Sort != nil {
 		keys := params.Sort.Keys()
@@ -52,6 +54,19 @@ func findRootFields(params *common.FindParams) ([]string, bool) {
 		return nil, false
 	}
 	return roots, true
+}
+
+// projectionExcludesID reports whether projection drops _id.
+func projectionExcludesID(projection *types.Document) bool {
+	v, err := projection.Get("_id")
+	if err != nil {
+		return false
+	}
+	switch v := v.(type) {
+	case bool, int32, int64, float64:
+		return !isTruthy(v)
+	}
+	return false
 }
 
 // appendProjectionRootFields adds the fields an inclusion projection reads and

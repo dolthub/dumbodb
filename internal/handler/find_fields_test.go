@@ -38,7 +38,11 @@ func TestFindRootFields(t *testing.T) {
 			Filter:     doc("grp", int32(3)),
 			Sort:       doc("s.x", int32(-1)),
 			Projection: doc("i", int32(1), "_id", int32(0)),
-		}, []string{"grp", "_id", "s", "i"}, true},
+		}, []string{"grp", "s", "i"}, true},
+		"_id excluded but filtered": {common.FindParams{
+			Filter:     doc("_id", int32(3)),
+			Projection: doc("i", int32(1), "_id", int32(0)),
+		}, []string{"_id", "i"}, true},
 		"dotted and positional": {common.FindParams{Projection: doc("a.b", int32(1), "c.$", int32(1))}, []string{"_id", "a", "c"}, true},
 		"slice and elemMatch":   {common.FindParams{Projection: doc("a", doc("$slice", int32(2)), "b", doc("$elemMatch", doc("x", int32(1))))}, []string{"_id", "a", "b"}, true},
 		"expressions":           {common.FindParams{Projection: doc("x", "$a", "y", doc("$add", arr("$b", int32(1))), "z", "literal")}, []string{"_id", "a", "b"}, true},
