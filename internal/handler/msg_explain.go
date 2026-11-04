@@ -45,6 +45,8 @@ type explainRun struct {
 	// scanned is what the leaf index scan returned.
 	scanned    int32
 	keys, docs int64
+	// branches are the counts of the index scans under an OR stage.
+	branches []backends.ExplainBranchCounts
 }
 
 // runExplained runs the explained command's read the way the command itself
@@ -193,6 +195,8 @@ func cloneExecutionStage(node *types.Document, run explainRun, root, aboveMatch 
 	case root:
 		nReturned = run.returned
 	case childArr != nil:
+		// An OR returns each document its branches found once, all fetched.
+		nReturned = int32(run.docs)
 	case stage == "FETCH" || stage == "COLLSCAN":
 		nReturned = run.matched
 	case childDoc == nil || !aboveMatch:
@@ -202,9 +206,6 @@ func cloneExecutionStage(node *types.Document, run explainRun, root, aboveMatch 
 	}
 	if stage == "FETCH" || stage == "COLLSCAN" {
 		aboveMatch = false
-	}
-	if childArr != nil {
-		run = explainRun{}
 	}
 	d.Set("nReturned", nReturned)
 	d.Set("executionTimeMillisEstimate", int64(0))
@@ -229,9 +230,14 @@ func cloneExecutionStage(node *types.Document, run explainRun, root, aboveMatch 
 	if childArr != nil {
 		out := types.MakeArray(childArr.Len())
 		for i := 0; i < childArr.Len(); i++ {
+			var branch explainRun
+			if i < len(run.branches) {
+				b := run.branches[i]
+				branch = explainRun{scanned: int32(b.NReturned), keys: b.KeysExamined}
+			}
 			c, _ := childArr.Get(i)
 			if cd, ok := c.(*types.Document); ok {
-				out.Append(cloneExecutionStage(cd, run, false, aboveMatch))
+				out.Append(cloneExecutionStage(cd, branch, false, false))
 			}
 		}
 		d.Set("inputStages", out)
@@ -457,6 +463,7 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 		}
 
 		run := h.runExplained(connCtx, coll, params, qp, viaView)
+		run.branches = res.UnionBranches
 
 		executionStages := buildExecutionStages(winningPlanDoc, execStage, run)
 		executionStats := must.NotFail(types.NewDocument(

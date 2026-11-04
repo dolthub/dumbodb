@@ -628,7 +628,7 @@ type indexLookupPlan struct {
 	// info and index are then empty, and ids are not in any index order.
 	union bool
 	// branches are a union's index scans, without their ids.
-	branches []*indexLookupPlan
+	branches []unionBranch
 	// keys is the number of index entries scanned; ids holds each matched
 	// document once and, when kept, values its entry's encoded index values.
 	keys   int
@@ -980,7 +980,7 @@ func unionIndexChoices(ctx context.Context, idxInfos []backends.IndexInfo, idxMa
 			return nil, err
 		}
 		union.keys += plan.keys
-		union.branches = append(union.branches, &indexLookupPlan{info: plan.info, index: plan.index, keys: plan.keys})
+		union.branches = append(union.branches, unionBranch{info: plan.info, keys: plan.keys, matched: len(plan.ids)})
 		for _, id := range plan.ids {
 			if _, dup := seen[string(id)]; dup {
 				continue
@@ -990,6 +990,13 @@ func unionIndexChoices(ctx context.Context, idxInfos []backends.IndexInfo, idxMa
 		}
 	}
 	return union, nil
+}
+
+// unionBranch is one index scan of a union: its index, the keys it read, and
+// the documents they matched.
+type unionBranch struct {
+	info          backends.IndexInfo
+	keys, matched int
 }
 
 // isLoneOr reports whether filter is a single top-level $or.
@@ -1545,6 +1552,8 @@ type explainStage struct {
 	index backends.IndexInfo
 	// idPoint marks the _id point lookup's IXSCAN.
 	idPoint bool
+	// counts are what a union branch's scan read while planning.
+	counts *backends.ExplainBranchCounts
 }
 
 func (s *explainStage) toDoc() *types.Document {
@@ -1918,6 +1927,7 @@ func (c *collection) Explain(ctx context.Context, params *backends.ExplainParams
 	shapeHash, keyHash, cached := c.planCacheState(params, idxInfos)
 
 	var winning *explainStage
+	var branches []backends.ExplainBranchCounts
 	switch params.Command {
 	case "count", "distinct":
 		winning = buildCountOrDistinctPlan(params, idxInfos)
@@ -1928,6 +1938,13 @@ func (c *collection) Explain(ctx context.Context, params *backends.ExplainParams
 		}
 		res.Iter.Close()
 		winning = wrapScanPlan(params, scan, res.Sorted)
+		if scan.input != nil && scan.input.stage == "OR" {
+			for _, in := range scan.input.inputs {
+				if in.counts != nil {
+					branches = append(branches, *in.counts)
+				}
+			}
+		}
 		// MongoDB plans each branch of a lone $or separately, under SUBPLAN.
 		if (params.Command == "find" || params.Command == "aggregate") && params.Filter != nil && isLoneOr(params.Filter) &&
 			scan.input != nil && scan.input.stage == "OR" {
@@ -1942,7 +1959,7 @@ func (c *collection) Explain(ctx context.Context, params *backends.ExplainParams
 	qp.Set("planCacheKey", keyHash)
 	qp.Set("winningPlan", winningDoc)
 	qp.Set("rejectedPlans", types.MakeArray(0))
-	return &backends.ExplainResult{QueryPlanner: qp}, nil
+	return &backends.ExplainResult{QueryPlanner: qp, UnionBranches: branches}, nil
 }
 
 // explainQueryParams is the QueryParams the explained command runs with.
@@ -2001,7 +2018,9 @@ func (plan *indexLookupPlan) stage() *explainStage {
 	}
 	or := &explainStage{stage: "OR"}
 	for _, branch := range plan.branches {
-		or.inputs = append(or.inputs, ixscanStage(branch.info))
+		ix := ixscanStage(branch.info)
+		ix.counts = &backends.ExplainBranchCounts{KeysExamined: int64(branch.keys), NReturned: int64(branch.matched)}
+		or.inputs = append(or.inputs, ix)
 	}
 	return fetchStage(or)
 }
