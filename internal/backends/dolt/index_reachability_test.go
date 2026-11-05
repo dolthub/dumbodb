@@ -320,17 +320,20 @@ func TestSecondaryIndexValueRejectsShortRoot(t *testing.T) {
 	require.ErrorContains(t, err, "invalid index map root length")
 }
 
-// Partial filters that differ only in key order are the same definition, so
-// merging them is not a conflict.
-func TestIndexSpecEqualIgnoresPartialFilterKeyOrder(t *testing.T) {
+// Partial filters keep their key order, so filters that differ only in key
+// order, at any depth, are different definitions.
+func TestIndexSpecEqualKeepsPartialFilterKeyOrder(t *testing.T) {
 	spec := func(partial *types.Document) backends.IndexInfo {
 		return backends.IndexInfo{Name: "p", Key: []backends.IndexKeyPair{{Field: "a"}}, PartialFilterExpression: partial}
 	}
 	ab := must.NotFail(types.NewDocument("a", must.NotFail(types.NewDocument("$gt", int32(1))), "b", must.NotFail(types.NewDocument("$exists", true))))
+	sameAB := must.NotFail(types.NewDocument("a", must.NotFail(types.NewDocument("$gt", int32(1))), "b", must.NotFail(types.NewDocument("$exists", true))))
 	ba := must.NotFail(types.NewDocument("b", must.NotFail(types.NewDocument("$exists", true)), "a", must.NotFail(types.NewDocument("$gt", int32(1)))))
-	other := must.NotFail(types.NewDocument("a", must.NotFail(types.NewDocument("$gt", int32(2))), "b", must.NotFail(types.NewDocument("$exists", true))))
-	require.True(t, indexSpecEqual(spec(ab), spec(ba)))
-	require.False(t, indexSpecEqual(spec(ab), spec(other)))
+	xy := must.NotFail(types.NewDocument("a", must.NotFail(types.NewDocument("x", int32(1), "y", int32(2)))))
+	yx := must.NotFail(types.NewDocument("a", must.NotFail(types.NewDocument("y", int32(2), "x", int32(1)))))
+	require.True(t, indexSpecEqual(spec(ab), spec(sameAB)))
+	require.False(t, indexSpecEqual(spec(ab), spec(ba)))
+	require.False(t, indexSpecEqual(spec(xy), spec(yx)))
 }
 
 // Writes change index map roots but not definitions, so they do not grow
