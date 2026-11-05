@@ -33,7 +33,7 @@ import (
 
 func TestMaterializeSpecialDatabasesTranslatesAuthAndMetadata(t *testing.T) {
 	ctx := context.Background()
-	backend, err := dolt.NewBackend(t.TempDir(), slog.Default(), false, false, 0, 0)
+	backend, err := dolt.NewBackend(t.TempDir(), slog.Default(), false, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func TestMaterializeSpecialDatabasesTranslatesAuthAndMetadata(t *testing.T) {
 }
 
 func TestMaterializeSpecialDatabasesPreflightsUnsupportedNamespace(t *testing.T) {
-	backend, err := dolt.NewBackend(t.TempDir(), slog.Default(), false, false, 0, 0)
+	backend, err := dolt.NewBackend(t.TempDir(), slog.Default(), false, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -52,7 +52,7 @@ func TestWritesRefusedWhileAnOperationIsPausedOnConflicts(t *testing.T) {
 	dumboDBCommit(t, env, dbName, "main", "alice")
 
 	// A transaction that began, and wrote, before the merge paused.
-	early := siClient(t, env)
+	early := newClient(t, env)
 	sess, err := early.StartSession()
 	require.NoError(t, err)
 	defer sess.EndSession(ctx)

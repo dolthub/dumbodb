@@ -150,24 +150,6 @@ func TestAutoCommitFlag(t *testing.T) {
 		"auto-commit must produce at least Initialize + 1 auto-insert commit")
 }
 
-// TestSessionIsolationFlagDisabled: --session-isolation is disabled (the
-// backend and wire plumbing remain), so the server must reject the flag as
-// undefined rather than silently accept it.
-func TestSessionIsolationFlagDisabled(t *testing.T) {
-	binary := filepath.Join(t.TempDir(), "dumbodb")
-	build := exec.Command("go", "build", "-o", binary, "./cmd/dumbodb/")
-	build.Dir = repoRoot()
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("building binary: %v\n%s", err, out)
-	}
-
-	cmd := exec.Command(binary, "--session-isolation", "--data-dir", t.TempDir())
-	out, err := cmd.CombinedOutput()
-	require.Error(t, err, "server must exit non-zero when --session-isolation is passed")
-	assert.Contains(t, string(out), "flag provided but not defined",
-		"the disabled flag must be rejected as undefined; got: %s", out)
-}
-
 // TestRequireDataDirFlag verifies that omitting --data-dir is an error;
 // there is no default data directory.
 func TestRequireDataDirFlag(t *testing.T) {

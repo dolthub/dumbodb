@@ -33,7 +33,7 @@ import (
 // compare-and-swap, so the write is refused with ErrWriteRaced rather than
 // overwriting the published one (dolthub/dumbodb#167).
 func TestDirectWriteFailsWhenAPublishLandsFirst(t *testing.T) {
-	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, false, 0, 0)
+	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, 0, 0)
 	require.NoError(t, err)
 	t.Cleanup(be.Close)
 

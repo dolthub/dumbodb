@@ -90,7 +90,7 @@ func TestApplierCRUDBySourceUUID(t *testing.T) {
 func TestApplierRoutesReplicatedAuthAndInvalidatesGeneration(t *testing.T) {
 	ctx := context.Background()
 	bumps := 0
-	backend, err := dolt.NewBackend(t.TempDir(), slog.Default(), false, false, 0, 0)
+	backend, err := dolt.NewBackend(t.TempDir(), slog.Default(), false, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +231,7 @@ func TestApplierSpecialStateContinuesAcrossRestart(t *testing.T) {
 	ctx := context.Background()
 	dataDirectory := t.TempDir()
 	configuration := control.Configuration{SetName: "rs0", MemberHost: "dumbo:27017"}
-	backend, err := dolt.NewBackend(dataDirectory, slog.Default(), false, false, 0, 0)
+	backend, err := dolt.NewBackend(dataDirectory, slog.Default(), false, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,7 +255,7 @@ func TestApplierSpecialStateContinuesAcrossRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reopenedBackend, err := dolt.NewBackend(dataDirectory, slog.Default(), false, false, 0, 0)
+	reopenedBackend, err := dolt.NewBackend(dataDirectory, slog.Default(), false, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -568,7 +568,7 @@ func TestApplierUsesMainAcrossRestart(t *testing.T) {
 	ctx := context.Background()
 	dataDir := t.TempDir()
 	configuration := control.Configuration{SetName: "rs0", MemberHost: "dumbo:27017"}
-	backend, err := dolt.NewBackend(dataDir, slog.Default(), false, false, 0, 0)
+	backend, err := dolt.NewBackend(dataDir, slog.Default(), false, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -599,7 +599,7 @@ func TestApplierUsesMainAcrossRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reopenedBackend, err := dolt.NewBackend(dataDir, slog.Default(), false, false, 0, 0)
+	reopenedBackend, err := dolt.NewBackend(dataDir, slog.Default(), false, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -648,7 +648,7 @@ func TestApplierUsesMainAcrossRestart(t *testing.T) {
 
 func newTestApplier(t *testing.T) (backends.Backend, *Applier, string) {
 	t.Helper()
-	backend, err := dolt.NewBackend(t.TempDir(), slog.Default(), false, false, 0, 0)
+	backend, err := dolt.NewBackend(t.TempDir(), slog.Default(), false, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

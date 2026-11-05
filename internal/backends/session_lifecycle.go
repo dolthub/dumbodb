@@ -24,7 +24,6 @@ type SessionAwareBackend interface {
 	OnSessionEnd(owner string)
 	OnTransactionCommit(ctx context.Context, owner string) error
 	OnTransactionAbort(owner string)
-	SessionIsolation() bool
 	SessionRegistry() *sqlctx.SessionRegistry
 }
 

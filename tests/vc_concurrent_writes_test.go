@@ -53,7 +53,7 @@ func TestVCOpsUnderConcurrentWritesKeepEveryAcknowledgedWrite(t *testing.T) {
 	var ackedCount, failedWrites atomic.Int64
 	stop := make(chan struct{})
 	var writers sync.WaitGroup
-	writerClient := siClient(t, env)
+	writerClient := newClient(t, env)
 	writerItems := writerClient.Database(dbName).Collection("items")
 	stopped := func() bool {
 		select {

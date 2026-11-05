@@ -34,7 +34,7 @@ import (
 
 func newSyncTestBackend(t *testing.T) *Backend {
 	t.Helper()
-	b, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, false, 0, 0)
+	b, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, 0, 0)
 	require.NoError(t, err)
 	t.Cleanup(b.Close)
 	return b

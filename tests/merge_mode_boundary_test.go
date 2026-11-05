@@ -16,145 +16,120 @@ package tests
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand/v2"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
-// serializedWrites has two connections write to one document, then publishes
-// them one after the other, and returns the second publish's error or nil.
-//
-// The fork has to outlive the command for this to be deterministic, so the
-// server runs with --session-isolation: both writes land in their own overlay
-// before either reconciles. Nothing is left to timing, and the second publish
-// certainly reconciles against a branch that already changed the document, so
-// the collection's merge mode alone decides whether it is accepted. That the
-// fork outlives the command is the only thing --session-isolation contributes
-// here; the boundary it reaches is the boundary an ordinary write reaches.
-func serializedWrites(t *testing.T, env *dumboDBTestEnv, dbName, mode string, edit writeShape) error {
-	t.Helper()
-	ctx := context.Background()
-
-	seed := siClient(t, env).Database(dbName)
-	require.NoError(t, seed.RunCommand(ctx, bson.D{
-		{Key: "create", Value: "docs"},
-		{Key: "mergeMode", Value: mode},
-	}).Err())
-	_, err := seed.Collection("docs").InsertOne(ctx, bson.D{
-		{Key: "_id", Value: "d"},
-		{Key: "v", Value: int32(1)},
-		{Key: "a", Value: "seed"},
-		{Key: "b", Value: "seed"},
-	})
-	require.NoError(t, err)
-	require.NoError(t, seed.RunCommand(ctx, bson.D{
-		{Key: "doltCommit", Value: 1}, {Key: "message", Value: "seed"},
-	}).Err(), "both writers must fork from the same committed base")
-
-	write := func(c *mongo.Client, field string, value any) {
-		result, err := c.Database(dbName).Collection("docs").UpdateOne(ctx,
-			bson.D{{Key: "_id", Value: "d"}},
-			bson.D{{Key: "$set", Value: bson.D{{Key: field, Value: value}}}})
-		require.NoError(t, err)
-		require.EqualValues(t, 1, result.MatchedCount, "each writer must match the seeded document")
-	}
-	publish := func(c *mongo.Client) error {
-		return c.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "doltCommit", Value: 1}, {Key: "message", Value: "write"},
-		}).Err()
-	}
-
-	first, second := siClient(t, env), siClient(t, env)
-	write(first, edit.firstField, edit.firstValue)
-	write(second, edit.secondField, edit.secondValue)
-	require.NoError(t, publish(first), "the first publish has nothing to reconcile against")
-	return publish(second)
+// txnBoundaryEdit is one writer's $set on the seed document
+// {_id: "d", v: 1, a: "seed", b: "seed"}.
+type txnBoundaryEdit struct {
+	field string
+	value any
 }
 
-// writeShape is what the two writers do to the document. Convergent means both
-// reach the same value in the same field, which the Divergent modes read as
-// agreement and the Touched modes refuse. Disjoint means each owns its own
-// field, which the field-granular modes allow and the document-granular modes
-// refuse. Together the two shapes separate all four modes: each mode is the
-// only one with its pair of answers.
-type writeShape struct {
-	name                    string
-	firstField, secondField string
-	firstValue, secondValue any
-}
-
-var (
-	convergentEdit = writeShape{"convergent", "v", "v", int32(2), int32(2)}
-	disjointEdit   = writeShape{"disjoint", "a", "b", "A", "B"}
-)
-
-// The merge mode governs the boundary a write reconciles at, not only an
-// explicit branch merge. Before one merge served both, this boundary ran
-// dolt's row merge with no policy at all: a document is stored in a single
-// cell, so every mode behaved alike and every concurrent edit conflicted.
-//
-// The default, fieldTouched, is the row that makes the MongoDB
-// compare-and-swap pattern work: it refuses two writers who both land on
-// v=2, and it still lets writers who own different fields through.
-func TestMergeMode_GovernsTheWriteBoundary(t *testing.T) {
-	for _, tc := range []struct {
-		mode         string
-		onConvergent bool
-		onDisjoint   bool
+// A client transaction reconciles at commitTransaction against the snapshot it
+// pinned with its first write. A plain write that changes a document after
+// that, and before the transaction edits the same document, leaves the
+// transaction's edit and the published one with a common base, and the
+// collection's merge mode alone decides whether the commit is accepted. The
+// transaction holds no lock on the document until it writes it, so nothing
+// else decides first.
+func TestMergeMode_GovernsTheTransactionBoundary(t *testing.T) {
+	shapes := []struct {
+		name               string
+		published, txnEdit txnBoundaryEdit
+	}{
+		{"convergent", txnBoundaryEdit{"v", int32(2)}, txnBoundaryEdit{"v", int32(2)}},
+		{"disjoint", txnBoundaryEdit{"a", "published"}, txnBoundaryEdit{"b", "txn"}},
+	}
+	expectations := []struct {
+		mode                     string
+		onConvergent, onDisjoint bool
 	}{
 		{"documentTouched", true, true},
 		{"fieldTouched", true, false},
 		{"fieldDivergent", false, false},
 		{"documentDivergent", false, true},
-	} {
-		for _, edit := range []writeShape{convergentEdit, disjointEdit} {
-			wantConflict := tc.onConvergent
-			if edit.name == disjointEdit.name {
-				wantConflict = tc.onDisjoint
-			}
-			t.Run(tc.mode+"/"+edit.name, func(t *testing.T) {
-				env := startDumboDB(t, "--session-isolation")
-				dbName := fmt.Sprintf("mmb_%d", rand.Int64N(1_000_000))
+	}
 
-				err := serializedWrites(t, env, dbName, tc.mode, edit)
+	env := startDumboDB(t)
+	ctx := context.Background()
+	for _, exp := range expectations {
+		for _, shape := range shapes {
+			wantConflict := exp.onConvergent
+			if shape.name == "disjoint" {
+				wantConflict = exp.onDisjoint
+			}
+			t.Run(exp.mode+"/"+shape.name, func(t *testing.T) {
+				dbName := fmt.Sprintf("mmtxn_%d", rand.Int64N(1_000_000))
+				db := env.Client.Database(dbName)
+				require.NoError(t, db.RunCommand(ctx, bson.D{
+					{Key: "create", Value: "docs"},
+					{Key: "mergeMode", Value: exp.mode},
+				}).Err())
+				docs := db.Collection("docs")
+				_, err := docs.InsertMany(ctx, []any{
+					bson.D{{Key: "_id", Value: "pin"}},
+					bson.D{{Key: "_id", Value: "d"}, {Key: "v", Value: int32(1)}, {Key: "a", Value: "seed"}, {Key: "b", Value: "seed"}},
+				})
+				require.NoError(t, err)
+
+				client := newClient(t, env)
+				sess, err := client.StartSession()
+				require.NoError(t, err)
+				defer sess.EndSession(ctx)
+				sc := mongo.NewSessionContext(ctx, sess)
+				txnDocs := client.Database(dbName).Collection("docs")
+
+				require.NoError(t, sess.StartTransaction(options.Transaction()))
+				_, err = txnDocs.UpdateOne(sc, bson.D{{Key: "_id", Value: "pin"}}, bson.D{{Key: "$set", Value: bson.D{{Key: "touched", Value: true}}}})
+				require.NoError(t, err, "the transaction's first write pins its snapshot")
+
+				setField(t, ctx, docs, shape.published)
+				setField(t, sc, txnDocs, shape.txnEdit)
+
+				err = sess.CommitTransaction(ctx)
+				var stored bson.M
+				require.NoError(t, docs.FindOne(ctx, bson.D{{Key: "_id", Value: "d"}}).Decode(&stored))
 				if wantConflict {
-					require.Error(t, err,
-						"mergeMode=%s must refuse a %s edit at the write boundary", tc.mode, edit.name)
-					require.Contains(t, strings.ToLower(err.Error()), "conflict",
-						"mergeMode=%s must refuse a %s edit as a conflict", tc.mode, edit.name)
+					var cmdErr mongo.CommandError
+					require.True(t, errors.As(err, &cmdErr),
+						"mergeMode=%s must refuse a %s edit at commitTransaction, got %v", exp.mode, shape.name, err)
+					require.EqualValues(t, 112, cmdErr.Code, "expected WriteConflict, got %v", err)
+					require.True(t, cmdErr.HasErrorLabel("TransientTransactionError"), "the driver must be told to retry: %v", err)
+					requireFields(t, stored, shape.published)
 					return
 				}
-
-				// A convergent edit accepted by the mode merges to exactly
-				// what the first writer already published, so there is
-				// nothing left to commit and dumboCommit says so. That is
-				// acceptance, not refusal, and it is the same answer the
-				// default mode has always given an empty commit.
-				if err != nil {
-					require.Contains(t, err.Error(), "nothing to commit",
-						"mergeMode=%s must accept a %s edit at the write boundary", tc.mode, edit.name)
-				}
-				assertMergedState(t, env, dbName, edit)
+				require.NoError(t, err, "mergeMode=%s must accept a %s edit at commitTransaction", exp.mode, shape.name)
+				requireFields(t, stored, shape.published, shape.txnEdit)
 			})
 		}
 	}
 }
 
-// assertMergedState checks that an accepted reconcile kept both writers'
-// changes, so "no conflict" cannot pass by having quietly dropped one.
-func assertMergedState(t *testing.T, env *dumboDBTestEnv, dbName string, edit writeShape) {
+func setField(t *testing.T, ctx context.Context, coll *mongo.Collection, edit txnBoundaryEdit) {
 	t.Helper()
-	var stored bson.M
-	require.NoError(t, siClient(t, env).Database(dbName).Collection("docs").
-		FindOne(context.Background(), bson.D{{Key: "_id", Value: "d"}}).Decode(&stored))
+	res, err := coll.UpdateOne(ctx, bson.D{{Key: "_id", Value: "d"}},
+		bson.D{{Key: "$set", Value: bson.D{{Key: edit.field, Value: edit.value}}}})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, res.MatchedCount)
+}
 
-	require.EqualValues(t, edit.firstValue, stored[edit.firstField],
-		"%s edit: the first writer's %s must survive", edit.name, edit.firstField)
-	require.EqualValues(t, edit.secondValue, stored[edit.secondField],
-		"%s edit: the second writer's %s must survive", edit.name, edit.secondField)
+// requireFields checks stored is the seed document with edits applied.
+func requireFields(t *testing.T, stored bson.M, edits ...txnBoundaryEdit) {
+	t.Helper()
+	want := bson.M{"v": int32(1), "a": "seed", "b": "seed"}
+	for _, e := range edits {
+		want[e.field] = e.value
+	}
+	for k, v := range want {
+		require.EqualValues(t, v, stored[k], "field %q", k)
+	}
 }

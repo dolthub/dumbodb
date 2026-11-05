@@ -173,11 +173,10 @@ func ownerForDocLocks(ctx context.Context) (string, bool) {
 // already holds the document, which is how MongoDB reports transaction
 // contention.
 //
-// An ordinary write takes no lock, in any mode. It pins a BASE, accumulates in
-// the session overlay, and reconciles at its boundary, where the collection's
-// merge mode decides whether two writes to one document agree. A lock would
-// decide that first, at write time, and the mode would never run.
-// --session-isolation changes when the boundary falls, not what happens at it.
+// An ordinary write takes no lock. It pins a BASE, accumulates in the session
+// overlay, and reconciles at its boundary, where the collection's merge mode
+// decides whether two writes to one document agree. A lock would decide that
+// first, at write time, and the mode would never run.
 func (b *Backend) acquireTxnLocks(ctx context.Context, db, branch, collection string, ids []hash.Hash, waitable bool) error {
 	if len(ids) == 0 {
 		return nil

@@ -887,7 +887,7 @@ func TestSecondaryIndex_EmailEqualityQuery(t *testing.T) {
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
 
-	b, err := dolt.NewBackend(dir, slog.New(slog.NewTextHandler(os.Stderr, nil)), false, false, 0, 0)
+	b, err := dolt.NewBackend(dir, slog.New(slog.NewTextHandler(os.Stderr, nil)), false, 0, 0)
 	if err != nil {
 		t.Fatalf("NewBackend: %v", err)
 	}
@@ -1070,7 +1070,7 @@ func TestSecondaryIndex_NoBuildOnInsertBeforeCreate(t *testing.T) {
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
 
-	b, err := dolt.NewBackend(dir, slog.New(slog.NewTextHandler(os.Stderr, nil)), false, false, 0, 0)
+	b, err := dolt.NewBackend(dir, slog.New(slog.NewTextHandler(os.Stderr, nil)), false, 0, 0)
 	if err != nil {
 		t.Fatalf("NewBackend: %v", err)
 	}

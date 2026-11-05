@@ -31,8 +31,7 @@ import (
 // so it must answer the same way instead of ignoring txnNumber.
 //
 // A multi-document transaction carries autocommit (false) and is served on the
-// session-isolation path even when standalone, so it is deliberately left
-// alone.
+// session overlay path even when standalone, so it is deliberately left alone.
 func rejectRetryableWriteOnStandalone(doc *types.Document, replSetName string) error {
 	if replSetName != "" {
 		return nil

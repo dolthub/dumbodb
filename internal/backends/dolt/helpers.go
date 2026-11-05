@@ -531,7 +531,7 @@ func (state *dbState) getOrInitBranchWS(ctx context.Context, branch string) (*do
 		return nil, fmt.Errorf("rootish %q: not found as branch or tag", branch)
 	}
 
-	if _, inTxn := ownerForTxn(ctx); inTxn {
+	if sessionTxnLive(ctx) {
 		if sess := sessionFromContext(ctx); sess != nil && dbNameDsessFriendly(state.name) && !alwaysAutoCommit(state.name) {
 			sqlCtx := sqlctx.Wrap(ctx, sess)
 			qualified := qualifiedDbName(state.name, branch)
@@ -583,22 +583,14 @@ func (state *dbState) loadCommittedWS(ctx context.Context, branch string) (*dolt
 	return ws, nil
 }
 
+// sessionTxnLive reports whether the connection is accumulating writes in a
+// session overlay: inside a client transaction, or while a write command runs.
+//
 // GetIfPresent (not Get): background loops (e.g., capped cleanup) run
 // without a ConnInfo and would otherwise panic.
-//
-// Forked means "this connection is accumulating writes in a session overlay
-// against a pinned BASE". Every write is forked, in every mode; the mode
-// decides only when the fork reconciles. So this asks whether a session
-// transaction is live, not which mode the server runs in.
-func ownerForTxn(ctx context.Context) (string, bool) {
+func sessionTxnLive(ctx context.Context) bool {
 	ci := conninfo.GetIfPresent(ctx)
-	if ci == nil {
-		return "", false
-	}
-	if ci.InTransaction() || ci.Forked() {
-		return ci.Owner(), true
-	}
-	return "", false
+	return ci != nil && (ci.InTransaction() || ci.Writing())
 }
 
 // commitDirtyBranchesForSession three-way merges each dirty branch's
@@ -625,7 +617,7 @@ func (state *dbState) commitDirtyBranchesForSession(sqlCtx *sql.Context, sess *d
 		if !strings.EqualFold(base, state.name) {
 			continue
 		}
-		published, _, err := state.reconcileBranchForSession(sqlCtx, sess, dtx, branch)
+		published, err := state.reconcileBranchForSession(sqlCtx, sess, dtx, branch)
 		if err != nil {
 			return branches, fmt.Errorf("commitTransaction: merging %q: %w", qualifiedDbName(base, branch), err)
 		}
@@ -650,172 +642,80 @@ func (state *dbState) commitDirtyBranchesForSession(sqlCtx *sql.Context, sess *d
 
 // reconcileBranchForSession reconciles one branch's session overlay against
 // the branch's published working set and publishes the result, returning the
-// published set. Reports (nil, nil, nil) when the session holds no overlay for
-// the branch and there is nothing to reconcile.
+// published set. Reports (nil, nil) when the session holds no overlay for the
+// branch and there is nothing to reconcile.
 //
 // This is the product's one reconciliation. A mode decides only where it is
-// reached from -- the end of a command, commitTransaction, or dumboCommit --
-// never what happens once it is. On a refusal the unresolved conflicts come
-// back alongside the error, so a caller able to offer resolution can install
-// them.
+// reached from -- the end of a command or commitTransaction -- never what
+// happens once it is.
 func (state *dbState) reconcileBranchForSession(
 	sqlCtx *sql.Context,
 	sess *dsess.DoltSession,
 	dtx *dsess.DoltTransaction,
 	branch string,
-) (*doltdb.WorkingSet, *mergeInProgress, error) {
+) (*doltdb.WorkingSet, error) {
 	qualified := qualifiedDbName(state.name, branch)
 
 	sessState, sok, err := sess.LookupDbState(sqlCtx, qualified)
 	if err != nil {
-		return nil, nil, fmt.Errorf("LookupDbState for %q: %w", qualified, err)
+		return nil, fmt.Errorf("LookupDbState for %q: %w", qualified, err)
 	}
 	if !sok {
-		return nil, nil, nil
+		return nil, nil
 	}
 	ours := sessState.WorkingSet()
 	if ours == nil {
-		return nil, nil, nil
+		return nil, nil
 	}
 
 	startRoot, ok := dtx.GetInitialRoot(state.name)
 	if !ok {
-		return nil, nil, fmt.Errorf("no initial root for %q", state.name)
+		return nil, fmt.Errorf("no initial root for %q", state.name)
 	}
 	wsRef := doltref.NewWorkingSetRef("heads/" + branch)
 	baseWS, err := state.doltDB.ResolveWorkingSetAtRoot(sqlCtx, wsRef, startRoot)
 	if err != nil {
-		return nil, nil, fmt.Errorf("resolving base WS for %q: %w", branch, err)
+		return nil, fmt.Errorf("resolving base WS for %q: %w", branch, err)
 	}
 	theirs, err := state.doltDB.ResolveWorkingSet(sqlCtx, wsRef)
 	if err != nil {
-		return nil, nil, fmt.Errorf("resolving theirs WS for %q: %w", branch, err)
+		return nil, fmt.Errorf("resolving theirs WS for %q: %w", branch, err)
 	}
 	// A transaction begun before the branch paused reaches it here.
 	if err := refuseWritesWhilePaused(branch, theirs); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	// The fork point: what the branch held when this reconcile read it. The
 	// publish below may only replace exactly this, or the merge it produced is
 	// answering a question about a branch that has already moved on.
 	forkPoint, err := theirs.HashOf()
 	if err != nil {
-		return nil, nil, fmt.Errorf("hashing theirs WS for %q: %w", branch, err)
+		return nil, fmt.Errorf("hashing theirs WS for %q: %w", branch, err)
 	}
 
-	merged, unresolved, err := state.reconcileWorkingSets(sqlCtx, branch, baseWS, ours, theirs)
+	merged, err := state.reconcileWorkingSets(sqlCtx, baseWS, ours, theirs)
 	if err != nil {
-		return nil, unresolved, err
+		return nil, err
 	}
 
 	if hook, ok := sqlCtx.Value(sessionPublishHookKey{}).(func()); ok {
 		hook()
 	}
 	if err := publishWorkingSet(sqlCtx, state.doltDB, merged, branch, forkPoint); err != nil {
-		return nil, nil, fmt.Errorf("persisting WS for %q: %w", branch, err)
+		return nil, fmt.Errorf("persisting WS for %q: %w", branch, err)
 	}
 	if err := sess.SetWorkingSet(sqlCtx, qualified, merged); err != nil {
-		return nil, nil, fmt.Errorf("updating sess WS for %q: %w", qualified, err)
+		return nil, fmt.Errorf("updating sess WS for %q: %w", qualified, err)
 	}
 	// Refresh the singleton entry so non-session readers see the merged WS.
 	if err := state.reloadBranchWSFromDisk(sqlCtx, branch); err != nil {
-		return nil, nil, fmt.Errorf("refreshing cache for %q: %w", qualified, err)
+		return nil, fmt.Errorf("refreshing cache for %q: %w", qualified, err)
 	}
-	return merged, nil, nil
+	return merged, nil
 }
 
 // sessionPublishHookKey makes the post-reconcile publish race deterministic in backend tests.
 type sessionPublishHookKey struct{}
-
-// publishSessionOverlay reconciles this branch's session overlay onto the
-// branch before a commit is taken from it, so dumboCommit commits a working
-// set that already accounts for everyone else's writes rather than one that
-// silently replaces them.
-//
-// dumboCommit is just another boundary. In default mode there is usually
-// nothing left to publish, because the command boundary already did it; under
-// --session-isolation this is where the whole fork lands. A refusal installs
-// the conflicts so the client can resolve them and commit again, instead of
-// throwing the fork's work away.
-//
-// dumboCommit still takes state.mu, because it also reads and clears
-// mergeState; the reconcile it calls does not need it.
-func (state *dbState) publishSessionOverlay(ctx context.Context, branch string) error {
-	if !dbNameDsessFriendly(state.name) || alwaysAutoCommit(state.name) {
-		return nil
-	}
-	sess := sessionFromContext(ctx)
-	if sess == nil {
-		return nil
-	}
-	dtx, ok := sess.GetTransaction().(*dsess.DoltTransaction)
-	if !ok {
-		return nil
-	}
-
-	sqlCtx := sqlctx.Wrap(ctx, sess)
-	published, unresolved, err := state.reconcileBranchForSession(sqlCtx, sess, dtx, branch)
-	if err != nil {
-		if unresolved != nil {
-			// Reported, not wrapped: the handler recognizes this error and
-			// turns it into a conflict response the client can act on.
-			unresolved.isSessionCommit = true
-			state.mergeState = unresolved
-		}
-		return err
-	}
-	if published == nil {
-		return nil
-	}
-	return releaseSessionOverlay(sqlCtx, sess, state.name, branch)
-}
-
-// releaseSessionOverlay drops the overlay for one published (database,
-// branch), and restarts the transaction so every other overlay survives --
-// dsess.StartTransaction wipes each branchState, so they have to be carried
-// across by hand.
-//
-// The unit is the branch, not the database: one session can hold an overlay
-// on several branches at once, and committing one of them must not discard
-// the uncommitted work on the others.
-//
-// Leaving a published overlay in place is not harmless either. The next
-// boundary would reconcile it against the branch it was just published to,
-// and a Touched mode reads that as both sides having written the same fields.
-func releaseSessionOverlay(sqlCtx *sql.Context, sess *dsess.DoltSession, dbName, published string) error {
-	preserved := map[string]*doltdb.WorkingSet{}
-	for _, dirty := range sess.DirtyBranches() {
-		branch := dirty.Branch
-		if branch == "" {
-			branch = defaultBranch
-		}
-		if strings.EqualFold(dirty.DbName, dbName) && strings.EqualFold(branch, published) {
-			continue
-		}
-		qualified := qualifiedDbName(dirty.DbName, branch)
-		sessState, ok, err := sess.LookupDbState(sqlCtx, qualified)
-		if err != nil || !ok {
-			continue
-		}
-		if ws := sessState.WorkingSet(); ws != nil {
-			preserved[qualified] = ws
-		}
-	}
-
-	sqlCtx.SetTransaction(nil)
-	if len(preserved) == 0 {
-		return nil
-	}
-	if _, err := sess.StartTransaction(sqlCtx, sql.ReadWrite); err != nil {
-		return fmt.Errorf("restarting transaction for preserved overlays: %w", err)
-	}
-	for qualified, ws := range preserved {
-		if err := sess.SetWorkingSet(sqlCtx, qualified, ws); err != nil {
-			return fmt.Errorf("restoring overlay for %q: %w", qualified, err)
-		}
-	}
-	return nil
-}
 
 // rollbackDirtyBranchesForSession is session-wide -- dsess has no per-
 // branch rollback.

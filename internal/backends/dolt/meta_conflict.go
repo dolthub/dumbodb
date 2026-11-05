@@ -220,12 +220,8 @@ func (b *Backend) reconcileMetaCollExistence(ctx context.Context, db *dbState, m
 
 // adoptBranchWrites refreshes ms.resolvedAM from the branch's working root so a
 // resolution edits the live state of the branch rather than the root staged
-// when the operation paused. A --session-isolation merge has no shared branch
-// root to adopt: its state stays in ms.resolvedAM until the finalizing commit.
+// when the operation paused.
 func (b *Backend) adoptBranchWrites(ctx context.Context, db *dbState, tip *branchTip, ms *mergeInProgress) error {
-	if ms.isSessionCommit {
-		return nil
-	}
 	liveAM, err := tip.workingAM(ctx, db)
 	if err != nil {
 		return fmt.Errorf("DumboDBResolveConflict: %w", err)
@@ -236,13 +232,8 @@ func (b *Backend) adoptBranchWrites(ctx context.Context, db *dbState, tip *branc
 
 // applyResolvedAM reflects a resolved AddressMap into the shared branch working
 // set, republishing the operation metadata alongside it so the resolution and
-// the shrinking conflict set land together. For a --session-isolation commit it
-// is a NO-OP (the resolution stays in ms.resolvedAM until finalize commits it).
-// Callers hold db.mu.
+// the shrinking conflict set land together. Callers hold db.mu.
 func (b *Backend) applyResolvedAM(ctx context.Context, db *dbState, tip *branchTip, ms *mergeInProgress, finalAM prolly.AddressMap) error {
-	if ms.isSessionCommit {
-		return nil
-	}
 	workingRtvl := buildRootValueFlatbuffer(finalAM)
 	if _, err := db.vs.WriteValue(ctx, dolttypes.SerialMessage(workingRtvl)); err != nil {
 		return fmt.Errorf("DumboDBResolveConflict: writing working RTVL: %w", err)

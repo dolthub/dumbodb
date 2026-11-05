@@ -112,10 +112,6 @@ func run(logger *slog.Logger) error {
 	logLevel := fs.String("log-level", "info", "log level (debug, info, warn, error)")
 	slowMS := fs.Int("slowms", 100, "log commands slower than this many milliseconds at INFO; 0 logs every command")
 	autoCommit := fs.Bool("auto-commit", false, "automatically commit each write (insert/update/delete) to Dolt history")
-	// Session isolation (per-connection working-set overlay, doltCommit merges)
-	// is disabled, not removed: the backend and wire paths still accept the
-	// switch, so re-enabling is a flag away once there is demand for it.
-	const sessionIsolation = false
 	sessionTimeout := fs.Duration("session-timeout", 0, "idle timeout for lsid-keyed sessions; default is 30m (matches MongoDB logicalSessionTimeoutMinutes)")
 	sessionSweepPeriod := fs.Duration("session-sweep-period", 0, "how often to walk the session registry looking for idle entries; default 1m")
 	pprofAddr := fs.String("pprof-addr", "", "if non-empty, expose net/http/pprof on this address (e.g. 127.0.0.1:6060)")
@@ -307,7 +303,7 @@ func run(logger *slog.Logger) error {
 	var replicationControlStore *control.Store
 	var handlerBackend backends.Backend
 	if replicationEnabled {
-		handlerBackend, err = dolt.NewBackend(*dataDir, logger, *autoCommit, sessionIsolation, *sessionTimeout, *sessionSweepPeriod)
+		handlerBackend, err = dolt.NewBackend(*dataDir, logger, *autoCommit, *sessionTimeout, *sessionSweepPeriod)
 		if err != nil {
 			return err
 		}
@@ -337,7 +333,6 @@ func run(logger *slog.Logger) error {
 		RotateCertificates:    rotateCertificates,
 		DoltDataDir:           *dataDir,
 		AutoCommit:            *autoCommit,
-		SessionIsolation:      sessionIsolation,
 		SessionTimeout:        *sessionTimeout,
 		SessionSweepPeriod:    *sessionSweepPeriod,
 		SlowOpThreshold:       slowOpThreshold(*slowMS),

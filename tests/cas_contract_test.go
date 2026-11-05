@@ -45,7 +45,7 @@ func TestCAS_FailedCompareAndSwapIsNotAnError(t *testing.T) {
 	ctx := context.Background()
 	dbName := fmt.Sprintf("cas_%d", rand.Int64N(1_000_000))
 
-	clientA, clientB := siClient(t, env), siClient(t, env)
+	clientA, clientB := newClient(t, env), newClient(t, env)
 	collOf := func(c *mongo.Client) *mongo.Collection {
 		return c.Database(dbName).Collection("documents")
 	}
@@ -125,7 +125,7 @@ func TestCAS_EveryAcknowledgedIncrementIsApplied(t *testing.T) {
 	ctx := context.Background()
 	dbName := fmt.Sprintf("inc_%d", rand.Int64N(1_000_000))
 
-	setup := siClient(t, env).Database(dbName).Collection("documents")
+	setup := newClient(t, env).Database(dbName).Collection("documents")
 	id := bson.D{{Key: "_id", Value: "counter"}}
 	_, err := setup.InsertOne(ctx,
 		bson.D{{Key: "_id", Value: "counter"}, {Key: "v", Value: int32(0)}})
@@ -136,7 +136,7 @@ func TestCAS_EveryAcknowledgedIncrementIsApplied(t *testing.T) {
 	failures := make([]error, workers)
 	clients := make([]*mongo.Client, workers)
 	for i := range clients {
-		clients[i] = siClient(t, env)
+		clients[i] = newClient(t, env)
 	}
 
 	var wg sync.WaitGroup

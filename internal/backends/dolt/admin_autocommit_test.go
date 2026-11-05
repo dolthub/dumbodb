@@ -51,7 +51,7 @@ func drainDBs(ci *conninfo.ConnInfo) map[string]bool {
 }
 
 func TestAdminAutoCommit_DefaultMode(t *testing.T) {
-	b, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, false, 0, 0)
+	b, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, 0, 0)
 	require.NoError(t, err)
 	t.Cleanup(b.Close)
 
@@ -66,8 +66,8 @@ func TestAdminAutoCommit_DefaultMode(t *testing.T) {
 		"admin write must always record an auto-commit, independent of --auto-commit")
 }
 
-func TestAdminAutoCommit_SessionIsolationBypass(t *testing.T) {
-	b, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, true, 0, 0)
+func TestAdminAutoCommit_OpenTransactionBypass(t *testing.T) {
+	b, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, 0, 0)
 	require.NoError(t, err)
 	t.Cleanup(b.Close)
 
@@ -87,9 +87,9 @@ func TestAdminAutoCommit_SessionIsolationBypass(t *testing.T) {
 
 	acInsert(t, ctx, b, "userdb", "col", 2)
 	got := drainDBs(ci)
-	require.NotContains(t, got, "userdb", "user-db write in session-isolation must defer, not auto-commit")
+	require.NotContains(t, got, "userdb", "user-db write inside an open transaction must defer, not auto-commit")
 
 	acInsert(t, ctx, b, "admin", "system.users", 2)
 	require.Equal(t, map[string]bool{"admin": true}, drainDBs(ci),
-		"admin write must auto-commit even in session-isolation mode")
+		"admin write must auto-commit even inside an open transaction")
 }

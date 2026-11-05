@@ -50,7 +50,7 @@ func TestCollMetaDurableAcrossRestart(t *testing.T) {
 
 	validator := catMustDoc(types.NewDocument("x", catMustDoc(types.NewDocument("$exists", true))))
 
-	b1, err := NewBackend(dir, logger, false, false, 0, 0)
+	b1, err := NewBackend(dir, logger, false, 0, 0)
 	if err != nil {
 		t.Fatalf("NewBackend: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestCollMetaDurableAcrossRestart(t *testing.T) {
 	}
 	b1.Close()
 
-	b2, err := NewBackend(dir, logger, false, false, 0, 0)
+	b2, err := NewBackend(dir, logger, false, 0, 0)
 	if err != nil {
 		t.Fatalf("NewBackend (reopen): %v", err)
 	}
@@ -94,7 +94,7 @@ func TestCollMetaDurableAcrossRestart(t *testing.T) {
 func TestSourceUUIDSurvivesRenameAndPreventsAlias(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
-	backend, err := NewBackend(dir, slog.Default(), false, false, 0, 0)
+	backend, err := NewBackend(dir, slog.Default(), false, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ func TestSourceUUIDSurvivesRenameAndPreventsAlias(t *testing.T) {
 	}
 	backend.Close()
 
-	reopened, err := NewBackend(dir, slog.Default(), false, false, 0, 0)
+	reopened, err := NewBackend(dir, slog.Default(), false, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +138,7 @@ func TestSourceUUIDSurvivesRenameAndPreventsAlias(t *testing.T) {
 
 func TestRenameCollectionDropTargetReplacesCatalogIdentity(t *testing.T) {
 	ctx := context.Background()
-	backend, err := NewBackend(t.TempDir(), slog.Default(), false, false, 0, 0)
+	backend, err := NewBackend(t.TempDir(), slog.Default(), false, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +180,7 @@ func TestCatalogHiddenFromListCollections(t *testing.T) {
 	defer os.RemoveAll(dir)
 
 	ctx := context.Background()
-	b, err := NewBackend(dir, slog.Default(), false, false, 0, 0)
+	b, err := NewBackend(dir, slog.Default(), false, 0, 0)
 	if err != nil {
 		t.Fatalf("NewBackend: %v", err)
 	}
@@ -339,7 +339,7 @@ func TestCatalogNameRejected(t *testing.T) {
 	defer os.RemoveAll(dir)
 
 	ctx := context.Background()
-	b, err := NewBackend(dir, slog.Default(), false, false, 0, 0)
+	b, err := NewBackend(dir, slog.Default(), false, 0, 0)
 	if err != nil {
 		t.Fatalf("NewBackend: %v", err)
 	}

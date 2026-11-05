@@ -38,7 +38,7 @@ func TestDatabaseNamesCannotLeaveDataDir(t *testing.T) {
 	if err := os.Mkdir(dataDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	b, err := newBackend(dataDir, slog.New(slog.NewTextHandler(io.Discard, nil)), false, false, 0, 0)
+	b, err := newBackend(dataDir, slog.New(slog.NewTextHandler(io.Discard, nil)), false, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

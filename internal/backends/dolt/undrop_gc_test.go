@@ -46,7 +46,7 @@ func newTestBackendWithLog(t *testing.T) (*Backend, *bytes.Buffer) {
 	var logBuf bytes.Buffer
 	be, err := newBackend(t.TempDir(),
 		slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo})),
-		false, false, 0, 0)
+		false, 0, 0)
 	require.NoError(t, err)
 	t.Cleanup(be.Close)
 	return be, &logBuf

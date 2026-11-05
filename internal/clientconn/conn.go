@@ -556,17 +556,9 @@ func (c *conn) route(connCtx context.Context, reqHeader *wire.MsgHeader, reqBody
 			}
 		}
 
-		var startedTxn bool
 		if err == nil {
 			extractAndSetLSID(connCtx, typedDoc)
-			startedTxn = extractAndSetTransactionFlag(connCtx, typedDoc)
-		}
-
-		if err == nil && startedTxn && c.h.SessionIsolation() {
-			err = handlererrors.NewCommandError(
-				handlererrors.ErrOperationNotSupportedInTransaction,
-				errSessionIsolationRejectStartTransaction,
-			)
+			extractAndSetTransactionFlag(connCtx, typedDoc)
 		}
 
 		if err == nil && cmd != nil && cmd.BlockedInTxn && conninfo.Get(connCtx).InTransaction() {
@@ -781,9 +773,9 @@ func (c *conn) dispatchThroughSession(connCtx context.Context, msg *wire.OpMsg, 
 	shadow, cachedKey := ci.CachedShadow()
 	// A non-transactional command may reconnect if its session was reaped: it
 	// carries no cross-command state, so a fresh session is equivalent. A
-	// command inside a client transaction or under --session-isolation cannot,
-	// because the reaped session held its uncommitted work.
-	mayReconnect := !c.h.SessionIsolation() && !ci.InTransaction()
+	// command inside a client transaction cannot, because the reaped session
+	// held its uncommitted work.
+	mayReconnect := !ci.InTransaction()
 	staleReap := shadow != nil && cachedKey == sessKey && !shadow.Active() &&
 		shadow.Purged() && mayReconnect
 	if shadow == nil || cachedKey != sessKey || staleReap {
@@ -806,14 +798,13 @@ func (c *conn) dispatchThroughSession(connCtx context.Context, msg *wire.OpMsg, 
 	// which that overlay reconciles against the tip and publishes:
 	//
 	//	explicit transaction  -> commitTransaction
-	//	--session-isolation   -> dumboCommit
 	//	otherwise             -> the end of this command
 	//
 	// Nothing else about a write depends on the mode.
 	writes := cmd != nil && cmd.WritesData
 	inClientTxn := ci.InTransaction()
-	forked := writes || inClientTxn || c.h.SessionIsolation()
-	reconcileAtCommandEnd := writes && !inClientTxn && !c.h.SessionIsolation()
+	forked := writes || inClientTxn
+	reconcileAtCommandEnd := writes && !inClientTxn
 
 	runFn := shadow.Use
 	if reconcileAtCommandEnd || cmd != nil && cmd.Durable {
@@ -838,18 +829,6 @@ func (c *conn) dispatchThroughSession(connCtx context.Context, msg *wire.OpMsg, 
 			if _, txErr := sqlctx.EnsureTxn(sqlCtx, sess); txErr != nil {
 				return fmt.Errorf("dispatchThroughSession: %w", txErr)
 			}
-			// Forked covers the writes that have no client transaction to
-			// speak for them. Inside one, InTransaction already reports the
-			// fork, and it is cleared when the transaction ends -- whereas a
-			// Forked set here would outlive the transaction, because only the
-			// command-end boundary clears it, and every later read on the
-			// connection would stay pinned to a finished transaction's root.
-			if !inClientTxn {
-				ci.SetForked(true)
-				if reconcileAtCommandEnd {
-					defer ci.SetForked(false)
-				}
-			}
 		}
 		var handlerErr error
 		resMsg, handlerErr = c.invokeHandler(connCtx, msg, name, cmd)
@@ -857,9 +836,9 @@ func (c *conn) dispatchThroughSession(connCtx context.Context, msg *wire.OpMsg, 
 			if handlerErr != nil {
 				return handlerErr
 			}
-			// A write whose boundary comes later -- a client transaction, or
-			// --session-isolation -- leaves the branches it recorded pending.
-			// The command that publishes them is the one that commits them.
+			// A write inside a client transaction leaves the branches it
+			// recorded pending. The command that publishes them is the one
+			// that commits them.
 			if writes {
 				return nil
 			}

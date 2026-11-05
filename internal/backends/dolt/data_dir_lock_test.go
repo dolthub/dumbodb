@@ -28,10 +28,10 @@ func TestSecondBackendOnSameDataDirFails(t *testing.T) {
 	dataDir := t.TempDir()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	first, err := newBackend(dataDir, logger, false, false, 0, 0)
+	first, err := newBackend(dataDir, logger, false, 0, 0)
 	require.NoError(t, err)
 
-	second, err := newBackend(dataDir, logger, false, false, 0, 0)
+	second, err := newBackend(dataDir, logger, false, 0, 0)
 	require.Error(t, err)
 	assert.Nil(t, second)
 	assert.ErrorIs(t, err, nbs.ErrDatabaseLocked)
@@ -39,7 +39,7 @@ func TestSecondBackendOnSameDataDirFails(t *testing.T) {
 
 	first.Close()
 
-	restarted, err := newBackend(dataDir, logger, false, false, 0, 0)
+	restarted, err := newBackend(dataDir, logger, false, 0, 0)
 	require.NoError(t, err)
 	restarted.Close()
 }

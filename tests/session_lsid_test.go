@@ -85,7 +85,7 @@ func TestSession_OneLsidAcrossManyConnections(t *testing.T) {
 	require.Zero(t, failed,
 		"%d of %d writes failed on a shared lsid; first: %v", failed, workers*perWorker, first)
 
-	count, err := siClient(t, env).Database(dbName).Collection("docs").CountDocuments(ctx, bson.D{})
+	count, err := newClient(t, env).Database(dbName).Collection("docs").CountDocuments(ctx, bson.D{})
 	require.NoError(t, err)
 	require.EqualValues(t, workers*perWorker, count, "every acknowledged insert must be stored")
 }

@@ -30,7 +30,7 @@ import (
 func TestCatalogApplierPreservesIdentityAcrossLifecycle(t *testing.T) {
 	ctx := context.Background()
 	dataDir := t.TempDir()
-	backend, err := dolt.NewBackend(dataDir, slog.Default(), false, false, 0, 0)
+	backend, err := dolt.NewBackend(dataDir, slog.Default(), false, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func TestCatalogApplierPreservesIdentityAcrossLifecycle(t *testing.T) {
 	}
 	backend.Close()
 
-	reopened, err := dolt.NewBackend(dataDir, slog.Default(), false, false, 0, 0)
+	reopened, err := dolt.NewBackend(dataDir, slog.Default(), false, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestCatalogApplierPreservesIdentityAcrossLifecycle(t *testing.T) {
 
 func TestCatalogCollModMaterializesDefaultValidationAction(t *testing.T) {
 	ctx := context.Background()
-	backend, err := dolt.NewBackend(t.TempDir(), slog.Default(), false, false, 0, 0)
+	backend, err := dolt.NewBackend(t.TempDir(), slog.Default(), false, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +155,7 @@ func TestCatalogCollModMaterializesDefaultValidationAction(t *testing.T) {
 }
 
 func TestResolveRejectsDuplicateSourceUUIDAcrossDatabases(t *testing.T) {
-	backend, err := dolt.NewBackend(t.TempDir(), slog.Default(), false, false, 0, 0)
+	backend, err := dolt.NewBackend(t.TempDir(), slog.Default(), false, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ func TestResolveRejectsDuplicateSourceUUIDAcrossDatabases(t *testing.T) {
 }
 
 func TestCatalogApplierAppliesViewLifecycle(t *testing.T) {
-	backend, err := dolt.NewBackend(t.TempDir(), slog.Default(), false, false, 0, 0)
+	backend, err := dolt.NewBackend(t.TempDir(), slog.Default(), false, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +215,7 @@ func TestCatalogApplierAppliesViewLifecycle(t *testing.T) {
 }
 
 func TestCatalogApplierRepairsCompletedRootMutation(t *testing.T) {
-	backend, err := dolt.NewBackend(t.TempDir(), slog.Default(), false, false, 0, 0)
+	backend, err := dolt.NewBackend(t.TempDir(), slog.Default(), false, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

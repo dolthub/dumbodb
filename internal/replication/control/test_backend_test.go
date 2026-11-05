@@ -40,7 +40,7 @@ func testBackend(t testing.TB, directory string) backends.Backend {
 	backend := testBackends.byDirectory[directory]
 	if backend == nil {
 		var err error
-		backend, err = dolt.NewBackend(directory, slog.New(slog.NewTextHandler(io.Discard, nil)), false, false, 0, 0)
+		backend, err = dolt.NewBackend(directory, slog.New(slog.NewTextHandler(io.Discard, nil)), false, 0, 0)
 		if err != nil {
 			testBackends.Unlock()
 			t.Fatal(err)

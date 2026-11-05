@@ -159,7 +159,7 @@ func TestMaterializeOrdinaryCatalogRejectsUnsupportedCatalogKinds(t *testing.T) 
 
 func newMaterializeCatalogTestApplier(t *testing.T) (backends.Backend, *catalog.Applier) {
 	t.Helper()
-	backend, err := dolt.NewBackend(t.TempDir(), slog.Default(), false, false, 0, 0)
+	backend, err := dolt.NewBackend(t.TempDir(), slog.Default(), false, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

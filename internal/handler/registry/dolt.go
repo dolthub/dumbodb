@@ -35,7 +35,7 @@ func newDoltHandler(opts *NewHandlerOpts) (*handler.Handler, CloseBackendFunc, e
 		if opts.DoltDataDir == "" {
 			return nil, nil, fmt.Errorf("dolt handler: data directory is required")
 		}
-		b, err = dolt.NewBackend(opts.DoltDataDir, opts.Logger, opts.AutoCommit, opts.SessionIsolation, opts.SessionTimeout, opts.SessionSweepPeriod)
+		b, err = dolt.NewBackend(opts.DoltDataDir, opts.Logger, opts.AutoCommit, opts.SessionTimeout, opts.SessionSweepPeriod)
 		if err != nil {
 			return nil, nil, err
 		}

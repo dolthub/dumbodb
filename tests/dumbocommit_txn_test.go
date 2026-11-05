@@ -40,7 +40,7 @@ func TestDumboCommit_InTransactionCommitsTheTransaction(t *testing.T) {
 	require.NoError(t, err)
 	dumboDBCommit(t, env, dbName, "base", "alice")
 
-	client := siClient(t, env)
+	client := newClient(t, env)
 	sess, err := client.StartSession()
 	require.NoError(t, err)
 	defer sess.EndSession(ctx)
@@ -81,7 +81,7 @@ func TestDumboCommit_InTransactionRefusedLikeCommitTransaction(t *testing.T) {
 	require.NoError(t, err)
 	dumboDBCommit(t, env, dbName, "base", "alice")
 
-	client := siClient(t, env)
+	client := newClient(t, env)
 	sess, err := client.StartSession()
 	require.NoError(t, err)
 	defer sess.EndSession(ctx)

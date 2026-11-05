@@ -95,8 +95,8 @@ func TestWritePath_OrdinaryWritesKeepAcknowledgedWrites(t *testing.T) {
 
 	env := startDumboDB(t)
 	ctx := context.Background()
-	collA := siClient(t, env).Database("write_path").Collection("documents")
-	collB := siClient(t, env).Database("write_path").Collection("documents")
+	collA := newClient(t, env).Database("write_path").Collection("documents")
+	collB := newClient(t, env).Database("write_path").Collection("documents")
 
 	lost := 0
 	var firstLoss disjointWriteRound
@@ -132,9 +132,9 @@ func TestWritePath_TransactionalWritesKeepAcknowledgedWrites(t *testing.T) {
 
 	env := startDumboDB(t)
 	ctx := context.Background()
-	setup := siClient(t, env).Database("write_path_txn").Collection("documents")
+	setup := newClient(t, env).Database("write_path_txn").Collection("documents")
 
-	clientA, clientB := siClient(t, env), siClient(t, env)
+	clientA, clientB := newClient(t, env), newClient(t, env)
 	sessA, err := clientA.StartSession()
 	require.NoError(t, err)
 	defer sessA.EndSession(ctx)

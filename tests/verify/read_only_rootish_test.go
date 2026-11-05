@@ -27,18 +27,7 @@ import (
 )
 
 func TestReadOnlyRootishCommands(t *testing.T) {
-	for _, mode := range []struct {
-		name string
-		args []string
-	}{
-		{name: "default"},
-		{name: "session_isolation", args: []string{"--session-isolation"}},
-	} {
-		t.Run(mode.name, func(t *testing.T) {
-			env := startDumboDB(t, mode.args...)
-			verifyReadOnlyRootishCommands(t, env)
-		})
-	}
+	verifyReadOnlyRootishCommands(t, startDumboDB(t))
 }
 
 func verifyReadOnlyRootishCommands(t *testing.T, env *dumboDBTestEnv) {

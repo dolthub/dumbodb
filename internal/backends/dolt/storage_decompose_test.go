@@ -62,7 +62,7 @@ func TestStorageDecomposition_Dumbo(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), true, false, 0, 0)
+	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), true, 0, 0)
 	require.NoError(t, err)
 	t.Cleanup(be.Close)
 
