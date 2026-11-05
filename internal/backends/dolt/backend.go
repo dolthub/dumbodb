@@ -484,7 +484,38 @@ func newBackend(dataDir string, l *slog.Logger, autoCommit bool, sessionTimeout,
 	go b.sessionSweepLoop()
 	go b.droppedDatabaseGCLoop()
 
+	if err := b.checkAdminIndexLayout(context.Background()); err != nil {
+		b.Close()
+		return nil, err
+	}
+
 	return b, nil
+}
+
+// checkAdminIndexLayout refuses a data dir whose admin database predates
+// dolthub/dumbodb#190. Users live in admin, so serving it would fail every
+// login as "Authentication failed", and admin cannot be dropped to recover.
+func (b *Backend) checkAdminIndexLayout(ctx context.Context) error {
+	state, err := b.getOrOpenDB(ctx, "admin", false)
+	if err != nil {
+		return fmt.Errorf("opening admin database: %w", err)
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	am, err := state.getOrInitBranchAM(ctx, defaultBranch)
+	if err != nil {
+		return fmt.Errorf("reading admin database: %w", err)
+	}
+	return am.IterAll(ctx, func(collName string, dtblHash hash.Hash) error {
+		_, err := secondaryIndexesForDTBL(ctx, state.cs, state.ns, dtblHash)
+		if errors.Is(err, errUnsupportedIndexLayout) {
+			return fmt.Errorf("data directory %q was written by an older version whose index layout this version does not read (admin.%s); start with an empty data directory", b.dataDir, collName)
+		}
+		if err != nil {
+			return fmt.Errorf("checking admin.%s: %w", collName, err)
+		}
+		return nil
+	})
 }
 
 // checkDataDirExists refuses a missing dataDir rather than creating it, as

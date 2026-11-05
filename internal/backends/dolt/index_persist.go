@@ -67,12 +67,13 @@ func newSecondaryIndexes(ctx context.Context, ns tree.NodeStore) (secondaryIndex
 	return secondaryIndexes{ns: ns, m: m}, nil
 }
 
-// secondaryIndexesFromBytes reads a DTBL's secondary_indexes field. Tables
-// written before dolthub/dumbodb#190 hold an AddressMap there, which is not
-// supported.
+// errUnsupportedIndexLayout marks tables written before dolthub/dumbodb#190,
+// which hold an AddressMap in secondary_indexes.
+var errUnsupportedIndexLayout = errors.New("a secondary index layout this version does not read")
+
 func secondaryIndexesFromBytes(ns tree.NodeStore, b []byte) (secondaryIndexes, error) {
 	if id := serial.GetFileID(b); id != serial.ProllyTreeNodeFileID {
-		return secondaryIndexes{}, fmt.Errorf("secondary indexes stored as %q, a layout this version does not read; recreate the database", id)
+		return secondaryIndexes{}, fmt.Errorf("secondary indexes stored as %q, %w; recreate the database", id, errUnsupportedIndexLayout)
 	}
 	node, _, err := tree.NodeFromBytes(b)
 	if err != nil {
@@ -161,10 +162,10 @@ func secondaryIndexesFromRoots(ctx context.Context, ns tree.NodeStore, infos []b
 }
 
 func readSecondaryIndexValue(ctx context.Context, ns tree.NodeStore, v val.Tuple) (def []byte, root hash.Hash, err error) {
-	root, ok := secondaryIndexValReadDesc.GetBytesAddr(1, v)
-	if !ok {
-		return nil, hash.Hash{}, fmt.Errorf("value missing index map root")
+	if rootLen := len(secondaryIndexValReadDesc.GetField(1, v)); rootLen != hash.ByteLen {
+		return nil, hash.Hash{}, fmt.Errorf("invalid index map root length %d", rootLen)
 	}
+	root, _ = secondaryIndexValReadDesc.GetBytesAddr(1, v)
 	stored, ok, err := secondaryIndexValReadDesc.GetBytesAdaptiveValue(ctx, 0, ns, v)
 	if err != nil {
 		return nil, hash.Hash{}, err
