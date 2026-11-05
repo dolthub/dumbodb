@@ -57,8 +57,8 @@ func mongoCommandCode(err error) int32 {
 // independently of connections, so this is ordinary traffic, and neither
 // connection may lose its session to the other. This replaced an earlier
 // contract where the second connection evicted the first and the first's next
-// command was answered with code 225; see workspace-5xe, where that cost a
-// 30-minute soak 1,550 indeterminate outcomes.
+// command was answered with code 225, which cost a 30-minute soak 1,550
+// indeterminate outcomes.
 func TestSession_LsidSharedByTwoConnections(t *testing.T) {
 	env := startDumboDB(t)
 
