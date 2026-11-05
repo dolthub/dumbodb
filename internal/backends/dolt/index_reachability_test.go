@@ -288,23 +288,35 @@ func TestStartupRefusesAdminAddressMapLayout(t *testing.T) {
 	require.ErrorContains(t, err, "admin.legacy")
 }
 
-// The definition keeps the key order of a partial filter and collation as
-// the user gave them.
-func TestIndexDefinitionKeepsKeyOrder(t *testing.T) {
-	partial := must.NotFail(types.NewDocument("b", must.NotFail(types.NewDocument("$gt", int32(1))), "a", must.NotFail(types.NewDocument("$exists", true))))
-	collation := must.NotFail(types.NewDocument("strength", int32(2), "locale", "en"))
-	def, err := encodeIndexDefinition(backends.IndexInfo{
-		Name: "p", Key: []backends.IndexKeyPair{{Field: "a"}}, PartialFilterExpression: partial, Collation: collation,
-	})
+// The definition is canonical: a partial filter or collation written in a
+// different key order, at any depth, encodes to the same bytes and decodes
+// with sorted keys.
+func TestIndexDefinitionIsCanonical(t *testing.T) {
+	define := func(partial, collation *types.Document) []byte {
+		def, err := encodeIndexDefinition(backends.IndexInfo{
+			Name: "p", Key: []backends.IndexKeyPair{{Field: "b"}, {Field: "a"}}, PartialFilterExpression: partial, Collation: collation,
+		})
+		require.NoError(t, err)
+		return def
+	}
+	ba := define(
+		must.NotFail(types.NewDocument("b", must.NotFail(types.NewDocument("y", int32(2), "x", int32(1))), "a", must.NotFail(types.NewDocument("$exists", true)))),
+		must.NotFail(types.NewDocument("strength", int32(2), "locale", "en")),
+	)
+	ab := define(
+		must.NotFail(types.NewDocument("a", must.NotFail(types.NewDocument("$exists", true)), "b", must.NotFail(types.NewDocument("x", int32(1), "y", int32(2))))),
+		must.NotFail(types.NewDocument("locale", "en", "strength", int32(2))),
+	)
+	require.Equal(t, ab, ba)
+
+	entry, err := resolveIndexEntry(ba, hash.Of([]byte("root")))
 	require.NoError(t, err)
-	entry, err := resolveIndexEntry(def, hash.Of([]byte("root")))
-	require.NoError(t, err)
-	require.Equal(t, []string{"b", "a"}, entry.info.PartialFilterExpression.Keys())
-	require.Equal(t, []string{"strength", "locale"}, entry.info.Collation.Keys())
-	match, err := entry.info.MatchesPartialFilter(must.NotFail(types.NewDocument("a", int32(1), "b", int32(2))))
+	require.Equal(t, []string{"a", "b"}, entry.info.PartialFilterExpression.Keys())
+	require.Equal(t, []string{"locale", "strength"}, entry.info.Collation.Keys())
+	require.True(t, slices.Equal(entry.info.Key, []backends.IndexKeyPair{{Field: "b"}, {Field: "a"}}), "compound key order is kept")
+	match, err := entry.info.MatchesPartialFilter(must.NotFail(types.NewDocument("a", int32(1), "b", must.NotFail(types.NewDocument("x", int32(1), "y", int32(2))))))
 	require.NoError(t, err)
 	require.True(t, match)
-	require.True(t, slices.Equal(entry.info.Key, []backends.IndexKeyPair{{Field: "a"}}))
 }
 
 // A root field that is not a hash is an error, not a panic.
@@ -320,20 +332,46 @@ func TestSecondaryIndexValueRejectsShortRoot(t *testing.T) {
 	require.ErrorContains(t, err, "invalid index map root length")
 }
 
-// Partial filters keep their key order, so filters that differ only in key
-// order, at any depth, are different definitions.
-func TestIndexSpecEqualKeepsPartialFilterKeyOrder(t *testing.T) {
+// Partial filters compare in canonical form, so filters that differ only in
+// key order, at any depth, are the same definition.
+func TestIndexSpecEqualIgnoresPartialFilterKeyOrder(t *testing.T) {
 	spec := func(partial *types.Document) backends.IndexInfo {
 		return backends.IndexInfo{Name: "p", Key: []backends.IndexKeyPair{{Field: "a"}}, PartialFilterExpression: partial}
 	}
 	ab := must.NotFail(types.NewDocument("a", must.NotFail(types.NewDocument("$gt", int32(1))), "b", must.NotFail(types.NewDocument("$exists", true))))
-	sameAB := must.NotFail(types.NewDocument("a", must.NotFail(types.NewDocument("$gt", int32(1))), "b", must.NotFail(types.NewDocument("$exists", true))))
 	ba := must.NotFail(types.NewDocument("b", must.NotFail(types.NewDocument("$exists", true)), "a", must.NotFail(types.NewDocument("$gt", int32(1)))))
 	xy := must.NotFail(types.NewDocument("a", must.NotFail(types.NewDocument("x", int32(1), "y", int32(2)))))
 	yx := must.NotFail(types.NewDocument("a", must.NotFail(types.NewDocument("y", int32(2), "x", int32(1)))))
-	require.True(t, indexSpecEqual(spec(ab), spec(sameAB)))
-	require.False(t, indexSpecEqual(spec(ab), spec(ba)))
-	require.False(t, indexSpecEqual(spec(xy), spec(yx)))
+	other := must.NotFail(types.NewDocument("a", must.NotFail(types.NewDocument("$gt", int32(2))), "b", must.NotFail(types.NewDocument("$exists", true))))
+	require.True(t, indexSpecEqual(spec(ab), spec(ba)))
+	require.True(t, indexSpecEqual(spec(xy), spec(yx)))
+	require.False(t, indexSpecEqual(spec(ab), spec(other)))
+}
+
+// Two branches that create the same index with the partial filter written in
+// a different key order merge cleanly.
+func TestMergeSameIndexWithReorderedPartialFilter(t *testing.T) {
+	ctx := context.Background()
+	b := newTestBackend(t)
+	insertDoc(t, b, "mdb", "items", mustDoc(t, "_id", int32(1), "a", int32(5), "b", int32(1)))
+	commitDB(t, b, "mdb", "base")
+	branchFrom(t, b, "mdb", "main", "feat")
+	create := func(branch string, partial *types.Document) {
+		coll := collAt(t, b, "mdb", branch, "items")
+		_, err := coll.CreateIndexes(ctx, &backends.CreateIndexesParams{Indexes: []backends.IndexInfo{{
+			Name: "p", Key: []backends.IndexKeyPair{{Field: "a"}}, PartialFilterExpression: partial,
+		}}})
+		require.NoError(t, err)
+		commitBranch(t, b, "mdb", branch, "create p on "+branch)
+	}
+	create("main", must.NotFail(types.NewDocument("a", must.NotFail(types.NewDocument("$gt", int32(1))), "b", must.NotFail(types.NewDocument("$exists", true)))))
+	create("feat", must.NotFail(types.NewDocument("b", must.NotFail(types.NewDocument("$exists", true)), "a", must.NotFail(types.NewDocument("$gt", int32(1))))))
+	mainDef := secondaryIndexEntry(t, ctx, secondaryIndexesOnDisk(t, ctx, b, "mdb", "main", "items"), "p")
+	featDef := secondaryIndexEntry(t, ctx, secondaryIndexesOnDisk(t, ctx, b, "mdb", "feat", "items"), "p")
+	require.Equal(t, definitionHash(t, mainDef.info), definitionHash(t, featDef.info), "reordered filters store the same definition")
+
+	mergeBranches(t, b, "mdb", "main", "feat")
+	require.Equal(t, []string{"_id_", "p"}, listIndexNames(t, ctx, collAt(t, b, "mdb", "main", "items")))
 }
 
 // Writes change index map roots but not definitions, so they do not grow
