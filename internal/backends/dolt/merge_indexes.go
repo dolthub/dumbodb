@@ -46,7 +46,8 @@ func indexSetOf(ctx context.Context, indexes secondaryIndexes) (map[string]*reso
 }
 
 // indexSpecEqual compares definitions only: content (map root) and the
-// sticky Lossy/Multikey flags never count as definition changes.
+// sticky Lossy/Multikey flags never count as definition changes. Partial
+// filters compare regardless of key order, so reordering is not a conflict.
 func indexSpecEqual(a, b backends.IndexInfo) bool {
 	if a.Name != b.Name || a.Unique != b.Unique || a.Sparse != b.Sparse || a.Hidden != b.Hidden {
 		return false
@@ -68,8 +69,8 @@ func indexSpecEqual(a, b backends.IndexInfo) bool {
 	if a.PartialFilterExpression == nil {
 		return true
 	}
-	aPartial, aErr := encodeOrderedBSON(a.PartialFilterExpression)
-	bPartial, bErr := encodeOrderedBSON(b.PartialFilterExpression)
+	aPartial, aErr := docToBSON(a.PartialFilterExpression)
+	bPartial, bErr := docToBSON(b.PartialFilterExpression)
 	return aErr == nil && bErr == nil && bytes.Equal(aPartial, bPartial)
 }
 

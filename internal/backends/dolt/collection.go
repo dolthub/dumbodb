@@ -3754,14 +3754,6 @@ func (c *collection) CreateIndexes(ctx context.Context, params *backends.CreateI
 	return &backends.CreateIndexesResult{}, nil
 }
 
-// rewriteDTBLAfterIndexChange rebuilds the collection's DTBL with the
-// given secondary indexes and updates the collections AM. Called after CreateIndexes
-// / DropIndexes so an index-only change is durable.
-//
-// If the collection has no primary map yet (no inserts have happened) it
-// uses a freshly created empty map  -- the same path as loadOrCreateMap.
-//
-// The caller must hold state.mu (write lock).
 func indexNames(indexes []backends.IndexInfo) string {
 	names := make([]string, len(indexes))
 	for i, idx := range indexes {
@@ -3770,6 +3762,14 @@ func indexNames(indexes []backends.IndexInfo) string {
 	return strings.Join(names, ", ")
 }
 
+// rewriteDTBLAfterIndexChange rebuilds the collection's DTBL with the
+// given secondary indexes and updates the collections AM. Called after CreateIndexes
+// / DropIndexes so an index-only change is durable.
+//
+// If the collection has no primary map yet (no inserts have happened) it
+// uses a freshly created empty map  -- the same path as loadOrCreateMap.
+//
+// The caller must hold state.mu (write lock).
 func (c *collection) rewriteDTBLAfterIndexChange(ctx context.Context, state *dbState, indexes secondaryIndexes, commitMsg string) error {
 	am, err := state.getOrInitBranchAM(ctx, c.db.rootish)
 	if err != nil {

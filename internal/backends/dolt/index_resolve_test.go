@@ -25,6 +25,7 @@ import (
 	"testing"
 
 	doltref "github.com/dolthub/dolt/go/libraries/doltcore/ref"
+	"github.com/dolthub/dolt/go/store/hash"
 )
 
 // TestResolver_RoundTripIndexAMFromDTBL exercises dtblHashForColl ->
@@ -137,10 +138,10 @@ func TestResolver_MissingCollection(t *testing.T) {
 	}
 }
 
-// TestResolver_IndexEntryMemoHitsAfterMiss verifies the indexEntryMemo:
-// the first resolve for an entry hash is a miss and populates the memo;
-// the second is a hit and returns the same pointer.
-func TestResolver_IndexEntryMemoHitsAfterMiss(t *testing.T) {
+// TestResolver_DefinitionMemoHitsAfterMiss verifies the indexDefinitionMemo:
+// the first resolve of a definition is a miss and populates the memo; the
+// second is a hit and shares the decoded definition.
+func TestResolver_DefinitionMemoHitsAfterMiss(t *testing.T) {
 	// Cannot t.Parallel: the test inspects global memo state.
 
 	ctx := context.Background()
@@ -177,9 +178,10 @@ func TestResolver_IndexEntryMemoHitsAfterMiss(t *testing.T) {
 		t.Fatalf("encodeIndexDefinition: %v", err)
 	}
 
-	indexEntryMemo.Delete(stored.id)
-	if _, ok := indexEntryMemo.Load(stored.id); ok {
-		t.Fatal("indexEntryMemo unexpectedly contained entry after Delete")
+	defHash := hash.Of(def)
+	indexDefinitionMemo.Delete(defHash)
+	if _, ok := indexDefinitionMemo.Load(defHash); ok {
+		t.Fatal("indexDefinitionMemo unexpectedly contained entry after Delete")
 	}
 
 	first, err := resolveIndexEntry(def, stored.mapRoot)
@@ -192,13 +194,19 @@ func TestResolver_IndexEntryMemoHitsAfterMiss(t *testing.T) {
 	if first.mapRoot.IsEmpty() {
 		t.Error("first resolve: mapRoot is empty")
 	}
+	if _, ok := indexDefinitionMemo.Load(defHash); !ok {
+		t.Fatal("first resolve did not populate indexDefinitionMemo")
+	}
 
 	second, err := resolveIndexEntry(def, stored.mapRoot)
 	if err != nil {
 		t.Fatalf("second resolveIndexEntry: %v", err)
 	}
-	if first != second {
-		t.Errorf("memo did not return same pointer: %p vs %p", first, second)
+	if &first.info.Key[0] != &second.info.Key[0] {
+		t.Error("second resolve decoded the definition again instead of sharing it")
+	}
+	if first.id != second.id {
+		t.Errorf("entry ids differ: %s vs %s", first.id, second.id)
 	}
 }
 
@@ -234,7 +242,7 @@ func TestResolver_OpenIndexMap(t *testing.T) {
 
 	resolved := secondaryIndexEntry(t, ctx, am, "by_age")
 	if resolved == nil {
-		t.Fatal("by_age IndexEntry not resolved")
+		t.Fatal("by_age entry not resolved")
 	}
 
 	idxMap, err := openIndexMap(ctx, state.vs, state.ns, resolved.mapRoot)

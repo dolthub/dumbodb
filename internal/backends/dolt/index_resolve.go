@@ -50,21 +50,22 @@ type resolvedIndexEntry struct {
 	id hash.Hash
 }
 
-// indexEntryMemo caches resolveIndexEntry results by entry id, a content
-// address, so an entry resolves the same from any branch or database. No
-// eviction; see design 6.1.
-var indexEntryMemo sync.Map // hash.Hash -> *resolvedIndexEntry
+// indexDefinitionMemo caches decoded definitions by the hash of their
+// encoding, so a definition decodes once from any branch or database. It is
+// keyed by definition alone because the map root changes on every indexed
+// write. No eviction; see design 6.1.
+var indexDefinitionMemo sync.Map // hash.Hash -> backends.IndexInfo
 
-func indexEntryID(def []byte, root hash.Hash) hash.Hash {
-	return hash.Of(append(append(make([]byte, 0, len(def)+hash.ByteLen), def...), root[:]...))
+func indexEntryID(defHash, root hash.Hash) hash.Hash {
+	return hash.Of(append(defHash[:], root[:]...))
 }
 
 // resolveIndexEntry decodes the definition def of the index whose map is at
-// root. The returned pointer must not be mutated.
+// root. The returned entry's info is shared and must not be mutated.
 func resolveIndexEntry(def []byte, root hash.Hash) (*resolvedIndexEntry, error) {
-	id := indexEntryID(def, root)
-	if v, ok := indexEntryMemo.Load(id); ok {
-		return v.(*resolvedIndexEntry), nil
+	defHash := hash.Of(def)
+	if v, ok := indexDefinitionMemo.Load(defHash); ok {
+		return &resolvedIndexEntry{info: v.(backends.IndexInfo), mapRoot: root, id: indexEntryID(defHash, root)}, nil
 	}
 	doc, err := bson.ToDocument(wirebson.RawDocument(def))
 	if err != nil {
@@ -74,8 +75,8 @@ func resolveIndexEntry(def []byte, root hash.Hash) (*resolvedIndexEntry, error) 
 	if err != nil {
 		return nil, fmt.Errorf("resolveIndexEntry: %w", err)
 	}
-	actual, _ := indexEntryMemo.LoadOrStore(id, &resolvedIndexEntry{info: info, mapRoot: root, id: id})
-	return actual.(*resolvedIndexEntry), nil
+	actual, _ := indexDefinitionMemo.LoadOrStore(defHash, info)
+	return &resolvedIndexEntry{info: actual.(backends.IndexInfo), mapRoot: root, id: indexEntryID(defHash, root)}, nil
 }
 
 // emptySecondaryIndexesCache memoizes the per-NodeStore empty secondary
