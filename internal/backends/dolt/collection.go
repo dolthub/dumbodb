@@ -2729,12 +2729,12 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 	if err != nil {
 		return nil, fmt.Errorf("updating secondary indexes: %w", err)
 	}
-	newIdxAM, err := buildIndexAM(ctx, state, updatedInfos, updatedIdxMaps)
+	newIndexes, err := buildSecondaryIndexes(ctx, state, updatedInfos, updatedIdxMaps)
 	if err != nil {
-		return nil, fmt.Errorf("building index AM: %w", err)
+		return nil, fmt.Errorf("building secondary indexes: %w", err)
 	}
 
-	dtblHash, err := state.dtblHashForCollection(ctx, c.name, newMap, newIdxAM, hash.Hash{})
+	dtblHash, err := state.dtblHashForCollection(ctx, c.name, newMap, newIndexes, hash.Hash{})
 	if err != nil {
 		return nil, err
 	}
@@ -2834,11 +2834,11 @@ func (c *collection) BulkLoadInitialSync(ctx context.Context, documents []*types
 	if err != nil {
 		return fmt.Errorf("merging initial-sync sorted run: %w", err)
 	}
-	indexAM, err := buildIndexAM(ctx, state, nil, nil)
+	indexes, err := buildSecondaryIndexes(ctx, state, nil, nil)
 	if err != nil {
 		return fmt.Errorf("building empty initial-sync index map: %w", err)
 	}
-	dtblHash, err := state.dtblHashForCollection(ctx, c.name, primary, indexAM, hash.Hash{})
+	dtblHash, err := state.dtblHashForCollection(ctx, c.name, primary, indexes, hash.Hash{})
 	if err != nil {
 		return err
 	}
@@ -3025,12 +3025,12 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 	if err != nil {
 		return nil, fmt.Errorf("updating secondary indexes: %w", err)
 	}
-	curIdxAM, err := buildIndexAM(ctx, state, updatedInfos, updatedIdxMaps)
+	curIndexes, err := buildSecondaryIndexes(ctx, state, updatedInfos, updatedIdxMaps)
 	if err != nil {
-		return nil, fmt.Errorf("building index AM: %w", err)
+		return nil, fmt.Errorf("building secondary indexes: %w", err)
 	}
 
-	dtblHash, err := state.dtblHashForCollection(ctx, c.name, newMap, curIdxAM, hash.Hash{})
+	dtblHash, err := state.dtblHashForCollection(ctx, c.name, newMap, curIndexes, hash.Hash{})
 	if err != nil {
 		return nil, err
 	}
@@ -3185,12 +3185,12 @@ func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllPa
 	if err != nil {
 		return nil, fmt.Errorf("updating secondary indexes: %w", err)
 	}
-	curIdxAM, err := buildIndexAM(ctx, state, idxInfos, updatedIdxMaps)
+	curIndexes, err := buildSecondaryIndexes(ctx, state, idxInfos, updatedIdxMaps)
 	if err != nil {
-		return nil, fmt.Errorf("building index AM: %w", err)
+		return nil, fmt.Errorf("building secondary indexes: %w", err)
 	}
 
-	dtblHash, err := state.dtblHashForCollection(ctx, c.name, newMap, curIdxAM, hash.Hash{})
+	dtblHash, err := state.dtblHashForCollection(ctx, c.name, newMap, curIndexes, hash.Hash{})
 	if err != nil {
 		return nil, err
 	}
@@ -3667,7 +3667,7 @@ func (c *collection) ListIndexes(ctx context.Context, params *backends.ListIndex
 			fmt.Errorf("collection %q does not exist", c.name))
 	}
 
-	idxAM, err := indexAMForDTBL(ctx, state.cs, state.ns, dtblHash)
+	secondary, err := secondaryIndexesForDTBL(ctx, state.cs, state.ns, dtblHash)
 	if err != nil {
 		return nil, err
 	}
@@ -3686,15 +3686,8 @@ func (c *collection) ListIndexes(ctx context.Context, params *backends.ListIndex
 		indexes[0].Collation = meta.Collation
 	}
 
-	if err := idxAM.IterAll(ctx, func(name string, entryHash hash.Hash) error {
-		if entryHash.IsEmpty() {
-			return nil
-		}
-		resolved, rerr := resolveIndexEntry(ctx, state.ns, entryHash)
-		if rerr != nil {
-			return rerr
-		}
-		indexes = append(indexes, resolved.info)
+	if err := secondary.IterAll(ctx, func(_ string, entry *resolvedIndexEntry) error {
+		indexes = append(indexes, entry.info)
 		return nil
 	}); err != nil {
 		return nil, err
@@ -3761,12 +3754,12 @@ func (c *collection) CreateIndexes(ctx context.Context, params *backends.CreateI
 		return cmp.Compare(a.Name, b.Name)
 	})
 
-	newIdxAM, err := buildIndexAM(ctx, state, newInfos, curMaps)
+	newIndexes, err := buildSecondaryIndexes(ctx, state, newInfos, curMaps)
 	if err != nil {
-		return nil, fmt.Errorf("building index AM: %w", err)
+		return nil, fmt.Errorf("building secondary indexes: %w", err)
 	}
 
-	if err := c.rewriteDTBLAfterIndexChange(ctx, state, newIdxAM, fmt.Sprintf("auto: create index %s on %s", indexNames(params.Indexes), c.name)); err != nil {
+	if err := c.rewriteDTBLAfterIndexChange(ctx, state, newIndexes, fmt.Sprintf("auto: create index %s on %s", indexNames(params.Indexes), c.name)); err != nil {
 		return nil, fmt.Errorf("rewriting DTBL for %q: %w", c.name, err)
 	}
 
@@ -3774,7 +3767,7 @@ func (c *collection) CreateIndexes(ctx context.Context, params *backends.CreateI
 }
 
 // rewriteDTBLAfterIndexChange rebuilds the collection's DTBL with the
-// given indexAM and updates the collections AM. Called after CreateIndexes
+// given secondary indexes and updates the collections AM. Called after CreateIndexes
 // / DropIndexes so an index-only change is durable.
 //
 // If the collection has no primary map yet (no inserts have happened) it
@@ -3789,7 +3782,7 @@ func indexNames(indexes []backends.IndexInfo) string {
 	return strings.Join(names, ", ")
 }
 
-func (c *collection) rewriteDTBLAfterIndexChange(ctx context.Context, state *dbState, indexAM prolly.AddressMap, commitMsg string) error {
+func (c *collection) rewriteDTBLAfterIndexChange(ctx context.Context, state *dbState, indexes secondaryIndexes, commitMsg string) error {
 	am, err := state.getOrInitBranchAM(ctx, c.db.rootish)
 	if err != nil {
 		return err
@@ -3812,7 +3805,7 @@ func (c *collection) rewriteDTBLAfterIndexChange(ctx context.Context, state *dbS
 		}
 	}
 
-	dtblHash, err := state.dtblHashForCollection(ctx, c.name, primary, indexAM, hash.Hash{})
+	dtblHash, err := state.dtblHashForCollection(ctx, c.name, primary, indexes, hash.Hash{})
 	if err != nil {
 		return err
 	}
@@ -4217,11 +4210,11 @@ func (c *collection) DropIndexes(ctx context.Context, params *backends.DropIndex
 		keptInfos = append(keptInfos, info)
 	}
 
-	newIdxAM, err := buildIndexAM(ctx, state, keptInfos, curMaps)
+	newIndexes, err := buildSecondaryIndexes(ctx, state, keptInfos, curMaps)
 	if err != nil {
-		return nil, fmt.Errorf("building index AM after drop: %w", err)
+		return nil, fmt.Errorf("building secondary indexes after drop: %w", err)
 	}
-	if err := c.rewriteDTBLAfterIndexChange(ctx, state, newIdxAM, fmt.Sprintf("auto: drop index %s on %s", strings.Join(params.Indexes, ", "), c.name)); err != nil {
+	if err := c.rewriteDTBLAfterIndexChange(ctx, state, newIndexes, fmt.Sprintf("auto: drop index %s on %s", strings.Join(params.Indexes, ", "), c.name)); err != nil {
 		return nil, fmt.Errorf("rewriting DTBL after drop for %q: %w", c.name, err)
 	}
 
@@ -4250,11 +4243,11 @@ func (c *collection) loadOrCreateMap(ctx context.Context, state *dbState) (proll
 		return prolly.Map{}, err
 	}
 
-	emptyAM, err := emptyIndexAM(state.ns)
+	noIndexes, err := emptySecondaryIndexes(ctx, state.ns)
 	if err != nil {
 		return prolly.Map{}, err
 	}
-	dtblHash, err := state.dtblHashForCollection(ctx, c.name, emptyMap, emptyAM, hash.Hash{})
+	dtblHash, err := state.dtblHashForCollection(ctx, c.name, emptyMap, noIndexes, hash.Hash{})
 	if err != nil {
 		return prolly.Map{}, err
 	}

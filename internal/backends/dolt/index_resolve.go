@@ -18,10 +18,9 @@ package dolt
 //
 // All functions in this file are pure with respect to dbState: they read
 // from the chunk store, NodeStore, and ValueStore handed to them, but
-// touch no in-memory caches keyed by collection name. The single
-// process-wide memo here (indexEntryMemo) is content-addressed on the
-// IndexEntry chunk hash, so it is safe to share across branches and
-// databases.
+// touch no in-memory caches keyed by collection name. The process-wide
+// entry memos here are content-addressed, so they are safe to share across
+// branches and databases.
 
 import (
 	"context"
@@ -29,6 +28,7 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/FerretDB/wire/wirebson"
 	"github.com/dolthub/dolt/go/gen/fb/serial"
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	"github.com/dolthub/dolt/go/store/hash"
@@ -38,6 +38,7 @@ import (
 	dolttypes "github.com/dolthub/dolt/go/store/types"
 
 	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/bson"
 	idxpkg "github.com/dolthub/dumbodb/internal/index"
 	"github.com/dolthub/dumbodb/internal/types"
 )
@@ -45,35 +46,61 @@ import (
 type resolvedIndexEntry struct {
 	info    backends.IndexInfo
 	mapRoot hash.Hash
+	// id identifies the definition and root.
+	id hash.Hash
 }
 
-// indexEntryMemo caches resolveIndexEntry results. Hashes are immutable
-// and content-addressed; the same hash from any branch or database
-// resolves to the same metadata. No eviction; see design 6.1.
+// indexEntryMemo caches resolveIndexEntry results by entry id, a content
+// address, so an entry resolves the same from any branch or database. No
+// eviction; see design 6.1.
 var indexEntryMemo sync.Map // hash.Hash -> *resolvedIndexEntry
 
-// emptyIndexAMCache memoizes the per-NodeStore empty AddressMap so writes
-// that have no secondary indexes do not re-allocate a fresh empty AM.
-// Replaces the per-dbState state.emptyIndexAM field; see design 6.4.
-var emptyIndexAMCache sync.Map // tree.NodeStore -> prolly.AddressMap
-
-func emptyIndexAM(ns tree.NodeStore) (prolly.AddressMap, error) {
-	if v, ok := emptyIndexAMCache.Load(ns); ok {
-		return v.(prolly.AddressMap), nil
-	}
-	am, err := prolly.NewEmptyAddressMap(ns)
-	if err != nil {
-		return prolly.AddressMap{}, fmt.Errorf("emptyIndexAM: %w", err)
-	}
-	actual, _ := emptyIndexAMCache.LoadOrStore(ns, am)
-	return actual.(prolly.AddressMap), nil
+func indexEntryID(def []byte, root hash.Hash) hash.Hash {
+	return hash.Of(append(append(make([]byte, 0, len(def)+hash.ByteLen), def...), root[:]...))
 }
 
-// forgetEmptyIndexAM evicts ns from emptyIndexAMCache. The cached map
-// references ns, so without eviction a closed database's chunk store,
-// journal buffers included, stays reachable for the life of the process.
-func forgetEmptyIndexAM(ns tree.NodeStore) {
-	emptyIndexAMCache.Delete(ns)
+// resolveIndexEntry decodes the definition def of the index whose map is at
+// root. The returned pointer must not be mutated.
+func resolveIndexEntry(def []byte, root hash.Hash) (*resolvedIndexEntry, error) {
+	id := indexEntryID(def, root)
+	if v, ok := indexEntryMemo.Load(id); ok {
+		return v.(*resolvedIndexEntry), nil
+	}
+	doc, err := bson.ToDocument(wirebson.RawDocument(def))
+	if err != nil {
+		return nil, fmt.Errorf("resolveIndexEntry: %w", err)
+	}
+	info, err := decodeIndexDefinition(doc)
+	if err != nil {
+		return nil, fmt.Errorf("resolveIndexEntry: %w", err)
+	}
+	actual, _ := indexEntryMemo.LoadOrStore(id, &resolvedIndexEntry{info: info, mapRoot: root, id: id})
+	return actual.(*resolvedIndexEntry), nil
+}
+
+// emptySecondaryIndexesCache memoizes the per-NodeStore empty secondary
+// indexes so writes to collections with none do not rebuild them. See
+// design 6.4.
+var emptySecondaryIndexesCache sync.Map // tree.NodeStore -> secondaryIndexes
+
+func emptySecondaryIndexes(ctx context.Context, ns tree.NodeStore) (secondaryIndexes, error) {
+	if v, ok := emptySecondaryIndexesCache.Load(ns); ok {
+		return v.(secondaryIndexes), nil
+	}
+	s, err := newSecondaryIndexes(ctx, ns)
+	if err != nil {
+		return secondaryIndexes{}, fmt.Errorf("emptySecondaryIndexes: %w", err)
+	}
+	actual, _ := emptySecondaryIndexesCache.LoadOrStore(ns, s)
+	return actual.(secondaryIndexes), nil
+}
+
+// forgetEmptySecondaryIndexes evicts ns from emptySecondaryIndexesCache. The
+// cached map references ns, so without eviction a closed database's chunk
+// store, journal buffers included, stays reachable for the life of the
+// process.
+func forgetEmptySecondaryIndexes(ns tree.NodeStore) {
+	emptySecondaryIndexesCache.Delete(ns)
 }
 
 // dtblHashForColl returns the DTBL hash for collName under rv. Returns
@@ -93,107 +120,72 @@ func dtblHashForColl(ctx context.Context, ns tree.NodeStore, rv doltdb.RootValue
 	return h, nil
 }
 
-// indexAMForDTBL returns the secondary_indexes AddressMap inlined in the
-// DTBL chunk at dtblHash. Returns the shared empty AM if dtblHash is the
-// zero hash, the chunk is empty, or the DTBL inlines an empty
-// secondary_indexes field.
-func indexAMForDTBL(ctx context.Context, cs *nbs.GenerationalNBS, ns tree.NodeStore, dtblHash hash.Hash) (prolly.AddressMap, error) {
+// secondaryIndexesForDTBL returns the secondary indexes inlined in the DTBL
+// chunk at dtblHash, the shared empty ones when dtblHash is the zero hash,
+// the chunk is empty, or the DTBL inlines no secondary_indexes field.
+func secondaryIndexesForDTBL(ctx context.Context, cs *nbs.GenerationalNBS, ns tree.NodeStore, dtblHash hash.Hash) (secondaryIndexes, error) {
 	if dtblHash.IsEmpty() {
-		return emptyIndexAM(ns)
+		return emptySecondaryIndexes(ctx, ns)
 	}
 	data, err := readTableChunk(ctx, cs, dtblHash)
 	if err != nil {
-		return prolly.AddressMap{}, fmt.Errorf("indexAMForDTBL: reading DTBL chunk: %w", err)
+		return secondaryIndexes{}, fmt.Errorf("secondaryIndexesForDTBL: reading DTBL chunk: %w", err)
 	}
 	if len(data) == 0 {
-		return emptyIndexAM(ns)
+		return emptySecondaryIndexes(ctx, ns)
 	}
 	if serial.GetFileID(data) != serial.TableFileID {
-		return prolly.AddressMap{}, fmt.Errorf("indexAMForDTBL: unexpected file ID %q (want DTBL)", serial.GetFileID(data))
+		return secondaryIndexes{}, fmt.Errorf("secondaryIndexesForDTBL: unexpected file ID %q (want DTBL)", serial.GetFileID(data))
 	}
 	tbl, err := serial.TryGetRootAsTable(data, serial.MessagePrefixSz)
 	if err != nil {
-		return prolly.AddressMap{}, fmt.Errorf("indexAMForDTBL: parsing DTBL: %w", err)
+		return secondaryIndexes{}, fmt.Errorf("secondaryIndexesForDTBL: parsing DTBL: %w", err)
 	}
 	idxBytes := tbl.SecondaryIndexesBytes()
 	if len(idxBytes) == 0 {
-		return emptyIndexAM(ns)
+		return emptySecondaryIndexes(ctx, ns)
 	}
-	amNode, _, err := tree.NodeFromBytes(idxBytes)
+	s, err := secondaryIndexesFromBytes(ns, idxBytes)
 	if err != nil {
-		return prolly.AddressMap{}, fmt.Errorf("indexAMForDTBL: parsing AM node: %w", err)
+		return secondaryIndexes{}, fmt.Errorf("secondaryIndexesForDTBL: %w", err)
 	}
-	am, err := prolly.NewAddressMap(amNode, ns)
-	if err != nil {
-		return prolly.AddressMap{}, fmt.Errorf("indexAMForDTBL: building AM: %w", err)
-	}
-	return am, nil
+	return s, nil
 }
 
-// resolveIndexEntry decodes the IndexEntry chunk at entryHash via the
-// process-wide memo. The returned pointer must not be mutated. See
-// design 6.5 for why memoizing is safe.
-func resolveIndexEntry(ctx context.Context, ns tree.NodeStore, entryHash hash.Hash) (*resolvedIndexEntry, error) {
-	if entryHash.IsEmpty() {
-		return nil, fmt.Errorf("resolveIndexEntry: empty hash")
-	}
-	if v, ok := indexEntryMemo.Load(entryHash); ok {
-		return v.(*resolvedIndexEntry), nil
-	}
-	entry, err := readIndexEntryChunk(ctx, ns, entryHash)
-	if err != nil {
-		return nil, fmt.Errorf("resolveIndexEntry: %w", err)
-	}
-	info, mapRoot, err := entryToIndexInfo(entry)
-	if err != nil {
-		return nil, fmt.Errorf("resolveIndexEntry: decode: %w", err)
-	}
-	resolved := &resolvedIndexEntry{info: info, mapRoot: mapRoot}
-	actual, _ := indexEntryMemo.LoadOrStore(entryHash, resolved)
-	return actual.(*resolvedIndexEntry), nil
-}
-
-func indexAMFromAM(ctx context.Context, cs *nbs.GenerationalNBS, ns tree.NodeStore, collAM prolly.AddressMap, collName string) (prolly.AddressMap, error) {
+func secondaryIndexesFromAM(ctx context.Context, cs *nbs.GenerationalNBS, ns tree.NodeStore, collAM prolly.AddressMap, collName string) (secondaryIndexes, error) {
 	dtblHash, err := collAM.Get(ctx, collName)
 	if err != nil {
-		return prolly.AddressMap{}, err
+		return secondaryIndexes{}, err
 	}
-	return indexAMForDTBL(ctx, cs, ns, dtblHash)
+	return secondaryIndexesForDTBL(ctx, cs, ns, dtblHash)
 }
 
-// resolveCollIndexAM resolves the (session, branch)-routed AddressMap,
-// looks up collName's DTBL, and returns the secondary_indexes
-// AddressMap. Returns the cached empty AM when the collection does not
-// exist or has no secondary indexes; callers that need to distinguish
-// those cases can branch on (am.Count() == 0).
+// resolveCollSecondaryIndexes resolves the (session, branch)-routed
+// AddressMap, looks up collName's DTBL, and returns its secondary indexes:
+// the cached empty ones when the collection does not exist or has none;
+// callers that need to distinguish those cases can branch on Count() == 0.
 //
 // The caller must hold at least state.mu.RLock(). Read-path call sites
 // (ListIndexes, tryIndexLookup, tryIndexedCount, DistinctScan, Explain)
 // take RLock around the call; write-path call sites (InsertAll,
 // UpdateAll, DeleteAll, CreateIndexes, DropIndexes) already hold the
 // write lock.
-func resolveCollIndexAM(ctx context.Context, c *collection, state *dbState) (prolly.AddressMap, error) {
+func resolveCollSecondaryIndexes(ctx context.Context, c *collection, state *dbState) (secondaryIndexes, error) {
 	collAM, err := c.db.resolveAM(ctx, state)
 	if err != nil {
-		return prolly.AddressMap{}, err
+		return secondaryIndexes{}, err
 	}
-	dtblHash, err := collAM.Get(ctx, c.name)
-	if err != nil {
-		return prolly.AddressMap{}, err
-	}
-	return indexAMForDTBL(ctx, state.cs, state.ns, dtblHash)
+	return secondaryIndexesFromAM(ctx, state.cs, state.ns, collAM, c.name)
 }
 
-// resolveIndexes walks the index AM and resolves every entry through
-// the memoized decode path. Returns parallel slices: the IndexInfo
-// for each index, and the prolly.Map handle. Both slices are in AM-walk
-// order (sorted by index name).
+// resolveIndexes returns parallel slices, sorted by index name: the
+// IndexInfo of each secondary index and its prolly.Map.
 func resolveIndexes(ctx context.Context, c *collection, state *dbState) ([]backends.IndexInfo, []prolly.Map, error) {
-	idxAM, err := resolveCollIndexAM(ctx, c, state)
+	indexes, err := resolveCollSecondaryIndexes(ctx, c, state)
 	if err != nil {
 		return nil, nil, err
 	}
-	cnt, err := idxAM.Count()
+	cnt, err := indexes.Count()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -202,19 +194,12 @@ func resolveIndexes(ctx context.Context, c *collection, state *dbState) ([]backe
 	}
 	infos := make([]backends.IndexInfo, 0, cnt)
 	maps := make([]prolly.Map, 0, cnt)
-	if err := idxAM.IterAll(ctx, func(_ string, entryHash hash.Hash) error {
-		if entryHash.IsEmpty() {
-			return nil
+	if err := indexes.IterAll(ctx, func(_ string, entry *resolvedIndexEntry) error {
+		m, err := openIndexMap(ctx, state.vs, state.ns, entry.mapRoot)
+		if err != nil {
+			return err
 		}
-		resolved, rerr := resolveIndexEntry(ctx, state.ns, entryHash)
-		if rerr != nil {
-			return rerr
-		}
-		m, merr := openIndexMap(ctx, state.vs, state.ns, resolved.mapRoot)
-		if merr != nil {
-			return merr
-		}
-		infos = append(infos, resolved.info)
+		infos = append(infos, entry.info)
 		maps = append(maps, m)
 		return nil
 	}); err != nil {
@@ -453,94 +438,71 @@ func applyDeletesToIndexes(ctx context.Context, infos []backends.IndexInfo, maps
 	return out, nil
 }
 
-// buildIndexAM is the pure replacement for persistIndexes: given a set of
-// (IndexInfo, prolly.Map) pairs it writes each map's root to the value
-// store and a per-index IndexEntry chunk, then returns a new
-// AddressMap from index name to IndexEntry hash. No dbState fields are
-// touched. Callers pass the result to dtblHashForCollection.
-func buildIndexAM(ctx context.Context, state *dbState, infos []backends.IndexInfo, maps map[string]prolly.Map) (prolly.AddressMap, error) {
+// buildSecondaryIndexes writes each index's map root to the value store and
+// returns the secondary indexes naming them. No dbState fields are touched.
+// Callers pass the result to dtblHashForCollection.
+func buildSecondaryIndexes(ctx context.Context, state *dbState, infos []backends.IndexInfo, maps map[string]prolly.Map) (secondaryIndexes, error) {
 	if len(infos) == 0 {
-		return emptyIndexAM(state.ns)
+		return emptySecondaryIndexes(ctx, state.ns)
 	}
-	am, err := prolly.NewEmptyAddressMap(state.ns)
-	if err != nil {
-		return prolly.AddressMap{}, fmt.Errorf("buildIndexAM: %w", err)
-	}
-	edt := am.Editor()
-	for _, idx := range infos {
+	roots := make([]hash.Hash, len(infos))
+	for i, idx := range infos {
 		m, ok := maps[idx.Name]
 		if !ok {
-			return prolly.AddressMap{}, fmt.Errorf("buildIndexAM: index %q has no map", idx.Name)
+			return secondaryIndexes{}, fmt.Errorf("buildSecondaryIndexes: index %q has no map", idx.Name)
 		}
 		ref, err := state.vs.WriteValue(ctx, tree.ValueFromNode(m.Node()))
 		if err != nil {
-			return prolly.AddressMap{}, fmt.Errorf("buildIndexAM: writing index map root for %q: %w", idx.Name, err)
+			return secondaryIndexes{}, fmt.Errorf("buildSecondaryIndexes: writing index map root for %q: %w", idx.Name, err)
 		}
-		mapRoot := ref.TargetHash()
-		entry, err := indexInfoToEntry(idx, mapRoot)
-		if err != nil {
-			return prolly.AddressMap{}, fmt.Errorf("buildIndexAM: encoding entry for %q: %w", idx.Name, err)
-		}
-		entryHash, err := writeIndexEntryChunk(ctx, state.ns, entry)
-		if err != nil {
-			return prolly.AddressMap{}, fmt.Errorf("buildIndexAM: writing entry chunk for %q: %w", idx.Name, err)
-		}
-		if err := edt.Add(ctx, idx.Name, entryHash); err != nil {
-			return prolly.AddressMap{}, fmt.Errorf("buildIndexAM: adding %q to AM: %w", idx.Name, err)
-		}
+		roots[i] = ref.TargetHash()
 	}
-	newAM, err := edt.Flush(ctx)
+	s, err := secondaryIndexesFromRoots(ctx, state.ns, infos, roots)
 	if err != nil {
-		return prolly.AddressMap{}, fmt.Errorf("buildIndexAM: flush: %w", err)
+		return secondaryIndexes{}, fmt.Errorf("buildSecondaryIndexes: %w", err)
 	}
-	return newAM, nil
+	return s, nil
 }
 
-// computeIndexChanges compares the secondary-index AMs of two DTBL
-// hashes and returns the per-kind index lifecycle: added, modified, and
-// removed. An index is:
+// computeIndexChanges compares the secondary indexes of two DTBL hashes and
+// returns the per-kind index lifecycle: added, modified, and removed. An
+// index is:
 //   - added    when only the b side has it,
 //   - removed  when only the a side has it,
-//   - modified when both sides carry the same name but different
-//     IndexEntry chunk hashes (drop+recreate with a different
-//     spec).
+//   - modified when both sides carry the same name but different entries
+//     (drop+recreate with a different spec).
 //
 // Either hash may be the zero hash (collection absent on that side); in
 // that case the corresponding side's index list is empty.
 //
-// All three returned slices are sorted by index name. The IndexInfo
-// values are decoded via resolveIndexEntry (memoized). Each IndexChange
-// in modified carries both the pre-state (From) and post-state (To)
+// All three returned slices are sorted by index name. Each IndexChange in
+// modified carries both the pre-state (From) and post-state (To)
 // definitions; the index name is From.Name == To.Name.
 //
-// This walks both index address maps in full rather than using a structural-
-// sharing diff. That is intentional: the cost is O(number of indexes on the
-// collection), not O(number of documents), and prolly.AddressMap exposes no
-// public diff primitive. Only the document-level diffs (forEachCollectionChange
-// in collection_diff.go) scale with collection size and use prolly.DiffMaps.
+// This walks both sides in full rather than diffing them: the cost is
+// O(number of indexes on the collection), not O(number of documents). Only
+// the document-level diffs (forEachCollectionChange in collection_diff.go)
+// scale with collection size and use prolly.DiffMaps.
 func computeIndexChanges(ctx context.Context, state *dbState, aDTBL, bDTBL hash.Hash) (added []backends.IndexInfo, modified []backends.IndexChange, removed []backends.IndexInfo, err error) {
-	aAM, err := indexAMForDTBL(ctx, state.cs, state.ns, aDTBL)
+	entriesOf := func(dtbl hash.Hash) (map[string]*resolvedIndexEntry, error) {
+		indexes, err := secondaryIndexesForDTBL(ctx, state.cs, state.ns, dtbl)
+		if err != nil {
+			return nil, err
+		}
+		entries := make(map[string]*resolvedIndexEntry)
+		err = indexes.IterAll(ctx, func(name string, entry *resolvedIndexEntry) error {
+			entries[name] = entry
+			return nil
+		})
+		return entries, err
+	}
+	aEntries, err := entriesOf(aDTBL)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("computeIndexChanges: a side: %w", err)
 	}
-	bAM, err := indexAMForDTBL(ctx, state.cs, state.ns, bDTBL)
+	bEntries, err := entriesOf(bDTBL)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("computeIndexChanges: b side: %w", err)
-	}
-
-	aEntries := make(map[string]hash.Hash)
-	if err = aAM.IterAll(ctx, func(name string, h hash.Hash) error {
-		aEntries[name] = h
-		return nil
-	}); err != nil {
-		return nil, nil, nil, fmt.Errorf("computeIndexChanges: walking a side: %w", err)
-	}
-	bEntries := make(map[string]hash.Hash)
-	if err = bAM.IterAll(ctx, func(name string, h hash.Hash) error {
-		bEntries[name] = h
-		return nil
-	}); err != nil {
-		return nil, nil, nil, fmt.Errorf("computeIndexChanges: walking b side: %w", err)
 	}
 
 	allNames := make(map[string]struct{}, len(aEntries)+len(bEntries))
@@ -557,31 +519,15 @@ func computeIndexChanges(ctx context.Context, state *dbState, aDTBL, bDTBL hash.
 	sort.Strings(sorted)
 
 	for _, name := range sorted {
-		aH, inA := aEntries[name]
-		bH, inB := bEntries[name]
+		a, inA := aEntries[name]
+		b, inB := bEntries[name]
 		switch {
 		case !inA && inB:
-			info, rerr := resolveIndexEntry(ctx, state.ns, bH)
-			if rerr != nil {
-				return nil, nil, nil, fmt.Errorf("computeIndexChanges: resolving b entry for %q: %w", name, rerr)
-			}
-			added = append(added, info.info)
+			added = append(added, b.info)
 		case inA && !inB:
-			info, rerr := resolveIndexEntry(ctx, state.ns, aH)
-			if rerr != nil {
-				return nil, nil, nil, fmt.Errorf("computeIndexChanges: resolving a entry for %q: %w", name, rerr)
-			}
-			removed = append(removed, info.info)
-		case aH != bH:
-			aInfo, rerr := resolveIndexEntry(ctx, state.ns, aH)
-			if rerr != nil {
-				return nil, nil, nil, fmt.Errorf("computeIndexChanges: resolving a entry for %q: %w", name, rerr)
-			}
-			bInfo, rerr := resolveIndexEntry(ctx, state.ns, bH)
-			if rerr != nil {
-				return nil, nil, nil, fmt.Errorf("computeIndexChanges: resolving b entry for %q: %w", name, rerr)
-			}
-			modified = append(modified, backends.IndexChange{From: aInfo.info, To: bInfo.info})
+			removed = append(removed, a.info)
+		case a.id != b.id:
+			modified = append(modified, backends.IndexChange{From: a.info, To: b.info})
 		}
 	}
 	return added, modified, removed, nil

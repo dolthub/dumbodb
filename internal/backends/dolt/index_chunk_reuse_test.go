@@ -57,22 +57,14 @@ func countSharedChunks(a, b map[hash.Hash]struct{}) int {
 func indexMapOnBranch(t *testing.T, ctx context.Context, b *Backend, dbName, branch, collName, idxName string) prolly.Map {
 	t.Helper()
 
-	am := indexAMOnDisk(t, ctx, b, dbName, branch, collName)
-	entryHash, err := am.Get(ctx, idxName)
-	if err != nil {
-		t.Fatalf("index AM Get(%q): %v", idxName, err)
-	}
-	if entryHash.IsEmpty() {
+	resolved := secondaryIndexEntry(t, ctx, secondaryIndexesOnDisk(t, ctx, b, dbName, branch, collName), idxName)
+	if resolved == nil {
 		t.Fatalf("index %q not present on branch %q", idxName, branch)
 	}
 
 	state, err := b.getOrOpenDB(ctx, dbName, false)
 	if err != nil || state == nil {
 		t.Fatalf("getOrOpenDB(%q): %v", dbName, err)
-	}
-	resolved, err := resolveIndexEntry(ctx, state.ns, entryHash)
-	if err != nil {
-		t.Fatalf("resolveIndexEntry: %v", err)
 	}
 	m, err := openIndexMap(ctx, state.vs, state.ns, resolved.mapRoot)
 	if err != nil {

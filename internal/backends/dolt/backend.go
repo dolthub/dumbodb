@@ -551,7 +551,7 @@ func (b *Backend) Close() {
 			b.l.Error("closing database", "db", name, "err", err)
 		}
 		db.mu.Unlock()
-		forgetEmptyIndexAM(db.ns)
+		forgetEmptySecondaryIndexes(db.ns)
 	}
 
 	b.dbs = make(map[string]*dbState)
@@ -725,7 +725,7 @@ func (b *Backend) dropDatabaseLocked(params *backends.DropDatabaseParams) error 
 		db.mu.Lock()
 		_ = db.doltDB.Close()
 		db.mu.Unlock()
-		forgetEmptyIndexAM(db.ns)
+		forgetEmptySecondaryIndexes(db.ns)
 		delete(b.dbs, params.Name)
 	}
 	b.provider.forgetDatabase(params.Name)
@@ -1093,8 +1093,8 @@ func (b *Backend) getOrOpenDBLocked(ctx context.Context, dbName string, create b
 		branchWS: make(map[string]*branchWS),
 	}
 
-	// Write the shared DSCH chunk once; the empty secondary-index AM is
-	// memoized per-NodeStore in emptyIndexAMCache (see index_resolve.go).
+	// Write the shared DSCH chunk once; the empty secondary indexes are
+	// memoized per-NodeStore in emptySecondaryIndexesCache (see index_resolve.go).
 	schemaMsg := buildCollectionTableSchema()
 	schemaRef, err := vs.WriteValue(ctx, dolttypes.SerialMessage(schemaMsg))
 	if err != nil {
