@@ -179,19 +179,15 @@ func buildCollectionTableSchema() serial.Message {
 // buildDoltTableFlatbuffer builds a DTBL (Table) flatbuffer that wraps a prolly.Map
 // as a proper dolt SQL table. The schema field stores a 20-byte hash referencing
 // the separately-written DSCH chunk; the primary_index field inlines the prolly.Map
-// root node bytes (TUPM). The secondary_indexes field inlines the given AddressMap
-// (typically state.collIndexAMs[collName] or state.emptyIndexAM if there are
-// no secondary indexes).
+// root node bytes (TUPM). The secondary_indexes field inlines idxBytes, the
+// collection's secondaryIndexes.tableBytes.
 // artifactsHash is the 20-byte noms hash of the ArtifactMap node in the value store;
 // pass hash.Hash{} (all zeros) when there are no conflict artifacts.
-func buildDoltTableFlatbuffer(m prolly.Map, schemaHash hash.Hash, indexAM prolly.AddressMap, artifactsHash hash.Hash) serial.Message {
+func buildDoltTableFlatbuffer(m prolly.Map, schemaHash hash.Hash, idxBytes []byte, artifactsHash hash.Hash) serial.Message {
 	b := fb.NewBuilder(1024)
 
 	// Primary index: inline TUPM bytes (prolly.Map root node).
 	rowBytes := []byte(tree.ValueFromNode(m.Node()).(dolttypes.SerialMessage))
-
-	// Secondary indexes: per-collection ADRM (name -> IndexEntry chunk hash).
-	idxBytes := []byte(tree.ValueFromNode(indexAM.Node()).(dolttypes.SerialMessage))
 
 	// Conflict struct fields (legacy format) and violations are always zero hashes.
 	var emptyHashBytes [hash.ByteLen]byte
@@ -475,16 +471,14 @@ func buildValue(ctx context.Context, ns tree.NodeStore, docBytes []byte, prior h
 }
 
 // dtblHashForCollection builds a DTBL from a prolly.Map and a
-// secondary-index AddressMap for the named collection, writes it to the
-// value store, and returns its chunk hash. Callers compute the indexAM
-// from the resolver chain (see index_resolve.go) rather than from a
-// shared dbState cache, so writes on one branch never inline another
-// branch's index AM.
+// collection's secondary indexes, writes it to the value store, and returns
+// its chunk hash. Callers compute indexes from the resolver chain (see
+// index_resolve.go) rather than from a shared dbState cache, so writes on one
+// branch never inline another branch's indexes.
 //
-// Pass the empty AM (emptyIndexAM helper, or any zero-element AM) when
-// the collection has no secondary indexes.
-func (state *dbState) dtblHashForCollection(ctx context.Context, collName string, m prolly.Map, indexAM prolly.AddressMap, artifactsHash hash.Hash) (hash.Hash, error) {
-	dtblMsg := buildDoltTableFlatbuffer(m, state.collSchemaHash, indexAM, artifactsHash)
+// Pass emptySecondaryIndexes when the collection has no secondary indexes.
+func (state *dbState) dtblHashForCollection(ctx context.Context, collName string, m prolly.Map, indexes secondaryIndexes, artifactsHash hash.Hash) (hash.Hash, error) {
+	dtblMsg := buildDoltTableFlatbuffer(m, state.collSchemaHash, indexes.tableBytes(), artifactsHash)
 	ref, err := state.vs.WriteValue(ctx, dolttypes.SerialMessage(dtblMsg))
 	if err != nil {
 		return hash.Hash{}, fmt.Errorf("writing DTBL: %w", err)

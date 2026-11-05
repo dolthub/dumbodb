@@ -134,40 +134,23 @@ func TestMemo_DistinctEntriesForDistinctDefinitions(t *testing.T) {
 	createIndex(t, ctx, featItems, "by_x", "y")
 	commitBranch(t, b, "testdb", "feat", "feat: by_x on y")
 
-	// Read each branch's persisted IndexEntry chunk hash directly.
-	mainAM := indexAMOnDisk(t, ctx, b, "testdb", "main", collName)
-	mainEntry, err := mainAM.Get(ctx, "by_x")
-	if err != nil {
-		t.Fatalf("main AM.Get(by_x): %v", err)
+	// Read each branch's persisted entry directly; reading resolves it
+	// through the memo.
+	mainEntry := secondaryIndexEntry(t, ctx, secondaryIndexesOnDisk(t, ctx, b, "testdb", "main", collName), "by_x")
+	featEntry := secondaryIndexEntry(t, ctx, secondaryIndexesOnDisk(t, ctx, b, "testdb", "feat", collName), "by_x")
+	if mainEntry == nil || featEntry == nil {
+		t.Fatalf("by_x missing: main %v, feat %v", mainEntry, featEntry)
 	}
-	featAM := indexAMOnDisk(t, ctx, b, "testdb", "feat", collName)
-	featEntry, err := featAM.Get(ctx, "by_x")
-	if err != nil {
-		t.Fatalf("feat AM.Get(by_x): %v", err)
-	}
-
-	if mainEntry == featEntry {
-		t.Fatalf("expected different IndexEntry hashes for by_x{x} vs by_x{y}; got equal %s", mainEntry.String())
-	}
-
-	// Resolve both. Both should be present in the memo with distinct keys.
-	state, err := b.getOrOpenDB(ctx, "testdb", false)
-	if err != nil {
-		t.Fatalf("getOrOpenDB: %v", err)
-	}
-	if _, err := resolveIndexEntry(ctx, state.ns, mainEntry); err != nil {
-		t.Fatalf("resolveIndexEntry main: %v", err)
-	}
-	if _, err := resolveIndexEntry(ctx, state.ns, featEntry); err != nil {
-		t.Fatalf("resolveIndexEntry feat: %v", err)
+	if mainEntry.id == featEntry.id {
+		t.Fatalf("expected different entry ids for by_x{x} vs by_x{y}; got equal %s", mainEntry.id.String())
 	}
 
 	keys := indexEntryMemoKeys()
-	if _, ok := keys[mainEntry]; !ok {
-		t.Errorf("memo missing main's by_x entry %s", mainEntry.String())
+	if _, ok := keys[mainEntry.id]; !ok {
+		t.Errorf("memo missing main's by_x entry %s", mainEntry.id.String())
 	}
-	if _, ok := keys[featEntry]; !ok {
-		t.Errorf("memo missing feat's by_x entry %s", featEntry.String())
+	if _, ok := keys[featEntry.id]; !ok {
+		t.Errorf("memo missing feat's by_x entry %s", featEntry.id.String())
 	}
 }
 

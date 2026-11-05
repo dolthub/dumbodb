@@ -25,12 +25,11 @@ import (
 	"testing"
 
 	doltref "github.com/dolthub/dolt/go/libraries/doltcore/ref"
-	"github.com/dolthub/dolt/go/store/hash"
 )
 
 // TestResolver_RoundTripIndexAMFromDTBL exercises dtblHashForColl ->
-// indexAMForDTBL and asserts that the returned AddressMap names the
-// indexes we wrote.
+// secondaryIndexesForDTBL and asserts that the result names the indexes we
+// wrote.
 func TestResolver_RoundTripIndexAMFromDTBL(t *testing.T) {
 	t.Parallel()
 
@@ -59,19 +58,19 @@ func TestResolver_RoundTripIndexAMFromDTBL(t *testing.T) {
 		t.Fatal("dtblHashForColl returned empty hash for an existing collection")
 	}
 
-	am, err := indexAMForDTBL(ctx, state.cs, state.ns, dtblHash)
+	am, err := secondaryIndexesForDTBL(ctx, state.cs, state.ns, dtblHash)
 	if err != nil {
-		t.Fatalf("indexAMForDTBL: %v", err)
+		t.Fatalf("secondaryIndexesForDTBL: %v", err)
 	}
-	names := indexNamesInAM(t, ctx, am)
+	names := secondaryIndexNames(t, ctx, am)
 	want := []string{"by_age"}
 	if !reflect.DeepEqual(names, want) {
-		t.Errorf("indexAMForDTBL names = %v, want %v", names, want)
+		t.Errorf("secondaryIndexesForDTBL names = %v, want %v", names, want)
 	}
 }
 
-// TestResolver_EmptyCollection returns the empty AM for a collection that
-// has been created with no secondary indexes.
+// TestResolver_EmptyCollection returns no secondary indexes for a collection
+// that has been created with none.
 func TestResolver_EmptyCollection(t *testing.T) {
 	t.Parallel()
 
@@ -95,16 +94,16 @@ func TestResolver_EmptyCollection(t *testing.T) {
 		t.Fatalf("dtblHashForColl: %v", err)
 	}
 
-	am, err := indexAMForDTBL(ctx, state.cs, state.ns, dtblHash)
+	am, err := secondaryIndexesForDTBL(ctx, state.cs, state.ns, dtblHash)
 	if err != nil {
-		t.Fatalf("indexAMForDTBL: %v", err)
+		t.Fatalf("secondaryIndexesForDTBL: %v", err)
 	}
 	cnt, err := am.Count()
 	if err != nil {
 		t.Fatalf("am.Count: %v", err)
 	}
 	if cnt != 0 {
-		t.Errorf("expected empty index AM, got %d entries", cnt)
+		t.Errorf("expected no secondary indexes, got %d", cnt)
 	}
 }
 
@@ -164,30 +163,26 @@ func TestResolver_IndexEntryMemoHitsAfterMiss(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dtblHashForColl: %v", err)
 	}
-	am, err := indexAMForDTBL(ctx, state.cs, state.ns, dtblHash)
+	am, err := secondaryIndexesForDTBL(ctx, state.cs, state.ns, dtblHash)
 	if err != nil {
-		t.Fatalf("indexAMForDTBL: %v", err)
+		t.Fatalf("secondaryIndexesForDTBL: %v", err)
 	}
 
-	var entryHash hash.Hash
-	if err := am.IterAll(ctx, func(name string, h hash.Hash) error {
-		if name == "by_age" {
-			entryHash = h
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("am.IterAll: %v", err)
+	stored := secondaryIndexEntry(t, ctx, am, "by_age")
+	if stored == nil {
+		t.Fatal("by_age entry not found")
 	}
-	if entryHash.IsEmpty() {
-		t.Fatal("by_age IndexEntry not found in AM")
+	def, err := encodeIndexDefinition(stored.info)
+	if err != nil {
+		t.Fatalf("encodeIndexDefinition: %v", err)
 	}
 
-	indexEntryMemo.Delete(entryHash)
-	if _, ok := indexEntryMemo.Load(entryHash); ok {
+	indexEntryMemo.Delete(stored.id)
+	if _, ok := indexEntryMemo.Load(stored.id); ok {
 		t.Fatal("indexEntryMemo unexpectedly contained entry after Delete")
 	}
 
-	first, err := resolveIndexEntry(ctx, state.ns, entryHash)
+	first, err := resolveIndexEntry(def, stored.mapRoot)
 	if err != nil {
 		t.Fatalf("first resolveIndexEntry: %v", err)
 	}
@@ -198,7 +193,7 @@ func TestResolver_IndexEntryMemoHitsAfterMiss(t *testing.T) {
 		t.Error("first resolve: mapRoot is empty")
 	}
 
-	second, err := resolveIndexEntry(ctx, state.ns, entryHash)
+	second, err := resolveIndexEntry(def, stored.mapRoot)
 	if err != nil {
 		t.Fatalf("second resolveIndexEntry: %v", err)
 	}
@@ -232,25 +227,12 @@ func TestResolver_OpenIndexMap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dtblHashForColl: %v", err)
 	}
-	am, err := indexAMForDTBL(ctx, state.cs, state.ns, dtblHash)
+	am, err := secondaryIndexesForDTBL(ctx, state.cs, state.ns, dtblHash)
 	if err != nil {
-		t.Fatalf("indexAMForDTBL: %v", err)
+		t.Fatalf("secondaryIndexesForDTBL: %v", err)
 	}
 
-	var resolved *resolvedIndexEntry
-	if err := am.IterAll(ctx, func(name string, h hash.Hash) error {
-		if name != "by_age" {
-			return nil
-		}
-		r, rerr := resolveIndexEntry(ctx, state.ns, h)
-		if rerr != nil {
-			return rerr
-		}
-		resolved = r
-		return nil
-	}); err != nil {
-		t.Fatalf("am.IterAll: %v", err)
-	}
+	resolved := secondaryIndexEntry(t, ctx, am, "by_age")
 	if resolved == nil {
 		t.Fatal("by_age IndexEntry not resolved")
 	}
@@ -269,7 +251,7 @@ func TestResolver_OpenIndexMap(t *testing.T) {
 }
 
 // TestResolver_EmptyAMSharedAcrossCallsForSameNodeStore confirms the
-// emptyIndexAMCache memoizes by NodeStore (design 6.4).
+// emptySecondaryIndexesCache memoizes by NodeStore (design 6.4).
 func TestResolver_EmptyAMSharedAcrossCallsForSameNodeStore(t *testing.T) {
 	t.Parallel()
 
@@ -283,19 +265,19 @@ func TestResolver_EmptyAMSharedAcrossCallsForSameNodeStore(t *testing.T) {
 		t.Fatalf("getOrOpenDB: %v", err)
 	}
 
-	a1, err := emptyIndexAM(state.ns)
+	a1, err := emptySecondaryIndexes(ctx, state.ns)
 	if err != nil {
-		t.Fatalf("emptyIndexAM #1: %v", err)
+		t.Fatalf("emptySecondaryIndexes #1: %v", err)
 	}
-	a2, err := emptyIndexAM(state.ns)
+	a2, err := emptySecondaryIndexes(ctx, state.ns)
 	if err != nil {
-		t.Fatalf("emptyIndexAM #2: %v", err)
+		t.Fatalf("emptySecondaryIndexes #2: %v", err)
 	}
 
-	// AddressMap is a value type; we identify identity via the underlying
+	// The map is a value type; we identify identity via the underlying
 	// node hash, which is stable across the value copy.
-	if a1.HashOf() != a2.HashOf() {
-		t.Errorf("emptyIndexAM produced different AMs across calls: %s vs %s",
-			a1.HashOf().String(), a2.HashOf().String())
+	if a1.m.HashOf() != a2.m.HashOf() {
+		t.Errorf("emptySecondaryIndexes produced different maps across calls: %s vs %s",
+			a1.m.HashOf().String(), a2.m.HashOf().String())
 	}
 }
