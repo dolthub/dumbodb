@@ -34,7 +34,7 @@ import (
 
 func TestMaterializeCollectionLoadsAndIndexesMain(t *testing.T) {
 	ctx := context.Background()
-	backend, err := dolt.NewBackend(t.TempDir(), slog.Default(), false, false, 0, 0)
+	backend, err := dolt.NewBackend(t.TempDir(), slog.Default(), false, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -293,7 +293,7 @@ func TestRecoverPublicationCompletesReadyApply(t *testing.T) {
 func newRecoveryRuntime(t *testing.T) (*Runtime, backends.Backend, *control.Store) {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	backend, err := dolt.NewBackend(t.TempDir(), logger, false, false, 0, 0)
+	backend, err := dolt.NewBackend(t.TempDir(), logger, false, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

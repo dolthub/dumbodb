@@ -27,7 +27,7 @@ import (
 func TestResetInitialSyncDataResetsMainToInitialCommit(t *testing.T) {
 	ctx := context.Background()
 	directory := t.TempDir()
-	backend, err := NewBackend(directory, slog.Default(), false, false, 0, 0)
+	backend, err := NewBackend(directory, slog.Default(), false, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestResetInitialSyncDataResetsMainToInitialCommit(t *testing.T) {
 	assertControlMarker(t, ctx, backend)
 	backend.Close()
 
-	reopened, err := NewBackend(directory, slog.Default(), false, false, 0, 0)
+	reopened, err := NewBackend(directory, slog.Default(), false, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

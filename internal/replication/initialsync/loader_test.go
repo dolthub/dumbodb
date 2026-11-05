@@ -29,7 +29,7 @@ import (
 
 func TestBoundedCollectionLoaderFlushesAtDocumentLimit(t *testing.T) {
 	ctx := context.Background()
-	backend, err := dolt.NewBackend(t.TempDir(), slog.Default(), false, false, 0, 0)
+	backend, err := dolt.NewBackend(t.TempDir(), slog.Default(), false, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestBoundedCollectionLoaderFlushesAtDocumentLimit(t *testing.T) {
 
 func TestBoundedCollectionLoaderFlushesBeforeByteLimit(t *testing.T) {
 	ctx := context.Background()
-	backend, err := dolt.NewBackend(t.TempDir(), slog.Default(), false, false, 0, 0)
+	backend, err := dolt.NewBackend(t.TempDir(), slog.Default(), false, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

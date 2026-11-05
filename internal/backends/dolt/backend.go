@@ -122,7 +122,7 @@ type viewMeta struct {
 
 // dbState holds the open Dolt store for a single MongoDB database.
 type dbState struct {
-	backend *Backend // back-pointer; lets helpers read backend-level config (e.g. sessionIsolation)
+	backend *Backend // back-pointer; lets helpers read backend-level config
 	name    string   // user-visible db name; needed to build qualified names for dsess
 
 	mu    sync.RWMutex
@@ -187,10 +187,9 @@ func amToRootValue(ctx context.Context, db *dbState, am prolly.AddressMap) (dolt
 
 // Backend implements backends.Backend using Dolt storage.
 type Backend struct {
-	dataDir          string
-	l                *slog.Logger
-	autoCommit       bool // when true, each write auto-creates a Dolt commit
-	sessionIsolation bool // when true, writes auto-fork into per-conn overlay and doltCommit merges
+	dataDir    string
+	l          *slog.Logger
+	autoCommit bool // when true, each write auto-creates a Dolt commit
 
 	mu       sync.RWMutex
 	dbs      map[string]*dbState // dbName -> dbState
@@ -332,10 +331,6 @@ func (b *Backend) rollbackOwnerTxn(owner string) {
 	sqlCtx.SetTransaction(nil)
 }
 
-func (b *Backend) SessionIsolation() bool {
-	return b.sessionIsolation
-}
-
 func (b *Backend) releaseLocksForOwner(owner string) {
 	b.docLocksMu.Lock()
 	managers := make([]*DocLockManager, 0, len(b.docLocks))
@@ -420,32 +415,31 @@ func commitMetaAC(author, committer, desc string, authorDate time.Time) (*datas.
 // sessionTimeout overrides the default lsid-keyed session idle timeout
 // (zero falls back to defaultSessionTimeout). sessionSweepPeriod overrides
 // the registry sweep cadence (zero falls back to defaultSessionSweepPeriod).
-func NewBackend(dataDir string, l *slog.Logger, autoCommit, sessionIsolation bool, sessionTimeout, sessionSweepPeriod time.Duration) (backends.Backend, error) {
-	b, err := newBackend(dataDir, l, autoCommit, sessionIsolation, sessionTimeout, sessionSweepPeriod)
+func NewBackend(dataDir string, l *slog.Logger, autoCommit bool, sessionTimeout, sessionSweepPeriod time.Duration) (backends.Backend, error) {
+	b, err := newBackend(dataDir, l, autoCommit, sessionTimeout, sessionSweepPeriod)
 	if err != nil {
 		return nil, err
 	}
 	return backends.BackendContract(b), nil
 }
 
-func newBackend(dataDir string, l *slog.Logger, autoCommit, sessionIsolation bool, sessionTimeout, sessionSweepPeriod time.Duration) (*Backend, error) {
+func newBackend(dataDir string, l *slog.Logger, autoCommit bool, sessionTimeout, sessionSweepPeriod time.Duration) (*Backend, error) {
 	if err := checkDataDirExists(dataDir); err != nil {
 		return nil, err
 	}
 
 	b := &Backend{
-		dataDir:          dataDir,
-		l:                l,
-		autoCommit:       autoCommit,
-		sessionIsolation: sessionIsolation,
-		dbs:              make(map[string]*dbState),
-		docLocks:         make(map[string]*DocLockManager),
-		sweeperStop:      make(chan struct{}),
-		sweeperDone:      make(chan struct{}),
-		droppedGCStop:    make(chan struct{}),
-		droppedGCDone:    make(chan struct{}),
-		droppedGCPeriod:  defaultDroppedGCPeriod,
-		droppedGCTTL:     defaultDroppedDatabaseTTL,
+		dataDir:         dataDir,
+		l:               l,
+		autoCommit:      autoCommit,
+		dbs:             make(map[string]*dbState),
+		docLocks:        make(map[string]*DocLockManager),
+		sweeperStop:     make(chan struct{}),
+		sweeperDone:     make(chan struct{}),
+		droppedGCStop:   make(chan struct{}),
+		droppedGCDone:   make(chan struct{}),
+		droppedGCPeriod: defaultDroppedGCPeriod,
+		droppedGCTTL:    defaultDroppedDatabaseTTL,
 	}
 	if sessionSweepPeriod > 0 {
 		b.sweeperPeriod = sessionSweepPeriod
@@ -1411,43 +1405,6 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	// A conflict paused an earlier dumboCommit on this branch. If the client
-	// has resolved it, publish the resolution so the commit below takes it;
-	// the resolution lives in ms.resolvedAM until then (applyResolvedAM is a
-	// no-op for a session commit). This runs before the merge guard below,
-	// which would otherwise report a merge in progress and leave the client
-	// with no way to finish.
-	if ms := db.mergeState; ms != nil && ms.isSessionCommit && ms.intoBranch == branch {
-		if ms.hasUnresolvedConflicts() {
-			return nil, &backends.MergeConflictError{Conflicts: ms.summaries()}
-		}
-		if len(ms.deferredCollections) > 0 {
-			newConflicts, mergeErr := mergeDeferredCollections(ctx, db, ms)
-			if mergeErr != nil {
-				return nil, fmt.Errorf("dumboCommit: merging deferred collections for %q: %w", branch, mergeErr)
-			}
-			if newConflicts {
-				return nil, &backends.MergeConflictError{Conflicts: ms.summaries()}
-			}
-		}
-		_ = clearConflictArtifacts(ctx, db, ms)
-		tip, err := db.readBranchTip(ctx, branch)
-		if err != nil {
-			return nil, fmt.Errorf("dumboCommit: %w", err)
-		}
-		if err := settleMergeState(ctx, db, tip, ms.resolvedAM); err != nil {
-			return nil, fmt.Errorf("dumboCommit: publishing the resolved merge for %q: %w", branch, err)
-		}
-		db.mergeState = nil
-		if sess := sessionFromContext(ctx); sess != nil {
-			if err := releaseSessionOverlay(sqlctx.Wrap(ctx, sess), sess, db.name, branch); err != nil {
-				return nil, fmt.Errorf("dumboCommit: %w", err)
-			}
-		}
-	} else if err := db.publishSessionOverlay(ctx, branch); err != nil {
-		return nil, err
-	}
-
 	// Guard: reject dumboDBCommit during any in-progress merge, cherry-pick, or rebase.
 	if db.mergeState != nil && db.mergeState.intoBranch == branch {
 		if db.mergeState.hasUnresolvedConflicts() {
@@ -1597,7 +1554,7 @@ func dumboDBBranchCreate(ctx context.Context, db *dbState, params *backends.Bran
 	}
 
 	// Eagerly create the working_set ref; dolt creates it lazily on
-	// checkout, but session-isolation writes without checking out.
+	// checkout, but dumbodb writes without checking out.
 	if err = initializeBranchWorkingSet(ctx, db.doltDB, params.Name); err != nil {
 		return nil, fmt.Errorf("DumboDBBranch: initializing working set for branch %q: %w", params.Name, err)
 	}

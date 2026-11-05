@@ -142,7 +142,7 @@ type raceFixture struct {
 }
 
 func newRaceFixture(t *testing.T) *raceFixture {
-	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, false, 0, 0)
+	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, 0, 0)
 	require.NoError(t, err)
 	t.Cleanup(be.Close)
 	f := &raceFixture{t: t, be: be, db: "vcrace", commitID: map[string]string{}}

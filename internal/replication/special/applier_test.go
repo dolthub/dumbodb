@@ -97,7 +97,7 @@ func TestAuthApplierPersistsOwnershipAndInvalidatesAuthGeneration(t *testing.T) 
 func TestMetadataApplierValidatesAndSurvivesControlStoreRestart(t *testing.T) {
 	directory := t.TempDir()
 	configuration := control.Configuration{SetName: "rs0", MemberHost: "dumbo:27017"}
-	backend, err := dolt.NewBackend(directory, slog.Default(), false, false, 0, 0)
+	backend, err := dolt.NewBackend(directory, slog.Default(), false, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ func TestMetadataApplierValidatesAndSurvivesControlStoreRestart(t *testing.T) {
 
 func newSpecialTestApplier(t *testing.T, bump func()) (backends.Backend, *control.Store, *Applier) {
 	t.Helper()
-	backend, err := dolt.NewBackend(t.TempDir(), slog.Default(), false, false, 0, 0)
+	backend, err := dolt.NewBackend(t.TempDir(), slog.Default(), false, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

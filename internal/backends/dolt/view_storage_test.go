@@ -63,7 +63,7 @@ func TestViewDurableAcrossRestart(t *testing.T) {
 	ctx := context.Background()
 	logger := slog.Default()
 
-	b1, err := NewBackend(dir, logger, false, false, 0, 0)
+	b1, err := NewBackend(dir, logger, false, 0, 0)
 	if err != nil {
 		t.Fatalf("NewBackend (open): %v", err)
 	}
@@ -80,7 +80,7 @@ func TestViewDurableAcrossRestart(t *testing.T) {
 	}
 	b1.Close()
 
-	b2, err := NewBackend(dir, logger, false, false, 0, 0)
+	b2, err := NewBackend(dir, logger, false, 0, 0)
 	if err != nil {
 		t.Fatalf("NewBackend (reopen): %v", err)
 	}
@@ -112,7 +112,7 @@ func TestViewDropDurable(t *testing.T) {
 	ctx := context.Background()
 	logger := slog.Default()
 
-	b1, err := NewBackend(dir, logger, false, false, 0, 0)
+	b1, err := NewBackend(dir, logger, false, 0, 0)
 	if err != nil {
 		t.Fatalf("NewBackend: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestViewDropDurable(t *testing.T) {
 	}
 	b1.Close()
 
-	b2, err := NewBackend(dir, logger, false, false, 0, 0)
+	b2, err := NewBackend(dir, logger, false, 0, 0)
 	if err != nil {
 		t.Fatalf("NewBackend (reopen): %v", err)
 	}

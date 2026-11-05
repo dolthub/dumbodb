@@ -67,12 +67,6 @@ type NewHandlerOpts struct {
 	// Used only by the "dolt" handler.
 	AutoCommit bool
 
-	// SessionIsolation, when true, runs DumboDB in version-control-native
-	// isolation: writes auto-fork into a per-connection working-set overlay,
-	// startTransaction is rejected with code 263, and doltCommit merges the
-	// overlay back to the branch HEAD with three-way conflict detection.
-	SessionIsolation bool
-
 	// SessionTimeout overrides the default lsid-keyed session idle
 	// timeout. Zero leaves the dolt backend's default in place (30m).
 	SessionTimeout time.Duration

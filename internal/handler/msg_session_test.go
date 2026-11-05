@@ -37,8 +37,6 @@ func (*commitErrorBackend) OnTransactionCommit(context.Context, string) error { 
 
 func (b *commitErrorBackend) OnTransactionAbort(owner string) { b.abortedOwner = owner }
 
-func (*commitErrorBackend) SessionIsolation() bool { return true }
-
 func (*commitErrorBackend) SessionRegistry() *sqlctx.SessionRegistry { return nil }
 
 func TestHandleTransactionCommitConflict(t *testing.T) {

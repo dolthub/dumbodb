@@ -383,7 +383,7 @@ func openControlStore(t *testing.T, dir string) *control.Store {
 	backend := topologyControlBackends.byDirectory[dir]
 	if backend == nil {
 		var err error
-		backend, err = dolt.NewBackend(dir, slog.New(slog.NewTextHandler(io.Discard, nil)), false, false, 0, 0)
+		backend, err = dolt.NewBackend(dir, slog.New(slog.NewTextHandler(io.Discard, nil)), false, 0, 0)
 		if err != nil {
 			topologyControlBackends.Unlock()
 			t.Fatal(err)

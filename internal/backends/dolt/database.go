@@ -111,10 +111,7 @@ func latestBranchWS(ctx context.Context, state *dbState, branch string) (*doltdb
 // connection's concurrent field write would be copied into this command's
 // overlay as though this command had made it.
 //
-// A read pins nothing and sees the latest state. That holds under
-// --session-isolation too, where the fork lives across commands: the fork
-// stops the root moving once you start writing, and until then a read should
-// see what other connections have committed.
+// A read pins nothing and sees the latest state.
 func txnVisibleWS(ctx context.Context, state *dbState, branch string) (*doltdb.WorkingSet, bool) {
 	sess := sessionFromContext(ctx)
 	if sess == nil {

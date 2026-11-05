@@ -85,7 +85,7 @@ func TestDumboDBBackupRestoreRoundTrip(t *testing.T) {
 
 	// It survives a backend restart.
 	b.Close()
-	b2, err := newBackend(b.dataDir, b.l, false, false, 0, 0)
+	b2, err := newBackend(b.dataDir, b.l, false, 0, 0)
 	require.NoError(t, err)
 	t.Cleanup(b2.Close)
 	require.Equal(t, 3, countDocs(t, b2, "copy", "coll"))

@@ -106,13 +106,6 @@ func (bc *backendContract) OnTransactionAbort(owner string) {
 	}
 }
 
-func (bc *backendContract) SessionIsolation() bool {
-	if sab, ok := bc.b.(SessionAwareBackend); ok {
-		return sab.SessionIsolation()
-	}
-	return false
-}
-
 func (bc *backendContract) SessionRegistry() *sqlctx.SessionRegistry {
 	if sab, ok := bc.b.(SessionAwareBackend); ok {
 		return sab.SessionRegistry()

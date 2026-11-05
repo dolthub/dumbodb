@@ -176,7 +176,7 @@ func TestRecoveryResumesPendingRollbackAfterRestart(t *testing.T) {
 func TestRecoveryPlanCarriesForwardSparseDatabaseHeads(t *testing.T) {
 	ctx := context.Background()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	backend, err := dolt.NewBackend(t.TempDir(), logger, false, false, 0, 0)
+	backend, err := dolt.NewBackend(t.TempDir(), logger, false, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +259,7 @@ func TestRecoveryPlanCarriesForwardSparseDatabaseHeads(t *testing.T) {
 func recoveryFixture(t *testing.T, ctx context.Context) (backends.Backend, *control.Store, *topology.Manager, []control.CommitInterval, string) {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	backend, err := dolt.NewBackend(t.TempDir(), logger, false, false, 0, 0)
+	backend, err := dolt.NewBackend(t.TempDir(), logger, false, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

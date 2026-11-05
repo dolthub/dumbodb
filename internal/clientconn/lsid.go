@@ -29,13 +29,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// startTransaction is unavailable in
-// --session-isolation mode; the user is expected to issue writes directly
-// and call doltCommit to merge them back to HEAD.
-var errSessionIsolationRejectStartTransaction = errors.New(
-	"Transactions are not available in session-isolation mode. Use doltCommit instead.",
-)
-
 func extractAndSetLSID(ctx context.Context, doc *types.Document) {
 	if doc == nil || !doc.Has("lsid") {
 		return
@@ -72,16 +65,13 @@ func extractAndSetLSID(ctx context.Context, doc *types.Document) {
 //     per-TCP-connection, so the second frame must set InTransaction
 //     from the wire field rather than carrying it forward). A frame
 //     without it clears InTransaction for the same reason.
-//
-// Returns whether startTransaction:true was observed; the conn-level
-// routing uses that specifically to reject the wire frame in
-// --session-isolation mode.
-func extractAndSetTransactionFlag(ctx context.Context, doc *types.Document) (started bool) {
+func extractAndSetTransactionFlag(ctx context.Context, doc *types.Document) {
 	if doc == nil {
-		return false
+		return
 	}
 	ci := conninfo.Get(ctx)
 
+	var started bool
 	if doc.Has("startTransaction") {
 		if v, err := doc.Get("startTransaction"); err == nil {
 			if b, ok := v.(bool); ok && b {
@@ -107,8 +97,6 @@ func extractAndSetTransactionFlag(ctx context.Context, doc *types.Document) (sta
 	} else if !started {
 		ci.SetInTransaction(true)
 	}
-
-	return started
 }
 
 // abortedTransactionError is mongod's error for a statement in a

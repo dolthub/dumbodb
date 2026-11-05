@@ -40,7 +40,7 @@ import (
 // published in between, both having already been told n:1.
 func TestPublishWorkingSet_RefusesAStalePublish(t *testing.T) {
 	ctx := context.Background()
-	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, false, 0, 0)
+	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, 0, 0)
 	require.NoError(t, err)
 	t.Cleanup(be.Close)
 
@@ -83,7 +83,7 @@ func TestPublishWorkingSet_RefusesAStalePublish(t *testing.T) {
 // the reconcile already resolved the working set it merged against.
 func TestPublishWorkingSet_ForkPointIsAvailableAtTheRead(t *testing.T) {
 	ctx := context.Background()
-	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, false, 0, 0)
+	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, 0, 0)
 	require.NoError(t, err)
 	t.Cleanup(be.Close)
 

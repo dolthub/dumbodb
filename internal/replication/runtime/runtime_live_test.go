@@ -163,7 +163,7 @@ func TestLiveRuntimeInitialSyncSteadyApplyAndRestart(t *testing.T) {
 func newLiveRuntime(t *testing.T, dataDirectory, _ string, source string) (backends.Backend, *topology.Manager, *Runtime) {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	backend, err := dolt.NewBackend(dataDirectory, logger, false, false, 0, 0)
+	backend, err := dolt.NewBackend(dataDirectory, logger, false, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

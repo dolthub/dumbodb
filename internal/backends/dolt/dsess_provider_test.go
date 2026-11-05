@@ -49,7 +49,7 @@ func TestBackendNewSessionConstructs(t *testing.T) {
 }
 
 func TestSessionLookupDbStateResolvesRealDb(t *testing.T) {
-	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, false, 0, 0)
+	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, 0, 0)
 	require.NoError(t, err)
 	t.Cleanup(be.Close)
 

@@ -55,7 +55,7 @@ func createUserMsg(t *testing.T, user, pwd string) *wire.OpMsg {
 func authGateHandler(t *testing.T, enableNewAuth bool) *Handler {
 	t.Helper()
 
-	be, err := dolt.NewBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, false, 0, 0)
+	be, err := dolt.NewBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, 0, 0)
 	require.NoError(t, err)
 	t.Cleanup(be.Close)
 

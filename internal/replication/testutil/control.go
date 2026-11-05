@@ -26,7 +26,7 @@ import (
 
 func NewControlStore(t testing.TB, configuration control.Configuration) (backends.Backend, *control.Store) {
 	t.Helper()
-	backend, err := dolt.NewBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, false, 0, 0)
+	backend, err := dolt.NewBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

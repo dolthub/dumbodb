@@ -42,21 +42,19 @@ func rootValueFromAM(ctx context.Context, state *dbState, am prolly.AddressMap) 
 // decides what counts as a conflict. There is one merge in the product and one
 // policy, and a write reaches it whatever boundary it reconciles at.
 //
-// A refusal comes back as a typed MergeConflictError together with the
-// unresolved conflicts, so a boundary that can offer resolution -- dumboCommit
-// -- is able to install them, and one that cannot just reports the error.
-func (state *dbState) reconcileWorkingSets(ctx context.Context, branch string, base, ours, theirs *doltdb.WorkingSet) (*doltdb.WorkingSet, *mergeInProgress, error) {
+// A refusal comes back as a typed MergeConflictError.
+func (state *dbState) reconcileWorkingSets(ctx context.Context, base, ours, theirs *doltdb.WorkingSet) (*doltdb.WorkingSet, error) {
 	baseHash, err := base.WorkingRoot().HashOf()
 	if err != nil {
-		return nil, nil, fmt.Errorf("hashing base root: %w", err)
+		return nil, fmt.Errorf("hashing base root: %w", err)
 	}
 	oursHash, err := ours.WorkingRoot().HashOf()
 	if err != nil {
-		return nil, nil, fmt.Errorf("hashing ours root: %w", err)
+		return nil, fmt.Errorf("hashing ours root: %w", err)
 	}
 	theirsHash, err := theirs.WorkingRoot().HashOf()
 	if err != nil {
-		return nil, nil, fmt.Errorf("hashing theirs root: %w", err)
+		return nil, fmt.Errorf("hashing theirs root: %w", err)
 	}
 
 	// The published working set takes everything but its roots from theirs:
@@ -65,10 +63,10 @@ func (state *dbState) reconcileWorkingSets(ctx context.Context, branch string, b
 	//
 	// One side changed nothing, so there is nothing to reconcile.
 	if baseHash == oursHash {
-		return theirs, nil, nil
+		return theirs, nil
 	}
 	if baseHash == theirsHash {
-		return theirs.WithWorkingRoot(ours.WorkingRoot()).WithStagedRoot(ours.StagedRoot()), nil, nil
+		return theirs.WithWorkingRoot(ours.WorkingRoot()).WithStagedRoot(ours.StagedRoot()), nil
 	}
 	// Deliberately no fast path for ours == theirs. Two sides reaching the
 	// identical result is the convergent edit, which is the case the Touched
@@ -78,46 +76,36 @@ func (state *dbState) reconcileWorkingSets(ctx context.Context, branch string, b
 
 	oursAM, err := amFromWorkingRoot(ctx, ours.WorkingRoot(), state.ns)
 	if err != nil {
-		return nil, nil, fmt.Errorf("deriving ours AM: %w", err)
+		return nil, fmt.Errorf("deriving ours AM: %w", err)
 	}
 	theirsAM, err := amFromWorkingRoot(ctx, theirs.WorkingRoot(), state.ns)
 	if err != nil {
-		return nil, nil, fmt.Errorf("deriving theirs AM: %w", err)
+		return nil, fmt.Errorf("deriving theirs AM: %w", err)
 	}
 	baseAM, err := amFromWorkingRoot(ctx, base.WorkingRoot(), state.ns)
 	if err != nil {
-		return nil, nil, fmt.Errorf("deriving base AM: %w", err)
+		return nil, fmt.Errorf("deriving base AM: %w", err)
 	}
 
-	mergedAM, conflicts, viewConflicts, metaConflicts, deferredCollections, err := mergeAddressMapsWithConflicts(
+	mergedAM, conflicts, viewConflicts, metaConflicts, _, err := mergeAddressMapsWithConflicts(
 		ctx, state, oursAM, theirsAM, baseAM, theirsHash, baseHash,
 		"your write (ours)", "the branch (theirs)")
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	if len(conflicts) > 0 || len(viewConflicts) > 0 || len(metaConflicts) > 0 {
 		unresolved := &mergeInProgress{
-			intoBranch:          branch,
-			fromLabel:           refLabel(ctx, state, branch),
-			premergeAM:          oursAM,
-			intoHash:            theirsHash,
-			fromHash:            theirsHash,
-			conflicts:           conflicts,
-			viewConflicts:       viewConflicts,
-			metaConflicts:       metaConflicts,
-			deferredCollections: deferredCollections,
-			resolvedAM:          mergedAM,
-			sessionIntoAM:       oursAM,
-			sessionFromAM:       theirsAM,
-			sessionBaseAM:       baseAM,
+			conflicts:     conflicts,
+			viewConflicts: viewConflicts,
+			metaConflicts: metaConflicts,
 		}
-		return nil, unresolved, &backends.MergeConflictError{Conflicts: unresolved.summaries()}
+		return nil, &backends.MergeConflictError{Conflicts: unresolved.summaries()}
 	}
 
 	mergedRV, err := rootValueFromAM(ctx, state, mergedAM)
 	if err != nil {
-		return nil, nil, fmt.Errorf("building merged root: %w", err)
+		return nil, fmt.Errorf("building merged root: %w", err)
 	}
-	return theirs.WithWorkingRoot(mergedRV).WithStagedRoot(mergedRV), nil, nil
+	return theirs.WithWorkingRoot(mergedRV).WithStagedRoot(mergedRV), nil
 }

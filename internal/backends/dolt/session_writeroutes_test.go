@@ -51,7 +51,7 @@ func ctxWithSession(t *testing.T, be *Backend, lsid string) context.Context {
 // and the disk WS ref is GC-protected directly); only writes inside an
 // active dsess txn live on the session's branchState.
 func TestSession_InsertVisibleToVisitGCRoots(t *testing.T) {
-	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, false, 0, 0)
+	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, 0, 0)
 	require.NoError(t, err)
 	t.Cleanup(be.Close)
 
@@ -69,7 +69,7 @@ func TestSession_InsertVisibleToVisitGCRoots(t *testing.T) {
 
 	// Start a dsess txn before the insert so the write lands on the
 	// session's branchState (mirroring dispatchThroughSession's EnsureTxn
-	// for session-isolation / explicit-tx flows).
+	// for write and explicit-tx flows).
 	sqlCtx := sqlctx.Wrap(ctx, sess)
 	_, err = sess.StartTransaction(sqlCtx, sql.ReadWrite)
 	require.NoError(t, err)
@@ -94,7 +94,7 @@ func TestSession_InsertVisibleToVisitGCRoots(t *testing.T) {
 // writing concurrently to the same (db, branch) must not clobber each
 // other's overlays, and all auto-committed writes must land.
 func TestSession_CrossSessionConcurrentWritesIsolated(t *testing.T) {
-	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), true, false, 0, 0)
+	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), true, 0, 0)
 	require.NoError(t, err)
 	t.Cleanup(be.Close)
 

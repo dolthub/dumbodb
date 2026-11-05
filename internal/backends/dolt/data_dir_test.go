@@ -28,7 +28,7 @@ import (
 func TestNewBackendRefusesMissingDataDir(t *testing.T) {
 	missingDataDir := filepath.Join(t.TempDir(), "nope")
 
-	b, err := newBackend(missingDataDir, slog.New(slog.NewTextHandler(io.Discard, nil)), false, false, 0, 0)
+	b, err := newBackend(missingDataDir, slog.New(slog.NewTextHandler(io.Discard, nil)), false, 0, 0)
 	require.Error(t, err)
 	assert.Nil(t, b)
 	assert.Contains(t, err.Error(), missingDataDir)
@@ -40,7 +40,7 @@ func TestNewBackendRefusesDataDirThatIsAFile(t *testing.T) {
 	dataFile := filepath.Join(t.TempDir(), "file")
 	require.NoError(t, os.WriteFile(dataFile, nil, 0o644))
 
-	b, err := newBackend(dataFile, slog.New(slog.NewTextHandler(io.Discard, nil)), false, false, 0, 0)
+	b, err := newBackend(dataFile, slog.New(slog.NewTextHandler(io.Discard, nil)), false, 0, 0)
 	require.Error(t, err)
 	assert.Nil(t, b)
 	assert.Contains(t, err.Error(), "is not a directory")

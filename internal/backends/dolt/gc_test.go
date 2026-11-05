@@ -38,7 +38,7 @@ import (
 // not complete its Wait until the bracket releases. The bracket's
 // VisitGCRoots is invoked at safepoint resolution.
 func TestRunUnderGCSafepointKeeper_GCWaitsForBracket(t *testing.T) {
-	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, false, 0, 0)
+	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, 0, 0)
 	require.NoError(t, err)
 	t.Cleanup(be.Close)
 
@@ -129,7 +129,7 @@ func (*outsideGCRootsProvider) VisitGCRoots(_ context.Context, _ string, _ func(
 // new-gen chunks no longer reachable from any branch ref, so the
 // chunk count drops.
 func TestDumboDBGC_DefaultModeShrinksAfterDelete(t *testing.T) {
-	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), true, false, 0, 0)
+	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), true, 0, 0)
 	require.NoError(t, err)
 	t.Cleanup(be.Close)
 
@@ -179,7 +179,7 @@ func TestDumboDBGC_DefaultModeShrinksAfterDelete(t *testing.T) {
 // to reclaim. The interesting property: every document inserted
 // before GC must still be readable after.
 func TestDumboDBGC_FullModePreservesReachableData(t *testing.T) {
-	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), true, false, 0, 0)
+	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), true, 0, 0)
 	require.NoError(t, err)
 	t.Cleanup(be.Close)
 
@@ -234,7 +234,7 @@ func TestDumboDBGC_FullModePreservesReachableData(t *testing.T) {
 // for BeginGC's root walk; an in-process call with no session in ctx
 // must fail rather than silently degrade.
 func TestDumboDBGC_NoSessionInContextErrors(t *testing.T) {
-	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), true, false, 0, 0)
+	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), true, 0, 0)
 	require.NoError(t, err)
 	t.Cleanup(be.Close)
 
@@ -253,7 +253,7 @@ func TestDumboDBGC_NoSessionInContextErrors(t *testing.T) {
 // TestDumboDBGC_UnknownDatabaseErrors: GC on an unopened database
 // surfaces DatabaseDoesNotExist.
 func TestDumboDBGC_UnknownDatabaseErrors(t *testing.T) {
-	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), true, false, 0, 0)
+	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), true, 0, 0)
 	require.NoError(t, err)
 	t.Cleanup(be.Close)
 
@@ -265,7 +265,7 @@ func TestDumboDBGC_UnknownDatabaseErrors(t *testing.T) {
 // TestDumboDBGC_UnknownModeErrors: rejects modes other than
 // "default" and "full" with a clear error.
 func TestDumboDBGC_UnknownModeErrors(t *testing.T) {
-	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), true, false, 0, 0)
+	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), true, 0, 0)
 	require.NoError(t, err)
 	t.Cleanup(be.Close)
 
@@ -284,7 +284,7 @@ func TestDumboDBGC_UnknownModeErrors(t *testing.T) {
 // resolves to the base database; the result's DB field echoes the
 // stripped base name.
 func TestDumboDBGC_BranchSelectorIsStripped(t *testing.T) {
-	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), true, false, 0, 0)
+	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), true, 0, 0)
 	require.NoError(t, err)
 	t.Cleanup(be.Close)
 

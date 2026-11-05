@@ -17,7 +17,6 @@ package dolt
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"testing"
@@ -127,9 +126,9 @@ func TestAcquireTxnVsTxnInsertConflicts(t *testing.T) {
 	assert.True(t, errors.Is(err, ErrWriteConflict))
 }
 
-func docLockBackend(t *testing.T, sessionIsolation bool) *Backend {
+func docLockBackend(t *testing.T) *Backend {
 	t.Helper()
-	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, sessionIsolation, 0, 0)
+	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, 0, 0)
 	require.NoError(t, err)
 	t.Cleanup(be.Close)
 	return be
@@ -137,10 +136,10 @@ func docLockBackend(t *testing.T, sessionIsolation bool) *Backend {
 
 // ordinaryWriteCtx describes a write with no client transaction: a session
 // transaction is live, so the write accumulates in the overlay and reconciles
-// at its boundary. Every write looks like this in every mode.
+// at its boundary.
 func ordinaryWriteCtx() (context.Context, string) {
 	ci := conninfo.New()
-	ci.SetForked(true)
+	ci.SetWriting(true)
 	return conninfo.Ctx(context.Background(), ci), ci.Owner()
 }
 
@@ -148,7 +147,7 @@ func ordinaryWriteCtx() (context.Context, string) {
 // startTransaction.
 func clientTxnCtx() (context.Context, string) {
 	ci := conninfo.New()
-	ci.SetForked(true)
+	ci.SetWriting(true)
 	ci.SetInTransaction(true)
 	return conninfo.Ctx(context.Background(), ci), ci.Owner()
 }
@@ -157,34 +156,26 @@ func clientTxnCtx() (context.Context, string) {
 // take a document lock. A lock here would decide contention before the merge
 // mode ever ran.
 func TestOrdinaryWriteTakesNoDocumentLock(t *testing.T) {
-	for _, sessionIsolation := range []bool{false, true} {
-		t.Run(fmt.Sprintf("sessionIsolation=%v", sessionIsolation), func(t *testing.T) {
-			be := docLockBackend(t, sessionIsolation)
-			ctx, owner := ordinaryWriteCtx()
+	be := docLockBackend(t)
+	ctx, owner := ordinaryWriteCtx()
 
-			require.NoError(t, be.acquireTxnLocks(ctx, "mydb", "main", "col", []hash.Hash{idH(1)}, true))
+	require.NoError(t, be.acquireTxnLocks(ctx, "mydb", "main", "col", []hash.Hash{idH(1)}, true))
 
-			assert.False(t, be.docLockManager("mydb", "main").Holds(owner, "col", idH(1)),
-				"an ordinary write must hold no document lock")
-		})
-	}
+	assert.False(t, be.docLockManager("mydb", "main").Holds(owner, "col", idH(1)),
+		"an ordinary write must hold no document lock")
 }
 
 // Two clients writing the same document is the case the merge mode exists to
 // decide. Neither may be rejected at write time.
 func TestOrdinaryWritesDoNotLockEachOtherOut(t *testing.T) {
-	for _, sessionIsolation := range []bool{false, true} {
-		t.Run(fmt.Sprintf("sessionIsolation=%v", sessionIsolation), func(t *testing.T) {
-			be := docLockBackend(t, sessionIsolation)
-			ctxA, _ := ordinaryWriteCtx()
-			ctxB, _ := ordinaryWriteCtx()
-			ids := []hash.Hash{idH(1)}
+	be := docLockBackend(t)
+	ctxA, _ := ordinaryWriteCtx()
+	ctxB, _ := ordinaryWriteCtx()
+	ids := []hash.Hash{idH(1)}
 
-			require.NoError(t, be.acquireTxnLocks(ctxA, "mydb", "main", "col", ids, true))
-			require.NoError(t, be.acquireTxnLocks(ctxB, "mydb", "main", "col", ids, true),
-				"a second ordinary writer must not be rejected or made to wait")
-		})
-	}
+	require.NoError(t, be.acquireTxnLocks(ctxA, "mydb", "main", "col", ids, true))
+	require.NoError(t, be.acquireTxnLocks(ctxB, "mydb", "main", "col", ids, true),
+		"a second ordinary writer must not be rejected or made to wait")
 }
 
 // An ordinary (non-transactional) write must not run over a document a client
@@ -192,13 +183,13 @@ func TestOrdinaryWritesDoNotLockEachOtherOut(t *testing.T) {
 // matching MongoDB, which blocks a plain write on a document an open transaction
 // locks. The wait is bounded by the command's maxTimeMS via ctx. See workspace-s1s.
 func TestOrdinaryWriteBlocksOnAClientTransactionsLock(t *testing.T) {
-	be := docLockBackend(t, false)
+	be := docLockBackend(t)
 	txnCtx, txnOwner := clientTxnCtx()
 	ids := []hash.Hash{idH(1)}
 	require.NoError(t, be.acquireTxnLocks(txnCtx, "mydb", "main", "col", ids, true))
 
 	ordinary := conninfo.New()
-	ordinary.SetForked(true)
+	ordinary.SetWriting(true)
 
 	// While the transaction holds the lock, an ordinary write waits; with a
 	// deadline it fails (mapped to maxTimeMS upstream) rather than proceeding.
@@ -229,24 +220,20 @@ func TestOrdinaryWriteBlocksOnAClientTransactionsLock(t *testing.T) {
 	}
 }
 
-// Client transactions keep fail-fast locking, and keep it in every mode: it is
+// Client transactions keep fail-fast locking: it is
 // transaction-contention behaviour, not a server-wide concurrency mechanism.
 func TestClientTransactionFailsFastOnDocumentContention(t *testing.T) {
-	for _, sessionIsolation := range []bool{false, true} {
-		t.Run(fmt.Sprintf("sessionIsolation=%v", sessionIsolation), func(t *testing.T) {
-			be := docLockBackend(t, sessionIsolation)
-			ctxA, ownerA := clientTxnCtx()
-			ctxB, _ := clientTxnCtx()
-			ids := []hash.Hash{idH(1)}
+	be := docLockBackend(t)
+	ctxA, ownerA := clientTxnCtx()
+	ctxB, _ := clientTxnCtx()
+	ids := []hash.Hash{idH(1)}
 
-			require.NoError(t, be.acquireTxnLocks(ctxA, "mydb", "main", "col", ids, true))
-			err := be.acquireTxnLocks(ctxB, "mydb", "main", "col", ids, true)
+	require.NoError(t, be.acquireTxnLocks(ctxA, "mydb", "main", "col", ids, true))
+	err := be.acquireTxnLocks(ctxB, "mydb", "main", "col", ids, true)
 
-			require.Error(t, err)
-			assert.True(t, backends.ErrorCodeIs(err, backends.ErrorCodeWriteConflict),
-				"expected a write conflict, got %v", err)
-			assert.True(t, be.docLockManager("mydb", "main").Holds(ownerA, "col", idH(1)),
-				"the holder keeps its lock")
-		})
-	}
+	require.Error(t, err)
+	assert.True(t, backends.ErrorCodeIs(err, backends.ErrorCodeWriteConflict),
+		"expected a write conflict, got %v", err)
+	assert.True(t, be.docLockManager("mydb", "main").Holds(ownerA, "col", idH(1)),
+		"the holder keeps its lock")
 }
