@@ -85,7 +85,7 @@ func TestVCOpsInATransactionCountItsUnpublishedWrites(t *testing.T) {
 	for name, op := range ops {
 		t.Run(name+"/with unpublished writes", func(t *testing.T) {
 			f := setup(t)
-			client := siClient(t, env)
+			client := newClient(t, env)
 			sess, err := client.StartSession()
 			require.NoError(t, err)
 			defer sess.EndSession(ctx)
@@ -105,7 +105,7 @@ func TestVCOpsInATransactionCountItsUnpublishedWrites(t *testing.T) {
 		})
 		t.Run(name+"/without writes", func(t *testing.T) {
 			f := setup(t)
-			client := siClient(t, env)
+			client := newClient(t, env)
 			sess, err := client.StartSession()
 			require.NoError(t, err)
 			defer sess.EndSession(ctx)

@@ -27,7 +27,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
-func siClient(t *testing.T, env *dumboDBTestEnv) *mongo.Client {
+func newClient(t *testing.T, env *dumboDBTestEnv) *mongo.Client {
 	t.Helper()
 	uri := fmt.Sprintf("mongodb://127.0.0.1:%d", env.Port)
 	c, err := mongo.Connect(options.Client().ApplyURI(uri))
