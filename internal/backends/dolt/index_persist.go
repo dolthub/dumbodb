@@ -28,7 +28,6 @@ import (
 	"github.com/dolthub/dolt/go/store/val"
 
 	"github.com/dolthub/dumbodb/internal/backends"
-	"github.com/dolthub/dumbodb/internal/bson"
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
@@ -184,8 +183,8 @@ func readSecondaryIndexValue(ctx context.Context, ns tree.NodeStore, v val.Tuple
 	}
 }
 
-// encodeIndexDefinition encodes idx as BSON, keeping the key order of its
-// partial filter and collation as the user gave them.
+// encodeIndexDefinition encodes idx as BSON in canonical form, keys sorted at
+// every level, so a definition has the same bytes however it was written.
 func encodeIndexDefinition(idx backends.IndexInfo) ([]byte, error) {
 	keys := types.MakeArray(len(idx.Key))
 	for _, k := range idx.Key {
@@ -220,16 +219,7 @@ func encodeIndexDefinition(idx backends.IndexInfo) ([]byte, error) {
 	if idx.Collation != nil {
 		doc.Set("collation", idx.Collation)
 	}
-	return encodeOrderedBSON(doc)
-}
-
-func encodeOrderedBSON(doc *types.Document) ([]byte, error) {
-	wdoc, err := bson.FromDocument(doc)
-	if err != nil {
-		return nil, err
-	}
-	raw, err := wdoc.Encode()
-	return []byte(raw), err
+	return doc.AppendBSONSortedKeys(nil), nil
 }
 
 // decodeIndexDefinition decodes an encodeIndexDefinition document.
