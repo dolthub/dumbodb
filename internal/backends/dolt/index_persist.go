@@ -66,13 +66,14 @@ func newSecondaryIndexes(ctx context.Context, ns tree.NodeStore) (secondaryIndex
 	return secondaryIndexes{ns: ns, m: m}, nil
 }
 
-// errUnsupportedIndexLayout marks tables written before dolthub/dumbodb#190,
-// which hold an AddressMap in secondary_indexes.
-var errUnsupportedIndexLayout = errors.New("a secondary index layout this version does not read")
+// errUnsupportedLayout marks tables an older version wrote: secondary_indexes
+// as an AddressMap (before dolthub/dumbodb#190), or a primary map keyed by
+// _id hashes (before dolthub/dumbodb#207), which a table's schema records.
+var errUnsupportedLayout = errors.New("a storage layout this version does not read")
 
 func secondaryIndexesFromBytes(ns tree.NodeStore, b []byte) (secondaryIndexes, error) {
 	if id := serial.GetFileID(b); id != serial.ProllyTreeNodeFileID {
-		return secondaryIndexes{}, fmt.Errorf("secondary indexes stored as %q, %w; recreate the database", id, errUnsupportedIndexLayout)
+		return secondaryIndexes{}, fmt.Errorf("secondary indexes stored as %q, %w; recreate the database", id, errUnsupportedLayout)
 	}
 	node, _, err := tree.NodeFromBytes(b)
 	if err != nil {

@@ -142,6 +142,9 @@ func secondaryIndexesForDTBL(ctx context.Context, cs *nbs.GenerationalNBS, ns tr
 	if err != nil {
 		return secondaryIndexes{}, fmt.Errorf("secondaryIndexesForDTBL: parsing DTBL: %w", err)
 	}
+	if err := checkTableLayout(tbl); err != nil {
+		return secondaryIndexes{}, fmt.Errorf("secondaryIndexesForDTBL: %w", err)
+	}
 	idxBytes := tbl.SecondaryIndexesBytes()
 	if len(idxBytes) == 0 {
 		return emptySecondaryIndexes(ctx, ns)

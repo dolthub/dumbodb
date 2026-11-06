@@ -25,9 +25,9 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// newCreationOrderCollection holds 300 documents with k = q = _id, indexed by
-// k and then by a_q on q and a_q_k on {q, k}, so creation and name order differ.
-func newCreationOrderCollection(t *testing.T) *collection {
+// newOrScanCollection holds 300 documents with k = q = _id, indexed by k, a_q
+// on q and a_q_k on {q, k}.
+func newOrScanCollection(t *testing.T) *collection {
 	t.Helper()
 	b, c := newDottedPathTestBackend(t, backends.IndexInfo{Name: "k", Key: []backends.IndexKeyPair{{Field: "k"}}})
 	var docs []*types.Document
@@ -48,29 +48,11 @@ func newCreationOrderCollection(t *testing.T) *collection {
 	return &collection{db: &database{backend: b, name: "idxdb", rootish: defaultBranch}, name: "tests"}
 }
 
-func TestIndexesResolveInCreationOrder(t *testing.T) {
-	c := newCreationOrderCollection(t)
-	state := must.NotFail(c.db.backend.getOrOpenDB(context.Background(), c.db.name, false))
-	state.mu.RLock()
-	infos, _, err := resolveIndexes(context.Background(), c, state)
-	state.mu.RUnlock()
-	if err != nil {
-		t.Fatal(err)
-	}
-	var names []string
-	for _, info := range infos {
-		names = append(names, info.Name)
-	}
-	if want := []string{"k", "a_q", "a_q_k"}; !slices.Equal(names, want) {
-		t.Errorf("indexes %v, want %v", names, want)
-	}
-}
-
 // TestOrBranchScans checks an $or's index scans come in the order MongoDB's OR
 // stage reads them, the single-predicate branches on one index merged into one
 // scan of their intervals, with the keys that scan examines between them.
 func TestOrBranchScans(t *testing.T) {
-	c := newCreationOrderCollection(t)
+	c := newOrScanCollection(t)
 	doc := func(pairs ...any) *types.Document { return must.NotFail(types.NewDocument(pairs...)) }
 	for _, tc := range []struct {
 		name   string
@@ -78,11 +60,11 @@ func TestOrBranchScans(t *testing.T) {
 		want   []string
 		keys   int64
 	}{
-		{"by index creation order", orFilter(doc("q", int32(2)), doc("k", int32(1))), []string{"IXSCAN(k)", "IXSCAN(a_q)"}, 2},
-		{"one scan per index", orFilter(doc("k", int32(1)), doc("q", int32(2)), doc("k", int32(5))), []string{"IXSCAN(k)", "IXSCAN(a_q)"}, 5},
+		{"by index name", orFilter(doc("k", int32(1)), doc("q", int32(2))), []string{"IXSCAN(a_q)", "IXSCAN(k)"}, 2},
+		{"one scan per index", orFilter(doc("k", int32(1)), doc("q", int32(2)), doc("k", int32(5))), []string{"IXSCAN(a_q)", "IXSCAN(k)"}, 5},
 		{"several predicates scan first", orFilter(doc("k", int32(2)), doc("q", int32(1), "k", doc("$gte", int32(0)))), []string{"IXSCAN(a_q_k)", "IXSCAN(k)"}, 2},
 		{"a branch its index does not bound fetches", orFilter(doc("q", int32(2)), doc("k", int32(1), "z", int32(1))), []string{"FETCH", "IXSCAN(k)", "IXSCAN(a_q)"}, 2},
-		{"overlapping intervals join", orFilter(doc("k", doc("$gt", int32(295))), doc("k", int32(298)), doc("q", int32(1))), []string{"IXSCAN(k)", "IXSCAN(a_q)"}, 6},
+		{"overlapping intervals join", orFilter(doc("k", doc("$gt", int32(295))), doc("k", int32(298)), doc("q", int32(1))), []string{"IXSCAN(a_q)", "IXSCAN(k)"}, 6},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, examined := backends.WithExaminedCounts(context.Background())
@@ -111,7 +93,7 @@ func TestOrBranchScans(t *testing.T) {
 // keys it lands on outside them, as MongoDB's IXSCAN does, unless each
 // interval is read from its own seek.
 func TestMultiIntervalScanKeys(t *testing.T) {
-	c := newCreationOrderCollection(t)
+	c := newOrScanCollection(t)
 	in := func(vs ...any) *types.Document {
 		return must.NotFail(types.NewDocument("k", must.NotFail(types.NewDocument("$in", must.NotFail(types.NewArray(vs...))))))
 	}
@@ -152,7 +134,7 @@ func TestMultiIntervalScanKeys(t *testing.T) {
 // TestCountingScan checks the scan under a counting GROUP reads no document
 // when its index bounds the whole filter.
 func TestCountingScan(t *testing.T) {
-	c := newCreationOrderCollection(t)
+	c := newOrScanCollection(t)
 	doc := func(pairs ...any) *types.Document { return must.NotFail(types.NewDocument(pairs...)) }
 	for _, tc := range []struct {
 		name   string

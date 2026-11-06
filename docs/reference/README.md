@@ -26,4 +26,5 @@ pinned version changes.
 | [mongodb-collation.md](mongodb-collation.md) | MongoDB 8.0 collation scopes and precedence; ICU and Go collation library facts |
 | [mongodb-sessions.md](mongodb-sessions.md) | MongoDB 8.0 logical session (`lsid`) behavior and driver constraints |
 | [mongodb-views.md](mongodb-views.md) | MongoDB 8.0 standard (computed) view behavior |
+| [mongodb-keystring.md](mongodb-keystring.md) | mongod 8.0.28 KeyString bytes and clustered collection behavior, observed from clustered RecordIds |
 | [dolt-storage.md](dolt-storage.md) | Dolt serialized objects, chunk graph, chunk stores, and optimistic locking, verified against the Dolt version pinned in `go.mod` |

@@ -86,11 +86,27 @@ func openCollection(ctx context.Context, cs *nbs.GenerationalNBS, ns tree.NodeSt
 	if err != nil {
 		return prolly.Map{}, fmt.Errorf("parsing DTBL: %w", err)
 	}
+	if err := checkTableLayout(tbl); err != nil {
+		return prolly.Map{}, err
+	}
 	node, _, err := tree.NodeFromBytes(tbl.PrimaryIndexBytes())
 	if err != nil {
 		return prolly.Map{}, fmt.Errorf("parsing DTBL primary_index: %w", err)
 	}
 	return prolly.NewMap(node, ns, keyDesc, valDescFor(ns)), nil
+}
+
+// collectionSchemaHash addresses buildCollectionTableSchema's chunk, which
+// every table this version writes references.
+var collectionSchemaHash = hash.Of(buildCollectionTableSchema())
+
+// checkTableLayout refuses a table whose schema is not this version's: an
+// older version keyed its primary map differently.
+func checkTableLayout(tbl *serial.Table) error {
+	if h := hash.New(tbl.SchemaBytes()); h != collectionSchemaHash {
+		return fmt.Errorf("table schema %s, %w; recreate the database", h, errUnsupportedLayout)
+	}
+	return nil
 }
 
 // buildCollectionTableSchema builds the DSCH flatbuffer for every
