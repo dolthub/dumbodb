@@ -698,8 +698,8 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 	if !ok {
 		return nil, fmt.Errorf("DumboDBResolveConflict: conflict key missing id bytes")
 	}
-	var selfHash [20]byte
-	copy(selfHash[:], rawKeyIDBytes)
+	var selfKey []byte
+	copy(selfKey, rawKeyIDBytes)
 
 	var oldDoc *types.Document
 	if err := collMap.Get(ctx, target.rawKey, func(_, v val.Tuple) error {
@@ -729,7 +729,7 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 				continue
 			}
 			for _, row := range rows {
-				conflict, perr := idxpkg.UniqueConflict(ctx, idxMaps[idx.Name], row, selfHash[:])
+				conflict, perr := idxpkg.UniqueConflict(ctx, idxMaps[idx.Name], row, selfKey)
 				if perr != nil {
 					return nil, fmt.Errorf("DumboDBResolveConflict: unique probe on %s: %w", idx.Name, perr)
 				}

@@ -295,7 +295,6 @@ type sortWalkIter struct {
 }
 
 func (it *sortWalkIter) nextEntry() (*sortWalkEntry, error) {
-	const primaryIDLen = 20
 	keyDesc := idxpkg.KeyDescriptor()
 	for {
 		k, _, err := it.entries.Next(it.ctx)
@@ -307,14 +306,14 @@ func (it *sortWalkIter) nextEntry() (*sortWalkEntry, error) {
 		}
 		countKeysExamined(1)
 		composite, ok := keyDesc.GetBytes(0, k)
-		if !ok || len(composite) < primaryIDLen+1 {
+		if !ok {
 			continue
 		}
-		idStart := len(composite) - primaryIDLen
-		return &sortWalkEntry{
-			prefix: composite[:idStart-1],
-			id:     append([]byte(nil), composite[idStart:]...),
-		}, nil
+		prefix, id, ok := idxpkg.SplitEntry(composite)
+		if !ok {
+			continue
+		}
+		return &sortWalkEntry{prefix: prefix, id: bytes.Clone(id)}, nil
 	}
 }
 

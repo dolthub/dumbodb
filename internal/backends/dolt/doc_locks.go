@@ -206,11 +206,11 @@ func idsFromDocs(docs []*types.Document) ([]hash.Hash, error) {
 		if err != nil {
 			return nil, fmt.Errorf("document missing _id: %w", err)
 		}
-		h, err := hashID(idVal)
+		h, err := primaryKey(idVal)
 		if err != nil {
-			return nil, fmt.Errorf("hashing _id: %w", err)
+			return nil, fmt.Errorf("encoding _id: %w", err)
 		}
-		out = append(out, hashFromArray(h))
+		out = append(out, keyLockID(h))
 	}
 	return out, nil
 }
@@ -218,11 +218,11 @@ func idsFromDocs(docs []*types.Document) ([]hash.Hash, error) {
 func idsFromValues(idVals []any) ([]hash.Hash, error) {
 	out := make([]hash.Hash, 0, len(idVals))
 	for _, v := range idVals {
-		h, err := hashID(v)
+		h, err := primaryKey(v)
 		if err != nil {
-			return nil, fmt.Errorf("hashing _id: %w", err)
+			return nil, fmt.Errorf("encoding _id: %w", err)
 		}
-		out = append(out, hashFromArray(h))
+		out = append(out, keyLockID(h))
 	}
 	return out, nil
 }

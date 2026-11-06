@@ -133,11 +133,11 @@ func (m *collMeta) effectiveValidation() (level, action string) {
 }
 
 func catalogKey(collName string) (val.Tuple, error) {
-	h, err := hashID(collName)
+	h, err := primaryKey(collName)
 	if err != nil {
-		return nil, fmt.Errorf("hashing catalog key %q: %w", collName, err)
+		return nil, fmt.Errorf("encoding catalog key %q: %w", collName, err)
 	}
-	return buildKey(h[:])
+	return buildKey(h)
 }
 
 // catalogMapFromAM opens the catalog document map from am, or an empty map if

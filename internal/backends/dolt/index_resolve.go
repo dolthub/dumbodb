@@ -286,11 +286,11 @@ func applyInsertsToIndexes(ctx context.Context, infos []backends.IndexInfo, maps
 			if err != nil {
 				return nil, nil, fmt.Errorf("applyInsertsToIndexes: doc missing _id for index %q: %w", info.Name, err)
 			}
-			h, err := hashID(docID)
+			h, err := primaryKey(docID)
 			if err != nil {
 				return nil, nil, fmt.Errorf("applyInsertsToIndexes: hashing _id for index %q: %w", info.Name, err)
 			}
-			idBytes := h[:]
+			idBytes := h
 			rows, multikey, lossy := indexEntriesForDoc(doc, info)
 			outInfos[i].Multikey = outInfos[i].Multikey || multikey
 			outInfos[i].Lossy = outInfos[i].Lossy || lossy
@@ -348,11 +348,11 @@ func applyUpdatesToIndexes(ctx context.Context, infos []backends.IndexInfo, maps
 			if err != nil {
 				return nil, nil, fmt.Errorf("applyUpdatesToIndexes: doc missing _id for index %q: %w", info.Name, err)
 			}
-			h, err := hashID(docID)
+			h, err := primaryKey(docID)
 			if err != nil {
 				return nil, nil, fmt.Errorf("applyUpdatesToIndexes: hashing _id for index %q: %w", info.Name, err)
 			}
-			idBytes := h[:]
+			idBytes := h
 
 			oldRows, _, _ := indexEntriesForDoc(oldDocs[d], info)
 			newRows, multikey, lossy := indexEntriesForDoc(newDocs[d], info)
@@ -414,11 +414,11 @@ func applyDeletesToIndexes(ctx context.Context, infos []backends.IndexInfo, maps
 			if err != nil {
 				return nil, fmt.Errorf("applyDeletesToIndexes: doc missing _id for index %q: %w", info.Name, err)
 			}
-			h, err := hashID(docID)
+			h, err := primaryKey(docID)
 			if err != nil {
 				return nil, fmt.Errorf("applyDeletesToIndexes: hashing _id for index %q: %w", info.Name, err)
 			}
-			idBytes := h[:]
+			idBytes := h
 			rows, _, _ := indexEntriesForDoc(doc, info)
 			for _, row := range rows {
 				if err := idxpkg.DeleteEntry(ctx, mut, row, idBytes); err != nil {

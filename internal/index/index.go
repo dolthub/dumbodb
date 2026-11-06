@@ -236,25 +236,13 @@ func rangeLookupCapped(ctx context.Context, m prolly.Map, startKey, stopKey []by
 			continue
 		}
 
-		// The primary ID byte width is fixed at 20 (see hashID in the dolt
-		// backend), so the primary ID is unambiguously the last 20 bytes of
-		// the composite key. We can't scan from the left for the discriminator
-		// because 0x04 may legitimately appear inside KeyString-encoded
-		// values (e.g. as a single-byte integer payload).
-		const primaryIDLen = 20
-		if len(compositeKey) < primaryIDLen+1 {
+		vals, id, ok := SplitEntry(compositeKey)
+		if !ok {
 			continue
 		}
-		idStart := len(compositeKey) - primaryIDLen
-		if compositeKey[idStart-1] != discriminator {
-			continue
-		}
-
-		idCopy := make([]byte, primaryIDLen)
-		copy(idCopy, compositeKey[idStart:])
-		results = append(results, idCopy)
+		results = append(results, bytes.Clone(id))
 		if keepValues {
-			values = append(values, bytes.Clone(compositeKey[:idStart-1]))
+			values = append(values, bytes.Clone(vals))
 		}
 
 		if maxResults >= 0 && len(results) > maxResults {
@@ -416,16 +404,30 @@ func (it *RangeIDIter) fillBackward(ctx context.Context) error {
 }
 
 func entryPrimaryID(k val.Tuple) ([]byte, bool) {
-	const primaryIDLen = 20
 	compositeKey, ok := idxKeyDesc.GetBytes(0, k)
-	if !ok || len(compositeKey) < primaryIDLen+1 {
+	if !ok {
 		return nil, false
 	}
-	idStart := len(compositeKey) - primaryIDLen
-	if compositeKey[idStart-1] != discriminator {
-		return nil, false
+	_, id, ok := SplitEntry(compositeKey)
+	return bytes.Clone(id), ok
+}
+
+// SplitEntry splits an index entry key, [values][0x04][primary key], into its
+// encoded values and primary key. Every value encoding delimits itself and
+// none begins with 0x04, so the first 0x04 at a value boundary ends the
+// values.
+func SplitEntry(compositeKey []byte) (values, primaryKey []byte, ok bool) {
+	for i := 0; i < len(compositeKey); {
+		if compositeKey[i] == discriminator {
+			return compositeKey[:i], compositeKey[i+1:], i+1 < len(compositeKey)
+		}
+		l, ok := valueLen(compositeKey[i:])
+		if !ok {
+			return nil, nil, false
+		}
+		i += l
 	}
-	return bytes.Clone(compositeKey[idStart:]), true
+	return nil, nil, false
 }
 
 // IterKeyRange iterates the entries in [startKey, stopKey); a nil or empty
