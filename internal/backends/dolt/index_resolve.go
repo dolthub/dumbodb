@@ -35,7 +35,6 @@ import (
 	"github.com/dolthub/dolt/go/store/nbs"
 	"github.com/dolthub/dolt/go/store/prolly"
 	"github.com/dolthub/dolt/go/store/prolly/tree"
-	dolttypes "github.com/dolthub/dolt/go/store/types"
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/bson"
@@ -46,26 +45,28 @@ import (
 type resolvedIndexEntry struct {
 	info    backends.IndexInfo
 	mapRoot hash.Hash
-	// id identifies the definition and root.
-	id hash.Hash
+	// defHash identifies the definition; with mapRoot, the index state.
+	defHash hash.Hash
 }
 
-// indexDefinitionMemo caches decoded definitions by the hash of their
-// encoding, so a definition decodes once from any branch or database. It is
-// keyed by definition alone because the map root changes on every indexed
-// write. No eviction; see design 6.1.
-var indexDefinitionMemo sync.Map // hash.Hash -> backends.IndexInfo
+// indexDefinitionMemo caches decoded definitions by their encoding, so a
+// definition decodes once from any branch or database. It is keyed by
+// definition alone because the map root changes on every indexed write, and
+// by the bytes rather than their hash because every query resolves its
+// indexes. No eviction; see design 6.1.
+var indexDefinitionMemo sync.Map // string(definition) -> memoizedDefinition
 
-func indexEntryID(defHash, root hash.Hash) hash.Hash {
-	return hash.Of(append(defHash[:], root[:]...))
+type memoizedDefinition struct {
+	info backends.IndexInfo
+	hash hash.Hash
 }
 
 // resolveIndexEntry decodes the definition def of the index whose map is at
 // root. The returned entry's info is shared and must not be mutated.
 func resolveIndexEntry(def []byte, root hash.Hash) (*resolvedIndexEntry, error) {
-	defHash := hash.Of(def)
-	if v, ok := indexDefinitionMemo.Load(defHash); ok {
-		return &resolvedIndexEntry{info: v.(backends.IndexInfo), mapRoot: root, id: indexEntryID(defHash, root)}, nil
+	if v, ok := indexDefinitionMemo.Load(string(def)); ok {
+		m := v.(memoizedDefinition)
+		return &resolvedIndexEntry{info: m.info, mapRoot: root, defHash: m.hash}, nil
 	}
 	doc, err := bson.ToDocument(wirebson.RawDocument(def))
 	if err != nil {
@@ -75,8 +76,9 @@ func resolveIndexEntry(def []byte, root hash.Hash) (*resolvedIndexEntry, error) 
 	if err != nil {
 		return nil, fmt.Errorf("resolveIndexEntry: %w", err)
 	}
-	actual, _ := indexDefinitionMemo.LoadOrStore(defHash, info)
-	return &resolvedIndexEntry{info: actual.(backends.IndexInfo), mapRoot: root, id: indexEntryID(defHash, root)}, nil
+	actual, _ := indexDefinitionMemo.LoadOrStore(string(def), memoizedDefinition{info: info, hash: hash.Of(def)})
+	m := actual.(memoizedDefinition)
+	return &resolvedIndexEntry{info: m.info, mapRoot: root, defHash: m.hash}, nil
 }
 
 // emptySecondaryIndexesCache memoizes the per-NodeStore empty secondary
@@ -199,7 +201,7 @@ func resolveIndexes(ctx context.Context, c *collection, state *dbState) ([]backe
 	infos := make([]backends.IndexInfo, 0, cnt)
 	maps := make([]prolly.Map, 0, cnt)
 	if err := indexes.IterAll(ctx, func(_ string, entry *resolvedIndexEntry) error {
-		m, err := openIndexMap(ctx, state.vs, state.ns, entry.mapRoot)
+		m, err := openIndexMap(ctx, state.ns, entry.mapRoot)
 		if err != nil {
 			return err
 		}
@@ -530,7 +532,7 @@ func computeIndexChanges(ctx context.Context, state *dbState, aDTBL, bDTBL hash.
 			added = append(added, b.info)
 		case inA && !inB:
 			removed = append(removed, a.info)
-		case a.id != b.id:
+		case a.defHash != b.defHash || a.mapRoot != b.mapRoot:
 			modified = append(modified, backends.IndexChange{From: a.info, To: b.info})
 		}
 	}
@@ -565,18 +567,12 @@ func indexChangeNamesOf(changes []backends.IndexChange) []string {
 	return out
 }
 
-func openIndexMap(ctx context.Context, vs *dolttypes.ValueStore, ns tree.NodeStore, mapRoot hash.Hash) (prolly.Map, error) {
-	v, err := vs.ReadValue(ctx, mapRoot)
+func openIndexMap(ctx context.Context, ns tree.NodeStore, mapRoot hash.Hash) (prolly.Map, error) {
+	// The node store's cache shares the root node across queries, and with it
+	// the node's memoized hash, which pinning the map for GC reads.
+	node, err := ns.Read(ctx, mapRoot)
 	if err != nil {
-		return prolly.Map{}, fmt.Errorf("openIndexMap: ReadValue: %w", err)
-	}
-	msg, ok := v.(dolttypes.SerialMessage)
-	if !ok {
-		return prolly.Map{}, fmt.Errorf("openIndexMap: unexpected value type %T", v)
-	}
-	node, _, err := tree.NodeFromBytes([]byte(msg))
-	if err != nil {
-		return prolly.Map{}, fmt.Errorf("openIndexMap: NodeFromBytes: %w", err)
+		return prolly.Map{}, fmt.Errorf("openIndexMap: %w", err)
 	}
 	return prolly.NewMap(node, ns, idxpkg.KeyDescriptor(), idxpkg.ValDescriptor()), nil
 }

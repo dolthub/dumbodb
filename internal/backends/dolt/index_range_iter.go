@@ -211,11 +211,12 @@ func (it *indexRangeIter) Close() {
 // indexIDStream yields the primary ids of index ranges lazily, in index order
 // or reversed, counting each index key as it is consumed.
 type indexIDStream struct {
-	ctx     context.Context
-	idxMap  prolly.Map
-	ranges  [][2][]byte
-	reverse bool
-	current *idxpkg.RangeIDIter
+	examined examinedCounter
+	ctx      context.Context
+	idxMap   prolly.Map
+	ranges   [][2][]byte
+	reverse  bool
+	current  *idxpkg.RangeIDIter
 	// buffered holds entries read ahead by holdsAtMost, yielded before
 	// current's.
 	buffered []indexEntry
@@ -266,11 +267,11 @@ func (s *indexIDStream) next() (indexEntry, error) {
 				return indexEntry{}, err
 			}
 		}
-		countKeysExamined(s.ctx, e.gapKeys)
+		s.examined.keys(s.ctx, e.gapKeys)
 		if e.id == nil {
 			return e, nil
 		}
-		countKeysExamined(s.ctx, 1)
+		s.examined.keys(s.ctx, 1)
 		if s.seen == nil {
 			return e, nil
 		}

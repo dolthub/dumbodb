@@ -16,6 +16,7 @@ package dolt
 
 import (
 	"context"
+	"hash/fnv"
 	"slices"
 	"testing"
 
@@ -72,5 +73,18 @@ func TestClusteredScan(t *testing.T) {
 				t.Errorf("examined %d docs, want %d", examined.Docs(), tc.docs)
 			}
 		})
+	}
+}
+
+func TestKeyBytesToRecordIDIsFNV64a(t *testing.T) {
+	for _, key := range [][]byte{nil, {0x2B, 0x02}, []byte("\x3Cabc\x00"), make([]byte, 40)} {
+		h := fnv.New64a()
+		_, _ = h.Write(key)
+		if got, want := keyBytesToRecordID(key), int64(h.Sum64()); got != want {
+			t.Errorf("% X: %d, want %d", key, got, want)
+		}
+	}
+	if n := testing.AllocsPerRun(100, func() { keyBytesToRecordID([]byte{0x2B, 0x02}) }); n != 0 {
+		t.Errorf("%v allocations, want 0", n)
 	}
 }

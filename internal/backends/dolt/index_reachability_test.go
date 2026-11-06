@@ -133,7 +133,7 @@ func (l indexLayout) requireReadable(t *testing.T, ctx context.Context, b *Backe
 	var names []string
 	require.NoError(t, indexes.IterAll(ctx, func(name string, entry *resolvedIndexEntry) error {
 		names = append(names, name)
-		m, err := openIndexMap(ctx, state.vs, state.ns, entry.mapRoot)
+		m, err := openIndexMap(ctx, state.ns, entry.mapRoot)
 		if err != nil {
 			return err
 		}
