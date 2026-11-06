@@ -128,9 +128,9 @@ func TestKeyStringMatchesMongod(t *testing.T) {
 
 // storedID is a stored document's _id, as a rawKey, and its RecordId.
 // orderOnly reports values whose encoding is checked only for order: those
-// holding an inexact Decimal128 of magnitude below 2^-256, where mongod's continuation
-// comes from Decimal128 arithmetic on the 2^768-scaled value that is not
-// reproduced. Its leading bytes, order and uniqueness still match.
+// holding an inexact Decimal128 of magnitude below 2^-255, where mongod's
+// trailing bytes come from Decimal128 arithmetic on the 2^768-scaled value
+// that is not reproduced. Order and uniqueness still match.
 func orderOnly(v any) bool {
 	switch v := v.(type) {
 	case *types.Document:
@@ -161,7 +161,7 @@ func orderOnly(v any) bool {
 	}
 	_, exact := mag.Float64()
 	return !exact && mag.Cmp(new(big.Rat).SetFloat64(math.SmallestNonzeroFloat64)) >= 0 &&
-		mag.Cmp(new(big.Rat).SetFloat64(0x1p-256)) < 0
+		mag.Cmp(new(big.Rat).SetFloat64(0x1p-255)) < 0
 }
 
 func abs(n int) int {
@@ -255,6 +255,7 @@ func keyStringCorpus() []any {
 		math.NaN(), math.Inf(1), math.Inf(-1), 0.0, math.Copysign(0, -1),
 		math.MaxFloat64, -math.MaxFloat64, math.SmallestNonzeroFloat64, -math.SmallestNonzeroFloat64, 2.2250738585072014e-308,
 		0.5, 0.25, 0.1, 1.5, 2.5, 1e-20, 255.5, 256.5, 1e15 + 0.5, 4503599627370495.5,
+		0x1p-255, math.Nextafter(0x1p-255, 0), 0x1.8p-256, 0x1p-256, -0x1.8p-256, dec(1, -77, false), dec(12345, -81, true),
 		-0.1, -0.10000000000000002, -1e-20, -3e-20, -0.49, -0.5, -0.75, -1.5, -2.5, -255.5, -1e15 - 0.5,
 		float64(1 << 53), float64(1<<53) * 2, 9.223372036854776e18, 1.8446744073709552e19, 1e20, 1e300, -1e20, -9.3e18,
 		dec(0, 0, false), dec(0, 0, true), dec(3, 0, false), dec(35, -1, false), dec(1, -1, true), dec(1, -32, false),

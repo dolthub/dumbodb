@@ -262,11 +262,12 @@ func appendFloat64(out []byte, f float64) []byte {
 	return appendLarge(out, negative, largeBits(mag))
 }
 
-// smallBits is the 8-byte encoding of mag in (0, 1), its two low bits clear:
-// the IEEE bits shifted past the zero sign and top exponent bit, or for mag
-// below 2^-256, the bits of mag scaled by 2^768 shifted one bit.
+// smallBits is the 8-byte encoding of mag in (0, 1): the IEEE bits shifted
+// past the zero sign and top exponent bit, its two low bits clear, or for mag
+// below 2^-255, the bits of mag scaled by 2^768 shifted one bit. The two meet
+// at 2^-255.
 func smallBits(mag float64) uint64 {
-	if mag < 0x1p-256 {
+	if mag < 0x1p-255 {
 		return math.Float64bits(mag*0x1p768) << 1
 	}
 	return math.Float64bits(mag) << 2
