@@ -404,25 +404,24 @@ func (s *decimalSum) result() types.Decimal128 {
 		return decimalZero()
 	}
 
-	p, ok := bson.ParseDecimal128FromBigInt(s.totalM, s.minExp)
-	if !ok {
-		return decimalZero()
-	}
+	// The exact total can need more than 34 digits; round it as Decimal128
+	// arithmetic does.
+	x := apd.NewWithBigInt(new(apd.BigInt).SetMathBigInt(s.totalM), int32(s.minExp))
 
-	h, l := p.GetBytes()
-
-	return types.Decimal128{H: h, L: l}
+	return APDToDecimal128(x)
 }
 
 // NumberSum incrementally sums numbers with the same type-promotion and
 // Decimal128 semantics as SumNumbers, in O(1) space. Pre-decimal int and
 // float64 values are folded via big.Int / float64 and converted to Decimal128
-// only when a Decimal128 value first appears; all-int, all-float, all-decimal,
-// and int+decimal groups match SumNumbers exactly, while a group mixing
-// multiple float64 values with a Decimal128 may differ in the last ULP.
+// only when a Decimal128 value first appears. The float64 sum also tracks its
+// rounding error, which joins the conversion, as MongoDB carries a double-double
+// sum into Decimal128: 0.1 + 0.2 + NumberDecimal("0.3") is
+// 0.6000000000000000166533453693773481 whatever the order.
 type NumberSum struct {
 	intSum     *big.Int
 	floatSum   float64
+	floatErr   float64 // rounding error of floatSum
 	hasInt     bool
 	hasInt64   bool
 	hasFloat64 bool
@@ -466,7 +465,11 @@ func (s *NumberSum) Add(v any) {
 			return
 		}
 		s.hasFloat64 = true
-		s.floatSum += n
+		sum := s.floatSum + n
+		// TwoSum: the exact error of the rounded addition.
+		b := sum - s.floatSum
+		s.floatErr += (s.floatSum - (sum - b)) + (n - b)
+		s.floatSum = sum
 	case types.Decimal128:
 		s.count++
 		if !s.sawDecimal {
@@ -489,6 +492,9 @@ func (s *NumberSum) promoteToDecimal() {
 
 	if s.hasFloat64 {
 		s.dec.add(s.floatSum)
+		if s.floatErr != 0 && !math.IsNaN(s.floatErr) && !math.IsInf(s.floatErr, 0) {
+			s.dec.add(s.floatErr)
+		}
 	}
 }
 
