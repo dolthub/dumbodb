@@ -3561,9 +3561,7 @@ func scanDistinctFromIndex(
 		}
 		prefix := composite[:idStart-1]
 
-		// Subdocuments and arrays all encode to one marker, so a group keyed by
-		// a marker holds distinct values and every member must be read.
-		if havePrev && bytes.Equal(prefix, prevPrefix) && !idxpkg.KeyMergesValues(prefix) {
+		if havePrev && bytes.Equal(prefix, prevPrefix) {
 			continue
 		}
 

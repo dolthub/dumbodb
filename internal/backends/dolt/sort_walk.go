@@ -20,7 +20,6 @@ import (
 	"errors"
 	"io"
 	"slices"
-	"sort"
 
 	"github.com/dolthub/dolt/go/store/prolly"
 	"github.com/dolthub/dolt/go/store/prolly/tree"
@@ -98,8 +97,7 @@ func (c *collection) trySortWalk(ctx context.Context, state *dbState, primary pr
 	idx, idxMap := infos[i], maps[i]
 
 	ascending := sortDirectionAscending(params.Sort)
-	path, err := types.NewPathFromString(idx.Key[0].Field)
-	if err != nil {
+	if _, err := types.NewPathFromString(idx.Key[0].Field); err != nil {
 		return nil, false, nil
 	}
 	var mapIter prolly.MapIter
@@ -118,12 +116,7 @@ func (c *collection) trySortWalk(ctx context.Context, state *dbState, primary pr
 		ns:      state.ns,
 		primary: primary,
 		entries: mapIter,
-		path:    path,
-		order:   types.Ascending,
 		fields:  params.Fields,
-	}
-	if !ascending {
-		it.order = types.Descending
 	}
 	if idx.Multikey {
 		it.seen = make(map[string]struct{})
@@ -296,29 +289,12 @@ type sortWalkIter struct {
 	ns      tree.NodeStore
 	primary prolly.Map
 	entries prolly.MapIter
-	path    types.Path
-	order   types.SortType
 	fields  []string
 	seen    map[string]struct{}
-	peeked  *sortWalkEntry
-	pending []*types.Document
 	release func()
 }
 
-func (it *sortWalkIter) sortsBefore(a, b *types.Document) bool {
-	return types.CompareOrderForSort(commonpath.SortKeyValue(a, it.path), commonpath.SortKeyValue(b, it.path), it.order) == types.Less
-}
-
-func (it *sortWalkIter) sortByValue(docs []*types.Document) {
-	sort.SliceStable(docs, func(i, j int) bool { return it.sortsBefore(docs[i], docs[j]) })
-}
-
 func (it *sortWalkIter) nextEntry() (*sortWalkEntry, error) {
-	if it.peeked != nil {
-		e := it.peeked
-		it.peeked = nil
-		return e, nil
-	}
 	const primaryIDLen = 20
 	keyDesc := idxpkg.KeyDescriptor()
 	for {
@@ -373,57 +349,15 @@ func (it *sortWalkIter) Next() (struct{}, *types.Document, error) {
 // nextWalked returns the next document in index order, or nil at the end.
 func (it *sortWalkIter) nextWalked() (*types.Document, error) {
 	for {
-		if len(it.pending) > 0 {
-			doc := it.pending[0]
-			it.pending = it.pending[1:]
-			return doc, nil
-		}
-
 		e, err := it.nextEntry()
 		if err != nil || e == nil {
 			return nil, err
 		}
-		if !idxpkg.LeadingKeyMergesValues(e.prefix) {
-			doc, err := it.fetch(e)
-			if err != nil {
-				return nil, err
-			}
-			if doc != nil {
-				return doc, nil
-			}
-			continue
-		}
-
-		if err := it.readMarkerGroup(e); err != nil {
-			return nil, err
-		}
-	}
-}
-
-// readMarkerGroup buffers every document whose leading key shares first's
-// marker and orders them by their sort value.
-func (it *sortWalkIter) readMarkerGroup(first *sortWalkEntry) error {
-	marker := first.prefix[0]
-	var group []*types.Document
-	for e := first; e != nil; {
 		doc, err := it.fetch(e)
-		if err != nil {
-			return err
-		}
-		if doc != nil {
-			group = append(group, doc)
-		}
-		if e, err = it.nextEntry(); err != nil {
-			return err
-		}
-		if e != nil && (len(e.prefix) == 0 || e.prefix[0] != marker) {
-			it.peeked = e
-			break
+		if err != nil || doc != nil {
+			return doc, err
 		}
 	}
-	it.sortByValue(group)
-	it.pending = group
-	return nil
 }
 
 func (it *sortWalkIter) Close() {
@@ -524,12 +458,7 @@ func newPlanSortedIter(ctx context.Context, state *dbState, primary prolly.Map, 
 		ns:      state.ns,
 		primary: primary,
 		ids:     ids,
-		path:    must.NotFail(types.NewPathFromString(sortDoc.Keys()[0])),
-		order:   types.Ascending,
 		fields:  fields,
-	}
-	if !sortDirectionAscending(sortDoc) {
-		it.order = types.Descending
 	}
 	if state.backend != nil && state.backend.backgroundRP != nil {
 		it.release = state.backend.backgroundRP.pinRoot(state.name, primary.HashOf())
@@ -545,20 +474,11 @@ type planSortedIter struct {
 	primary prolly.Map
 	ids     [][]byte
 	stream  *indexIDStream
-	path    types.Path
-	order   types.SortType
 	fields  []string
-	peeked  *types.Document
-	pending []*types.Document
 	release func()
 }
 
 func (it *planSortedIter) nextFetched() (*types.Document, error) {
-	if it.peeked != nil {
-		doc := it.peeked
-		it.peeked = nil
-		return doc, nil
-	}
 	for {
 		id, err := it.nextID()
 		if err != nil || id == nil {
@@ -587,17 +507,7 @@ func (it *planSortedIter) nextID() ([]byte, error) {
 	return id, nil
 }
 
-func (it *planSortedIter) isSubdocument(doc *types.Document) bool {
-	_, ok := commonpath.SortKeyValue(doc, it.path).(*types.Document)
-	return ok
-}
-
 func (it *planSortedIter) Next() (struct{}, *types.Document, error) {
-	if len(it.pending) > 0 {
-		doc := it.pending[0]
-		it.pending = it.pending[1:]
-		return struct{}{}, doc, nil
-	}
 	doc, err := it.nextFetched()
 	if err != nil {
 		return struct{}{}, nil, err
@@ -605,29 +515,7 @@ func (it *planSortedIter) Next() (struct{}, *types.Document, error) {
 	if doc == nil {
 		return struct{}{}, nil, iterator.ErrIteratorDone
 	}
-	if !it.isSubdocument(doc) {
-		return struct{}{}, doc, nil
-	}
-	group := []*types.Document{doc}
-	for {
-		next, err := it.nextFetched()
-		if err != nil {
-			return struct{}{}, nil, err
-		}
-		if next == nil {
-			break
-		}
-		if !it.isSubdocument(next) {
-			it.peeked = next
-			break
-		}
-		group = append(group, next)
-	}
-	sort.SliceStable(group, func(i, j int) bool {
-		return types.CompareOrderForSort(commonpath.SortKeyValue(group[i], it.path), commonpath.SortKeyValue(group[j], it.path), it.order) == types.Less
-	})
-	it.pending = group[1:]
-	return struct{}{}, group[0], nil
+	return struct{}{}, doc, nil
 }
 
 func (it *planSortedIter) Close() {
