@@ -66,6 +66,14 @@ Parity is verified against a specific MongoDB release: **MongoDB 8.0.28**. This 
 - Ecosystem Features: Proprietary features specific to [MongoDB Atlas](https://www.mongodb.com/lp/cloud/atlas/try3) (e.g., Search Indexes, Serverless Triggers) are not supported. Support not planned.
 - Capped Collections: Fixed-size collections (`capped: true`) and their oldest-first eviction are not supported; creating one is rejected with an error. Not clear if there is any place for this feature in a version-controlled database. Support not planned.
 - Expiration (TTL): `expireAfterSeconds` is not supported; specifying it on a collection or index is rejected with an error rather than silently accepted. Support not planned.
+- Clustered Collections: every collection is stored clustered by `_id`, as a MongoDB collection created with `clusteredIndex: {key: {_id: 1}, unique: true}` is, and `listCollections` and `listIndexes` report it that way. The `clusteredIndex` option is validated as in MongoDB and otherwise has no effect. Behavior that follows from clustering:
+  - A query without a sort, and `$natural` order, return documents in `_id` order rather than insertion order. With the default ObjectId `_id`s that is close to insertion order.
+  - `_id` equality, ranges and sorts read the collection directly (`CLUSTERED_IXSCAN` in explain).
+  - Secondary index entries carry the encoded `_id`, so large `_id`s (long strings, embedded documents) make secondary indexes larger.
+  - `mongodump` of a DumboDB database restored into MongoDB creates clustered collections.
+  - A custom clustered index `name` is not recorded; the index is always reported as `_id_`.
+- Query Plans: when an `$or` uses several indexes, DumboDB runs their scans in index name order; MongoDB uses index creation order, which DumboDB does not record. Results are the same; only the order of unsorted results and explain output differ.
+- RecordIds: `showRecordId()` and `$recordId` return MongoDB's KeyString bytes for the `_id`, except for a Decimal128 `_id` below 2^-255 that is not exactly a double, whose trailing bytes differ (see [mongodb-keystring.md](docs/reference/mongodb-keystring.md#known-deviation-small-decimals)). Order and uniqueness are unaffected.
 - Reserved System Databases: the `config` and `local` databases carry special MongoDB semantics that DumboDB does not implement, so creating them is rejected with an error. DumboDB uses the `admin` database to store users and roles, but it is not at full parity with MongoDB's `admin` database.
 
 If you are needing missing features, please file an [issue](https://github.com/dolthub/dumbodb/issues), or join our [Discord server](https://discord.gg/gqr7K4VNKe) to start a conversation with us. We'd love your feedback!

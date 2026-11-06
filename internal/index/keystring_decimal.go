@@ -36,7 +36,8 @@ import (
 // Below 2^-255 mongod derives the flags and continuation of an inexact decimal
 // from Decimal128 arithmetic on the 2^768-scaled value; this encoding uses the
 // exact value instead. The leading bytes, order and uniqueness match mongod;
-// the trailing bytes may not.
+// the trailing bytes may not (docs/reference/mongodb-keystring.md, "Known
+// deviation").
 const (
 	decimalEqual15 = 2 // no continuation: the double rounded up to 15 digits
 	decimalBelow   = 1 // continuation; below the double rounded up to 15 digits
