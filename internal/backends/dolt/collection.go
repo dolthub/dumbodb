@@ -2801,8 +2801,8 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 
 	mut := m.Mutate()
 
-	// batchHashSet detects in-batch duplicate _id hashes in O(1).
-	batchHashSet := make(map[string]struct{}, len(params.Docs))
+	// batchKeySet detects in-batch duplicate primary keys in O(1).
+	batchKeySet := make(map[string]struct{}, len(params.Docs))
 	// In-batch collated string _ids (the primary probe only sees pre-batch state).
 	var batchStrIDs []string
 	// In-batch claims per unique index (probes only see pre-batch state).
@@ -2832,7 +2832,7 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 			return nil, backends.NewDuplicateKeyError(backends.DefaultIndexName, idDupKey(docID))
 		}
 
-		if _, dup := batchHashSet[string(h)]; dup {
+		if _, dup := batchKeySet[string(h)]; dup {
 			return nil, backends.NewDuplicateKeyError(backends.DefaultIndexName, idDupKey(docID))
 		}
 
@@ -2921,7 +2921,7 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 			return nil, err
 		}
 
-		batchHashSet[string(h)] = struct{}{}
+		batchKeySet[string(h)] = struct{}{}
 	}
 
 	newMap, err := mut.Map(ctx)
@@ -2958,10 +2958,10 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 }
 
 type initialSyncTuple struct {
-	hash  []byte
-	id    any
-	key   val.Tuple
-	value val.Tuple
+	primaryKey []byte
+	id         any
+	key        val.Tuple
+	value      val.Tuple
 }
 
 type initialSyncTupleIter struct {
@@ -3011,11 +3011,11 @@ func (c *collection) BulkLoadInitialSync(ctx context.Context, documents []*types
 		if err != nil {
 			return fmt.Errorf("document missing _id: %w", err)
 		}
-		hash, err := primaryKey(documentID)
+		pk, err := primaryKey(documentID)
 		if err != nil {
 			return fmt.Errorf("encoding _id: %w", err)
 		}
-		key, err := buildKey(hash)
+		key, err := buildKey(pk)
 		if err != nil {
 			return err
 		}
@@ -3023,16 +3023,16 @@ func (c *collection) BulkLoadInitialSync(ctx context.Context, documents []*types
 		if err != nil {
 			return err
 		}
-		tuples = append(tuples, initialSyncTuple{hash: hash, id: documentID, key: key, value: value})
+		tuples = append(tuples, initialSyncTuple{primaryKey: pk, id: documentID, key: key, value: value})
 	}
 	slices.SortFunc(tuples, func(left, right initialSyncTuple) int {
-		return bytes.Compare(left.hash, right.hash)
+		return bytes.Compare(left.primaryKey, right.primaryKey)
 	})
 	for index, tuple := range tuples {
-		if index > 0 && bytes.Equal(tuple.hash, tuples[index-1].hash) {
+		if index > 0 && bytes.Equal(tuple.primaryKey, tuples[index-1].primaryKey) {
 			return backends.NewDuplicateKeyError(backends.DefaultIndexName, idDupKey(tuple.id))
 		}
-		exists, err := existsID(ctx, primary, tuple.hash)
+		exists, err := existsID(ctx, primary, tuple.primaryKey)
 		if err != nil {
 			return fmt.Errorf("checking existing _id: %w", err)
 		}

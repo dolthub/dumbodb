@@ -130,7 +130,8 @@ func TestKeyStringMatchesMongod(t *testing.T) {
 // orderOnly reports values whose encoding is checked only for order: those
 // holding an inexact Decimal128 of magnitude below 2^-255, where mongod's
 // trailing bytes come from Decimal128 arithmetic on the 2^768-scaled value
-// that is not reproduced. Order and uniqueness still match.
+// that is not reproduced. Order and uniqueness still match
+// (docs/reference/mongodb-keystring.md, "Known deviation").
 func orderOnly(v any) bool {
 	switch v := v.(type) {
 	case *types.Document:
