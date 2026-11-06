@@ -98,6 +98,10 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 	// If an already-existing collection is created with explicit options, it's an error.
 	var hasExplicitOptions bool
 
+	if err := validateClusteredIndex(document); err != nil {
+		return nil, err
+	}
+
 	if v, _ := document.Get("capped"); v != nil {
 		capped, err := handlerparams.GetBoolOptionalParam("capped", v)
 		if err != nil {

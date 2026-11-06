@@ -208,14 +208,14 @@ func cloneExecutionStage(node *types.Document, run explainRun, root, aboveMatch 
 		// An OR or SORT_MERGE returns each document its branches found once,
 		// all fetched.
 		nReturned = int32(run.outerDocs())
-	case stage == "FETCH" || stage == "COLLSCAN":
+	case stage == "FETCH" || stage == "COLLSCAN" || stage == "CLUSTERED_IXSCAN":
 		nReturned = run.matched
 	case childDoc == nil || !aboveMatch:
 		nReturned = run.scanned
 	default:
 		nReturned = run.returned
 	}
-	if stage == "FETCH" || stage == "COLLSCAN" {
+	if stage == "FETCH" || stage == "COLLSCAN" || stage == "CLUSTERED_IXSCAN" {
 		aboveMatch = false
 	}
 	d.Set("nReturned", nReturned)
@@ -223,9 +223,9 @@ func cloneExecutionStage(node *types.Document, run explainRun, root, aboveMatch 
 	switch stage {
 	case "IXSCAN", "COUNT_SCAN", "DISTINCT_SCAN":
 		d.Set("keysExamined", int32(run.keys))
-	case "FETCH", "COLLSCAN":
+	case "FETCH", "COLLSCAN", "CLUSTERED_IXSCAN":
 		d.Set("docsExamined", int32(run.outerDocs()))
-	case "EXPRESS_IXSCAN", "EXPRESS_UPDATE", "EXPRESS_DELETE":
+	case "EXPRESS_CLUSTERED_IXSCAN", "EXPRESS_UPDATE", "EXPRESS_DELETE":
 		d.Set("keysExamined", int32(run.keys))
 		d.Set("docsExamined", int32(run.docs))
 	}

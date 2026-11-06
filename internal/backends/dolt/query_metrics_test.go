@@ -51,7 +51,8 @@ func TestQueryExecutorCounters(t *testing.T) {
 	}{
 		{"collection scan", func(ctx context.Context) { query(ctx, &backends.QueryParams{Filter: eq("x", int32(1))}) }, 0, 25},
 		{"index equality", func(ctx context.Context) { query(ctx, &backends.QueryParams{Filter: eq("k", int32(10))}) }, 2, 2},
-		{"_id equality", func(ctx context.Context) { query(ctx, &backends.QueryParams{Filter: eq("_id", int32(3))}) }, 1, 1},
+		// The clustered _id index reads the document itself: no keys.
+		{"_id equality", func(ctx context.Context) { query(ctx, &backends.QueryParams{Filter: eq("_id", int32(3))}) }, 0, 1},
 		{"_id miss", func(ctx context.Context) { query(ctx, &backends.QueryParams{Filter: eq("_id", int32(99))}) }, 0, 0},
 		{"index-only count", func(ctx context.Context) {
 			if _, err := c.Count(ctx, &backends.CountParams{Filter: eq("k", int32(10))}); err != nil {

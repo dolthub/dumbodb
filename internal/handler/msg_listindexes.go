@@ -123,6 +123,12 @@ func (h *Handler) MsgListIndexes(connCtx context.Context, msg *wire.OpMsg) (*wir
 			indexDoc.Set("unique", index.Unique)
 		}
 
+		// The _id index is the clustered index every collection is stored by.
+		if index.Name == backends.DefaultIndexName {
+			indexDoc.Set("unique", true)
+			indexDoc.Set("clustered", true)
+		}
+
 		// sparse is reported only when set, matching MongoDB
 		if index.Sparse && index.Name != backends.DefaultIndexName {
 			indexDoc.Set("sparse", index.Sparse)

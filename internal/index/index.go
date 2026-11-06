@@ -159,6 +159,21 @@ func UpperBoundInclusive(fieldValue any) []byte {
 	return out
 }
 
+// ValueBound converts a bound from LowerBound*, UpperBound* or BracketRange,
+// which bound index entries, into the same bound on bare value encodings such
+// as primary keys.
+func ValueBound(entryBound []byte) []byte {
+	if len(entryBound) <= 1 {
+		return entryBound
+	}
+	value := bytes.Clone(entryBound[:len(entryBound)-1])
+	if entryBound[len(entryBound)-1] == discriminator {
+		return value
+	}
+	// Value encodings are prefix-free, so value+0x00 is the least key past value.
+	return append(value, 0x00)
+}
+
 // boundTuple wraps a raw composite-key byte slice in the index's val.Tuple
 // shape so it can be passed to prolly.Map.IterKeyRange. A nil/empty slice
 // produces a nil tuple, which IterKeyRange interprets as an open bound.

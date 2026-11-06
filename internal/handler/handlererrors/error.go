@@ -502,6 +502,21 @@ const (
 	// descending sortBy.
 	ErrRangeWindowDescendingSort = ErrorCode(8947401) // Location8947401
 
+	// ErrClusteredIndexNotUnique indicates a clusteredIndex without unique: true.
+	ErrClusteredIndexNotUnique = ErrorCode(5979700) // Location5979700
+
+	// ErrClusteredIndexLegacyFormat indicates clusteredIndex: true.
+	ErrClusteredIndexLegacyFormat = ErrorCode(5979703) // Location5979703
+
+	// ErrClusteredIndexVersion indicates a clusteredIndex with v other than 2.
+	ErrClusteredIndexVersion = ErrorCode(5979704) // Location5979704
+
+	// ErrClusteredIndexOnView indicates a clusteredIndex on a view.
+	ErrClusteredIndexOnView = ErrorCode(6026500) // Location6026500
+
+	// ErrClusteredIndexCappedSize indicates a capped size on a clustered collection.
+	ErrClusteredIndexCappedSize = ErrorCode(6049200) // Location6049200
+
 	// ErrSizeNotArray indicates that the argument to $size is not an array.
 	ErrSizeNotArray = ErrorCode(17124) // Location17124
 

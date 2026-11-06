@@ -144,8 +144,12 @@ func (c *collection) query(ctx context.Context, params *backends.QueryParams) (*
 	// so without a hint it is tried first, as MongoDB prefers _id_.
 	if !naturalHint && params != nil && params.Hint == nil && !params.Collated && params.Filter != nil {
 		if idVal, ok := simpleIDEquality(params.Filter); ok {
-			if iter, err := pointLookupByID(ctx, state.ns, m, idVal, params.OnlyRecordIDs); err == nil {
-				return &backends.QueryResult{Iter: iter}, idPointStage(), nil
+			if params.Filter.Len() == 1 {
+				if iter, err := pointLookupByID(ctx, state.ns, m, idVal, params.OnlyRecordIDs); err == nil {
+					return &backends.QueryResult{Iter: iter}, idPointStage(), nil
+				}
+			} else if res, ok, err := clusteredQuery(ctx, state, m, params); err != nil || ok {
+				return res, clusteredStage(), err
 			}
 		}
 	}
@@ -302,16 +306,31 @@ func (c *collection) query(ctx context.Context, params *backends.QueryParams) (*
 
 	onlyRecordIDs := params != nil && params.OnlyRecordIDs
 
-	// Fast path: if the filter pins _id to a concrete scalar value, use the
-	// primary-key point lookup instead of a full collection scan. The handler's
-	// downstream FilterIterator applies any remaining predicates.
 	if !naturalHint && params != nil && !params.Collated && params.Filter != nil {
-		if idVal, ok := simpleIDEquality(params.Filter); ok {
+		if idVal, ok := simpleIDEquality(params.Filter); ok && params.Filter.Len() == 1 {
 			iter, err := pointLookupByID(ctx, state.ns, m, idVal, onlyRecordIDs)
 			if err == nil {
 				return &backends.QueryResult{Iter: iter}, idPointStage(), nil
 			}
 			// Fall back to full scan on any error (e.g. unsupported _id type).
+		}
+	}
+
+	// The primary map is the clustered _id index: it serves _id ranges and
+	// _id sorts.
+	if !naturalHint && params != nil && !params.Collated {
+		if idSort, _ := sortIsID(params.Sort); params.Sort.Len() == 0 || idSort {
+			res, ok, err := clusteredQuery(ctx, state, m, params)
+			if err != nil {
+				return nil, nil, err
+			}
+			if ok {
+				stage := collscanStage()
+				if _, _, ranged := clusteredIDRange(params.Filter); ranged {
+					stage = clusteredStage()
+				}
+				return res, stage, nil
+			}
 		}
 	}
 
@@ -558,7 +577,6 @@ func pointLookupByID(ctx context.Context, ns tree.NodeStore, m prolly.Map, idVal
 		if v == nil {
 			return nil
 		}
-		countKeysExamined(ctx, 1)
 		countDocsExamined(ctx, 1)
 
 		keyBytes, ok := keyDesc.GetBytes(0, k)
@@ -1728,11 +1746,8 @@ type explainStage struct {
 	stage      string
 	indexName  string
 	keyPattern *types.Document
-	// keyPatternText replaces keyPattern for an EXPRESS stage, which MongoDB
-	// reports as a string.
-	keyPatternText string
-	input          *explainStage
-	inputs         []*explainStage
+	input      *explainStage
+	inputs     []*explainStage
 	// index is the index an IXSCAN reads.
 	index backends.IndexInfo
 	// idPoint marks the _id point lookup's IXSCAN.
@@ -1747,10 +1762,7 @@ func (s *explainStage) toDoc() *types.Document {
 	if s.indexName != "" {
 		d.Set("indexName", s.indexName)
 	}
-	switch {
-	case s.keyPatternText != "":
-		d.Set("keyPattern", s.keyPatternText)
-	case s.keyPattern != nil:
+	if s.keyPattern != nil {
 		d.Set("keyPattern", s.keyPattern)
 	}
 	if len(s.inputs) > 0 {
@@ -2220,14 +2232,14 @@ func ixscanStage(info backends.IndexInfo) *explainStage {
 	return &explainStage{stage: "IXSCAN", indexName: info.Name, keyPattern: keyPatternOf(info), index: info}
 }
 
-// idPointStage is the _id point lookup, a FETCH of one _id_ index entry.
+// idPointStage is the _id point lookup, one read of the clustered _id index.
 func idPointStage() *explainStage {
-	return fetchStage(&explainStage{
-		stage:      "IXSCAN",
-		indexName:  "_id_",
-		keyPattern: must.NotFail(types.NewDocument("_id", int32(1))),
-		idPoint:    true,
-	})
+	return &explainStage{stage: "CLUSTERED_IXSCAN", idPoint: true}
+}
+
+// clusteredStage is a scan of an _id range of the clustered _id index.
+func clusteredStage() *explainStage {
+	return &explainStage{stage: "CLUSTERED_IXSCAN"}
 }
 
 // walkStage is a sort walk of the index named name, fetching each document.
@@ -2306,6 +2318,8 @@ func buildCountOrDistinctPlan(params *backends.ExplainParams, idxInfos []backend
 		leaf := collscanStage()
 		if indexPicked {
 			leaf = &explainStage{stage: "COUNT_SCAN", indexName: picked.Name, keyPattern: keyPatternOf(picked)}
+		} else if _, _, ranged := clusteredIDRange(params.Filter); ranged && !params.Collated && !hintIsNatural(params.Hint) {
+			leaf = clusteredStage()
 		}
 		return &explainStage{stage: "COUNT", input: leaf}
 	}
@@ -2385,20 +2399,20 @@ func wrapScanPlan(params *backends.ExplainParams, scan *explainStage, sorted boo
 	return node
 }
 
-// expressStage returns the single EXPRESS stage MongoDB explains an _id point
-// lookup with when the filter is the _id equality alone.
+// expressStage returns the single EXPRESS stage MongoDB explains a clustered
+// _id point lookup with when the filter is the _id equality alone.
 func expressStage(params *backends.ExplainParams, scan *explainStage) (*explainStage, bool) {
-	if scan.input == nil || !scan.input.idPoint || params.Filter.Len() != 1 {
+	if !scan.idPoint || params.Filter.Len() != 1 {
 		return nil, false
 	}
-	stage := "EXPRESS_IXSCAN"
+	stage := "EXPRESS_CLUSTERED_IXSCAN"
 	switch {
 	case params.Command == "update" || params.Command == "findAndModify" && !params.Remove:
 		stage = "EXPRESS_UPDATE"
 	case params.Command == "delete" || params.Command == "findAndModify":
 		stage = "EXPRESS_DELETE"
 	}
-	return &explainStage{stage: stage, indexName: "_id_", keyPatternText: "{ _id: 1 }"}, true
+	return &explainStage{stage: stage}, true
 }
 
 // projectionIsCoveredBy reports whether projection only references
@@ -4597,6 +4611,10 @@ type mapIter struct {
 	buf          []byte
 	// release, if set, unpins the iterated map's root from GC on Close.
 	release func()
+	// outside, if set, ends the scan at the first key it reports, after
+	// counting that document examined as a clustered scan does.
+	outside func(key []byte) bool
+	done    bool
 }
 
 func newMapIter(ctx context.Context, ns tree.NodeStore, m prolly.Map, reverse bool, limit int64, onlyRecordID bool, prefilter func([]byte) bool) types.DocumentsIterator {
@@ -4624,7 +4642,7 @@ func newMapIter(ctx context.Context, ns tree.NodeStore, m prolly.Map, reverse bo
 }
 
 func (it *mapIter) Next() (struct{}, *types.Document, error) {
-	if it.limit > 0 && it.count >= it.limit {
+	if it.done || it.limit > 0 && it.count >= it.limit {
 		return struct{}{}, nil, iterator.ErrIteratorDone
 	}
 
@@ -4646,6 +4664,10 @@ func (it *mapIter) Next() (struct{}, *types.Document, error) {
 		keyBytes, ok := keyDesc.GetBytes(0, k)
 		if !ok {
 			continue
+		}
+		if it.outside != nil && it.outside(keyBytes) {
+			it.done = true
+			return struct{}{}, nil, iterator.ErrIteratorDone
 		}
 
 		recordID := keyBytesToRecordID(keyBytes)
