@@ -20,7 +20,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"hash/fnv"
 	"io"
 	"math"
 	"slices"
@@ -1219,13 +1218,14 @@ func flattenOrBranches(branches any) ([]*types.Document, bool) {
 // when it is non-nil.
 func (plan *indexLookupPlan) fetch(ctx context.Context, state *dbState, primary prolly.Map, fields []string) ([]*types.Document, error) {
 	docs := make([]*types.Document, 0, len(plan.ids))
+	var examined examinedCounter
 	for _, idBytes := range plan.ids {
 		doc, err := readPrimaryDoc(ctx, state.ns, primary, idBytes, fields)
 		if err != nil {
 			return nil, err
 		}
 		if doc != nil {
-			countDocsExamined(ctx, 1)
+			examined.docs(ctx, 1)
 			docs = append(docs, doc)
 		}
 	}
@@ -4596,9 +4596,13 @@ func decodeDocument(data []byte) (*types.Document, error) {
 // keyBytesToRecordID derives a stable int64 RecordID from a primary key. Keys
 // share prefixes, so it hashes the whole key.
 func keyBytesToRecordID(keyBytes []byte) int64 {
-	h := fnv.New64a()
-	_, _ = h.Write(keyBytes)
-	return int64(h.Sum64())
+	// FNV-64a, inline: a hash.Hash64 would allocate once per scanned document.
+	h := uint64(14695981039346656037)
+	for _, b := range keyBytes {
+		h ^= uint64(b)
+		h *= 1099511628211
+	}
+	return int64(h)
 }
 
 // mapIter implements types.DocumentsIterator over a prolly.Map.
@@ -4625,8 +4629,9 @@ type mapIter struct {
 	release func()
 	// outside, if set, ends the scan at the first key it reports, after
 	// counting that document examined as a clustered scan does.
-	outside func(key []byte) bool
-	done    bool
+	outside  func(key []byte) bool
+	done     bool
+	examined examinedCounter
 }
 
 func newMapIter(ctx context.Context, ns tree.NodeStore, m prolly.Map, reverse bool, limit int64, onlyRecordID bool, prefilter func([]byte) bool) types.DocumentsIterator {
@@ -4671,7 +4676,7 @@ func (it *mapIter) Next() (struct{}, *types.Document, error) {
 		if v == nil {
 			return struct{}{}, nil, iterator.ErrIteratorDone
 		}
-		countDocsExamined(it.ctx, 1)
+		it.examined.docs(it.ctx, 1)
 
 		keyBytes, ok := keyDesc.GetBytes(0, k)
 		if !ok {

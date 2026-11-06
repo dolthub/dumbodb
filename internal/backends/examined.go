@@ -62,11 +62,31 @@ func WithExaminedCounts(ctx context.Context) (context.Context, *ExaminedCounts) 
 	return context.WithValue(ctx, examinedCountsKey{}, e), e
 }
 
-// AddKeysExamined counts n index keys read under ctx.
-func AddKeysExamined(ctx context.Context, n int) {
-	if e, ok := ctx.Value(examinedCountsKey{}).(*ExaminedCounts); ok {
+// ExaminedCountsFrom returns the counts attached to ctx, or nil. A scan that
+// counts every key or document resolves them once: a context lookup per item
+// costs more than reading the item.
+func ExaminedCountsFrom(ctx context.Context) *ExaminedCounts {
+	e, _ := ctx.Value(examinedCountsKey{}).(*ExaminedCounts)
+	return e
+}
+
+// AddKeys counts n index keys read; a nil e counts nothing.
+func (e *ExaminedCounts) AddKeys(n int) {
+	if e != nil {
 		e.keys.Add(int64(n))
 	}
+}
+
+// AddDocs counts n documents read; a nil e counts nothing.
+func (e *ExaminedCounts) AddDocs(n int) {
+	if e != nil {
+		e.docs.Add(int64(n))
+	}
+}
+
+// AddKeysExamined counts n index keys read under ctx.
+func AddKeysExamined(ctx context.Context, n int) {
+	ExaminedCountsFrom(ctx).AddKeys(n)
 }
 
 // AddBranchExamined counts keys read and returned entries for the branch'th
@@ -103,9 +123,7 @@ func AddBranchFetched(ctx context.Context, branch int, docs, matched int64) {
 
 // AddDocsExamined counts n documents read under ctx.
 func AddDocsExamined(ctx context.Context, n int) {
-	if e, ok := ctx.Value(examinedCountsKey{}).(*ExaminedCounts); ok {
-		e.docs.Add(int64(n))
-	}
+	ExaminedCountsFrom(ctx).AddDocs(n)
 }
 
 type seekEachRangeKey struct{}

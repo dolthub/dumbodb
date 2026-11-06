@@ -77,3 +77,35 @@ func TestRangeIDIterMatchesRangeLookup(t *testing.T) {
 		})
 	}
 }
+
+func TestSeekKeyRangePastTheEnd(t *testing.T) {
+	ctx := context.Background()
+	empty, err := NewEmptyMap(ctx, tree.NewTestNodeStore())
+	require.NoError(t, err)
+	_, ok, err := SeekKeyRange(ctx, empty, LowerBoundInclusive(int32(1)), nil)
+	require.NoError(t, err)
+	require.False(t, ok, "an empty map has nothing at or after any start")
+
+	mut := empty.Mutate()
+	for i := 0; i < 3000; i++ {
+		id := make([]byte, 20)
+		binary.BigEndian.PutUint32(id, uint32(i))
+		require.NoError(t, InsertEntry(ctx, mut, []any{int32(i)}, id))
+	}
+	m, err := mut.Map(ctx)
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name  string
+		start []byte
+		ok    bool
+	}{
+		{"before the first entry", LowerBoundInclusive(int32(-1)), true},
+		{"at the last value", LowerBoundInclusive(int32(2999)), true},
+		{"past the last entry", LowerBoundExclusive(int32(2999)), false},
+		{"another type past every number", LowerBoundInclusive("a"), false},
+	} {
+		_, ok, err := SeekKeyRange(ctx, m, tc.start, nil)
+		require.NoError(t, err)
+		require.Equal(t, tc.ok, ok, tc.name)
+	}
+}

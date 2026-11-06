@@ -66,7 +66,7 @@ func indexMapOnBranch(t *testing.T, ctx context.Context, b *Backend, dbName, bra
 	if err != nil || state == nil {
 		t.Fatalf("getOrOpenDB(%q): %v", dbName, err)
 	}
-	m, err := openIndexMap(ctx, state.vs, state.ns, resolved.mapRoot)
+	m, err := openIndexMap(ctx, state.ns, resolved.mapRoot)
 	if err != nil {
 		t.Fatalf("openIndexMap: %v", err)
 	}

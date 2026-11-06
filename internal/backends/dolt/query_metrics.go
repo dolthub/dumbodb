@@ -42,3 +42,28 @@ func countDocsExamined(ctx context.Context, n int) {
 	queryExecutorCounters.docs.Add(int64(n))
 	backends.AddDocsExamined(ctx, n)
 }
+
+// examinedCounter is countKeysExamined and countDocsExamined for an iterator
+// that counts every item: it resolves the operation's counts from the context
+// on first use. Its zero value is ready to use.
+type examinedCounter struct {
+	op       *backends.ExaminedCounts
+	resolved bool
+}
+
+func (c *examinedCounter) resolve(ctx context.Context) *backends.ExaminedCounts {
+	if !c.resolved {
+		c.op, c.resolved = backends.ExaminedCountsFrom(ctx), true
+	}
+	return c.op
+}
+
+func (c *examinedCounter) keys(ctx context.Context, n int) {
+	queryExecutorCounters.keys.Add(int64(n))
+	c.resolve(ctx).AddKeys(n)
+}
+
+func (c *examinedCounter) docs(ctx context.Context, n int) {
+	queryExecutorCounters.docs.Add(int64(n))
+	c.resolve(ctx).AddDocs(n)
+}

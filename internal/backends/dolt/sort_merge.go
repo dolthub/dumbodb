@@ -94,10 +94,11 @@ func mergesSortedRanges(info backends.IndexInfo, params *backends.QueryParams) b
 // mergedIDStream yields the ids of several index ranges in the order of the
 // second index key, taking the lowest (or, reversed, the highest) head next.
 type mergedIDStream struct {
-	ctx     context.Context
-	reverse bool
-	keys    int
-	heads   []mergeHead
+	examined examinedCounter
+	ctx      context.Context
+	reverse  bool
+	keys     int
+	heads    []mergeHead
 	// taken is the head whose id was yielded last; it advances on the next
 	// call, so a limit stops before reading past what it returns.
 	taken int
@@ -135,7 +136,7 @@ func (s *mergedIDStream) advance(head *mergeHead) error {
 		head.entry = indexEntry{}
 		return err
 	}
-	countKeysExamined(s.ctx, 1)
+	s.examined.keys(s.ctx, 1)
 	backends.AddBranchExamined(s.ctx, head.branch, 1, 1)
 	split, ok := idxpkg.SplitKeyValues(values, s.keys)
 	if !ok {

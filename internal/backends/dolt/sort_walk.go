@@ -265,14 +265,15 @@ type sortWalkEntry struct {
 // value; nested arrays share one marker group, ordered by value like
 // subdocuments.
 type sortWalkIter struct {
-	index   string
-	ctx     context.Context
-	ns      tree.NodeStore
-	primary prolly.Map
-	entries prolly.MapIter
-	fields  []string
-	seen    map[string]struct{}
-	release func()
+	index    string
+	ctx      context.Context
+	ns       tree.NodeStore
+	primary  prolly.Map
+	entries  prolly.MapIter
+	fields   []string
+	seen     map[string]struct{}
+	release  func()
+	examined examinedCounter
 }
 
 func (it *sortWalkIter) nextEntry() (*sortWalkEntry, error) {
@@ -285,7 +286,7 @@ func (it *sortWalkIter) nextEntry() (*sortWalkEntry, error) {
 		if err != nil {
 			return nil, err
 		}
-		countKeysExamined(it.ctx, 1)
+		it.examined.keys(it.ctx, 1)
 		composite, ok := keyDesc.GetBytes(0, k)
 		if !ok {
 			continue

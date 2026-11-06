@@ -521,19 +521,13 @@ func IterKeyRange(ctx context.Context, m prolly.Map, startKey, stopKey []byte) (
 // and there is nothing to iterate.
 func SeekKeyRange(ctx context.Context, m prolly.Map, startKey, stopKey []byte) (iter prolly.MapIter, ok bool, err error) {
 	if len(startKey) > 0 {
-		startTup, err := boundTuple(startKey)
-		if err != nil {
-			return nil, false, err
+		// The root holds the last key, so this costs no descent.
+		lastKey := m.LastKey(ctx)
+		if len(lastKey) == 0 {
+			return nil, false, nil
 		}
-		ord, err := m.GetOrdinalForKey(ctx, startTup)
-		if err != nil {
-			return nil, false, err
-		}
-		n, err := m.Count()
-		if err != nil {
-			return nil, false, err
-		}
-		if ord >= uint64(n) {
+		last, ok := idxKeyDesc.GetBytes(0, lastKey)
+		if !ok || bytes.Compare(last, startKey) < 0 {
 			return nil, false, nil
 		}
 	}

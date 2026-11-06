@@ -41,12 +41,12 @@ func indexDefinitionMemoLen() int {
 	return n
 }
 
-// indexDefinitionMemoKeys returns the set of hash.Hash keys currently in the
-// memo. Useful for cross-branch dedup assertions.
+// indexDefinitionMemoKeys returns the hashes of the definitions currently in
+// the memo. Useful for cross-branch dedup assertions.
 func indexDefinitionMemoKeys() map[hash.Hash]struct{} {
 	out := make(map[hash.Hash]struct{})
-	indexDefinitionMemo.Range(func(k, _ any) bool {
-		out[k.(hash.Hash)] = struct{}{}
+	indexDefinitionMemo.Range(func(_, v any) bool {
+		out[v.(memoizedDefinition).hash] = struct{}{}
 		return true
 	})
 	return out
@@ -140,8 +140,8 @@ func TestMemo_DistinctEntriesForDistinctDefinitions(t *testing.T) {
 	if mainEntry == nil || featEntry == nil {
 		t.Fatalf("by_x missing: main %v, feat %v", mainEntry, featEntry)
 	}
-	if mainEntry.id == featEntry.id {
-		t.Fatalf("expected different entry ids for by_x{x} vs by_x{y}; got equal %s", mainEntry.id.String())
+	if mainEntry.defHash == featEntry.defHash {
+		t.Fatalf("expected different definitions for by_x{x} vs by_x{y}; got equal %s", mainEntry.defHash.String())
 	}
 
 	keys := indexDefinitionMemoKeys()

@@ -665,7 +665,7 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 	idxInfos := make([]backends.IndexInfo, 0, len(idxSet))
 	idxMaps := make(map[string]prolly.Map, len(idxSet))
 	for _, entry := range idxSet {
-		m, merr := openIndexMap(ctx, db.vs, db.ns, entry.mapRoot)
+		m, merr := openIndexMap(ctx, db.ns, entry.mapRoot)
 		if merr != nil {
 			return nil, fmt.Errorf("DumboDBResolveConflict: opening index %q: %w", entry.info.Name, merr)
 		}

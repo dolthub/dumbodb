@@ -192,7 +192,7 @@ func openSurvivors(ctx context.Context, state *dbState, seeds map[string]struct 
 	out := make([]*indexMergeSurvivor, 0, len(seeds))
 	for _, name := range names {
 		seed := seeds[name]
-		m, err := openIndexMap(ctx, state.vs, state.ns, seed.entry.mapRoot)
+		m, err := openIndexMap(ctx, state.ns, seed.entry.mapRoot)
 		if err != nil {
 			return nil, fmt.Errorf("openSurvivors: %q: %w", name, err)
 		}

@@ -179,8 +179,8 @@ func TestResolver_DefinitionMemoHitsAfterMiss(t *testing.T) {
 	}
 
 	defHash := hash.Of(def)
-	indexDefinitionMemo.Delete(defHash)
-	if _, ok := indexDefinitionMemo.Load(defHash); ok {
+	indexDefinitionMemo.Delete(string(def))
+	if _, ok := indexDefinitionMemo.Load(string(def)); ok {
 		t.Fatal("indexDefinitionMemo unexpectedly contained entry after Delete")
 	}
 
@@ -194,8 +194,11 @@ func TestResolver_DefinitionMemoHitsAfterMiss(t *testing.T) {
 	if first.mapRoot.IsEmpty() {
 		t.Error("first resolve: mapRoot is empty")
 	}
-	if _, ok := indexDefinitionMemo.Load(defHash); !ok {
+	if _, ok := indexDefinitionMemo.Load(string(def)); !ok {
 		t.Fatal("first resolve did not populate indexDefinitionMemo")
+	}
+	if first.defHash != defHash {
+		t.Errorf("first resolve: defHash %s, want %s", first.defHash, defHash)
 	}
 
 	second, err := resolveIndexEntry(def, stored.mapRoot)
@@ -205,8 +208,8 @@ func TestResolver_DefinitionMemoHitsAfterMiss(t *testing.T) {
 	if &first.info.Key[0] != &second.info.Key[0] {
 		t.Error("second resolve decoded the definition again instead of sharing it")
 	}
-	if first.id != second.id {
-		t.Errorf("entry ids differ: %s vs %s", first.id, second.id)
+	if first.defHash != second.defHash || first.mapRoot != second.mapRoot {
+		t.Errorf("entries differ: %s@%s vs %s@%s", first.defHash, first.mapRoot, second.defHash, second.mapRoot)
 	}
 }
 
@@ -245,7 +248,7 @@ func TestResolver_OpenIndexMap(t *testing.T) {
 		t.Fatal("by_age entry not resolved")
 	}
 
-	idxMap, err := openIndexMap(ctx, state.vs, state.ns, resolved.mapRoot)
+	idxMap, err := openIndexMap(ctx, state.ns, resolved.mapRoot)
 	if err != nil {
 		t.Fatalf("openIndexMap: %v", err)
 	}
