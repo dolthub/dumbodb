@@ -110,3 +110,37 @@ func TestNumberAvgIncrementalMatchesBatch(t *testing.T) {
 		})
 	}
 }
+
+// Doubles summed before a Decimal128 arrives carry their exact sum into it,
+// as MongoDB's double-double sum does, so the order of values does not matter.
+func TestNumberSumCarriesDoubleErrorIntoDecimal(t *testing.T) {
+	want := dec128(t, "0.6000000000000000166533453693773481")
+	for _, order := range [][]any{
+		{0.1, 0.2, dec128(t, "0.3")},
+		{dec128(t, "0.3"), 0.1, 0.2},
+		{0.1, dec128(t, "0.3"), 0.2},
+	} {
+		s := aggregations.NewNumberSum()
+		for _, v := range order {
+			s.Add(v)
+		}
+		if got := s.Result(); !sameNumber(got, want) {
+			t.Errorf("sum of %v = %v, want %v", order, got, want)
+		}
+	}
+	a, b := 0.1, 0.2
+	s := aggregations.NewNumberSum()
+	s.Add(a)
+	s.Add(b)
+	if got := s.Result(); got != a+b {
+		t.Errorf("double-only sum = %v, want %v", got, a+b)
+	}
+
+	// An exact total past 34 digits rounds instead of collapsing to zero.
+	s = aggregations.NewNumberSum()
+	s.Add(dec128(t, "1E20"))
+	s.Add(dec128(t, "1E-20"))
+	if got, want := s.Result(), dec128(t, "100000000000000000000.0000000000000"); !sameNumber(got, want) {
+		t.Errorf("1E20 + 1E-20 = %v, want %v", got, want)
+	}
+}
