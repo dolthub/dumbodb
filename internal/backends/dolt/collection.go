@@ -18,9 +18,9 @@ import (
 	"bytes"
 	"cmp"
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"math"
 	"slices"
@@ -500,12 +500,12 @@ func simpleIDEquality(filter *types.Document) (any, bool) {
 }
 
 func pointLookupByID(ctx context.Context, ns tree.NodeStore, m prolly.Map, idVal any, onlyRecordID bool) (types.DocumentsIterator, error) {
-	h, err := hashID(idVal)
+	h, err := primaryKey(idVal)
 	if err != nil {
 		return nil, err
 	}
 
-	key, err := buildKey(h[:])
+	key, err := buildKey(h)
 	if err != nil {
 		return nil, err
 	}
@@ -2580,7 +2580,7 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 	mut := m.Mutate()
 
 	// batchHashSet detects in-batch duplicate _id hashes in O(1).
-	batchHashSet := make(map[[20]byte]struct{}, len(params.Docs))
+	batchHashSet := make(map[string]struct{}, len(params.Docs))
 	// In-batch collated string _ids (the primary probe only sees pre-batch state).
 	var batchStrIDs []string
 	// In-batch claims per unique index (probes only see pre-batch state).
@@ -2597,9 +2597,9 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 			return nil, fmt.Errorf("document missing _id: %w", err)
 		}
 
-		h, err := hashID(docID)
+		h, err := primaryKey(docID)
 		if err != nil {
-			return nil, fmt.Errorf("hashing _id: %w", err)
+			return nil, fmt.Errorf("encoding _id: %w", err)
 		}
 
 		exists, err := existsID(ctx, m, h)
@@ -2610,7 +2610,7 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 			return nil, backends.NewDuplicateKeyError(backends.DefaultIndexName, idDupKey(docID))
 		}
 
-		if _, dup := batchHashSet[h]; dup {
+		if _, dup := batchHashSet[string(h)]; dup {
 			return nil, backends.NewDuplicateKeyError(backends.DefaultIndexName, idDupKey(docID))
 		}
 
@@ -2672,7 +2672,7 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 				}
 			}
 			for _, row := range rows {
-				conflict, probeErr := idxpkg.UniqueConflict(ctx, branchIdxMaps[idx.Name], row, h[:])
+				conflict, probeErr := idxpkg.UniqueConflict(ctx, branchIdxMaps[idx.Name], row, h)
 				if probeErr != nil {
 					return nil, fmt.Errorf("unique probe on %s: %w", idx.Name, probeErr)
 				}
@@ -2685,7 +2685,7 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 			}
 		}
 
-		key, err := buildKey(h[:])
+		key, err := buildKey(h)
 		if err != nil {
 			return nil, err
 		}
@@ -2699,7 +2699,7 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 			return nil, err
 		}
 
-		batchHashSet[h] = struct{}{}
+		batchHashSet[string(h)] = struct{}{}
 	}
 
 	newMap, err := mut.Map(ctx)
@@ -2736,7 +2736,7 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 }
 
 type initialSyncTuple struct {
-	hash  [20]byte
+	hash  []byte
 	id    any
 	key   val.Tuple
 	value val.Tuple
@@ -2789,11 +2789,11 @@ func (c *collection) BulkLoadInitialSync(ctx context.Context, documents []*types
 		if err != nil {
 			return fmt.Errorf("document missing _id: %w", err)
 		}
-		hash, err := hashID(documentID)
+		hash, err := primaryKey(documentID)
 		if err != nil {
-			return fmt.Errorf("hashing _id: %w", err)
+			return fmt.Errorf("encoding _id: %w", err)
 		}
-		key, err := buildKey(hash[:])
+		key, err := buildKey(hash)
 		if err != nil {
 			return err
 		}
@@ -2804,10 +2804,10 @@ func (c *collection) BulkLoadInitialSync(ctx context.Context, documents []*types
 		tuples = append(tuples, initialSyncTuple{hash: hash, id: documentID, key: key, value: value})
 	}
 	slices.SortFunc(tuples, func(left, right initialSyncTuple) int {
-		return bytes.Compare(left.hash[:], right.hash[:])
+		return bytes.Compare(left.hash, right.hash)
 	})
 	for index, tuple := range tuples {
-		if index > 0 && tuple.hash == tuples[index-1].hash {
+		if index > 0 && bytes.Equal(tuple.hash, tuples[index-1].hash) {
 			return backends.NewDuplicateKeyError(backends.DefaultIndexName, idDupKey(tuple.id))
 		}
 		exists, err := existsID(ctx, primary, tuple.hash)
@@ -2835,8 +2835,8 @@ func (c *collection) BulkLoadInitialSync(ctx context.Context, documents []*types
 	})
 }
 
-func existsID(ctx context.Context, m prolly.Map, h [20]byte) (bool, error) {
-	key, err := buildKey(h[:])
+func existsID(ctx context.Context, m prolly.Map, h []byte) (bool, error) {
+	key, err := buildKey(h)
 	if err != nil {
 		return false, err
 	}
@@ -2908,12 +2908,12 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 			return nil, fmt.Errorf("document missing _id: %w", err)
 		}
 
-		h, err := hashID(docID)
+		h, err := primaryKey(docID)
 		if err != nil {
-			return nil, fmt.Errorf("hashing _id: %w", err)
+			return nil, fmt.Errorf("encoding _id: %w", err)
 		}
 
-		key, err := buildKey(h[:])
+		key, err := buildKey(h)
 		if err != nil {
 			return nil, err
 		}
@@ -3121,12 +3121,12 @@ func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllPa
 		}
 	} else {
 		for _, id := range params.IDs {
-			h, err := hashID(id)
+			h, err := primaryKey(id)
 			if err != nil {
 				continue
 			}
 
-			key, err := buildKey(h[:])
+			key, err := buildKey(h)
 			if err != nil {
 				continue
 			}
@@ -3499,7 +3499,7 @@ func (c *collection) DistinctScan(ctx context.Context, params *backends.Distinct
 
 // scanDistinctFromIndex walks idxMap in key order and emits one primary lookup
 // per unique KeyString prefix. The secondary index key layout is
-// `[KeyString(value)][0x04][primaryID(20 bytes)]`; values with the same
+// `[KeyString(value)][0x04][primary key]`; values with the same
 // KeyString prefix share a distinct value, so a single doc fetch per group
 // suffices to recover the original typed value. Each fetched doc contributes
 // its MongoDB index keys, including null for a missing field and undefined for
@@ -3515,8 +3515,6 @@ func scanDistinctFromIndex(
 	start, stop []byte,
 	filter *types.Document,
 ) ([]any, error) {
-	const primaryIDLen = 20
-
 	path, err := types.NewPathFromString(field)
 	if err != nil {
 		return nil, err
@@ -3552,21 +3550,16 @@ func scanDistinctFromIndex(
 		if !ok {
 			continue
 		}
-		if len(composite) < primaryIDLen+1 {
+		prefix, id, ok := idxpkg.SplitEntry(composite)
+		if !ok {
 			continue
 		}
-		idStart := len(composite) - primaryIDLen
-		if composite[idStart-1] != 0x04 {
-			continue
-		}
-		prefix := composite[:idStart-1]
 
 		if havePrev && bytes.Equal(prefix, prevPrefix) {
 			continue
 		}
 
-		idBytes := make([]byte, primaryIDLen)
-		copy(idBytes, composite[idStart:])
+		idBytes := bytes.Clone(id)
 
 		doc, err := lookupDocFromPrimary(ctx, primary, ns, idBytes, nil)
 		if err != nil {
@@ -3929,7 +3922,7 @@ func checkUniqueBuildConflict(seen map[string][]byte, idx backends.IndexInfo, do
 
 // scanUniqueConflict is the O(N) value-level fallback for rows with no
 // faithful byte encoding (Decimal128); the common path is the probe.
-func (c *collection) scanUniqueConflict(ctx context.Context, state *dbState, m prolly.Map, idx backends.IndexInfo, doc *types.Document, selfHash [20]byte) (bool, error) {
+func (c *collection) scanUniqueConflict(ctx context.Context, state *dbState, m prolly.Map, idx backends.IndexInfo, doc *types.Document, selfKey []byte) (bool, error) {
 	cmp := indexComparator(idx)
 	newKey := extractIndexKey(doc, idx)
 	iter, err := m.IterAll(ctx)
@@ -3948,7 +3941,7 @@ func (c *collection) scanUniqueConflict(ctx context.Context, state *dbState, m p
 			break
 		}
 		idBytes, ok := keyDesc.GetBytes(0, k)
-		if ok && bytes.Equal(idBytes, selfHash[:]) {
+		if ok && bytes.Equal(idBytes, selfKey) {
 			continue
 		}
 		existingDoc, err := readDocFromValue(ctx, state.ns, v)
@@ -3973,10 +3966,10 @@ func (c *collection) scanUniqueConflict(ctx context.Context, state *dbState, m p
 }
 
 // scanCollatedIDConflict reports whether the primary map already holds a string
-// _id equal to idStr under cmp. The primary key is a hash of the raw _id, so
+// _id equal to idStr under cmp. The primary key encodes the raw _id, so
 // collation-equal-but-distinct values ("a"/"A") do not collide there; this O(N)
 // value scan enforces _id uniqueness under the collection collation (design 3.6).
-func (c *collection) scanCollatedIDConflict(ctx context.Context, state *dbState, m prolly.Map, idStr string, selfHash [20]byte, cmp *collation.Comparator) (bool, error) {
+func (c *collection) scanCollatedIDConflict(ctx context.Context, state *dbState, m prolly.Map, idStr string, selfKey []byte, cmp *collation.Comparator) (bool, error) {
 	iter, err := m.IterAll(ctx)
 	if err != nil {
 		return false, err
@@ -3992,7 +3985,7 @@ func (c *collection) scanCollatedIDConflict(ctx context.Context, state *dbState,
 		if v == nil {
 			break
 		}
-		if idBytes, ok := keyDesc.GetBytes(0, k); ok && bytes.Equal(idBytes, selfHash[:]) {
+		if idBytes, ok := keyDesc.GetBytes(0, k); ok && bytes.Equal(idBytes, selfKey) {
 			continue
 		}
 		existingDoc, err := readDocFromValue(ctx, state.ns, v)
@@ -4012,7 +4005,7 @@ func (c *collection) scanCollatedIDConflict(ctx context.Context, state *dbState,
 
 // validateUniqueOnUpdate rejects an update whose new version collides
 // with a different document on any unique index.
-func (c *collection) validateUniqueOnUpdate(ctx context.Context, state *dbState, m prolly.Map, infos []backends.IndexInfo, idxMaps map[string]prolly.Map, newDoc *types.Document, selfHash [20]byte) error {
+func (c *collection) validateUniqueOnUpdate(ctx context.Context, state *dbState, m prolly.Map, infos []backends.IndexInfo, idxMaps map[string]prolly.Map, newDoc *types.Document, selfKey []byte) error {
 	for _, idx := range infos {
 		if !idx.Unique {
 			continue
@@ -4022,7 +4015,7 @@ func (c *collection) validateUniqueOnUpdate(ctx context.Context, state *dbState,
 			continue
 		}
 		if lossy || idx.Lossy {
-			conflict, err := c.scanUniqueConflict(ctx, state, m, idx, newDoc, selfHash)
+			conflict, err := c.scanUniqueConflict(ctx, state, m, idx, newDoc, selfKey)
 			if err != nil {
 				return err
 			}
@@ -4032,7 +4025,7 @@ func (c *collection) validateUniqueOnUpdate(ctx context.Context, state *dbState,
 			continue
 		}
 		for _, row := range rows {
-			conflict, err := idxpkg.UniqueConflict(ctx, idxMaps[idx.Name], row, selfHash[:])
+			conflict, err := idxpkg.UniqueConflict(ctx, idxMaps[idx.Name], row, selfKey)
 			if err != nil {
 				return fmt.Errorf("unique probe on %s: %w", idx.Name, err)
 			}
@@ -4358,13 +4351,12 @@ func decodeDocument(data []byte) (*types.Document, error) {
 	return doc, nil
 }
 
-// keyBytesToRecordID derives a stable int64 RecordID from the fixed 20-byte hash key.
-// The first 8 bytes are interpreted as a big-endian int64.
+// keyBytesToRecordID derives a stable int64 RecordID from a primary key. Keys
+// share prefixes, so it hashes the whole key.
 func keyBytesToRecordID(keyBytes []byte) int64 {
-	if len(keyBytes) < 8 {
-		return 0
-	}
-	return int64(binary.BigEndian.Uint64(keyBytes[:8]))
+	h := fnv.New64a()
+	_, _ = h.Write(keyBytes)
+	return int64(h.Sum64())
 }
 
 // mapIter implements types.DocumentsIterator over a prolly.Map.

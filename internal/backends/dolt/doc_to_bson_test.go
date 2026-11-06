@@ -27,7 +27,7 @@ import (
 
 // sortDocumentKeys is the reference for docToBSON's key order: it deep-copies doc with object keys lex-sorted at every
 // level. Top-level _id is preserved verbatim: MongoDB treats {a:1,b:2}
-// and {b:2,a:1} as distinct _ids, and hashID hashes the original byte
+// and {b:2,a:1} as distinct _ids, and primaryKey encodes the original
 // order; sorting would break post-lookup filter equality.
 func sortDocumentKeys(doc *types.Document) *types.Document {
 	keys := append([]string(nil), doc.Keys()...)
