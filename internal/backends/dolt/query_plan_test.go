@@ -54,7 +54,7 @@ func TestQueryReportsItsPlan(t *testing.T) {
 		params *backends.QueryParams
 		want   []string
 	}{
-		{"_id beside an indexed field reads _id", &backends.QueryParams{Filter: eq("_id", int32(5), "p", int32(2))}, []string{"FETCH", "IXSCAN(_id_)"}},
+		{"_id beside an indexed field reads _id", &backends.QueryParams{Filter: eq("_id", int32(5), "p", int32(2))}, []string{"CLUSTERED_IXSCAN"}},
 		{"narrow range in a small collection", &backends.QueryParams{Filter: eq("q", eq("$gte", int32(10)))}, []string{"FETCH", "IXSCAN(q)"}},
 		{"$or union", &backends.QueryParams{Filter: eq("$or", must.NotFail(types.NewArray(eq("k", int32(1)), eq("q", int32(2)))))},
 			[]string{"FETCH", "OR", "IXSCAN(k)", "IXSCAN(q)"}},
