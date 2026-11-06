@@ -33,7 +33,7 @@ import (
 // beyond the double range encode as [range bit][14-bit biased exponent]
 // [113-bit coefficient] in 16 bytes.
 //
-// Below 2^-256 mongod derives the flags and continuation of an inexact decimal
+// Below 2^-255 mongod derives the flags and continuation of an inexact decimal
 // from Decimal128 arithmetic on the 2^768-scaled value; this encoding uses the
 // exact value instead. The leading bytes, order and uniqueness match mongod;
 // the trailing bytes may not.
@@ -86,7 +86,7 @@ var (
 	ratOne         = big.NewRat(1, 1)
 	maxDouble      = new(big.Rat).SetFloat64(math.MaxFloat64)
 	smallestDouble = new(big.Rat).SetFloat64(math.SmallestNonzeroFloat64)
-	twoMinus256    = new(big.Rat).SetFloat64(0x1p-256)
+	twoMinus255    = new(big.Rat).SetFloat64(0x1p-255)
 	two768         = new(big.Rat).SetFloat64(0x1p768)
 )
 
@@ -131,12 +131,13 @@ func appendDecimal128(out []byte, d128 types.Decimal128) []byte {
 		if mag.Cmp(smallestDouble) < 0 {
 			return appendWide(out, d, ctypePosSmall, ctypeNegSmall, false)
 		}
-		// Below 2^-256 the encoding scales by 2^768 first, so the leading
-		// double keeps full precision even where a double is subnormal.
+		// Below 2^-255 the encoding scales by 2^768 first, so the leading
+		// double keeps full precision even where a double is subnormal. Its
+		// lowest mantissa bit is cleared to make room for the flags.
 		var enc uint64
 		var lead *big.Rat
-		if mag.Cmp(twoMinus256) < 0 {
-			scaled := truncDouble(new(big.Rat).Mul(mag, two768))
+		if mag.Cmp(twoMinus255) < 0 {
+			scaled := math.Float64frombits(math.Float64bits(truncDouble(new(big.Rat).Mul(mag, two768))) &^ 1)
 			enc = math.Float64bits(scaled) << 1
 			lead = new(big.Rat).Quo(new(big.Rat).SetFloat64(scaled), two768)
 		} else {
