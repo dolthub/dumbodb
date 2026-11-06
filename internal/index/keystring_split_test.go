@@ -53,8 +53,8 @@ func TestSplitKeyValues(t *testing.T) {
 	}
 
 	bin := append(EncodeValue(types.Binary{B: []byte{7}}), EncodeValue(int32(1))...)
-	if _, ok := SplitKeyValues(bin, 2); ok {
-		t.Error("a BinData value before the last does not mark its end")
+	if _, ok := SplitKeyValues(bin, 2); !ok {
+		t.Error("a BinData value before the last splits by its length")
 	}
 	// int32(5) with a following string whose bytes also read as a fraction
 	// plus a valid tail would be ambiguous; an 8-byte string is not.
