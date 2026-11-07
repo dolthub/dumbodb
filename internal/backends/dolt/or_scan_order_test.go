@@ -169,3 +169,37 @@ func TestCountingScan(t *testing.T) {
 		})
 	}
 }
+
+// TestOrEmptyIn checks an $or branch with an empty $in matches nothing
+// rather than panicking or reading its whole index.
+func TestOrEmptyIn(t *testing.T) {
+	c := newOrScanCollection(t)
+	doc := func(pairs ...any) *types.Document { return must.NotFail(types.NewDocument(pairs...)) }
+	emptyIn := doc("k", doc("$in", must.NotFail(types.NewArray())))
+	for _, tc := range []struct {
+		name   string
+		filter *types.Document
+		want   int
+	}{
+		{"alone", orFilter(emptyIn), 0},
+		{"beside an indexed branch", orFilter(emptyIn, doc("q", int32(2))), 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res, _, err := c.query(context.Background(), &backends.QueryParams{Filter: tc.filter})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer res.Iter.Close()
+			n := 0
+			for {
+				if _, _, err := res.Iter.Next(); err != nil {
+					break
+				}
+				n++
+			}
+			if n > tc.want {
+				t.Errorf("read %d candidates, want at most %d", n, tc.want)
+			}
+		})
+	}
+}
