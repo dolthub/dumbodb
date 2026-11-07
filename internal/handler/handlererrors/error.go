@@ -504,6 +504,14 @@ const (
 	// descending sortBy.
 	ErrRangeWindowDescendingSort = ErrorCode(8947401) // Location8947401
 
+	// ErrNearMinDistanceNegative indicates a $minDistance beside $near that is
+	// NaN or negative.
+	ErrNearMinDistanceNegative = ErrorCode(16894) // Location16894
+
+	// ErrNearMaxDistanceNegative indicates a $maxDistance beside $near that is
+	// NaN or negative.
+	ErrNearMaxDistanceNegative = ErrorCode(16896) // Location16896
+
 	// ErrKeyTooLong indicates a key longer than DumboDB stores.
 	ErrKeyTooLong = ErrorCode(17280) // KeyTooLong
 

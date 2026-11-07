@@ -16,6 +16,7 @@ package dolt
 
 import (
 	"context"
+	"errors"
 	"math"
 	"sort"
 	"testing"
@@ -211,5 +212,46 @@ func TestGeoIndexServesNoOtherRead(t *testing.T) {
 	defer res.Iter.Close()
 	if got := planChain(plan); len(got) != 1 || got[0] != "COLLSCAN" {
 		t.Errorf("plan %v, want COLLSCAN", got)
+	}
+}
+
+// A non-finite point or bound declines the index read, and a cancelled
+// context stops one, so neither walks the grid without end.
+func TestGeoNearRefusesNonFinite(t *testing.T) {
+	docs := []*types.Document{geoPointDoc(1, 0, 0), geoPointDoc(2, 1, 1)}
+	sphere := newGeoCollection(t, backends.IndexKeyPair{Field: "loc", Geo2DSphere: true}, docs)
+	planar := newGeoCollection(t, backends.IndexKeyPair{Field: "loc", Geo2D: true}, []*types.Document{
+		must.NotFail(types.NewDocument("_id", int32(1), "loc", must.NotFail(types.NewArray(1.0, 1.0)))),
+	})
+	nan, inf := math.NaN(), math.Inf(1)
+	for _, tc := range []struct {
+		name   string
+		c      *collection
+		params backends.GeoNearParams
+	}{
+		{"sphere NaN x", sphere, backends.GeoNearParams{X: nan, Spherical: true, MaxDistance: inf}},
+		{"sphere Inf y", sphere, backends.GeoNearParams{Y: inf, Spherical: true, MaxDistance: inf}},
+		{"planar NaN x", planar, backends.GeoNearParams{X: nan, MaxDistance: inf}},
+		{"planar Inf x", planar, backends.GeoNearParams{X: inf, MaxDistance: inf}},
+		{"NaN max distance", sphere, backends.GeoNearParams{Spherical: true, MaxDistance: nan}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.params.Distance = func(*types.Document) float64 { return 0 }
+			res, err := tc.c.GeoNear(context.Background(), &tc.params)
+			if err != nil || res != nil {
+				t.Fatalf("GeoNear = %v, %v; want it declined", res, err)
+			}
+		})
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	res, err := sphere.GeoNear(ctx, &backends.GeoNearParams{Spherical: true, MaxDistance: inf, Distance: geoDistance(0, 0, true)})
+	if err != nil || res == nil {
+		t.Fatalf("GeoNear = %v, %v", res, err)
+	}
+	defer res.Iter.Close()
+	cancel()
+	if _, _, err := res.Iter.Next(); !errors.Is(err, context.Canceled) {
+		t.Errorf("Next after cancel = %v, want context.Canceled", err)
 	}
 }

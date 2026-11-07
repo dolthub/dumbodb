@@ -154,6 +154,10 @@ func (b geoBox) whole() bool { return b.x0 <= 0 && b.x1 >= 1 && b.y0 <= 0 && b.y
 
 // coverBox returns the cells, at most a few per side of the box, covering b.
 func coverBox(b geoBox) []geoCell {
+	if !finiteFloat(b.x0) || !finiteFloat(b.x1) || !finiteFloat(b.y0) || !finiteFloat(b.y1) {
+		// No comparison prunes a NaN box; cover it with the root cell.
+		return []geoCell{{}}
+	}
 	size := max(b.x1-b.x0, b.y1-b.y0)
 	maxLevel := geoCellBits
 	if size > 0 {
@@ -230,6 +234,11 @@ func (c *collection) GeoNear(ctx context.Context, params *backends.GeoNearParams
 	if params == nil || params.Distance == nil {
 		return nil, nil
 	}
+	// A query validated as MongoDB does never gets here with a non-finite
+	// point or bound; decline rather than walk the grid without end.
+	if !finiteFloat(params.X) || !finiteFloat(params.Y) || math.IsNaN(params.MaxDistance) {
+		return nil, nil
+	}
 	m, exists, state, err := c.getMap(ctx)
 	if err != nil || !exists {
 		return nil, err
@@ -294,6 +303,9 @@ type geoNearIter struct {
 
 func (it *geoNearIter) Next() (struct{}, *types.Document, error) {
 	for {
+		if err := it.ctx.Err(); err != nil {
+			return struct{}{}, nil, err
+		}
 		if len(it.found) > 0 && (it.done || it.found[0].dist <= it.radius) {
 			return struct{}{}, heap.Pop(&it.found).(nearDoc).doc, nil
 		}
@@ -333,11 +345,14 @@ func (it *geoNearIter) expand() error {
 		next, it.done = limit, true
 	}
 	boxes, whole := nearBoxes(it.params.X, it.params.Y, next, it.params.Spherical, it.sphere)
-	if whole {
+	if whole || !finiteFloat(next) {
 		boxes, it.done = []geoBox{{0, 1, 0, 1}}, true
 	}
 	for _, b := range boxes {
 		for _, cell := range coverBox(b) {
+			if err := it.ctx.Err(); err != nil {
+				return err
+			}
 			if it.coveredByScanned(cell) {
 				continue
 			}
@@ -422,3 +437,5 @@ func (h *nearHeap) Pop() any {
 }
 
 var _ backends.GeoNearScanner = (*collection)(nil)
+
+func finiteFloat(f float64) bool { return !math.IsNaN(f) && !math.IsInf(f, 0) }
