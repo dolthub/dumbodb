@@ -2330,10 +2330,16 @@ func buildCountOrDistinctPlan(params *backends.ExplainParams, idxInfos []backend
 	}
 	if params.Command == "count" {
 		leaf := collscanStage()
-		if indexPicked {
+		switch {
+		case indexPicked && hintedOffFilter(params, picked):
+			// A hinted index the filter does not lead fetches every entry.
+			leaf = fetchStage(ixscanStage(picked))
+		case indexPicked:
 			leaf = &explainStage{stage: "COUNT_SCAN", indexName: picked.Name, keyPattern: keyPatternOf(picked)}
-		} else if _, _, ranged := clusteredIDRange(params.Filter); ranged && !params.Collated && !hintIsNatural(params.Hint) {
-			leaf = clusteredStage()
+		default:
+			if _, _, ranged := clusteredIDRange(params.Filter); ranged && !params.Collated && !hintIsNatural(params.Hint) {
+				leaf = clusteredStage()
+			}
 		}
 		return &explainStage{stage: "COUNT", input: leaf}
 	}
@@ -2627,6 +2633,15 @@ func sortIsNatural(sort *types.Document) bool {
 
 func hintIsNatural(hint any) bool {
 	return backends.HintIsNatural(hint)
+}
+
+// hintedOffFilter reports whether params hints idx while filtering on fields
+// other than idx's leading one, so counting must read the documents.
+func hintedOffFilter(params *backends.ExplainParams, idx backends.IndexInfo) bool {
+	if params.Hint == nil || hintIsNatural(params.Hint) || params.Filter.Len() == 0 || len(idx.Key) == 0 {
+		return false
+	}
+	return params.Filter.Len() != 1 || params.Filter.Keys()[0] != idx.Key[0].Field
 }
 
 func pickHintedIndex(hint any, idxInfos []backends.IndexInfo) string {
@@ -3443,7 +3458,7 @@ func (c *collection) Count(ctx context.Context, params *backends.CountParams) (*
 	}
 
 	if params != nil && params.Filter != nil && params.Filter.Len() > 0 {
-		n, used, ferr := c.tryIndexedCount(ctx, state, params.Filter, params.Collation)
+		n, used, ferr := c.tryIndexedCount(ctx, state, params.Filter, params.Collation, params.Stop)
 		if ferr != nil {
 			return nil, ferr
 		}
@@ -3472,7 +3487,7 @@ func (c *collection) Count(ctx context.Context, params *backends.CountParams) (*
 //
 // Returns (0, false, nil) when the filter shape is unsupported  -- caller
 // falls back to the scan path.
-func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter *types.Document, queryCollation *types.Document) (int64, bool, error) {
+func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter *types.Document, queryCollation *types.Document, stop int64) (int64, bool, error) {
 	if filter == nil || filter.Len() != 1 {
 		return 0, false, nil
 	}
@@ -3529,12 +3544,6 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 		return 0, false, nil
 	}
 
-	// A multikey range counts a doc once per matching element; equality
-	// counts stay exact (one entry per value+docID).
-	if _, isOp := v.(*types.Document); isOp && chosen.Multikey {
-		return 0, false, nil
-	}
-
 	if queryCmp != nil {
 		v = collateFilterValue(v, queryCmp)
 	}
@@ -3544,12 +3553,41 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 		return 0, false, nil
 	}
 
+	// A multikey range holds a document once per matching element, so its
+	// documents are counted by id, still without fetching one; equality
+	// counts stay exact (one entry per value and document).
+	if _, isOp := v.(*types.Document); isOp && chosen.Multikey {
+		return multikeyRangeCount(ctx, idxMap, startKey, stopKey)
+	}
+
 	n, err := idxpkg.RangeCount(ctx, idxMap, startKey, stopKey)
 	if err != nil {
 		return 0, false, err
 	}
-	countKeysExamined(ctx, int(n))
+	read := n
+	if stop > 0 && read > stop {
+		read = stop
+	}
+	var examined examinedCounter
+	examined.keys(ctx, int(read))
+	examined.entries(ctx, int(read))
 	return n, true, nil
+}
+
+// multikeyRangeCount counts the distinct documents of a multikey index range.
+func multikeyRangeCount(ctx context.Context, idxMap prolly.Map, startKey, stopKey []byte) (int64, bool, error) {
+	entries, err := idxpkg.RangeLookup(ctx, idxMap, startKey, stopKey)
+	if err != nil {
+		return 0, false, err
+	}
+	seen := make(map[string]struct{}, len(entries))
+	for _, id := range entries {
+		seen[string(id)] = struct{}{}
+	}
+	var examined examinedCounter
+	examined.keys(ctx, len(entries))
+	examined.entries(ctx, len(seen))
+	return int64(len(seen)), true, nil
 }
 
 func (c *collection) Stats(ctx context.Context, params *backends.CollectionStatsParams) (*backends.CollectionStatsResult, error) {

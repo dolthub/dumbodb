@@ -182,7 +182,11 @@ func (h *Handler) execCount(ctx context.Context, c backends.Collection, params *
 	// The backend signals success via Filtered=true; otherwise we fall
 	// through to the scan path below.
 	if !h.DisablePushdown && cmp == nil && !hinted {
-		countRes, cerr := c.Count(ctx, &backends.CountParams{Filter: params.Filter, Collation: params.Collation})
+		stop := int64(0)
+		if params.Limit > 0 {
+			stop = params.Skip + params.Limit
+		}
+		countRes, cerr := c.Count(ctx, &backends.CountParams{Filter: params.Filter, Collation: params.Collation, Stop: stop})
 		if cerr != nil {
 			return 0, lazyerrors.Error(cerr)
 		}
