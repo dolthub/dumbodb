@@ -31,7 +31,7 @@ func ResolveFilterToDocIDHashes(filter *types.Document) (ids []hash.Hash, fullCo
 	}
 
 	if _, isDoc := idVal.(*types.Document); !isDoc {
-		h, hashErr := primaryKey(idVal)
+		h, hashErr := idKey(idVal)
 		if hashErr != nil {
 			return nil, false, hashErr
 		}
@@ -60,7 +60,7 @@ func ResolveFilterToDocIDHashes(filter *types.Document) (ids []hash.Hash, fullCo
 		if _, isDoc := v.(*types.Document); isDoc {
 			return nil, true, nil
 		}
-		h, hashErr := primaryKey(v)
+		h, hashErr := idKey(v)
 		if hashErr != nil {
 			return nil, false, hashErr
 		}

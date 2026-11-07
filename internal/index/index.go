@@ -17,6 +17,7 @@ package index
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 
@@ -59,6 +60,9 @@ func BuildSecondaryKey(fieldValues []any, primaryIDBytes []byte) []byte {
 
 func BuildIndexEntry(fieldValues []any, primaryIDBytes []byte) (val.Tuple, val.Tuple, error) {
 	compositeKey := BuildSecondaryKey(fieldValues, primaryIDBytes)
+	if err := CheckKeyLength(compositeKey); err != nil {
+		return nil, nil, err
+	}
 
 	ktb := val.NewTupleBuilder(idxKeyDesc, nil)
 	ktb.PutByteString(0, compositeKey)
@@ -159,6 +163,41 @@ func UpperBoundInclusive(fieldValue any) []byte {
 	return out
 }
 
+// MaxKeyLength is the longest key DumboDB stores, in encoded bytes: a primary
+// key (KeyString(_id)), or a secondary entry of its values and primary key.
+// Longer keys are refused with ErrKeyTooLong.
+//
+// Tested up to 32K (2026-11-07): a prolly node holds at most 64KB and an
+// internal node at least two keys, so the largest key that fits is 32741
+// encoded bytes; one byte more panics the chunker with "impossible node" on
+// the second insert. 400 documents with 32700-byte string _ids, inserted in
+// random order, stored and read back correctly (point, range and secondary
+// lookups, deletes), but each internal node held two keys, making the tree
+// binary and deep, and loading them took seconds where small keys take
+// milliseconds. 4096 keeps nodes wide; it can be raised toward 32741.
+const MaxKeyLength = 4096
+
+// ErrKeyTooLong reports a key longer than MaxKeyLength.
+var ErrKeyTooLong = errors.New("key too large to index")
+
+// CheckKeyLength returns ErrKeyTooLong for a key longer than MaxKeyLength.
+func CheckKeyLength(key []byte) error {
+	if len(key) > MaxKeyLength {
+		return fmt.Errorf("%w: %d bytes, the limit is %d", ErrKeyTooLong, len(key), MaxKeyLength)
+	}
+	return nil
+}
+
+// ClampBound shortens a range bound to MaxKeyLength+1 bytes. No stored key is
+// longer than MaxKeyLength, so the shortened bound orders against every
+// stored key as the full one does, and it always fits in a tuple.
+func ClampBound(bound []byte) []byte {
+	if len(bound) > MaxKeyLength+1 {
+		return bound[:MaxKeyLength+1]
+	}
+	return bound
+}
+
 // ValueBound converts a bound from LowerBound*, UpperBound* or BracketRange,
 // which bound index entries, into the same bound on bare value encodings such
 // as primary keys.
@@ -178,6 +217,7 @@ func ValueBound(entryBound []byte) []byte {
 // shape so it can be passed to prolly.Map.IterKeyRange. A nil/empty slice
 // produces a nil tuple, which IterKeyRange interprets as an open bound.
 func boundTuple(key []byte) (val.Tuple, error) {
+	key = ClampBound(key)
 	if len(key) == 0 {
 		return nil, nil
 	}
