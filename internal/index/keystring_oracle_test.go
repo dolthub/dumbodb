@@ -90,7 +90,7 @@ func TestKeyStringMatchesMongod(t *testing.T) {
 	for _, s := range stored {
 		id := byRaw[s.rawID]
 		got := index.EncodeID(id)
-		if !bytes.Equal(got, s.recordID) && !orderOnly(id) {
+		if !bytes.Equal(got, s.recordID) && !(orderOnly(id) && leadingMatch(got, s.recordID)) {
 			mismatches = append(mismatches, fmt.Sprintf("%s\n\tmongod % X\n\tours   % X", describe(id), s.recordID, got))
 		}
 		if _, ok := index.SplitKeyValues(s.recordID, 1); !ok {
@@ -127,10 +127,24 @@ func TestKeyStringMatchesMongod(t *testing.T) {
 }
 
 // storedID is a stored document's _id, as a rawKey, and its RecordId.
-// orderOnly reports values whose encoding is checked only for order: those
+// leadingMatch reports whether an orderOnly value's encoding matches mongod's
+// in length and in everything but the continuation of each band decimal: the
+// type byte and leading double. A value holding one decimal is checked whole
+// but for its last 8 bytes; one nesting several is checked for length alone.
+func leadingMatch(got, want []byte) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	if len(got) == 17 {
+		return bytes.Equal(got[:9], want[:9])
+	}
+	return true
+}
+
+// orderOnly reports values whose continuation bytes are not compared: those
 // holding an inexact Decimal128 of magnitude below 2^-255, where mongod's
-// trailing bytes come from Decimal128 arithmetic on the 2^768-scaled value
-// that is not reproduced. Order and uniqueness still match
+// continuation comes from Decimal128 arithmetic on the 2^768-scaled value
+// that is not reproduced. Leading bytes, order and uniqueness still match
 // (docs/reference/mongodb-keystring.md, "Known deviation").
 func orderOnly(v any) bool {
 	switch v := v.(type) {
@@ -257,6 +271,10 @@ func keyStringCorpus() []any {
 		math.MaxFloat64, -math.MaxFloat64, math.SmallestNonzeroFloat64, -math.SmallestNonzeroFloat64, 2.2250738585072014e-308,
 		0.5, 0.25, 0.1, 1.5, 2.5, 1e-20, 255.5, 256.5, 1e15 + 0.5, 4503599627370495.5,
 		0x1p-255, math.Nextafter(0x1p-255, 0), 0x1.8p-256, 0x1p-256, -0x1.8p-256, dec(1, -77, false), dec(12345, -81, true),
+		// Inexact decimals below 2^-255 beside the doubles nearest them.
+		dec(2, -300, false), 2e-300, math.Nextafter(2e-300, 0), dec(2, -300, true), -2e-300,
+		dec(1, -100, false), 1e-100, 9.999999999999999e-101, dec(1, -78, false), 1e-78,
+		dec(3, -90, false), 3e-90, dec(10001552324586932, -323, false), 1.000155232458693e-307,
 		-0.1, -0.10000000000000002, -1e-20, -3e-20, -0.49, -0.5, -0.75, -1.5, -2.5, -255.5, -1e15 - 0.5,
 		float64(1 << 53), float64(1<<53) * 2, 9.223372036854776e18, 1.8446744073709552e19, 1e20, 1e300, -1e20, -9.3e18,
 		dec(0, 0, false), dec(0, 0, true), dec(3, 0, false), dec(35, -1, false), dec(1, -1, true), dec(1, -32, false),
