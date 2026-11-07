@@ -536,7 +536,7 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 	}
 
 	if params.Aggregate && !viaView {
-		explainLookups(connCtx, db, params.DB, params.StagesDocs, response, params.Verbosity != "queryPlanner")
+		explainLookups(connCtx, db, params.DB, params.StagesDocs, response, params.Verbosity != "queryPlanner", qp.Collated)
 	}
 
 	if params.Verbosity == "allPlansExecution" {

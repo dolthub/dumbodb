@@ -191,11 +191,22 @@ func (f *foreignFetcher) indexOn(ctx context.Context, collName, field string) (b
 	if err != nil {
 		return backends.IndexInfo{}, false
 	}
-	for _, idx := range res.Indexes {
-		if len(idx.Key) == 1 && idx.Key[0].Field == field && !idx.Lossy &&
-			idx.PartialFilterExpression == nil && collation.Parse(idx.Collation).IsSimple() {
+	// A single-field index on the join field, else a compound one it leads.
+	var led *backends.IndexInfo
+	for i, idx := range res.Indexes {
+		if len(idx.Key) == 0 || idx.Key[0].Field != field || idx.Lossy ||
+			idx.PartialFilterExpression != nil || !collation.Parse(idx.Collation).IsSimple() {
+			continue
+		}
+		if len(idx.Key) == 1 {
 			return idx, true
 		}
+		if led == nil {
+			led = &res.Indexes[i]
+		}
+	}
+	if led != nil {
+		return *led, true
 	}
 	return backends.IndexInfo{}, false
 }

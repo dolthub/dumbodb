@@ -34,15 +34,19 @@ const hashJoinMaxDocs = 10000
 // query plan. Any other stage moves the explain into a stages array: the query
 // under $cursor, then each remaining stage, a $lookup naming at
 // executionStats verbosity the foreign indexes it reads.
-func explainLookups(ctx context.Context, db backends.Database, dbName string, pipeline []any, response *types.Document, execStats bool) {
+func explainLookups(ctx context.Context, db backends.Database, dbName string, pipeline []any, response *types.Document, execStats, collated bool) {
 	fetcher := &foreignFetcher{db: db}
 	var rest []*types.Document
 	var eqLookups []*types.Document
 	hasLookup := false
-	for _, s := range pipeline {
+	for i, s := range pipeline {
 		stage, _ := s.(*types.Document)
 		if stage == nil || stage.Len() == 0 {
 			return
+		}
+		var next *types.Document
+		if i+1 < len(pipeline) {
+			next, _ = pipeline[i+1].(*types.Document)
 		}
 		name := stage.Command()
 		if name == "$lookup" {
@@ -53,7 +57,8 @@ func explainLookups(ctx context.Context, db backends.Database, dbName string, pi
 			case "$match", "$sort", "$limit", "$skip":
 				continue
 			case "$lookup":
-				if spec, _ := must.NotFail(stage.Get(name)).(*types.Document); spec != nil && runsInQueryPlan(ctx, db, spec) {
+				if spec, _ := must.NotFail(stage.Get(name)).(*types.Document); spec != nil && !collated &&
+					!unwindsJoin(spec, next) && runsInQueryPlan(ctx, db, spec) {
 					eqLookups = append(eqLookups, spec)
 					continue
 				}
@@ -72,6 +77,8 @@ func explainLookups(ctx context.Context, db backends.Database, dbName string, pi
 			plan = eqLookupStage(ctx, db, dbName, fetcher, spec, plan)
 		}
 		queryPlanner.Set("winningPlan", must.NotFail(types.NewDocument("queryPlan", plan)))
+		// A plan joining in the query runs in SBE.
+		response.Set("explainVersion", "2")
 	}
 	if len(rest) == 0 {
 		return
@@ -137,7 +144,9 @@ func eqLookupStage(ctx context.Context, db backends.Database, dbName string, fet
 		"asField", as,
 		"scanDirection", "forward",
 	))
-	if idx, ok := fetcher.indexOn(ctx, from, stages.LookupJoinField(spec)); ok {
+	if info, err := lookupCollectionInfo(ctx, db, from); err == nil && info == nil {
+		stage.Set("strategy", "NonExistentForeignCollection")
+	} else if idx, ok := fetcher.indexOn(ctx, from, stages.LookupJoinField(spec)); ok {
 		stage.Set("strategy", "IndexedLoopJoin")
 		stage.Set("indexName", idx.Name)
 		stage.Set("indexKeyPattern", joinKeyPattern(idx))
@@ -158,11 +167,30 @@ func unindexedJoinStrategy(ctx context.Context, db backends.Database, from strin
 }
 
 func joinKeyPattern(idx backends.IndexInfo) *types.Document {
-	order := int32(1)
-	if idx.Key[0].Descending {
-		order = -1
+	pattern := types.MakeDocument(len(idx.Key))
+	for _, k := range idx.Key {
+		order := int32(1)
+		if k.Descending {
+			order = -1
+		}
+		pattern.Set(k.Field, order)
 	}
-	return must.NotFail(types.NewDocument(idx.Key[0].Field, order))
+	return pattern
+}
+
+// unwindsJoin reports whether next, the stage after the $lookup spec,
+// unwinds the array the join writes, which MongoDB folds into a classic
+// $lookup.
+func unwindsJoin(spec, next *types.Document) bool {
+	if next == nil || next.Command() != "$unwind" {
+		return false
+	}
+	as, _ := specString(spec, "as")
+	path, _ := must.NotFail(next.Get("$unwind")).(string)
+	if d, ok := must.NotFail(next.Get("$unwind")).(*types.Document); ok {
+		path, _ = specString(d, "path")
+	}
+	return path == "$"+as
 }
 
 // lookupIndexesUsed returns the foreign indexes the $lookup spec reads,
