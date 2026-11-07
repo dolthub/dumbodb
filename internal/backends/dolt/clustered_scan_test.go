@@ -88,3 +88,23 @@ func TestKeyBytesToRecordIDIsFNV64a(t *testing.T) {
 		t.Errorf("%v allocations, want 0", n)
 	}
 }
+
+// TestClusteredInEmptyFieldName checks an _id $in holding a document with an
+// empty field name is a value, not an operator.
+func TestClusteredInEmptyFieldName(t *testing.T) {
+	c := newOrScanCollection(t)
+	ctx := context.Background()
+	id := must.NotFail(types.NewDocument("", int32(1)))
+	if _, err := c.InsertAll(ctx, &backends.InsertAllParams{Docs: []*types.Document{must.NotFail(types.NewDocument("_id", id))}}); err != nil {
+		t.Fatal(err)
+	}
+	filter := must.NotFail(types.NewDocument("_id", must.NotFail(types.NewDocument("$in", must.NotFail(types.NewArray(id))))))
+	res, _, err := c.query(ctx, &backends.QueryParams{Filter: filter})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Iter.Close()
+	if _, d, err := res.Iter.Next(); err != nil || d == nil {
+		t.Fatalf("want the document, got %v, %v", d, err)
+	}
+}
