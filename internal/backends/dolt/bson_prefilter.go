@@ -281,6 +281,14 @@ func bsonValueEqualsOrContains(typeByte byte, valueBytes []byte, target any) boo
 // scalarMatch coerces across int32/int64/double per mongo's numeric
 // equivalence rules; non-numeric types match on native shape only.
 func scalarMatch(typeByte byte, valueBytes []byte, target any) bool {
+	switch target.(type) {
+	case int32, int64, float64:
+		// A stored decimal can equal any number ({x: 7} matches
+		// NumberDecimal("7.000")); the full filter decides.
+		if typeByte == bsonTypeDecimal {
+			return true
+		}
+	}
 	switch t := target.(type) {
 	case int32:
 		f, ok := bsonNumericAsFloat(typeByte, valueBytes)
