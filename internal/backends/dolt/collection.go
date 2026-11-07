@@ -707,11 +707,12 @@ func planIndexLookupIn(ctx context.Context, ns tree.NodeStore, primary prolly.Ma
 	plan, err := readIndexLookup(ctx, ns, primary, idxInfos, idxMaps, filter, hint, queryCollation, keepValues)
 	if plan != nil {
 		countKeysExamined(ctx, plan.keys)
+		counts := backends.ExaminedCountsFrom(ctx)
 		for i, branch := range plan.branches {
-			backends.AddBranchExamined(ctx, i, int64(branch.keys), int64(branch.matched))
+			counts.AddBranchKeys(i, int64(branch.keys), int64(branch.matched))
 			if branch.residual {
 				countDocsExamined(ctx, branch.fetched)
-				backends.AddBranchFetched(ctx, i, int64(branch.fetched), int64(branch.kept))
+				counts.AddBranchDocs(i, int64(branch.fetched), int64(branch.kept))
 			}
 		}
 	}

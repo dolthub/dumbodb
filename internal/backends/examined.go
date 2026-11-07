@@ -102,27 +102,26 @@ func AddKeysExamined(ctx context.Context, n int) {
 	ExaminedCountsFrom(ctx).AddKeys(n)
 }
 
-// AddBranchExamined counts keys read and returned entries for the branch'th
-// index scan under an OR or SORT_MERGE stage run under ctx.
-func AddBranchExamined(ctx context.Context, branch int, keys, returned int64) {
-	e, ok := ctx.Value(examinedCountsKey{}).(*ExaminedCounts)
-	if !ok {
-		return
-	}
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	for len(e.branches) <= branch {
-		e.branches = append(e.branches, ExplainBranchCounts{})
-	}
-	e.branches[branch].KeysExamined += keys
-	e.branches[branch].NReturned += returned
+// AddBranchKeys counts keys read and entries returned by the branch'th index
+// scan under an OR or SORT_MERGE stage; a nil e counts nothing.
+func (e *ExaminedCounts) AddBranchKeys(branch int, keys, returned int64) {
+	e.updateBranch(branch, func(b *ExplainBranchCounts) {
+		b.KeysExamined += keys
+		b.NReturned += returned
+	})
 }
 
-// AddBranchFetched counts the documents the branch'th scan under an OR fetched
-// and those matching its filter.
-func AddBranchFetched(ctx context.Context, branch int, docs, matched int64) {
-	e, ok := ctx.Value(examinedCountsKey{}).(*ExaminedCounts)
-	if !ok {
+// AddBranchDocs counts the documents the branch'th scan under an OR fetched
+// and those matching its filter; a nil e counts nothing.
+func (e *ExaminedCounts) AddBranchDocs(branch int, docs, matched int64) {
+	e.updateBranch(branch, func(b *ExplainBranchCounts) {
+		b.DocsExamined += docs
+		b.Matched += matched
+	})
+}
+
+func (e *ExaminedCounts) updateBranch(branch int, update func(*ExplainBranchCounts)) {
+	if e == nil {
 		return
 	}
 	e.mu.Lock()
@@ -130,8 +129,7 @@ func AddBranchFetched(ctx context.Context, branch int, docs, matched int64) {
 	for len(e.branches) <= branch {
 		e.branches = append(e.branches, ExplainBranchCounts{})
 	}
-	e.branches[branch].DocsExamined += docs
-	e.branches[branch].Matched += matched
+	update(&e.branches[branch])
 }
 
 // AddDocsExamined counts n documents read under ctx.
