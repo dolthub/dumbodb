@@ -512,6 +512,9 @@ const (
 	// NaN or negative.
 	ErrNearMaxDistanceNegative = ErrorCode(16896) // Location16896
 
+	// ErrCannotExtractGeoKeys indicates a value a 2dsphere index cannot hold.
+	ErrCannotExtractGeoKeys = ErrorCode(16755) // Location16755
+
 	// ErrKeyTooLong indicates a key longer than DumboDB stores.
 	ErrKeyTooLong = ErrorCode(17280) // KeyTooLong
 
@@ -805,8 +808,8 @@ func ProtocolError(err error) ProtoErr {
 		}
 	}
 
-	if errors.Is(err, index.ErrKeyTooLong) {
-		return NewCommandErrorMsg(ErrKeyTooLong, KeyTooLongMessage(err)).(*CommandError)
+	if code, msg, ok := IndexKeyError(err); ok {
+		return NewCommandErrorMsg(code, msg).(*CommandError)
 	}
 
 	if errors.Is(err, bson.ErrNestingTooDeep) {
@@ -818,12 +821,24 @@ func ProtocolError(err error) ProtoErr {
 	return NewCommandError(errInternalError, err).(*CommandError)
 }
 
-// KeyTooLongMessage describes err, an index.ErrKeyTooLong, without the
-// internal call chain that wraps it.
-func KeyTooLongMessage(err error) string {
-	msg := err.Error()
-	if i := strings.Index(msg, index.ErrKeyTooLong.Error()); i >= 0 {
-		msg = msg[i:]
+// IndexKeyError returns the code and message MongoDB reports when err is a
+// value an index cannot hold: index.ErrKeyTooLong or
+// index.ErrCannotExtractGeoKeys. The message drops the internal call chain.
+func IndexKeyError(err error) (ErrorCode, string, bool) {
+	for _, e := range []struct {
+		sentinel error
+		code     ErrorCode
+	}{
+		{index.ErrKeyTooLong, ErrKeyTooLong},
+		{index.ErrCannotExtractGeoKeys, ErrCannotExtractGeoKeys},
+	} {
+		if errors.Is(err, e.sentinel) {
+			msg := err.Error()
+			if i := strings.Index(msg, e.sentinel.Error()); i >= 0 {
+				msg = msg[i:]
+			}
+			return e.code, msg, true
+		}
 	}
-	return msg
+	return 0, "", false
 }

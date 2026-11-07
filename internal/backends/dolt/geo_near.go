@@ -17,6 +17,7 @@ package dolt
 import (
 	"container/heap"
 	"context"
+	"fmt"
 	"math"
 
 	"github.com/dolthub/dolt/go/store/prolly"
@@ -439,3 +440,22 @@ func (h *nearHeap) Pop() any {
 var _ backends.GeoNearScanner = (*collection)(nil)
 
 func finiteFloat(f float64) bool { return !math.IsNaN(f) && !math.IsInf(f, 0) }
+
+// checkGeoKeys refuses doc when idx is a 2dsphere index and doc's field holds
+// an array of legacy pairs, which MongoDB reads as a malformed point.
+func checkGeoKeys(doc *types.Document, idx backends.IndexInfo) error {
+	for _, kp := range idx.Key {
+		if !kp.Geo2DSphere {
+			continue
+		}
+		arr, ok := indexFieldValue(doc, kp.Field).(*types.Array)
+		if !ok || arr.Len() == 0 {
+			continue
+		}
+		if _, nested := must.NotFail(arr.Get(0)).(*types.Array); nested {
+			return fmt.Errorf("%w: field %s  Point must only contain numeric elements, instead got type array",
+				idxpkg.ErrCannotExtractGeoKeys, kp.Field)
+		}
+	}
+	return nil
+}

@@ -29,7 +29,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
-	"github.com/dolthub/dumbodb/internal/index"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
@@ -288,11 +287,11 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 				continue
 			}
 
-			if errors.Is(err, index.ErrKeyTooLong) {
+			if code, msg, ok := handlererrors.IndexKeyError(err); ok {
 				writeErrors = append(writeErrors, &mongo.WriteError{
 					Index:   docsIndexes[j],
-					Code:    int(handlererrors.ErrKeyTooLong),
-					Message: handlererrors.KeyTooLongMessage(err),
+					Code:    int(code),
+					Message: msg,
 				})
 				if params.Ordered {
 					break

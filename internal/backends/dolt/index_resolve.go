@@ -296,6 +296,9 @@ func applyInsertsToIndexes(ctx context.Context, infos []backends.IndexInfo, maps
 				return nil, nil, fmt.Errorf("applyInsertsToIndexes: hashing _id for index %q: %w", info.Name, err)
 			}
 			idBytes := h
+			if err := checkGeoKeys(doc, info); err != nil {
+				return nil, nil, err
+			}
 			rows, multikey, lossy := indexEntriesForDoc(doc, info)
 			outInfos[i].Multikey = outInfos[i].Multikey || multikey
 			outInfos[i].Lossy = outInfos[i].Lossy || lossy
@@ -360,6 +363,9 @@ func applyUpdatesToIndexes(ctx context.Context, infos []backends.IndexInfo, maps
 			idBytes := h
 
 			oldRows, _, _ := indexEntriesForDoc(oldDocs[d], info)
+			if err := checkGeoKeys(newDocs[d], info); err != nil {
+				return nil, nil, err
+			}
 			newRows, multikey, lossy := indexEntriesForDoc(newDocs[d], info)
 			outInfos[i].Multikey = outInfos[i].Multikey || multikey
 			outInfos[i].Lossy = outInfos[i].Lossy || lossy
