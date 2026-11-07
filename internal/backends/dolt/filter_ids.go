@@ -30,6 +30,10 @@ func ResolveFilterToDocIDHashes(filter *types.Document) (ids []hash.Hash, fullCo
 		return nil, true, nil
 	}
 
+	// A regex matches a pattern, not one _id.
+	if _, isRegex := idVal.(types.Regex); isRegex {
+		return nil, true, nil
+	}
 	if _, isDoc := idVal.(*types.Document); !isDoc {
 		h, hashErr := idKey(idVal)
 		if hashErr != nil {
@@ -57,7 +61,8 @@ func ResolveFilterToDocIDHashes(filter *types.Document) (ids []hash.Hash, fullCo
 		if getErr != nil {
 			return nil, false, getErr
 		}
-		if _, isDoc := v.(*types.Document); isDoc {
+		switch v.(type) {
+		case *types.Document, types.Regex:
 			return nil, true, nil
 		}
 		h, hashErr := idKey(v)
