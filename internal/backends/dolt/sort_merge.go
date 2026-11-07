@@ -153,7 +153,8 @@ func newMergedIDStream(ctx context.Context, idxMap prolly.Map, ranges [][2][]byt
 }
 
 // The stream is a heap of its heads, lowest (or, reversed, highest) sort key
-// first; equal sort keys keep range order, so a run of them stays together.
+// first; equal sort keys keep range order (reversed with the scan), so a run
+// of them stays together.
 
 func (s *mergedIDStream) Len() int { return len(s.heads) }
 
@@ -164,6 +165,10 @@ func (s *mergedIDStream) Less(i, j int) bool {
 	}
 	if c != 0 {
 		return c < 0
+	}
+	// Ties come in range order, reversed with the scan, as MongoDB's bounds.
+	if s.reverse {
+		return s.heads[i].branch > s.heads[j].branch
 	}
 	return s.heads[i].branch < s.heads[j].branch
 }
