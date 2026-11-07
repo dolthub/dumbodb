@@ -126,7 +126,6 @@ func TestKeyStringMatchesMongod(t *testing.T) {
 	}
 }
 
-// storedID is a stored document's _id, as a rawKey, and its RecordId.
 // leadingMatch reports whether an orderOnly value's encoding matches mongod's
 // in length and in everything but the continuation of each band decimal: the
 // type byte and leading double. A value holding one decimal is checked whole
@@ -186,6 +185,7 @@ func abs(n int) int {
 	return n
 }
 
+// storedID is a stored document's _id, as a rawKey, and its RecordId.
 type storedID struct {
 	rawID    string
 	recordID []byte

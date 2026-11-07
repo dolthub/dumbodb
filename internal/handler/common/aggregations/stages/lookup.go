@@ -651,9 +651,6 @@ func (l *lookup) runPipeline(ctx context.Context, fetcher CollectionFetcher, fro
 	return current, nil
 }
 
-// leadingMatchEqualityField returns the foreign field compared for equality by
-// a sub-pipeline that starts with {$match: {$expr: {$eq: ["$field", x]}}} (in
-// either operand order), or "" when the pipeline does not start that way.
 // LookupJoinField returns the field of a $lookup's foreign collection whose
 // index the stage probes for each joined document: the foreignField, or the
 // field of a leading $match equality in its pipeline. It is empty when the
@@ -669,6 +666,9 @@ func LookupJoinField(spec *types.Document) string {
 	return leadingMatchEqualityField(pipeline)
 }
 
+// leadingMatchEqualityField returns the foreign field compared for equality by
+// a sub-pipeline that starts with {$match: {$expr: {$eq: ["$field", x]}}} (in
+// either operand order), or "" when the pipeline does not start that way.
 func leadingMatchEqualityField(pipeline *types.Array) string {
 	field, _, ok := leadingExprEquality(pipeline)
 	if !ok {
