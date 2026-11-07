@@ -24,6 +24,7 @@ import (
 	"github.com/dolthub/dolt/go/store/prolly/tree"
 
 	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/geo"
 	idxpkg "github.com/dolthub/dumbodb/internal/index"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
@@ -52,7 +53,7 @@ func geoIndexValue(v any, kp backends.IndexKeyPair) any {
 	if _, missing := v.(types.NullType); missing {
 		return v
 	}
-	x, y, ok := geoPoint(v)
+	x, y, ok := geo.Point(v)
 	if !ok {
 		return geoOtherCell
 	}
@@ -61,49 +62,6 @@ func geoIndexValue(v any, kp backends.IndexKeyPair) any {
 		return geoOtherCell
 	}
 	return geoCellKey(nx, ny)
-}
-
-// geoPoint returns the point a GeoJSON Point, a legacy [x, y] pair, or a
-// legacy {x, y} document holds.
-func geoPoint(v any) (x, y float64, ok bool) {
-	switch v := v.(type) {
-	case *types.Array:
-		if v.Len() < 2 {
-			return 0, 0, false
-		}
-		return geoNumberPair(must.NotFail(v.Get(0)), must.NotFail(v.Get(1)))
-	case *types.Document:
-		if t, err := v.Get("type"); err == nil {
-			coords, _ := v.Get("coordinates")
-			arr, isArr := coords.(*types.Array)
-			if t != "Point" || !isArr || arr.Len() < 2 {
-				return 0, 0, false
-			}
-			return geoNumberPair(must.NotFail(arr.Get(0)), must.NotFail(arr.Get(1)))
-		}
-		if values := v.Values(); len(values) >= 2 {
-			return geoNumberPair(values[0], values[1])
-		}
-	}
-	return 0, 0, false
-}
-
-func geoNumberPair(a, b any) (float64, float64, bool) {
-	x, okX := geoNumber(a)
-	y, okY := geoNumber(b)
-	return x, y, okX && okY
-}
-
-func geoNumber(v any) (float64, bool) {
-	switch n := v.(type) {
-	case float64:
-		return n, !math.IsNaN(n) && !math.IsInf(n, 0)
-	case int32:
-		return float64(n), true
-	case int64:
-		return float64(n), true
-	}
-	return 0, false
 }
 
 // geoNormalize maps a point into the grid's unit square.

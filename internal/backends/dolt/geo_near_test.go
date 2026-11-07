@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/geo"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
@@ -46,7 +47,7 @@ func geoDistance(x, y float64, spherical bool) func(*types.Document) float64 {
 		if err != nil {
 			return math.MaxFloat64
 		}
-		px, py, ok := geoPoint(v)
+		px, py, ok := geo.Point(v)
 		if !ok {
 			return math.MaxFloat64
 		}

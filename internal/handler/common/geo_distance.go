@@ -17,6 +17,7 @@ package common
 import (
 	"math"
 
+	"github.com/dolthub/dumbodb/internal/geo"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
@@ -29,7 +30,7 @@ import (
 // MongoDB's Earth radius, measured as S2 does; a point inside a polygon is at
 // distance 0.
 func GeoDistance(v any, x, y float64, spherical bool) float64 {
-	if px, py, ok := legacyPoint(v); ok {
+	if px, py, ok := geo.Point(v); ok {
 		return pointDistance(x, y, px, py, spherical)
 	}
 	switch v := v.(type) {
@@ -45,35 +46,6 @@ func GeoDistance(v any, x, y float64, spherical bool) float64 {
 		return best
 	}
 	return math.MaxFloat64
-}
-
-// legacyPoint reads a legacy [x, y] pair or {x, y} document.
-func legacyPoint(v any) (float64, float64, bool) {
-	var first, second any
-	switch v := v.(type) {
-	case *types.Array:
-		if v.Len() < 2 {
-			return 0, 0, false
-		}
-		first, second = must.NotFail(v.Get(0)), must.NotFail(v.Get(1))
-	case *types.Document:
-		keys := v.Keys()
-		if len(keys) < 2 || keys[0] == "type" || keys[1] == "type" || v.Has("coordinates") {
-			return 0, 0, false
-		}
-		first, second = must.NotFail(v.Get(keys[0])), must.NotFail(v.Get(keys[1]))
-	default:
-		return 0, 0, false
-	}
-	px, err := toFloat64(first)
-	if err != nil {
-		return 0, 0, false
-	}
-	py, err := toFloat64(second)
-	if err != nil {
-		return 0, 0, false
-	}
-	return px, py, true
 }
 
 func pointDistance(x, y, px, py float64, spherical bool) float64 {
@@ -97,7 +69,7 @@ func geometryDistance(g *types.Document, x, y float64, spherical bool) float64 {
 	}
 	switch typ {
 	case "Point":
-		if px, py, ok := legacyPoint(arr); ok {
+		if px, py, ok := geo.Point(arr); ok {
 			return pointDistance(x, y, px, py, spherical)
 		}
 	case "MultiPoint":
@@ -162,7 +134,7 @@ func polygonDistance(rings *types.Array, x, y float64, spherical bool) float64 {
 func linePoints(line *types.Array) [][2]float64 {
 	pts := make([][2]float64, 0, line.Len())
 	for i := 0; i < line.Len(); i++ {
-		if px, py, ok := legacyPoint(must.NotFail(line.Get(i))); ok {
+		if px, py, ok := geo.Point(must.NotFail(line.Get(i))); ok {
 			pts = append(pts, [2]float64{px, py})
 		}
 	}
