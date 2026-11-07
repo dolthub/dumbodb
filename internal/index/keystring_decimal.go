@@ -91,9 +91,23 @@ var (
 	two768         = new(big.Rat).SetFloat64(0x1p768)
 )
 
+// pow10 returns 10^n. The result is shared and must not be modified.
 func pow10(n int) *big.Int {
+	if n < len(pow10Table) {
+		return pow10Table[n]
+	}
 	return new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(n)), nil)
 }
+
+// pow10Table holds the powers of ten that values in the double range use.
+var pow10Table = func() []*big.Int {
+	t := make([]*big.Int, 700)
+	t[0] = big.NewInt(1)
+	for i := 1; i < len(t); i++ {
+		t[i] = new(big.Int).Mul(t[i-1], big.NewInt(10))
+	}
+	return t
+}()
 
 // rat returns |value| exactly.
 func (d decimal) rat() *big.Rat {
@@ -138,7 +152,7 @@ func appendDecimal128(out []byte, d128 types.Decimal128) []byte {
 		var enc uint64
 		var lead *big.Rat
 		if mag.Cmp(twoMinus255) < 0 {
-			scaled := math.Float64frombits(math.Float64bits(truncDouble(new(big.Rat).Mul(mag, two768))) &^ 1)
+			scaled := math.Float64frombits(math.Float64bits(truncQuo(new(big.Int).Lsh(mag.Num(), 768), mag.Denom())) &^ 1)
 			enc = math.Float64bits(scaled) << 1
 			lead = new(big.Rat).Quo(new(big.Rat).SetFloat64(scaled), two768)
 		} else {
@@ -150,7 +164,7 @@ func appendDecimal128(out []byte, d128 types.Decimal128) []byte {
 		start := len(out)
 		out = binary.BigEndian.AppendUint64(append(out, ctypePosSmall), enc|uint64(flag))
 		if flag != decimalEqual15 {
-			out = appendContinuation(out, d, lead)
+			out = appendContinuation(out, mag, lead)
 		}
 		return signed(out, start, d.negative, ctypeNegSmall)
 	case mag.Cmp(two63) < 0:
@@ -176,7 +190,7 @@ func appendDecimal128(out []byte, d128 types.Decimal128) []byte {
 				return signedMagnitude(out, start, d.negative)
 			}
 		}
-		out = appendContinuation(out, d, leadValue)
+		out = appendContinuation(out, mag, leadValue)
 		return signedMagnitude(out, start, d.negative)
 	}
 	if mag.Cmp(maxDouble) > 0 {
@@ -185,22 +199,31 @@ func appendDecimal128(out []byte, d128 types.Decimal128) []byte {
 	lead := truncDouble(mag)
 	start := len(out)
 	out = binary.BigEndian.AppendUint64(append(out, ctypePosLarge), largeBits(lead)|1)
-	out = appendContinuation(out, d, new(big.Rat).SetFloat64(lead))
+	out = appendContinuation(out, mag, new(big.Rat).SetFloat64(lead))
 	return signed(out, start, d.negative, ctypeNegLarge)
 }
 
 // truncDouble is the largest double not above mag <= MaxFloat64.
 func truncDouble(mag *big.Rat) float64 {
-	f, _ := mag.Float64()
-	if math.IsInf(f, 1) || new(big.Rat).SetFloat64(f).Cmp(mag) > 0 {
-		f = math.Nextafter(f, 0)
-	}
+	return truncQuo(mag.Num(), mag.Denom())
+}
+
+// truncQuo is the largest double not above num/den, in the normal range.
+func truncQuo(num, den *big.Int) float64 {
+	n := new(big.Float).SetInt(num)
+	d := new(big.Float).SetInt(den)
+	f, _ := new(big.Float).SetPrec(53).SetMode(big.ToZero).Quo(n, d).Float64()
 	return f
 }
 
 // decimalFlag compares mag with lead rounded up to 15 significant digits.
 func decimalFlag(mag, lead *big.Rat) int {
-	switch mag.Cmp(roundUp15(lead)) {
+	e := decade(lead) - 14
+	n, exact := scaledFloor(lead, e)
+	if !exact {
+		n.Add(n, big.NewInt(1))
+	}
+	switch cmpScaled(mag, n, e) {
 	case 0:
 		return decimalEqual15
 	case -1:
@@ -209,50 +232,59 @@ func decimalFlag(mag, lead *big.Rat) int {
 	return decimalAbove
 }
 
-func roundUp15(r *big.Rat) *big.Rat {
-	e := decade(r) - 14
-	unit := new(big.Rat).SetInt(pow10(abs(e)))
-	if e < 0 {
-		unit.Inv(unit)
-	}
-	q := new(big.Rat).Quo(r, unit)
-	n := new(big.Int).Quo(q.Num(), q.Denom())
-	if !q.IsInt() {
-		n.Add(n, big.NewInt(1))
-	}
-	return new(big.Rat).Mul(new(big.Rat).SetInt(n), unit)
-}
+// The helpers below work on a Rat's numerator and denominator directly:
+// big.Rat reduces every result by a GCD, which over the 1000-bit
+// denominators of tiny values costs far more than the arithmetic.
 
-// decade returns floor(log10(r)) for r > 0.
+// decade returns floor(log10(r)) for r > 0. The bit lengths of numerator and
+// denominator put it within one of the answer.
 func decade(r *big.Rat) int {
-	e := len(new(big.Int).Quo(r.Num(), r.Denom()).String()) - 1
-	if r.Cmp(ratOne) >= 0 {
-		return e
+	bits := r.Num().BitLen() - r.Denom().BitLen()
+	e := int(math.Floor(float64(bits-1) * math.Log10(2)))
+	for cmpScaled(r, big.NewInt(1), e+1) >= 0 {
+		e++
 	}
-	e = -1
-	ten := big.NewRat(10, 1)
-	for x := new(big.Rat).Mul(r, ten); x.Cmp(ratOne) < 0; x.Mul(x, ten) {
+	for cmpScaled(r, big.NewInt(1), e) < 0 {
 		e--
 	}
 	return e
 }
 
-// appendContinuation appends the decimal's coefficient at the scale of lead's
+// cmpScaled compares r with n * 10^e.
+func cmpScaled(r *big.Rat, n *big.Int, e int) int {
+	left := new(big.Int).Set(r.Num())
+	right := new(big.Int).Mul(n, r.Denom())
+	if e >= 0 {
+		right.Mul(right, pow10(e))
+	} else {
+		left.Mul(left, pow10(-e))
+	}
+	return left.Cmp(right)
+}
+
+// scaledFloor returns floor(r / 10^e) and whether the division is exact.
+func scaledFloor(r *big.Rat, e int) (*big.Int, bool) {
+	num := new(big.Int).Set(r.Num())
+	den := new(big.Int).Set(r.Denom())
+	if e >= 0 {
+		den.Mul(den, pow10(e))
+	} else {
+		num.Mul(num, pow10(-e))
+	}
+	q, rem := new(big.Int).QuoRem(num, den, new(big.Int))
+	return q, rem.Sign() == 0
+}
+
+// appendContinuation appends mag, a decimal's magnitude, at the scale of lead's
 // decade (34 digits there) less lead's, rounded up.
-func appendContinuation(out []byte, d decimal, lead *big.Rat) []byte {
+func appendContinuation(out []byte, mag, lead *big.Rat) []byte {
 	u := decade(lead) - 33
-	unit := new(big.Rat).SetInt(pow10(abs(u)))
-	if u < 0 {
-		unit.Inv(unit)
+	c, _ := scaledFloor(mag, u)
+	l, exact := scaledFloor(lead, u)
+	if !exact {
+		l.Add(l, big.NewInt(1))
 	}
-	c := new(big.Rat).Quo(d.rat(), unit)
-	l := new(big.Rat).Quo(lead, unit)
-	ceil := new(big.Int).Quo(l.Num(), l.Denom())
-	if !l.IsInt() {
-		ceil.Add(ceil, big.NewInt(1))
-	}
-	cont := new(big.Int).Sub(new(big.Int).Quo(c.Num(), c.Denom()), ceil)
-	return binary.BigEndian.AppendUint64(out, cont.Uint64())
+	return binary.BigEndian.AppendUint64(out, c.Sub(c, l).Uint64())
 }
 
 // appendWide appends a decimal beyond the double range: the range bit, the
