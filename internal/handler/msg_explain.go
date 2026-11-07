@@ -380,7 +380,9 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 			return nil, lazyerrors.Error(err)
 		}
 
-		params.Filter, _ = aggregations.GetPushdownQuery(rawStages)
+		// The command's own filter applies after the view's.
+		viewFilter, _ := aggregations.GetPushdownQuery(rawStages)
+		params.Filter = andFilters(viewFilter, params.Filter)
 		common.CanonicalizeFilter(params.Filter)
 		params.Aggregate = false
 		params.StagesDocs = nil
@@ -488,7 +490,7 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 	}
 
 	response := must.NotFail(types.NewDocument(
-		"explainVersion", "1",
+		"explainVersion", explainVersion(params, viaView),
 		"queryPlanner", res.QueryPlanner,
 	))
 
@@ -546,4 +548,25 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 	response.Set("ok", float64(1))
 
 	return documentOpMsg(response)
+}
+
+// andFilters returns a filter matching both a and b, either of which may be
+// empty.
+func andFilters(a, b *types.Document) *types.Document {
+	switch {
+	case a.Len() == 0:
+		return b
+	case b.Len() == 0:
+		return a
+	}
+	return must.NotFail(types.NewDocument("$and", must.NotFail(types.NewArray(a, b))))
+}
+
+// explainVersion is "2" where MongoDB runs the command as a pipeline: a count
+// on a view.
+func explainVersion(params *common.ExplainParams, viaView bool) string {
+	if viaView && params.CommandName == "count" {
+		return "2"
+	}
+	return "1"
 }
