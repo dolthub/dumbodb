@@ -16,6 +16,7 @@ package handler
 
 import (
 	"context"
+	"github.com/dolthub/dumbodb/internal/backends"
 
 	"github.com/FerretDB/wire"
 
@@ -73,16 +74,18 @@ func (h *Handler) MsgListDatabases(connCtx context.Context, msg *wire.OpMsg) (*w
 			continue
 		}
 
-		stats, err := db.Stats(connCtx, nil)
-		if err != nil {
-			h.L.WarnContext(connCtx, "Failed to get database stats", logging.Error(err))
-			continue
+		// A database whose stats cannot be read, such as one an older version
+		// wrote, is still listed so it can be found and dropped.
+		stats, statsErr := db.Stats(connCtx, nil)
+		if statsErr != nil {
+			h.L.WarnContext(connCtx, "Failed to get database stats", logging.Error(statsErr))
+			stats = &backends.DatabaseStatsResult{}
 		}
 
 		d := must.NotFail(types.NewDocument(
 			"name", dbInfo.Name,
 			"sizeOnDisk", stats.SizeTotal,
-			"empty", stats.SizeTotal == 0,
+			"empty", stats.SizeTotal == 0 && statsErr == nil,
 		))
 
 		matches, err := common.FilterDocument(d, filter)
