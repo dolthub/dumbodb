@@ -154,7 +154,7 @@ const (
 // documents it examined are replayed ahead of the rest of the walk, returned
 // with trialWalkWon.
 func (c *collection) trySortWalkTrial(ctx context.Context, state *dbState, primary prolly.Map, params *backends.QueryParams, plan *indexLookupPlan) (*replayIter, trialOutcome, error) {
-	if params.Hint != nil || plan.union {
+	if params.Hint != nil {
 		return nil, trialNotRun, nil
 	}
 	target := trialTarget(params)
@@ -295,6 +295,7 @@ func (it *sortWalkIter) nextEntry() (*sortWalkEntry, error) {
 		if !ok {
 			continue
 		}
+		it.examined.entries(it.ctx, 1)
 		return &sortWalkEntry{prefix: prefix, id: bytes.Clone(id)}, nil
 	}
 }
