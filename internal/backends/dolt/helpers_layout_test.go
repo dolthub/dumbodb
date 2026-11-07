@@ -18,8 +18,10 @@ import (
 	"context"
 	"testing"
 
+	"github.com/dolthub/dolt/go/gen/fb/serial"
 	"github.com/dolthub/dolt/go/store/hash"
 	dolttypes "github.com/dolthub/dolt/go/store/types"
+	fb "github.com/dolthub/flatbuffers/v23/go"
 	"github.com/stretchr/testify/require"
 
 	"github.com/dolthub/dumbodb/internal/util/must"
@@ -44,4 +46,23 @@ func TestOpenCollectionRefusesOtherSchema(t *testing.T) {
 	require.ErrorIs(t, err, errUnsupportedLayout)
 	_, err = secondaryIndexesForDTBL(ctx, state.cs, state.ns, ref.TargetHash())
 	require.ErrorIs(t, err, errUnsupportedLayout)
+}
+
+// A table whose schema field is missing or not a hash is refused, not a panic.
+func TestCheckTableLayoutRefusesMalformedSchema(t *testing.T) {
+	for _, schema := range [][]byte{nil, make([]byte, 5)} {
+		b := fb.NewBuilder(64)
+		var schOff fb.UOffsetT
+		if schema != nil {
+			schOff = b.CreateByteVector(schema)
+		}
+		serial.TableStart(b)
+		if schema != nil {
+			serial.TableAddSchema(b, schOff)
+		}
+		msg := serial.FinishMessage(b, serial.TableEnd(b), []byte(serial.TableFileID))
+		tbl, err := serial.TryGetRootAsTable(msg, serial.MessagePrefixSz)
+		require.NoError(t, err)
+		require.ErrorIs(t, checkTableLayout(tbl), errUnsupportedLayout, "schema of %d bytes", len(schema))
+	}
 }
