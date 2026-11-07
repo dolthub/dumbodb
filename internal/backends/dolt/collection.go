@@ -249,7 +249,11 @@ func (c *collection) query(ctx context.Context, params *backends.QueryParams) (*
 					// trial work.
 					backends.AddKeysExamined(ctx, -plan.keys)
 					c.db.backend.planCache.put(cacheKey, newPlanCacheEntry(idxInfos, params, iter.rest.index, "", len(iter.docs)))
-					return &backends.QueryResult{Iter: iter, Sorted: true}, walkStage(idxInfos, iter.rest.index), nil
+					walk := walkStage(idxInfos, iter.rest.index)
+					// A lone $or is planned per branch, under SUBPLAN, even
+					// when a walk of the sort index wins.
+					walk.subplan = plan.union && !plan.inRewrite
+					return &backends.QueryResult{Iter: iter, Sorted: true}, walk, nil
 				case trialFilterWon:
 					c.db.backend.planCache.put(cacheKey, newPlanCacheEntry(idxInfos, params, "", plan.index, filterPlanWorks(plan, params)))
 				}
