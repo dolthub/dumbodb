@@ -194,6 +194,10 @@ type CountParams struct {
 
 	// Collation is the effective operation collation, nil when simple/binary.
 	Collation *types.Document
+
+	// Stop, when positive, is skip + limit: a count reads no further keys
+	// than that, as MongoDB's COUNT stage stops pulling from its scan.
+	Stop int64
 }
 
 type CountResult struct {
