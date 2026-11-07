@@ -113,26 +113,31 @@ bytes. NaN is the single byte `1E`.
 
 ### Known deviation: small decimals
 
-DumboDB's encoding differs from mongod's for one class of values: a Decimal128
-that is not exactly a double and whose magnitude is below 2^-255 (about
-1.7e-77). Every other value, Decimal128 or not, encodes byte for byte as
+DumboDB's encoding can differ from mongod's for one class of values: a
+Decimal128 that is not exactly a double and whose magnitude is below 2^-255
+(about 1.7e-77). Every other value, Decimal128 or not, encodes byte for byte as
 mongod encodes it.
 
-Below 2^-255 mongod scales the decimal by 2^768 using Decimal128 arithmetic,
-which rounds, and derives the flags and continuation from that rounded value.
-DumboDB uses the exact value. The two agree on the type byte and on the
-leading double down to its last bits, and differ after that:
+Below 2^-255 such a decimal is the 2^768-scaled double nearest it toward zero,
+shifted left one bit with the low bit set, followed by an 8-byte continuation.
+A double's word there always ends in a 0 bit, so a decimal never shares a
+double's bytes and sorts strictly between its truncated double and the next
+one. mongod derives the continuation from Decimal128 arithmetic on the scaled
+value, which rounds; DumboDB uses the exact value. The leading 9 bytes always
+match, and the continuation usually does: in `TestKeyStringMatchesMongod`'s
+corpus, 3 of 3145 values differ, in the continuation's last digits.
 
 | Decimal | mongod | DumboDB |
 |---|---|---|
-| `1E-100` | `2A B6 57 FE 5D C9 1C 0A 5F 0E D6 09 0E C7 B5 10 3F` | `2A B6 57 FE 5D C9 1C 0A 5E` |
-| `2E-300` | `2A 63 6A DC 3F 85 F1 E6 B1 03 E7 E3 84 33 2F D4 E7` | `2A 63 6A DC 3F 85 F1 E6 B2` |
+| `1E-100` | `2A B6 57 FE 5D C9 1C 0A 5F 0E D6 09 0E C7 B5 10 3F` | the same |
+| `1E-310` | `2A 5F 24 D1 16 E1 CC 56 1F 16 39 B8 19 3F D8 80 16` | `... 3F D8 80 0C` |
 
-Within DumboDB these encodings still sort in numeric order and stay distinct
-for distinct values, so queries, sorts, indexes and `_id` uniqueness behave as
-in mongod. The difference is visible only as raw bytes: the RecordId that
+Within DumboDB these encodings sort in numeric order and stay distinct, so
+queries, sorts, indexes and `_id` uniqueness behave as in mongod. The
+difference is visible only as raw bytes: the RecordId that
 `find().showRecordId()` or `$recordId` returns for such an `_id`.
-`TestKeyStringMatchesMongod` checks these values for order only.
+`TestKeyStringMatchesMongod` checks the leading 9 bytes of these values and
+their order.
 
 ## Other types
 

@@ -33,10 +33,11 @@ import (
 // beyond the double range encode as [range bit][14-bit biased exponent]
 // [113-bit coefficient] in 16 bytes.
 //
-// Below 2^-255 mongod derives the flags and continuation of an inexact decimal
-// from Decimal128 arithmetic on the 2^768-scaled value; this encoding uses the
-// exact value instead. The leading bytes, order and uniqueness match mongod;
-// the trailing bytes may not (docs/reference/mongodb-keystring.md, "Known
+// Below 2^-255 an inexact decimal is the 2^768-scaled double nearest it toward
+// zero, a set flag bit, and a continuation. mongod derives the continuation
+// from Decimal128 arithmetic on the scaled value; this encoding uses the exact
+// value instead. The leading 9 bytes, order and uniqueness match mongod; the
+// continuation may not (docs/reference/mongodb-keystring.md, "Known
 // deviation").
 const (
 	decimalEqual15 = 2 // no continuation: the double rounded up to 15 digits
@@ -146,23 +147,24 @@ func appendDecimal128(out []byte, d128 types.Decimal128) []byte {
 		if mag.Cmp(smallestDouble) < 0 {
 			return appendWide(out, d, ctypePosSmall, ctypeNegSmall, false)
 		}
-		// Below 2^-255 the encoding scales by 2^768 first, so the leading
-		// double keeps full precision even where a double is subnormal. Its
-		// lowest mantissa bit is cleared to make room for the flags.
-		var enc uint64
-		var lead *big.Rat
-		if mag.Cmp(twoMinus255) < 0 {
-			scaled := math.Float64frombits(math.Float64bits(truncQuo(new(big.Int).Lsh(mag.Num(), 768), mag.Denom())) &^ 1)
-			enc = math.Float64bits(scaled) << 1
-			lead = new(big.Rat).Quo(new(big.Rat).SetFloat64(scaled), two768)
-		} else {
-			f := truncDouble(mag)
-			enc = smallBits(f)
-			lead = new(big.Rat).SetFloat64(f)
-		}
-		flag := decimalFlag(mag, lead)
 		start := len(out)
-		out = binary.BigEndian.AppendUint64(append(out, ctypePosSmall), enc|uint64(flag))
+		if mag.Cmp(twoMinus255) < 0 {
+			// Below 2^-255 the encoding scales by 2^768 first, so the leading
+			// double keeps full precision even where a double is subnormal. A
+			// double's word ends in a 0 bit; an inexact decimal sets it and
+			// always carries the continuation, so it sorts strictly between
+			// its truncated double and the next one and never shares a
+			// double's bytes.
+			scaled := truncQuo(new(big.Int).Lsh(mag.Num(), 768), mag.Denom())
+			lead := new(big.Rat).Quo(new(big.Rat).SetFloat64(scaled), two768)
+			out = binary.BigEndian.AppendUint64(append(out, ctypePosSmall), math.Float64bits(scaled)<<1|1)
+			out = appendContinuation(out, mag, lead)
+			return signed(out, start, d.negative, ctypeNegSmall)
+		}
+		f := truncDouble(mag)
+		lead := new(big.Rat).SetFloat64(f)
+		flag := decimalFlag(mag, lead)
+		out = binary.BigEndian.AppendUint64(append(out, ctypePosSmall), smallBits(f)|uint64(flag))
 		if flag != decimalEqual15 {
 			out = appendContinuation(out, mag, lead)
 		}

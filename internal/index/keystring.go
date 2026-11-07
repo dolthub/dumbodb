@@ -445,7 +445,15 @@ func numberLen(b []byte) (int, bool) {
 		if !ok {
 			return 0, false
 		}
-		if w < smallestDoubleBits || w&3 == decimalBelow || w&3 == decimalAbove {
+		switch {
+		case w < smallestDoubleBits:
+			return 17, len(b) >= 17
+		case w < smallBits(0x1p-255):
+			// Scaled band: a set low bit marks a decimal's continuation.
+			if w&1 == 1 {
+				return 17, len(b) >= 17
+			}
+		case w&3 == decimalBelow || w&3 == decimalAbove:
 			return 17, len(b) >= 17
 		}
 		return 9, true
