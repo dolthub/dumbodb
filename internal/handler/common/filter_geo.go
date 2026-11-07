@@ -20,6 +20,7 @@ import (
 	"math"
 	"sort"
 
+	"github.com/dolthub/dumbodb/internal/geo"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
@@ -1124,25 +1125,9 @@ func arrToRing(arr *types.Array) ([][2]float64, error) {
 	return ring, nil
 }
 
-// fieldPoint extracts a point (lon, lat) from a document field value.
-// Accepts GeoJSON Point doc or legacy [lon, lat] array.
+// fieldPoint returns the point a stored field value holds; see geo.Point.
 func fieldPoint(val any) (float64, float64, error) {
-	switch v := val.(type) {
-	case *types.Document:
-		lon, lat, err := extractPointCoords(v)
-		return lon, lat, err
-	case *types.Array:
-		if v.Len() < 2 {
-			return 0, 0, fmt.Errorf("expected [lon, lat] array")
-		}
-		lon, err := toFloat64(must.NotFail(v.Get(0)))
-		if err != nil {
-			return 0, 0, err
-		}
-		lat, err := toFloat64(must.NotFail(v.Get(1)))
-		if err != nil {
-			return 0, 0, err
-		}
+	if lon, lat, ok := geo.Point(val); ok {
 		return lon, lat, nil
 	}
 	return 0, 0, fmt.Errorf("field is not a Point geometry")
