@@ -45,6 +45,7 @@ type DistinctParams struct {
 
 	Collation *types.Document `dumbo:"collation,opt"`
 	MaxTimeMS int64           `dumbo:"maxTimeMS,opt,wholePositiveNumber"`
+	Hint      any             `dumbo:"hint,opt"`
 
 	ReadConcern    *types.Document `dumbo:"readConcern,ignored"`
 	LSID           any             `dumbo:"lsid,ignored"`

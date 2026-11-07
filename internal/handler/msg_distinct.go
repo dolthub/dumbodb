@@ -129,10 +129,15 @@ func (h *Handler) MsgDistinct(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 func (h *Handler) execDistinct(ctx context.Context, c backends.Collection, params *common.DistinctParams, cmp *collation.Comparator) (*types.Array, error) {
 	// With no filter, MongoDB answers distinct from an index led by the key
 	// (DISTINCT_SCAN) and returns its index keys rather than document values.
+	hinted := params.Hint != nil && !backends.HintIsNatural(params.Hint)
 	if params.Filter.Len() == 0 && cmp == nil {
 		idx, err := distinctScanIndex(ctx, c, params.Key)
 		if err != nil {
 			return nil, lazyerrors.Error(err)
+		}
+		// A hint to another index rules out the scan of this one.
+		if idx != nil && hinted && backends.MatchHintedIndex(params.Hint, []backends.IndexInfo{*idx}) != idx.Name {
+			idx = nil
 		}
 		if idx != nil {
 			distinct, err := distinctFromIndexKeys(ctx, c, params.Key, idx)
@@ -143,7 +148,7 @@ func (h *Handler) execDistinct(ctx context.Context, c backends.Collection, param
 		}
 	}
 
-	if cmp == nil && params.Filter.Len() == 1 && params.Filter.Keys()[0] == params.Key && !h.DisablePushdown {
+	if cmp == nil && !hinted && params.Filter.Len() == 1 && params.Filter.Keys()[0] == params.Key && !h.DisablePushdown {
 		if ds, ok := c.(backends.DistinctScanner); ok {
 			res, err := ds.DistinctScan(ctx, &backends.DistinctParams{Key: params.Key, Filter: params.Filter})
 			if err != nil {
@@ -164,6 +169,7 @@ func (h *Handler) execDistinct(ctx context.Context, c backends.Collection, param
 
 	var qp backends.QueryParams
 	qp.Collated = cmp != nil
+	qp.Hint = params.Hint
 	if fields, ok := common.FilterRootFields(params.Filter); ok {
 		keyRoot, _, _ := strings.Cut(params.Key, ".")
 		qp.Fields = append(fields, keyRoot)
