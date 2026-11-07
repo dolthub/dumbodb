@@ -143,7 +143,11 @@ func (c *Cursor) Next() (struct{}, *types.Document, error) {
 		c.lastRecordID = recordID
 
 		if c.ShowRecordID {
-			doc.Set("$recordId", recordID)
+			if recordKey := doc.RecordKey(); recordKey != nil {
+				doc.Set("$recordId", types.Binary{Subtype: types.BinaryGeneric, B: recordKey})
+			} else {
+				doc.Set("$recordId", recordID)
+			}
 		}
 	}
 

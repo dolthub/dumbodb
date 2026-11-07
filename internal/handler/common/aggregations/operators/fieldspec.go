@@ -196,7 +196,7 @@ func ProjectInclusionTree(doc, spec *types.Document) (*types.Document, error) {
 		}
 		out = reordered
 	}
-	out.SetRecordID(doc.RecordID())
+	out.CopyRecordIdentity(doc)
 	return out, nil
 }
 
@@ -290,7 +290,7 @@ func AddFieldsTree(doc, spec *types.Document) (*types.Document, error) {
 	if err != nil {
 		return nil, err
 	}
-	res.SetRecordID(doc.RecordID())
+	res.CopyRecordIdentity(doc)
 	return res, nil
 }
 
