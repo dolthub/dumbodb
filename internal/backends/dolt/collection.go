@@ -297,6 +297,10 @@ func (c *collection) query(ctx context.Context, params *backends.QueryParams) (*
 		sortVal := params.Sort.Map()["$natural"].(int64)
 		reverse = sortVal == -1
 	}
+	// Without a sort, {$natural: -1} as a hint reads the collection backward.
+	if naturalHint && params.Sort.Len() == 0 {
+		reverse = naturalHintDescending(params.Hint)
+	}
 
 	var limit int64
 	if params != nil {
@@ -4790,3 +4794,20 @@ func (it *sliceIter) Next() (struct{}, *types.Document, error) {
 }
 
 func (it *sliceIter) Close() {}
+
+// naturalHintDescending reports whether a {$natural: n} hint has negative n.
+func naturalHintDescending(hint any) bool {
+	doc, _ := hint.(*types.Document)
+	if doc == nil {
+		return false
+	}
+	switch v := must.NotFail(doc.Get("$natural")).(type) {
+	case int32:
+		return v < 0
+	case int64:
+		return v < 0
+	case float64:
+		return v < 0
+	}
+	return false
+}
