@@ -180,6 +180,9 @@ const MaxKeyLength = 4096
 // ErrKeyTooLong reports a key longer than MaxKeyLength.
 var ErrKeyTooLong = errors.New("key too large to index")
 
+// ErrCannotExtractGeoKeys reports a value a 2dsphere index cannot hold.
+var ErrCannotExtractGeoKeys = errors.New("Can't extract geo keys")
+
 // CheckKeyLength returns ErrKeyTooLong for a key longer than MaxKeyLength.
 func CheckKeyLength(key []byte) error {
 	if len(key) > MaxKeyLength {
