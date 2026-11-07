@@ -69,6 +69,8 @@ func buildViewPipelineStages(db backends.Database, viewPipeline *types.Array, cm
 			vs, err = stages.NewMatchStage(vd, cmp, stages.SeesStoredDocuments(stageDocs, i))
 		case "$sort":
 			vs, err = stages.NewSortStage(vd, sortLimitBound(stageDocs, i), cmp)
+		case "$group":
+			vs, err = stages.NewGroupStage(vd, cmp)
 		default:
 			vs, err = stages.NewStage(vd)
 		}

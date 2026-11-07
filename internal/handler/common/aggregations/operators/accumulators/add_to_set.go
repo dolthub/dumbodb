@@ -17,6 +17,8 @@ package accumulators
 import (
 	"errors"
 
+	"github.com/dolthub/dumbodb/internal/collation"
+
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
@@ -49,9 +51,17 @@ func (a *addToSetAccumulator) New() Accumulation {
 	return &addToSetState{spec: a, result: types.MakeArray(0)}
 }
 
+// NewCollated returns an accumulation whose set compares strings under cmp.
+func (a *addToSetAccumulator) NewCollated(cmp *collation.Comparator) Accumulation {
+	return &addToSetState{spec: a, result: types.MakeArray(0), cmp: cmp, keys: types.MakeArray(0)}
+}
+
 type addToSetState struct {
 	spec   *addToSetAccumulator
 	result *types.Array
+	// cmp, when set, dedups by collation; keys holds result's collation keys.
+	cmp  *collation.Comparator
+	keys *types.Array
 }
 
 func (s *addToSetState) Accumulate(doc *types.Document) error {
@@ -60,7 +70,14 @@ func (s *addToSetState) Accumulate(doc *types.Document) error {
 		return err
 	}
 
-	if !containsValue(s.result, val) {
+	if s.cmp == nil {
+		if !containsValue(s.result, val) {
+			s.result.Append(val)
+		}
+		return nil
+	}
+	if key := s.cmp.KeyValue(val); !containsValue(s.keys, key) {
+		s.keys.Append(key)
 		s.result.Append(val)
 	}
 

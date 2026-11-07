@@ -293,6 +293,9 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 				s, err = stages.NewStage(d)
 			}
 
+		case "$group":
+			s, err = stages.NewGroupStage(d, collCmp)
+
 		case "$sort":
 			// Coalesce a following $limit (or $skip + $limit) into a top-K bound
 			// so $sort holds only the needed documents instead of the whole input.
