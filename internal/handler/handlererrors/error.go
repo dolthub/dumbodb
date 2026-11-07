@@ -18,10 +18,12 @@ package handlererrors
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/FerretDB/wire/wirebson"
 
 	"github.com/dolthub/dumbodb/internal/bson"
+	"github.com/dolthub/dumbodb/internal/index"
 )
 
 //go:generate ../../../bin/stringer -linecomment -type ErrorCode
@@ -502,6 +504,9 @@ const (
 	// descending sortBy.
 	ErrRangeWindowDescendingSort = ErrorCode(8947401) // Location8947401
 
+	// ErrKeyTooLong indicates a key longer than DumboDB stores.
+	ErrKeyTooLong = ErrorCode(17280) // KeyTooLong
+
 	// ErrClusteredIndexNotUnique indicates a clusteredIndex without unique: true.
 	ErrClusteredIndexNotUnique = ErrorCode(5979700) // Location5979700
 
@@ -792,6 +797,10 @@ func ProtocolError(err error) ProtoErr {
 		}
 	}
 
+	if errors.Is(err, index.ErrKeyTooLong) {
+		return NewCommandErrorMsg(ErrKeyTooLong, KeyTooLongMessage(err)).(*CommandError)
+	}
+
 	if errors.Is(err, bson.ErrNestingTooDeep) {
 		msg := fmt.Sprintf("BSONObj exceeded maximum nested object depth: %d", bson.MaxNestingDepth)
 		return NewCommandErrorMsg(ErrOverflow, msg).(*CommandError)
@@ -799,4 +808,14 @@ func ProtocolError(err error) ProtoErr {
 
 	//nolint:errorlint // only *CommandError could be returned
 	return NewCommandError(errInternalError, err).(*CommandError)
+}
+
+// KeyTooLongMessage describes err, an index.ErrKeyTooLong, without the
+// internal call chain that wraps it.
+func KeyTooLongMessage(err error) string {
+	msg := err.Error()
+	if i := strings.Index(msg, index.ErrKeyTooLong.Error()); i >= 0 {
+		msg = msg[i:]
+	}
+	return msg
 }

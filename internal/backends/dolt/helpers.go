@@ -233,8 +233,22 @@ func buildDoltTableFlatbuffer(m prolly.Map, schemaHash hash.Hash, idxBytes []byt
 
 // primaryKey returns a collection's primary map key for an _id: its
 // KeyString, which orders keys as MongoDB orders _id values and makes equal
-// values (1, 1.0, NumberLong(1)) one key, as a clustered collection does.
+// values (1, 1.0, NumberLong(1)) one key, as a clustered collection does. A
+// key longer than idxpkg.MaxKeyLength is refused with idxpkg.ErrKeyTooLong.
 func primaryKey(id any) ([]byte, error) {
+	key, err := idKey(id)
+	if err != nil {
+		return nil, err
+	}
+	if err := idxpkg.CheckKeyLength(key); err != nil {
+		return nil, err
+	}
+	return key, nil
+}
+
+// idKey is primaryKey without the length limit, for keys that are compared
+// but never stored, such as document lock ids.
+func idKey(id any) ([]byte, error) {
 	if idxpkg.ValueLossy(id) {
 		return nil, fmt.Errorf("unsupported _id type %T", id)
 	}
@@ -248,7 +262,7 @@ func pow10(n int) *big.Int {
 // buildKey creates a key tuple for the encoded MongoDB _id bytes.
 func buildKey(idBytes []byte) (val.Tuple, error) {
 	tb := val.NewTupleBuilder(keyDesc, nil)
-	tb.PutByteString(0, idBytes)
+	tb.PutByteString(0, idxpkg.ClampBound(idBytes))
 
 	tup, err := tb.Build(context.Background(), bufPool)
 	if err != nil {

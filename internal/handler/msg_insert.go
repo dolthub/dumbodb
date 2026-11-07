@@ -29,6 +29,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/index"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
@@ -280,6 +281,18 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 					Message: fmt.Sprintf(
 						"db already exists with different case already have: [%s] trying to create [%s]", existing, requested,
 					),
+				})
+				if params.Ordered {
+					break
+				}
+				continue
+			}
+
+			if errors.Is(err, index.ErrKeyTooLong) {
+				writeErrors = append(writeErrors, &mongo.WriteError{
+					Index:   docsIndexes[j],
+					Code:    int(handlererrors.ErrKeyTooLong),
+					Message: handlererrors.KeyTooLongMessage(err),
 				})
 				if params.Ordered {
 					break

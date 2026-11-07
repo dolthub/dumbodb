@@ -206,7 +206,7 @@ func idsFromDocs(docs []*types.Document) ([]hash.Hash, error) {
 		if err != nil {
 			return nil, fmt.Errorf("document missing _id: %w", err)
 		}
-		h, err := primaryKey(idVal)
+		h, err := idKey(idVal)
 		if err != nil {
 			return nil, fmt.Errorf("encoding _id: %w", err)
 		}
@@ -218,7 +218,7 @@ func idsFromDocs(docs []*types.Document) ([]hash.Hash, error) {
 func idsFromValues(idVals []any) ([]hash.Hash, error) {
 	out := make([]hash.Hash, 0, len(idVals))
 	for _, v := range idVals {
-		h, err := primaryKey(v)
+		h, err := idKey(v)
 		if err != nil {
 			return nil, fmt.Errorf("encoding _id: %w", err)
 		}
