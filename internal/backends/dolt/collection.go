@@ -1058,6 +1058,10 @@ func orBranchScans(idxInfos []backends.IndexInfo, flat []*types.Document, choice
 // mergedRangeChoice sorts choice's ranges and joins those that overlap.
 func mergedRangeChoice(choice indexRangeChoice) indexRangeChoice {
 	ranges := choice.pointRanges
+	if len(ranges) == 0 {
+		// An empty $in reads nothing; a nil list would read the whole index.
+		return indexRangeChoice{mapIdx: choice.mapIdx, pointRanges: [][2][]byte{}}
+	}
 	slices.SortStableFunc(ranges, func(a, b [2][]byte) int { return bytes.Compare(a[0], b[0]) })
 	merged := ranges[:1]
 	for _, r := range ranges[1:] {
