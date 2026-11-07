@@ -3669,10 +3669,9 @@ func (c *collection) Compact(ctx context.Context, params *backends.CompactParams
 
 // DistinctScan implements backends.DistinctScanner.
 //
-// Walks the leading-field secondary index for `key` in sorted order,
-// emitting one primary lookup per unique KeyString prefix to recover the
-// original BSON value. Avoids reading every document and the O(n) primary
-// fetches a full collection scan would do.
+// Walks the leading-field secondary index for `key` in sorted order, reading
+// one entry per distinct value and decoding the value from the entry, so most
+// values need no document fetch.
 //
 // Returns (nil, nil) when the request can't be served from an index  -- no
 // matching single-field index, partial filter that would drop rows, dotted
@@ -3768,8 +3767,8 @@ func (c *collection) DistinctScan(ctx context.Context, params *backends.Distinct
 // entry per value, restoring the value from the entry and skipping past the
 // rest of its entries. An entry that cannot restore its value costs one
 // document fetch for its group. A fetched document contributes its MongoDB
-// index keys, including
-// null for a missing field and undefined for an empty array. A value counts
+// index keys, including null for a missing field and undefined for an empty
+// array. A value counts
 // only when it, or its fetched document, matches filter, when set.
 func scanDistinctFromIndex(
 	ctx context.Context,
