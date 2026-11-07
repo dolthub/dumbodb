@@ -16,6 +16,7 @@ package dolt
 
 import (
 	"bytes"
+	"container/heap"
 	"context"
 
 	"github.com/dolthub/dolt/go/store/prolly"
@@ -35,7 +36,7 @@ func tryStreamMergedRanges(ctx context.Context, state *dbState, primary prolly.M
 		return nil, nil, false, nil
 	}
 	choice, ok := chooseIndexRange(idxInfos, params.Filter, params.Hint, params.Collation, params.Fields)
-	if !ok || len(choice.pointRanges) < 2 {
+	if !ok || len(choice.pointRanges) < 2 || len(choice.pointRanges) > maxMergedScans {
 		return nil, nil, false, nil
 	}
 	info, idxMap := idxInfos[choice.mapIdx], idxMaps[choice.mapIdx]
@@ -66,6 +67,10 @@ func tryStreamMergedRanges(ctx context.Context, state *dbState, primary prolly.M
 	}
 	return it, fetchStage(merge), true, nil
 }
+
+// maxMergedScans caps the index scans one SORT_MERGE reads, as MongoDB's
+// internalQueryMaxScansToExplode does; a larger $in sorts in memory.
+const maxMergedScans = 200
 
 // mergesSortedRanges reports whether params' ranges of info, one per $in value
 // of its leading field, are each in the order of params' sort: the sort is on
@@ -99,9 +104,9 @@ type mergedIDStream struct {
 	reverse  bool
 	keys     int
 	heads    []mergeHead
-	// taken is the head whose id was yielded last; it advances on the next
-	// call, so a limit stops before reading past what it returns.
-	taken int
+	// taken reports that the top head's id was yielded last; it advances on
+	// the next call, so a limit stops before reading past what it returns.
+	taken bool
 }
 
 type mergeHead struct {
@@ -112,7 +117,7 @@ type mergeHead struct {
 }
 
 func newMergedIDStream(ctx context.Context, idxMap prolly.Map, ranges [][2][]byte, keys int, reverse bool) (*mergedIDStream, error) {
-	s := &mergedIDStream{ctx: ctx, reverse: reverse, keys: keys, taken: -1}
+	s := &mergedIDStream{ctx: ctx, reverse: reverse, keys: keys, taken: false}
 	for i, r := range ranges {
 		iter, err := idxpkg.NewRangeIDIter(ctx, idxMap, r[0], r[1], reverse)
 		if err != nil {
@@ -126,7 +131,34 @@ func newMergedIDStream(ctx context.Context, idxMap prolly.Map, ranges [][2][]byt
 			s.heads = append(s.heads, head)
 		}
 	}
+	heap.Init(s)
 	return s, nil
+}
+
+// The stream is a heap of its heads, lowest (or, reversed, highest) sort key
+// first; equal sort keys keep range order, so a run of them stays together.
+
+func (s *mergedIDStream) Len() int { return len(s.heads) }
+
+func (s *mergedIDStream) Less(i, j int) bool {
+	c := bytes.Compare(s.heads[i].sortKey, s.heads[j].sortKey)
+	if s.reverse {
+		c = -c
+	}
+	if c != 0 {
+		return c < 0
+	}
+	return s.heads[i].branch < s.heads[j].branch
+}
+
+func (s *mergedIDStream) Swap(i, j int) { s.heads[i], s.heads[j] = s.heads[j], s.heads[i] }
+
+func (s *mergedIDStream) Push(x any) { s.heads = append(s.heads, x.(mergeHead)) }
+
+func (s *mergedIDStream) Pop() any {
+	last := s.heads[len(s.heads)-1]
+	s.heads = s.heads[:len(s.heads)-1]
+	return last
 }
 
 // advance reads head's next entry, leaving a nil id at its end.
@@ -147,27 +179,21 @@ func (s *mergedIDStream) advance(head *mergeHead) error {
 }
 
 // next returns the next entry in sort order, with a nil id after the last.
-// Equal sort keys keep range order, so a run of them stays together.
 func (s *mergedIDStream) next() (indexEntry, error) {
-	if s.taken >= 0 {
-		if err := s.advance(&s.heads[s.taken]); err != nil {
+	if s.taken {
+		s.taken = false
+		if err := s.advance(&s.heads[0]); err != nil {
 			return indexEntry{}, err
 		}
-		if s.heads[s.taken].entry.id == nil {
-			s.heads = append(s.heads[:s.taken], s.heads[s.taken+1:]...)
+		if s.heads[0].entry.id == nil {
+			heap.Pop(s)
+		} else {
+			heap.Fix(s, 0)
 		}
-		s.taken = -1
 	}
 	if len(s.heads) == 0 {
 		return indexEntry{}, nil
 	}
-	best := 0
-	for i := 1; i < len(s.heads); i++ {
-		c := bytes.Compare(s.heads[i].sortKey, s.heads[best].sortKey)
-		if (!s.reverse && c < 0) || (s.reverse && c > 0) {
-			best = i
-		}
-	}
-	s.taken = best
-	return s.heads[best].entry, nil
+	s.taken = true
+	return s.heads[0].entry, nil
 }

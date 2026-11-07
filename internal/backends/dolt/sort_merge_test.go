@@ -88,3 +88,32 @@ func TestSortMergeOfInRanges(t *testing.T) {
 		}
 	})
 }
+
+// A SORT_MERGE reads at most maxMergedScans ranges, as MongoDB's explode limit
+// does; a larger $in sorts another way, and both return the same documents.
+func TestSortMergeScanLimit(t *testing.T) {
+	b, _ := newDottedPathTestBackend(t, backends.IndexInfo{Name: "grp_k", Key: []backends.IndexKeyPair{{Field: "grp"}, {Field: "k"}}})
+	c := &collection{db: &database{backend: b, name: "idxdb", rootish: defaultBranch}, name: "tests"}
+	var docs []*types.Document
+	for i := int32(1); i <= 2000; i++ {
+		docs = append(docs, must.NotFail(types.NewDocument("_id", i, "grp", i%1000, "k", i)))
+	}
+	if _, err := c.InsertAll(context.Background(), &backends.InsertAllParams{Docs: docs}); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []int{maxMergedScans, maxMergedScans + 1} {
+		vals := make([]any, n)
+		for i := range vals {
+			vals[i] = int32(i)
+		}
+		filter := must.NotFail(types.NewDocument("grp", must.NotFail(types.NewDocument("$in", must.NotFail(types.NewArray(vals...))))))
+		res, plan, err := c.query(context.Background(), &backends.QueryParams{Filter: filter, Sort: sortOn("k", 1), LimitHint: 5})
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Iter.Close()
+		if merged := slices.Contains(planChain(plan), "SORT_MERGE"); merged != (n <= maxMergedScans) {
+			t.Errorf("$in of %d: plan %v", n, planChain(plan))
+		}
+	}
+}
