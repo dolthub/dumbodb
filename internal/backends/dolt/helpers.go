@@ -103,7 +103,11 @@ var collectionSchemaHash = hash.Of(buildCollectionTableSchema())
 // checkTableLayout refuses a table whose schema is not this version's: an
 // older version keyed its primary map differently.
 func checkTableLayout(tbl *serial.Table) error {
-	if h := hash.New(tbl.SchemaBytes()); h != collectionSchemaHash {
+	schema := tbl.SchemaBytes()
+	if len(schema) != hash.ByteLen {
+		return fmt.Errorf("table schema of %d bytes, %w; recreate the database", len(schema), errUnsupportedLayout)
+	}
+	if h := hash.New(schema); h != collectionSchemaHash {
 		return fmt.Errorf("table schema %s, %w; recreate the database", h, errUnsupportedLayout)
 	}
 	return nil
