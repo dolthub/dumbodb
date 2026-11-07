@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"runtime/debug"
 	"time"
 
 	"github.com/dolthub/dumbodb/internal/backends"
@@ -87,6 +88,14 @@ func New(
 }
 
 func (r *Runtime) Run(ctx context.Context) {
+	defer func() {
+		// Replication runs on its own goroutine; a panic must stop it, not
+		// the server.
+		if p := recover(); p != nil {
+			r.manager.SetRuntimePhase("failed")
+			r.logger.Error("MongoDB replication stopped by a panic", "panic", fmt.Sprint(p), "stack", string(debug.Stack()))
+		}
+	}()
 	r.manager.SetRuntimePhase("starting")
 	defer func() {
 		if ctx.Err() != nil {
