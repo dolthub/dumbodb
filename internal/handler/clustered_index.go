@@ -17,6 +17,7 @@ package handler
 import (
 	"fmt"
 
+	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -113,10 +114,30 @@ func validateClusteredIndexSpec(spec *types.Document, fail func(handlererrors.Er
 	}
 	if v, _ := spec.Get("v"); v != nil {
 		if !isNumber(v, 2) {
-			return fail(handlererrors.ErrClusteredIndexVersion, fmt.Sprintf("Invalid clusteredIndex specification; cannot create a clusteredIndex with v=%v", v))
+			return fail(handlererrors.ErrClusteredIndexVersion, fmt.Sprintf(
+				"Invalid clusteredIndex specification %s; cannot create a clusteredIndex with v=%v", formatClusteredIndexSpec(spec), v))
 		}
 	}
 	return nil
+}
+
+// formatClusteredIndexSpec renders the spec as mongod echoes it: v, key, name (default "_id_"), unique.
+func formatClusteredIndexSpec(spec *types.Document) string {
+	name := backends.DefaultIndexName
+	if n, _ := spec.Get("name"); n != nil {
+		name = n.(string)
+	}
+	version := must.NotFail(spec.Get("v"))
+	if whole, err := handlerparams.GetWholeNumberParam(version); err == nil {
+		version = int32(whole)
+	}
+	normalized := must.NotFail(types.NewDocument(
+		"v", version,
+		"key", must.NotFail(spec.Get("key")),
+		"name", name,
+		"unique", must.NotFail(spec.Get("unique")),
+	))
+	return formatDupKey(normalized)
 }
 
 func isNumber(v any, want int32) bool {
