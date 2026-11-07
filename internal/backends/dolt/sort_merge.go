@@ -54,7 +54,7 @@ func tryStreamMergedRanges(ctx context.Context, state *dbState, primary prolly.M
 	}
 	it := newPlanSortedIter(ctx, state, primary, nil, params.Sort, false, params.Fields).(*planSortedIter)
 	it.stream = stream
-	it.covered = coveredKeysFor(info, params.Fields)
+	it.covered = coveredRead(info, params)
 	if releasePrimary, releaseIndex := it.release, pinRoots(state, idxMap); releasePrimary != nil {
 		it.release = func() {
 			releasePrimary()

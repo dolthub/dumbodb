@@ -26,13 +26,16 @@ import (
 	idxpkg "github.com/dolthub/dumbodb/internal/index"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // streamIndexRanges serves params' filter by reading its index ranges lazily,
 // so a downstream limit stops the reads. It declines when no index serves the
 // filter or the ranges are not worth reading (indexStreamWorthReading).
 func streamIndexRanges(ctx context.Context, state *dbState, primary prolly.Map, idxInfos []backends.IndexInfo, idxMaps []prolly.Map, params *backends.QueryParams) (types.DocumentsIterator, backends.IndexInfo, bool, error) {
-	if params.Filter.Len() == 0 || params.Filter.Has("$or") {
+	// Without a filter only a hint picks an index: its whole range.
+	hinted := params.Hint != nil && !backends.HintIsNatural(params.Hint)
+	if (params.Filter.Len() == 0 && !hinted) || params.Filter.Has("$or") {
 		return nil, backends.IndexInfo{}, false, nil
 	}
 	choice, ok := chooseIndexRange(idxInfos, params.Filter, params.Hint, params.Collation, params.Fields)
@@ -51,7 +54,7 @@ func streamIndexRanges(ctx context.Context, state *dbState, primary prolly.Map, 
 		primary: primary,
 		ids:     ids,
 		fields:  params.Fields,
-		covered: coveredKeysFor(info, params.Fields),
+		covered: coveredRead(info, params),
 		release: pinRoots(state, primary, idxMap),
 	}, info, true, nil
 }
@@ -148,6 +151,9 @@ type indexEntry struct {
 type coveredKeys struct {
 	keys   int
 	fields []string
+	// fetchNull reads the document for a null key, as MongoDB does when the
+	// filter tests for null: the key cannot tell null from a missing field.
+	fetchNull bool
 	// positions holds each field's position among the index keys.
 	positions []int
 }
@@ -188,10 +194,14 @@ func (c *coveredKeys) document(e indexEntry) (*types.Document, bool) {
 	}
 	doc := types.MakeDocument(len(c.fields))
 	for i, f := range c.fields {
+		// A null key stands for null or a missing field, and a covered read
+		// reports null for both, as MongoDB's does.
 		v, ok := idxpkg.DecodeValue(split[c.positions[i]], e.tags[c.positions[i]])
 		switch v.(type) {
-		case types.NullType, types.UndefinedType:
+		case types.UndefinedType:
 			ok = false
+		case types.NullType:
+			ok = ok && !c.fetchNull
 		}
 		if !ok {
 			return nil, false
@@ -320,4 +330,66 @@ func (s *indexIDStream) readEntry() (indexEntry, error) {
 func (s *indexIDStream) takeGapKeys(e indexEntry) indexEntry {
 	e.gapKeys, s.gapKeys = s.gapKeys, 0
 	return e
+}
+
+// coveredRead is coveredKeysFor the fields params reads, fetching a null key's
+// document when params' filter tests for null.
+func coveredRead(info backends.IndexInfo, params *backends.QueryParams) *coveredKeys {
+	c := coveredKeysFor(info, params.Fields)
+	if c != nil {
+		c.fetchNull = filterTestsNull(params.Filter)
+	}
+	return c
+}
+
+// filterTestsNull reports whether filter compares a field with null.
+func filterTestsNull(filter *types.Document) bool {
+	if filter == nil {
+		return false
+	}
+	for _, k := range filter.Keys() {
+		v := must.NotFail(filter.Get(k))
+		switch k {
+		case "$and", "$or", "$nor":
+			arr, _ := v.(*types.Array)
+			for i := 0; arr != nil && i < arr.Len(); i++ {
+				if sub, ok := must.NotFail(arr.Get(i)).(*types.Document); ok && filterTestsNull(sub) {
+					return true
+				}
+			}
+			continue
+		}
+		if isNull(v) {
+			return true
+		}
+		ops, ok := v.(*types.Document)
+		if !ok {
+			continue
+		}
+		for _, op := range ops.Keys() {
+			ov := must.NotFail(ops.Get(op))
+			switch op {
+			case "$eq", "$gte", "$lte":
+				if isNull(ov) {
+					return true
+				}
+			case "$in":
+				arr, _ := ov.(*types.Array)
+				for i := 0; arr != nil && i < arr.Len(); i++ {
+					if isNull(must.NotFail(arr.Get(i))) {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
+func isNull(v any) bool {
+	switch v.(type) {
+	case nil, types.NullType:
+		return true
+	}
+	return false
 }
