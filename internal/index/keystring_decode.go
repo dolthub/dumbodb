@@ -149,6 +149,10 @@ func cutCString(b []byte) (s, rest []byte, ok bool) {
 // a number of tag's type. Decimal128-only encodings, which carry a
 // continuation or lie beyond the double range, do not decode.
 func decodeNumber(enc []byte, tag byte) (any, bool) {
+	// A tag stored beside a key that is not a number does not decode.
+	if c := enc[0]; c < ctypeNumeric || c > ctypePosLarge {
+		return nil, false
+	}
 	f, ok := decodeDouble(enc)
 	if !ok {
 		return nil, false
