@@ -29,13 +29,15 @@ const maxRatio = 8.0
 
 // attempts is how many times both sizes are measured before failing. Load
 // from other tests only slows a run down, so the fastest run of each size is
-// kept across attempts: noise cannot hide superlinear growth, and the ratio
-// settles once both sizes have had an unloaded run.
+// kept across attempts and the ratio settles once both sizes have had an
+// unloaded run.
 const attempts = 3
 
 // Assert fails t when run(4n) takes more than maxRatio times as long as
 // run(n), comparing the fastest runs seen of each. n is doubled first until
-// run(n) takes at least minBaseline.
+// run(n) takes at least minBaseline. The base is measured on both sides of the
+// first 4n run, so one loaded window cannot inflate it enough to hide
+// superlinear growth.
 func Assert(t testing.TB, n int, run func(n int)) {
 	t.Helper()
 
@@ -46,6 +48,7 @@ func Assert(t testing.TB, n int, run func(n int)) {
 	}
 
 	quadrupled := fastest(4*n, run)
+	base = min(base, fastest(n, run))
 	for attempt := 1; float64(quadrupled) > maxRatio*float64(base) && attempt < attempts; attempt++ {
 		base = min(base, fastest(n, run))
 		quadrupled = min(quadrupled, fastest(4*n, run))
