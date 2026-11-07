@@ -72,3 +72,9 @@ func (c *examinedCounter) docs(ctx context.Context, n int) {
 func (c *examinedCounter) entries(ctx context.Context, n int) {
 	c.resolve(ctx).AddEntries(n)
 }
+
+// branchKeys counts keys read and entries returned by the branch'th scan under
+// an OR or SORT_MERGE stage.
+func (c *examinedCounter) branchKeys(ctx context.Context, branch int, keys, returned int64) {
+	c.resolve(ctx).AddBranchKeys(branch, keys, returned)
+}

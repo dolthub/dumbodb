@@ -191,7 +191,7 @@ func (s *mergedIDStream) advance(head *mergeHead) error {
 		return err
 	}
 	s.examined.keys(s.ctx, 1)
-	backends.AddBranchExamined(s.ctx, head.branch, 1, 1)
+	s.examined.branchKeys(s.ctx, head.branch, 1, 1)
 	split, ok := idxpkg.SplitKeyValues(values, s.keys)
 	if !ok {
 		split = [][]byte{nil, nil}
