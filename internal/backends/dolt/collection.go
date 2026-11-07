@@ -1271,6 +1271,10 @@ func indexPointRangesForIn(v any) ([][2][]byte, bool) {
 		}
 		ranges = append(ranges, [2][]byte{idxpkg.LowerBoundInclusive(value), idxpkg.UpperBoundInclusive(value)})
 	}
+	// As MongoDB builds index bounds: in key order, once per key, so values
+	// equal as keys ([2, 2], [2, NumberLong(2)]) read their range once.
+	slices.SortFunc(ranges, func(a, b [2][]byte) int { return bytes.Compare(a[0], b[0]) })
+	ranges = slices.CompactFunc(ranges, func(a, b [2][]byte) bool { return bytes.Equal(a[0], b[0]) })
 	return ranges, true
 }
 

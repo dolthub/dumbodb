@@ -107,6 +107,8 @@ type mergedIDStream struct {
 	// taken reports that the top head's id was yielded last; it advances on
 	// the next call, so a limit stops before reading past what it returns.
 	taken bool
+	// seen holds the ids yielded.
+	seen map[string]struct{}
 }
 
 type mergeHead struct {
@@ -117,7 +119,7 @@ type mergeHead struct {
 }
 
 func newMergedIDStream(ctx context.Context, idxMap prolly.Map, ranges [][2][]byte, keys int, reverse bool) (*mergedIDStream, error) {
-	s := &mergedIDStream{ctx: ctx, reverse: reverse, keys: keys, taken: false}
+	s := &mergedIDStream{ctx: ctx, reverse: reverse, keys: keys, seen: make(map[string]struct{})}
 	for i, r := range ranges {
 		iter, err := idxpkg.NewRangeIDIter(ctx, idxMap, r[0], r[1], reverse)
 		if err != nil {
@@ -181,19 +183,35 @@ func (s *mergedIDStream) advance(head *mergeHead) error {
 // next returns the next entry in sort order, with a nil id after the last.
 func (s *mergedIDStream) next() (indexEntry, error) {
 	if s.taken {
-		s.taken = false
-		if err := s.advance(&s.heads[0]); err != nil {
+		if err := s.advanceTop(); err != nil {
 			return indexEntry{}, err
 		}
-		if s.heads[0].entry.id == nil {
-			heap.Pop(s)
-		} else {
-			heap.Fix(s, 0)
+	}
+	for len(s.heads) > 0 {
+		e := s.heads[0].entry
+		s.taken = true
+		// A multikey document can lie in more than one range.
+		if _, dup := s.seen[string(e.id)]; !dup {
+			s.seen[string(e.id)] = struct{}{}
+			return e, nil
+		}
+		if err := s.advanceTop(); err != nil {
+			return indexEntry{}, err
 		}
 	}
-	if len(s.heads) == 0 {
-		return indexEntry{}, nil
+	return indexEntry{}, nil
+}
+
+// advanceTop reads the top head's next entry and restores the heap.
+func (s *mergedIDStream) advanceTop() error {
+	s.taken = false
+	if err := s.advance(&s.heads[0]); err != nil {
+		return err
 	}
-	s.taken = true
-	return s.heads[0].entry, nil
+	if s.heads[0].entry.id == nil {
+		heap.Pop(s)
+	} else {
+		heap.Fix(s, 0)
+	}
+	return nil
 }
