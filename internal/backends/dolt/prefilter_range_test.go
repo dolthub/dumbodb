@@ -387,3 +387,25 @@ func TestScanTopLevelBSONNumeric_DirectCases(t *testing.T) {
 		})
 	}
 }
+
+// A stored decimal may equal or bound any numeric literal, so neither the
+// equality nor the range prefilter rejects it.
+func TestPrefilter_StoredDecimalPasses(t *testing.T) {
+	t.Parallel()
+	seven, err := mongobson.ParseDecimal128("7.000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := canonicalDoc(t, mongobson.D{{Key: "_id", Value: int32(1)}, {Key: "x", Value: seven}, {Key: "w", Value: int32(1)}})
+	for _, filter := range []*types.Document{
+		must.NotFail(types.NewDocument("x", int32(7))),
+		must.NotFail(types.NewDocument("x", int64(7), "w", int32(1))),
+		must.NotFail(types.NewDocument("x", 7.0)),
+		rangeOp(t, "x", "$gt", int32(5)),
+		rangeOp(t, "x", "$lte", 7.0),
+	} {
+		if pf := buildScanPrefilter(filter); pf != nil && !pf(doc) {
+			t.Errorf("prefilter for %v rejects x: NumberDecimal(\"7.000\")", filter)
+		}
+	}
+}
