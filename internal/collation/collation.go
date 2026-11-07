@@ -459,3 +459,31 @@ func must(doc *types.Document, err error) *types.Document {
 	}
 	return doc
 }
+
+// KeyValue returns v with every string, nested in documents and arrays too,
+// replaced by its sort key under cmp, so values equal under the collation are
+// equal as BSON. A nil cmp returns v unchanged.
+func (cmp *Comparator) KeyValue(v any) any {
+	if cmp == nil {
+		return v
+	}
+	switch v := v.(type) {
+	case string:
+		return string(cmp.Key(v))
+	case *types.Document:
+		out := types.MakeDocument(v.Len())
+		for _, k := range v.Keys() {
+			fv, _ := v.Get(k)
+			out.Set(k, cmp.KeyValue(fv))
+		}
+		return out
+	case *types.Array:
+		out := types.MakeArray(v.Len())
+		for i := 0; i < v.Len(); i++ {
+			ev, _ := v.Get(i)
+			out.Append(cmp.KeyValue(ev))
+		}
+		return out
+	}
+	return v
+}

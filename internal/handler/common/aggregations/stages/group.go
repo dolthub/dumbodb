@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/dolthub/dumbodb/internal/collation"
 	"math"
 	"strconv"
 	"strings"
@@ -53,6 +54,8 @@ type group struct {
 	// per-document path parsing in the hot loop.
 	groupExprCompiled *aggregations.Expression
 	groupBy           []groupBy
+	// cmp, when set, groups strings equal under the collation together.
+	cmp *collation.Comparator
 }
 
 type groupBy struct {
@@ -66,6 +69,12 @@ type groupBy struct {
 var retainingAccumulators = map[string]bool{"$addToSet": true, "$mergeObjects": true, "$push": true}
 
 func newGroup(stage *types.Document) (aggregations.Stage, error) {
+	return NewGroupStage(stage, nil)
+}
+
+// NewGroupStage creates a $group stage whose keys and set accumulators
+// compare strings under cmp, the aggregate's collation, when it is set.
+func NewGroupStage(stage *types.Document, cmp *collation.Comparator) (aggregations.Stage, error) {
 	fields, err := common.GetRequiredParam[*types.Document](stage, "$group")
 	if err != nil {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
@@ -128,6 +137,7 @@ func newGroup(stage *types.Document) (aggregations.Stage, error) {
 	g := &group{
 		groupExpression: groupKey,
 		groupBy:         groups,
+		cmp:             cmp,
 	}
 
 	if s, ok := groupKey.(string); ok {
@@ -146,7 +156,7 @@ func (g *group) Process(ctx context.Context, iter types.DocumentsIterator, close
 	// Fold each document into its group's accumulators as it streams; documents
 	// are never retained, so memory scales with the number of groups (and any
 	// inherently-retaining accumulators like $push), not the input size.
-	gm := newGroupMap(g.groupBy)
+	gm := newGroupMap(g.groupBy, g.cmp)
 
 	// Memory grows with each new group's key and, for retaining
 	// accumulators, with every input document.
@@ -396,6 +406,8 @@ func evaluateDocument(expr, doc *types.Document, nestedField bool) (any, error) 
 
 type groupedDocuments struct {
 	groupID any
+	// key is groupID with strings as collation keys, which groups match on.
+	key any
 	// accs holds one live accumulation per groupBy spec, folded as documents
 	// stream in. Documents themselves are not retained.
 	accs []accumulators.Accumulation
@@ -416,10 +428,11 @@ type groupMap struct {
 	// CompareForAggregation scan. Numeric keys hash lossily and are
 	// reconciled by a one-time backstop scan; see index.
 	fast map[string]int
+	cmp  *collation.Comparator
 }
 
-func newGroupMap(specs []groupBy) *groupMap {
-	return &groupMap{specs: specs}
+func newGroupMap(specs []groupBy, cmp *collation.Comparator) *groupMap {
+	return &groupMap{specs: specs, cmp: cmp}
 }
 
 // accumulate routes doc into its group (creating the group and its fresh
@@ -439,7 +452,8 @@ func (m *groupMap) accumulate(groupKey any, doc *types.Document) error {
 // index returns the slot for groupKey, creating a new group with fresh
 // accumulators when none exists yet.
 func (m *groupMap) index(groupKey any) int {
-	key, numericFree := canonicalGroupKey(groupKey)
+	matchKey := m.cmp.KeyValue(groupKey)
+	key, numericFree := canonicalGroupKey(matchKey)
 
 	if m.fast == nil {
 		m.fast = make(map[string]int)
@@ -456,14 +470,14 @@ func (m *groupMap) index(groupKey any) int {
 	// one. Numeric-free keys are exact, so they skip the scan entirely.
 	if !numericFree {
 		for i := range m.docs {
-			if types.CompareForAggregation(groupKey, m.docs[i].groupID) == types.Equal {
+			if types.CompareForAggregation(matchKey, m.docs[i].key) == types.Equal {
 				m.fast[key] = i
 				return i
 			}
 		}
 	}
 
-	i := m.newGroup(groupKey)
+	i := m.newGroup(groupKey, matchKey)
 	m.fast[key] = i
 
 	return i
@@ -471,13 +485,17 @@ func (m *groupMap) index(groupKey any) int {
 
 // newGroup appends a group for groupKey with a fresh accumulation per spec and
 // returns its index.
-func (m *groupMap) newGroup(groupKey any) int {
+func (m *groupMap) newGroup(groupKey, matchKey any) int {
 	accs := make([]accumulators.Accumulation, len(m.specs))
 	for i := range m.specs {
+		if collated, ok := m.specs[i].accumulator.(accumulators.CollatedAccumulator); ok && m.cmp != nil {
+			accs[i] = collated.NewCollated(m.cmp)
+			continue
+		}
 		accs[i] = m.specs[i].accumulator.New()
 	}
 
-	m.docs = append(m.docs, groupedDocuments{groupID: groupKey, accs: accs})
+	m.docs = append(m.docs, groupedDocuments{groupID: groupKey, key: matchKey, accs: accs})
 
 	return len(m.docs) - 1
 }
