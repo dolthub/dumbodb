@@ -26,8 +26,9 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// earthRadiusMeters is the mean radius of the Earth in metres (WGS84 approximation).
-const earthRadiusMeters = 6378137.0
+// earthRadiusMeters is the Earth radius MongoDB measures spherical distances
+// with (kRadiusOfEarthInMeters).
+const earthRadiusMeters = 6378100.0
 
 // geoFormatBSON formats a float64 like MongoDB's BSON coordinate representation:
 // whole numbers show ".0" suffix (e.g. 200.0 -> "200.0"), others as-is (e.g. 40.7 -> "40.7").
@@ -311,34 +312,7 @@ func docDistanceFromField(doc *types.Document, field string, lon, lat float64, s
 	if err != nil {
 		return math.MaxFloat64
 	}
-	switch v := val.(type) {
-	case *types.Document:
-		dlon, dlat, err := extractPointCoords(v)
-		if err != nil {
-			return math.MaxFloat64
-		}
-		if spherical {
-			return haversineMeters(lon, lat, dlon, dlat)
-		}
-		return euclidean(lon, lat, dlon, dlat)
-	case *types.Array:
-		if v.Len() < 2 {
-			return math.MaxFloat64
-		}
-		dlon, err := toFloat64(must.NotFail(v.Get(0)))
-		if err != nil {
-			return math.MaxFloat64
-		}
-		dlat, err := toFloat64(must.NotFail(v.Get(1)))
-		if err != nil {
-			return math.MaxFloat64
-		}
-		if spherical {
-			return haversineMeters(lon, lat, dlon, dlat)
-		}
-		return euclidean(lon, lat, dlon, dlat)
-	}
-	return math.MaxFloat64
+	return GeoDistance(val, lon, lat, spherical)
 }
 
 // filterFieldGeoWithin handles {field: {$geoWithin: spec}}.
@@ -420,7 +394,7 @@ func filterFieldGeoWithin(fieldValue any, spec *types.Document) (bool, error) {
 			if err != nil {
 				return false, nil
 			}
-			dist := haversineMeters(center[0], center[1], px, py)
+			dist := pointDistance(center[0], center[1], px, py, true)
 			return dist <= radiusMeters, nil
 
 		case "$polygon":
@@ -525,37 +499,8 @@ func filterFieldNear(fieldValue any, opDoc *types.Document, spherical bool) (boo
 	// If we reach here without $geometry, we assume the coordinates were extracted in
 	// the caller for legacy 2d form and the distance units are Euclidean degrees.
 
-	// Compute distance from query point to field value.
-	var dist float64
-	switch v := fieldValue.(type) {
-	case *types.Document:
-		dlon, dlat, err := extractPointCoords(v)
-		if err != nil {
-			return false, nil // non-point geometry  -- skip
-		}
-		if spherical {
-			dist = haversineMeters(queryLon, queryLat, dlon, dlat)
-		} else {
-			dist = euclidean(queryLon, queryLat, dlon, dlat)
-		}
-	case *types.Array:
-		if v.Len() < 2 {
-			return false, nil
-		}
-		dlon, err := toFloat64(must.NotFail(v.Get(0)))
-		if err != nil {
-			return false, nil
-		}
-		dlat, err := toFloat64(must.NotFail(v.Get(1)))
-		if err != nil {
-			return false, nil
-		}
-		if spherical {
-			dist = haversineMeters(queryLon, queryLat, dlon, dlat)
-		} else {
-			dist = euclidean(queryLon, queryLat, dlon, dlat)
-		}
-	default:
+	dist := GeoDistance(fieldValue, queryLon, queryLat, spherical)
+	if dist == math.MaxFloat64 {
 		return false, nil
 	}
 
@@ -1140,18 +1085,6 @@ func pointInRing(px, py float64, ring [][2]float64) bool {
 		j = i
 	}
 	return inside
-}
-
-// haversineMeters computes the great-circle distance in metres between two
-// [lon, lat] points using the Haversine formula.
-func haversineMeters(lon1, lat1, lon2, lat2 float64) float64 {
-	dLat := (lat2 - lat1) * math.Pi / 180
-	dLon := (lon2 - lon1) * math.Pi / 180
-	a := math.Sin(dLat/2)*math.Sin(dLat/2) +
-		math.Cos(lat1*math.Pi/180)*math.Cos(lat2*math.Pi/180)*
-			math.Sin(dLon/2)*math.Sin(dLon/2)
-	c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
-	return earthRadiusMeters * c
 }
 
 // euclidean computes the 2D Euclidean distance between two points.

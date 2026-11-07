@@ -41,7 +41,7 @@ const geoOtherCell = int64(-1)
 
 // earthRadiusMeters is the radius the handler measures spherical distances
 // with.
-const earthRadiusMeters = 6378137.0
+const earthRadiusMeters = 6378100.0
 
 func isGeoKey(kp backends.IndexKeyPair) bool { return kp.Geo2D || kp.Geo2DSphere }
 

@@ -419,53 +419,7 @@ func (g *geoNear) autoDetectGeoField(doc *types.Document) string {
 
 // computeDistance returns the distance from the query point to fieldVal.
 func (g *geoNear) computeDistance(fieldVal any) float64 {
-	switch v := fieldVal.(type) {
-	case *types.Document:
-		lon, lat, err := extractGeoJSONPointCoords(v)
-		if err != nil {
-			return math.MaxFloat64
-		}
-		if g.spherical {
-			return haversineDistMeters(g.nearLon, g.nearLat, lon, lat)
-		}
-		return euclideanDist(g.nearLon, g.nearLat, lon, lat)
-	case *types.Array:
-		if v.Len() < 2 {
-			return math.MaxFloat64
-		}
-		lon, err := geoToFloat64(must.NotFail(v.Get(0)))
-		if err != nil {
-			return math.MaxFloat64
-		}
-		lat, err := geoToFloat64(must.NotFail(v.Get(1)))
-		if err != nil {
-			return math.MaxFloat64
-		}
-		if g.spherical {
-			return haversineDistMeters(g.nearLon, g.nearLat, lon, lat)
-		}
-		return euclideanDist(g.nearLon, g.nearLat, lon, lat)
-	}
-	return math.MaxFloat64
-}
-
-const earthRadiusM = 6378137.0
-
-func haversineDistMeters(lon1, lat1, lon2, lat2 float64) float64 {
-	const pi180 = math.Pi / 180
-	dLat := (lat2 - lat1) * pi180
-	dLon := (lon2 - lon1) * pi180
-	a := math.Sin(dLat/2)*math.Sin(dLat/2) +
-		math.Cos(lat1*pi180)*math.Cos(lat2*pi180)*
-			math.Sin(dLon/2)*math.Sin(dLon/2)
-	c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
-	return earthRadiusM * c
-}
-
-func euclideanDist(x1, y1, x2, y2 float64) float64 {
-	dx := x2 - x1
-	dy := y2 - y1
-	return math.Sqrt(dx*dx + dy*dy)
+	return common.GeoDistance(fieldVal, g.nearLon, g.nearLat, g.spherical)
 }
 
 func extractGeoJSONPointCoords(doc *types.Document) (float64, float64, error) {
