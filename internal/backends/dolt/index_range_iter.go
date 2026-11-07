@@ -283,10 +283,12 @@ func (s *indexIDStream) next() (indexEntry, error) {
 		}
 		s.examined.keys(s.ctx, 1)
 		if s.seen == nil {
+			s.examined.entries(s.ctx, 1)
 			return e, nil
 		}
 		if _, dup := s.seen[string(e.id)]; !dup {
 			s.seen[string(e.id)] = struct{}{}
+			s.examined.entries(s.ctx, 1)
 			return e, nil
 		}
 	}

@@ -67,3 +67,8 @@ func (c *examinedCounter) docs(ctx context.Context, n int) {
 	queryExecutorCounters.docs.Add(int64(n))
 	c.resolve(ctx).AddDocs(n)
 }
+
+// entries counts n index entries the scan returned.
+func (c *examinedCounter) entries(ctx context.Context, n int) {
+	c.resolve(ctx).AddEntries(n)
+}

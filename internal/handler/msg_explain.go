@@ -81,6 +81,11 @@ func (h *Handler) runExplained(ctx context.Context, coll backends.Collection, pa
 		run = runExplainedFind(ctx, coll, qp)
 	}
 	run.keys, run.docs, run.branches = examined.Keys(), examined.Docs(), examined.Branches()
+	// A scan streaming index entries counts what it returned; the stage
+	// above it filters them.
+	if entries := examined.Entries(); entries > 0 {
+		run.scanned = int32(entries)
+	}
 	return run
 }
 
