@@ -322,6 +322,15 @@ type decimalSum struct {
 	special *apd.Decimal
 }
 
+// clone returns a copy that shares no state with s.
+func (s *decimalSum) clone() decimalSum {
+	c := *s
+	if s.totalM != nil {
+		c.totalM = new(big.Int).Set(s.totalM)
+	}
+	return c
+}
+
 func (s *decimalSum) addDecimalVal(dv decimalVal) {
 	if !s.any {
 		s.totalM = new(big.Int).Set(dv.m)
@@ -411,22 +420,22 @@ func (s *decimalSum) result() types.Decimal128 {
 	return APDToDecimal128(x)
 }
 
-// NumberSum incrementally sums numbers with the same type-promotion and
-// Decimal128 semantics as SumNumbers, in O(1) space. Pre-decimal int and
-// float64 values are folded via big.Int / float64 and converted to Decimal128
-// only when a Decimal128 value first appears. The float64 sum also tracks its
-// rounding error, which joins the conversion, as MongoDB carries a double-double
-// sum into Decimal128: 0.1 + 0.2 + NumberDecimal("0.3") is
-// 0.6000000000000000166533453693773481 whatever the order.
+// NumberSum incrementally sums numbers as MongoDB's $sum does, in O(1)
+// space. Integers sum exactly, doubles in a double-double (the rounded sum and
+// its error), and Decimal128 values apart; the result is a Decimal128 of all
+// three when any decimal arrived, else the double-double rounded once, else
+// the integer. Since no total depends on when a decimal arrived, the result
+// does not depend on order: 0.1 + 0.2 + NumberDecimal("0.3") is
+// 0.6000000000000000166533453693773481 whatever the order, and
+// [1e16, 1, 1, 1, 1] sums to 1.0000000000000004e16 as MongoDB's does.
 type NumberSum struct {
 	intSum     *big.Int
 	floatSum   float64
 	floatErr   float64 // rounding error of floatSum
-	hasInt     bool
 	hasInt64   bool
 	hasFloat64 bool
 	sawDecimal bool
-	dec        decimalSum
+	dec        decimalSum // the Decimal128 values alone
 	count      int64
 }
 
@@ -443,71 +452,48 @@ func (s *NumberSum) Add(v any) {
 	switch n := v.(type) {
 	case int32:
 		s.count++
-		if s.sawDecimal {
-			s.dec.add(v)
-			return
-		}
-		s.hasInt = true
 		s.intSum.Add(s.intSum, big.NewInt(int64(n)))
+		s.addDouble(float64(n))
 	case int64:
 		s.count++
-		if s.sawDecimal {
-			s.dec.add(v)
-			return
-		}
-		s.hasInt = true
 		s.hasInt64 = true
 		s.intSum.Add(s.intSum, big.NewInt(n))
+		// A long joins the double-double as two exact doubles: its nearest
+		// double and the remainder.
+		hi := float64(n)
+		s.addDouble(hi)
+		rest, _ := new(big.Float).Sub(new(big.Float).SetInt64(n), big.NewFloat(hi)).Float64()
+		s.addDouble(rest)
 	case float64:
 		s.count++
-		if s.sawDecimal {
-			s.dec.add(v)
-			return
-		}
 		s.hasFloat64 = true
-		sum := s.floatSum + n
-		// TwoSum: the exact error of the rounded addition.
-		b := sum - s.floatSum
-		s.floatErr += (s.floatSum - (sum - b)) + (n - b)
-		s.floatSum = sum
+		s.addDouble(n)
 	case types.Decimal128:
 		s.count++
-		if !s.sawDecimal {
-			s.promoteToDecimal()
-		}
+		s.sawDecimal = true
 		s.dec.add(v)
 	default:
 		// ignore non-number
 	}
 }
 
-// promoteToDecimal seeds the decimal accumulator from the running int and
-// float sums when the first Decimal128 value arrives.
-func (s *NumberSum) promoteToDecimal() {
-	s.sawDecimal = true
-
-	if s.hasInt {
-		s.dec.addDecimalVal(decimalVal{new(big.Int).Set(s.intSum), 0})
-	}
-
-	if s.hasFloat64 {
-		s.dec.add(s.floatSum)
-		if s.floatErr != 0 && !math.IsNaN(s.floatErr) && !math.IsInf(s.floatErr, 0) {
-			s.dec.add(s.floatErr)
-		}
-	}
+// addDouble folds n into the double-double total.
+func (s *NumberSum) addDouble(n float64) {
+	sum := s.floatSum + n
+	// TwoSum: the exact error of the rounded addition.
+	b := sum - s.floatSum
+	s.floatErr += (s.floatSum - (sum - b)) + (n - b)
+	s.floatSum = sum
 }
 
 // Result returns the sum with SumNumbers' type rules. Empty input yields int32(0).
 func (s *NumberSum) Result() any {
 	if s.sawDecimal {
-		return s.dec.result()
+		return s.decimalTotal()
 	}
 
 	if s.hasFloat64 || !s.intSum.IsInt64() {
-		intAsFloat, _ := new(big.Float).SetInt(s.intSum).Float64()
-
-		return intAsFloat + s.floatSum
+		return s.doubleTotal()
 	}
 
 	integer := s.intSum.Int64()
@@ -519,67 +505,59 @@ func (s *NumberSum) Result() any {
 	return integer
 }
 
-// NumberAvg incrementally averages numbers with the same semantics as
-// AvgNumbers, in O(1) space: float64 running sum for non-decimal input, and a
-// Decimal128 running sum once any Decimal128 appears. Returns types.Null for
-// zero numeric values.
+// decimalTotal is the Decimal128 sum of every value, as MongoDB forms it: the
+// double-double of the integers and doubles converts to Decimal128 one part at
+// a time, each rounded to 34 digits, and that joins the decimals' total.
+func (s *NumberSum) decimalTotal() types.Decimal128 {
+	total := s.dec.clone()
+	if s.floatSum != 0 || s.floatErr != 0 {
+		var nonDecimal decimalSum
+		nonDecimal.add(roundedDecimal(s.floatSum))
+		if s.floatErr != 0 && !math.IsNaN(s.floatErr) && !math.IsInf(s.floatErr, 0) {
+			nonDecimal.add(roundedDecimal(s.floatErr))
+		}
+		total.add(nonDecimal.result())
+	}
+	return total.result()
+}
+
+// roundedDecimal converts f to Decimal128, rounding to 34 digits.
+func roundedDecimal(f float64) types.Decimal128 {
+	var d decimalSum
+	d.add(f)
+	return d.result()
+}
+
+// doubleTotal is the double-double total of the integers and doubles.
+func (s *NumberSum) doubleTotal() float64 {
+	if math.IsNaN(s.floatSum) || math.IsInf(s.floatSum, 0) || math.IsNaN(s.floatErr) || math.IsInf(s.floatErr, 0) {
+		return s.floatSum
+	}
+	return s.floatSum + s.floatErr
+}
+
+// NumberAvg incrementally averages numbers as MongoDB's $avg does: the
+// NumberSum of the values over their count. Returns types.Null for zero
+// numeric values.
 type NumberAvg struct {
-	floatSum   float64
-	count      int64
-	sawDecimal bool
-	dec        decimalSum
+	sum *NumberSum
 }
 
 // NewNumberAvg returns a zeroed incremental averager.
-func NewNumberAvg() *NumberAvg { return &NumberAvg{} }
+func NewNumberAvg() *NumberAvg { return &NumberAvg{sum: NewNumberSum()} }
 
 // Add folds one value; non-numeric values are ignored.
-func (a *NumberAvg) Add(v any) {
-	switch n := v.(type) {
-	case int32:
-		if a.sawDecimal {
-			a.dec.add(v)
-		} else {
-			a.floatSum += float64(n)
-		}
-		a.count++
-	case int64:
-		if a.sawDecimal {
-			a.dec.add(v)
-		} else {
-			a.floatSum += float64(n)
-		}
-		a.count++
-	case float64:
-		if a.sawDecimal {
-			a.dec.add(v)
-		} else {
-			a.floatSum += n
-		}
-		a.count++
-	case types.Decimal128:
-		if !a.sawDecimal {
-			a.sawDecimal = true
-			if a.count > 0 {
-				a.dec.add(a.floatSum)
-			}
-		}
-		a.dec.add(v)
-		a.count++
-	default:
-		// ignore non-number
-	}
-}
+func (a *NumberAvg) Add(v any) { a.sum.Add(v) }
 
 // Result returns the average, or types.Null when no numeric values were folded.
 func (a *NumberAvg) Result() any {
-	if a.count == 0 {
+	if a.sum.count == 0 {
 		return types.Null
 	}
 
-	if a.sawDecimal {
-		return avgFromDecimalSum(a.dec.result(), a.count)
+	if a.sum.sawDecimal {
+		return avgFromDecimalSum(a.sum.decimalTotal(), a.sum.count)
 	}
 
-	return a.floatSum / float64(a.count)
+	return a.sum.doubleTotal() / float64(a.sum.count)
 }
