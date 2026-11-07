@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"strings"
 
 	"github.com/dolthub/dolt/go/store/prolly"
 	"github.com/dolthub/dolt/go/store/val"
@@ -82,7 +83,7 @@ func clusteredInRange(in any) (start, stop []byte, ok bool) {
 		case nil, types.NullType, *types.Array, types.Regex:
 			return nil, nil, false
 		}
-		if doc, isDoc := v.(*types.Document); isDoc && doc.Len() > 0 && doc.Keys()[0][0] == '$' {
+		if doc, isDoc := v.(*types.Document); isDoc && doc.Len() > 0 && strings.HasPrefix(doc.Keys()[0], "$") {
 			return nil, nil, false
 		}
 		key, err := primaryKey(v)
