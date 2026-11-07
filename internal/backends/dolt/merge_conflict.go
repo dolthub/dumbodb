@@ -15,6 +15,7 @@
 package dolt
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/binary"
@@ -698,8 +699,7 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 	if !ok {
 		return nil, fmt.Errorf("DumboDBResolveConflict: conflict key missing id bytes")
 	}
-	var selfKey []byte
-	copy(selfKey, rawKeyIDBytes)
+	selfKey := bytes.Clone(rawKeyIDBytes)
 
 	var oldDoc *types.Document
 	if err := collMap.Get(ctx, target.rawKey, func(_, v val.Tuple) error {
