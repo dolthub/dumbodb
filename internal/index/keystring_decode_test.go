@@ -79,3 +79,29 @@ func TestDecodeValueRefusesWhatItCannotRestore(t *testing.T) {
 		t.Error("a fraction decoded as int32")
 	}
 }
+
+// DecodeValue rejects, rather than panics on, a tag that does not match its
+// key's type.
+func TestDecodeValueMismatchedTag(t *testing.T) {
+	keys := [][]byte{
+		EncodeValue("abc"), EncodeValue(types.Null), EncodeValue(types.MaxKey), EncodeValue(types.MinKey),
+		EncodeValue(true), EncodeValue(types.ObjectID{}), EncodeValue(time.Unix(0, 0)),
+	}
+	for _, key := range keys {
+		for _, tag := range []byte{TagInt32, TagInt64, TagDouble, TagNegZero} {
+			if v, ok := DecodeValue(key, tag); ok {
+				t.Errorf("% X with tag %d decoded to %v", key, tag, v)
+			}
+		}
+	}
+}
+
+func FuzzDecodeValue(f *testing.F) {
+	for _, v := range []any{int32(1), int64(-3), 2.5, "abc", types.Null, types.MaxKey} {
+		f.Add(EncodeValue(v), TagFromKey)
+		f.Add(EncodeValue(v), TagInt32)
+	}
+	f.Fuzz(func(t *testing.T, enc []byte, tag byte) {
+		DecodeValue(enc, tag)
+	})
+}
