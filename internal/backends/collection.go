@@ -194,6 +194,10 @@ type CountParams struct {
 
 	// Collation is the effective operation collation, nil when simple/binary.
 	Collation *types.Document
+
+	// Stop, when positive, is skip + limit: a count reads no further keys
+	// than that, as MongoDB's COUNT stage stops pulling from its scan.
+	Stop int64
 }
 
 type CountResult struct {
@@ -265,6 +269,21 @@ type ExplainParams struct {
 	// pattern, or a single-string value naming an index by name (the latter
 	// is left to the backend to interpret).
 	Hint any
+
+	// Multi is set for an update or delete that may write more than one
+	// document.
+	Multi bool
+
+	// Remove is set for a findAndModify that deletes its document.
+	Remove bool
+
+	// Fields names the only top-level fields the explained read returns, as
+	// QueryParams.Fields.
+	Fields []string
+
+	// CountOnly is set for a pipeline that only counts the documents Filter
+	// matches in a $group, which MongoDB plans as a GROUP over a scan.
+	CountOnly bool
 }
 
 type ExplainResult struct {

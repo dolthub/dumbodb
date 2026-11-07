@@ -133,11 +133,11 @@ func (m *collMeta) effectiveValidation() (level, action string) {
 }
 
 func catalogKey(collName string) (val.Tuple, error) {
-	h, err := hashID(collName)
+	h, err := primaryKey(collName)
 	if err != nil {
-		return nil, fmt.Errorf("hashing catalog key %q: %w", collName, err)
+		return nil, fmt.Errorf("encoding catalog key %q: %w", collName, err)
 	}
-	return buildKey(h[:])
+	return buildKey(h)
 }
 
 // catalogMapFromAM opens the catalog document map from am, or an empty map if
@@ -157,11 +157,11 @@ func catalogMapFromAM(ctx context.Context, state *dbState, am prolly.AddressMap)
 // reserved catalog name. It performs no commit; the catalog write folds into the
 // caller's AddressMap transaction. The caller holds state.mu (write lock).
 func (state *dbState) setCatalogEntry(ctx context.Context, am prolly.AddressMap, ed prolly.AddressMapEditor, m prolly.Map) error {
-	emptyIdx, err := emptyIndexAM(state.ns)
+	noIndexes, err := emptySecondaryIndexes(ctx, state.ns)
 	if err != nil {
 		return err
 	}
-	dtblHash, err := state.dtblHashForCollection(ctx, reservedCatalogName, m, emptyIdx, hash.Hash{})
+	dtblHash, err := state.dtblHashForCollection(ctx, reservedCatalogName, m, noIndexes, hash.Hash{})
 	if err != nil {
 		return err
 	}

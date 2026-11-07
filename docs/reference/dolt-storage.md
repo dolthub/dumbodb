@@ -47,8 +47,10 @@ Commit (DCMT)        root -> RootValue
 WorkingSet (WRST)    working_root_addr, staged_root_addr -> RootValue
 RootValue (RTVL)     tables: AddressMap (table name -> Table)
 Table (DTBL)         schema -> TableSchema (DSCH)
-                     primary_index: embedded prolly map root (TUPM)
-                     secondary_indexes: embedded AddressMap (index name -> index map)
+                     primary_index: embedded prolly map root (TUPM), keyed by
+                       KeyString(_id) (see mongodb-keystring.md)
+                     secondary_indexes: embedded prolly map (index name ->
+                       [definition BSON (adaptive), index map root (BytesAddrEnc)])
                      artifacts -> ArtifactMap (ARTM)
 ```
 
@@ -58,6 +60,8 @@ Table (DTBL)         schema -> TableSchema (DSCH)
 - A `WorkingSet` stores root value addresses, not the root values themselves.
 - In a Table, `primary_index` and `secondary_indexes` are embedded bytes, not
   addresses: the root node of each map is stored inline in the Table message.
+- Each secondary index map root is an address field, so GC, push, clone and
+  backup follow it to the index map (dolthub/dumbodb#190).
 - `durable.TableFromAddr` (`libraries/doltcore/doltdb/durable/table.go`)
   requires the addressed chunk to be a `DTBL` message. Any other file ID fails
   with "table ref is unexpected noms value; GetFileID == <id>". Dolt code that

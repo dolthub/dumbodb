@@ -19,6 +19,7 @@ import (
 	"errors"
 	"log/slog"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -876,5 +877,15 @@ func assertCollectionCount(t *testing.T, ctx context.Context, backend backends.B
 	}
 	if count != want {
 		t.Fatalf("collection count = %d, want %d", count, want)
+	}
+}
+
+// A panic while applying an entry becomes that entry's error.
+func TestApplyRecoversPanic(t *testing.T) {
+	applier := &Applier{}
+	doc := must.NotFail(types.NewDocument("_id", int32(1)))
+	err := applier.Apply(context.Background(), makeOplogEntry(t, 2, "i", "db.c", "12345678-1234-4234-9234-123456789abc", doc, nil))
+	if err == nil || !strings.Contains(err.Error(), "panicked") {
+		t.Fatalf("Apply = %v, want a recovered panic", err)
 	}
 }

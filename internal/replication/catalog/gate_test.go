@@ -51,6 +51,15 @@ func TestPreflightCollectionBuildsSupportedPlan(t *testing.T) {
 	}
 }
 
+func TestPreflightCollectionAcceptsIDClustering(t *testing.T) {
+	options := must.NotFail(types.NewDocument("clusteredIndex", must.NotFail(types.NewDocument(
+		"v", int32(2), "key", must.NotFail(types.NewDocument("_id", int32(1))), "name", "_id_", "unique", true,
+	))))
+	if _, err := PreflightCollection("sales", "orders", options, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestPreflightCollectionRejectsViewAndTimeSeries(t *testing.T) {
 	viewOptions := must.NotFail(types.NewDocument(
 		"viewOn", "orders",

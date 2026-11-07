@@ -20,6 +20,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -66,7 +67,14 @@ func NewApplierWithAuthGeneration(backend backends.Backend, store *control.Store
 	return &Applier{backend: backend, catalog: catalogApplier, special: specialApplier, store: store}, nil
 }
 
-func (a *Applier) Apply(ctx context.Context, entry Entry) error {
+// Apply applies one oplog entry. A panic while applying it, from an entry
+// the source should never have sent, becomes that entry's error.
+func (a *Applier) Apply(ctx context.Context, entry Entry) (err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			err = fmt.Errorf("applying oplog entry at %v panicked: %v\n%s", entry.OpTime, p, debug.Stack())
+		}
+	}()
 	document, err := bson.ToDocument(wirebson.RawDocument(entry.RawBSON))
 	if err != nil {
 		return fmt.Errorf("decoding oplog entry at %v: %w", entry.OpTime, err)

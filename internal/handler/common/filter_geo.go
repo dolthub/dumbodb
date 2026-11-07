@@ -20,19 +20,29 @@ import (
 	"math"
 	"sort"
 
+	"github.com/dolthub/dumbodb/internal/geo"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// earthRadiusMeters is the mean radius of the Earth in metres (WGS84 approximation).
-const earthRadiusMeters = 6378137.0
+// earthRadiusMeters is the Earth radius MongoDB measures spherical distances
+// with (kRadiusOfEarthInMeters).
+const earthRadiusMeters = 6378100.0
 
 // geoFormatBSON formats a float64 like MongoDB's BSON coordinate representation:
 // whole numbers show ".0" suffix (e.g. 200.0 -> "200.0"), others as-is (e.g. 40.7 -> "40.7").
 func geoFormatBSON(f float64) string {
-	if f == math.Trunc(f) && !math.IsInf(f, 0) {
+	switch {
+	case math.IsNaN(f):
+		return "nan.0"
+	case math.IsInf(f, 1):
+		return "inf.0"
+	case math.IsInf(f, -1):
+		return "-inf.0"
+	}
+	if f == math.Trunc(f) {
 		return fmt.Sprintf("%.1f", f)
 	}
 	return fmt.Sprintf("%g", f)
@@ -63,6 +73,24 @@ type GeoSortKey struct {
 	Lon       float64 // query-point longitude
 	Lat       float64 // query-point latitude
 	Spherical bool    // true => haversine; false => Euclidean (2d index)
+	// MaxDistance is the $maxDistance bound, +Inf when none.
+	MaxDistance float64
+}
+
+// Distance returns doc's distance from the query point, the order
+// GeoDistanceSortIterator sorts by.
+func (g *GeoSortKey) Distance(doc *types.Document) float64 {
+	return docDistanceFromField(doc, g.Field, g.Lon, g.Lat, g.Spherical)
+}
+
+// geoMaxDistance returns the numeric $maxDistance of doc, +Inf when absent.
+func geoMaxDistance(doc *types.Document) float64 {
+	if v, err := doc.Get("$maxDistance"); err == nil {
+		if d, err := toFloat64(v); err == nil {
+			return d
+		}
+	}
+	return math.Inf(1)
 }
 
 // FindGeoSortKey scans a filter document for a top-level $near or $nearSphere
@@ -110,11 +138,17 @@ func FindGeoSortKey(filter *types.Document) *GeoSortKey {
 				if err != nil {
 					continue
 				}
+				maxDistance := geoMaxDistance(expr)
+				if opKey == "$nearSphere" {
+					// Legacy $nearSphere bounds are radians; distances are metres.
+					maxDistance *= earthRadiusMeters
+				}
 				return &GeoSortKey{
-					Field:     field,
-					Lon:       lon,
-					Lat:       lat,
-					Spherical: opKey == "$nearSphere",
+					Field:       field,
+					Lon:         lon,
+					Lat:         lat,
+					Spherical:   opKey == "$nearSphere",
+					MaxDistance: maxDistance,
 				}
 			}
 
@@ -132,10 +166,11 @@ func FindGeoSortKey(filter *types.Document) *GeoSortKey {
 				continue
 			}
 			return &GeoSortKey{
-				Field:     field,
-				Lon:       lon,
-				Lat:       lat,
-				Spherical: true,
+				Field:       field,
+				Lon:         lon,
+				Lat:         lat,
+				Spherical:   true,
+				MaxDistance: geoMaxDistance(opDoc),
 			}
 		}
 	}
@@ -171,10 +206,30 @@ func ValidateGeoFilter(filter *types.Document) error {
 			if opKey != "$near" && opKey != "$nearSphere" {
 				continue
 			}
+			if err := validateNearDistances(expr, opKey); err != nil {
+				return err
+			}
 			opVal := must.NotFail(expr.Get(opKey))
+			if arr, ok := opVal.(*types.Array); ok {
+				if !finitePair(arr) {
+					return handlererrors.NewCommandErrorMsgWithArgument(
+						handlererrors.ErrBadValue, "invalid argument in geo near query: 0", opKey,
+					)
+				}
+				continue
+			}
 			opDoc, ok := opVal.(*types.Document)
 			if !ok {
 				continue
+			}
+			for _, bound := range []string{"$maxDistance", "$minDistance"} {
+				if v, err := opDoc.Get(bound); err == nil {
+					if d, err := toFloat64(v); err == nil && (math.IsNaN(d) || math.IsInf(d, 0) || d < 0) {
+						return handlererrors.NewCommandErrorMsgWithArgument(
+							handlererrors.ErrBadValue, bound+" must be non-negative", opKey,
+						)
+					}
+				}
 			}
 			geomAny, err2 := opDoc.Get("$geometry")
 			if err2 != nil {
@@ -187,6 +242,21 @@ func ValidateGeoFilter(filter *types.Document) error {
 			lon, lat, err2 := extractPointCoords(geomDoc)
 			if err2 != nil {
 				continue
+			}
+			if !finite(lon) || !finite(lat) {
+				return handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrBadValue,
+					fmt.Sprintf(`invalid point in geo near query $geometry argument: { type: "Point", coordinates: [ %s, %s ] }  Point coordinates must be finite numbers`,
+						geoFormatBSON(lon), geoFormatBSON(lat)),
+					opKey,
+				)
+			}
+			if v, err := expr.Get("$maxDistance"); err == nil {
+				return handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrBadValue,
+					"geo near accepts just one argument when querying for a GeoJSON point. Extra field found: $maxDistance: "+geoFormatValue(v),
+					opKey,
+				)
 			}
 			if lon < -180 || lon > 180 || lat < -90 || lat > 90 {
 				return handlererrors.NewCommandErrorMsgWithArgument(
@@ -243,34 +313,7 @@ func docDistanceFromField(doc *types.Document, field string, lon, lat float64, s
 	if err != nil {
 		return math.MaxFloat64
 	}
-	switch v := val.(type) {
-	case *types.Document:
-		dlon, dlat, err := extractPointCoords(v)
-		if err != nil {
-			return math.MaxFloat64
-		}
-		if spherical {
-			return haversineMeters(lon, lat, dlon, dlat)
-		}
-		return euclidean(lon, lat, dlon, dlat)
-	case *types.Array:
-		if v.Len() < 2 {
-			return math.MaxFloat64
-		}
-		dlon, err := toFloat64(must.NotFail(v.Get(0)))
-		if err != nil {
-			return math.MaxFloat64
-		}
-		dlat, err := toFloat64(must.NotFail(v.Get(1)))
-		if err != nil {
-			return math.MaxFloat64
-		}
-		if spherical {
-			return haversineMeters(lon, lat, dlon, dlat)
-		}
-		return euclidean(lon, lat, dlon, dlat)
-	}
-	return math.MaxFloat64
+	return GeoDistance(val, lon, lat, spherical)
 }
 
 // filterFieldGeoWithin handles {field: {$geoWithin: spec}}.
@@ -352,7 +395,7 @@ func filterFieldGeoWithin(fieldValue any, spec *types.Document) (bool, error) {
 			if err != nil {
 				return false, nil
 			}
-			dist := haversineMeters(center[0], center[1], px, py)
+			dist := pointDistance(center[0], center[1], px, py, true)
 			return dist <= radiusMeters, nil
 
 		case "$polygon":
@@ -457,37 +500,8 @@ func filterFieldNear(fieldValue any, opDoc *types.Document, spherical bool) (boo
 	// If we reach here without $geometry, we assume the coordinates were extracted in
 	// the caller for legacy 2d form and the distance units are Euclidean degrees.
 
-	// Compute distance from query point to field value.
-	var dist float64
-	switch v := fieldValue.(type) {
-	case *types.Document:
-		dlon, dlat, err := extractPointCoords(v)
-		if err != nil {
-			return false, nil // non-point geometry  -- skip
-		}
-		if spherical {
-			dist = haversineMeters(queryLon, queryLat, dlon, dlat)
-		} else {
-			dist = euclidean(queryLon, queryLat, dlon, dlat)
-		}
-	case *types.Array:
-		if v.Len() < 2 {
-			return false, nil
-		}
-		dlon, err := toFloat64(must.NotFail(v.Get(0)))
-		if err != nil {
-			return false, nil
-		}
-		dlat, err := toFloat64(must.NotFail(v.Get(1)))
-		if err != nil {
-			return false, nil
-		}
-		if spherical {
-			dist = haversineMeters(queryLon, queryLat, dlon, dlat)
-		} else {
-			dist = euclidean(queryLon, queryLat, dlon, dlat)
-		}
-	default:
+	dist := GeoDistance(fieldValue, queryLon, queryLat, spherical)
+	if dist == math.MaxFloat64 {
 		return false, nil
 	}
 
@@ -1074,18 +1088,6 @@ func pointInRing(px, py float64, ring [][2]float64) bool {
 	return inside
 }
 
-// haversineMeters computes the great-circle distance in metres between two
-// [lon, lat] points using the Haversine formula.
-func haversineMeters(lon1, lat1, lon2, lat2 float64) float64 {
-	dLat := (lat2 - lat1) * math.Pi / 180
-	dLon := (lon2 - lon1) * math.Pi / 180
-	a := math.Sin(dLat/2)*math.Sin(dLat/2) +
-		math.Cos(lat1*math.Pi/180)*math.Cos(lat2*math.Pi/180)*
-			math.Sin(dLon/2)*math.Sin(dLon/2)
-	c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
-	return earthRadiusMeters * c
-}
-
 // euclidean computes the 2D Euclidean distance between two points.
 func euclidean(x1, y1, x2, y2 float64) float64 {
 	dx := x2 - x1
@@ -1123,25 +1125,9 @@ func arrToRing(arr *types.Array) ([][2]float64, error) {
 	return ring, nil
 }
 
-// fieldPoint extracts a point (lon, lat) from a document field value.
-// Accepts GeoJSON Point doc or legacy [lon, lat] array.
+// fieldPoint returns the point a stored field value holds; see geo.Point.
 func fieldPoint(val any) (float64, float64, error) {
-	switch v := val.(type) {
-	case *types.Document:
-		lon, lat, err := extractPointCoords(v)
-		return lon, lat, err
-	case *types.Array:
-		if v.Len() < 2 {
-			return 0, 0, fmt.Errorf("expected [lon, lat] array")
-		}
-		lon, err := toFloat64(must.NotFail(v.Get(0)))
-		if err != nil {
-			return 0, 0, err
-		}
-		lat, err := toFloat64(must.NotFail(v.Get(1)))
-		if err != nil {
-			return 0, 0, err
-		}
+	if lon, lat, ok := geo.Point(val); ok {
 		return lon, lat, nil
 	}
 	return 0, 0, fmt.Errorf("field is not a Point geometry")
@@ -1158,4 +1144,48 @@ func toFloat64(v any) (float64, error) {
 		return float64(n), nil
 	}
 	return 0, fmt.Errorf("expected numeric value, got %T", v)
+}
+
+// validateNearDistances checks the $maxDistance and $minDistance written
+// beside a $near or $nearSphere, as {field: {$near: ..., $maxDistance: n}}.
+func validateNearDistances(expr *types.Document, opKey string) error {
+	for _, b := range []struct {
+		name string
+		code handlererrors.ErrorCode
+	}{
+		{"$maxDistance", handlererrors.ErrNearMaxDistanceNegative},
+		{"$minDistance", handlererrors.ErrNearMinDistanceNegative},
+	} {
+		v, err := expr.Get(b.name)
+		if err != nil {
+			continue
+		}
+		if d, err := toFloat64(v); err == nil && (math.IsNaN(d) || d < 0) {
+			return handlererrors.NewCommandErrorMsgWithArgument(b.code, b.name+" must be non-negative", opKey)
+		}
+	}
+	return nil
+}
+
+func finite(f float64) bool { return !math.IsNaN(f) && !math.IsInf(f, 0) }
+
+// finitePair reports whether a legacy [x, y] point's coordinates are finite.
+func finitePair(arr *types.Array) bool {
+	for i := 0; i < arr.Len() && i < 2; i++ {
+		if f, err := toFloat64(must.NotFail(arr.Get(i))); err == nil && !finite(f) {
+			return false
+		}
+	}
+	return true
+}
+
+// geoFormatValue formats a number as MongoDB prints it in geo errors.
+func geoFormatValue(v any) string {
+	if f, err := toFloat64(v); err == nil {
+		if _, isDouble := v.(float64); isDouble {
+			return geoFormatBSON(f)
+		}
+		return fmt.Sprintf("%v", v)
+	}
+	return fmt.Sprintf("%v", v)
 }

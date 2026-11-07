@@ -886,13 +886,12 @@ func clearConflictArtifacts(ctx context.Context, state *dbState, ms *mergeInProg
 		}
 
 		// Build a DTBL with no artifacts. Preserve the current per-branch
-		// index AM read from the resolved AM (workspace-ife will handle
-		// proper per-index merge).
-		curIdxAM, idxErr := indexAMFromAM(ctx, state.cs, state.ns, ms.resolvedAM, collName)
+		// secondary indexes read from the resolved AM.
+		curIndexes, idxErr := secondaryIndexesFromAM(ctx, state.cs, state.ns, ms.resolvedAM, collName)
 		if idxErr != nil {
-			return fmt.Errorf("reading current index AM for %q: %w", collName, idxErr)
+			return fmt.Errorf("reading current secondary indexes for %q: %w", collName, idxErr)
 		}
-		newDTBLHash, err := state.dtblHashForCollection(ctx, collName, collMap, curIdxAM, hash.Hash{})
+		newDTBLHash, err := state.dtblHashForCollection(ctx, collName, collMap, curIndexes, hash.Hash{})
 		if err != nil {
 			return fmt.Errorf("building clean DTBL for %q: %w", collName, err)
 		}

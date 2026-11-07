@@ -21,6 +21,7 @@ import (
 	"math"
 	stdsort "sort"
 
+	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
@@ -53,7 +54,37 @@ type geoNear struct {
 	key                string          // geo field name (optional  -- auto-detected)
 	includeLocs        string          // optional output field for matched location
 	distanceMultiplier float64         // multiplier applied to distance (default 1)
+	// sortedField, when set, is the field of an input that arrives nearest
+	// first, which the stage streams instead of sorting.
+	sortedField string
 }
+
+// GeoNearStage is a $geoNear stage whose input can be read nearest first.
+type GeoNearStage interface {
+	// NearParams describes the read of the stage's input nearest first.
+	NearParams() *backends.GeoNearParams
+	// ReadsSorted makes the stage take its input nearest first, by field.
+	ReadsSorted(field string)
+}
+
+func (g *geoNear) NearParams() *backends.GeoNearParams {
+	return &backends.GeoNearParams{
+		Field:       g.key,
+		X:           g.nearLon,
+		Y:           g.nearLat,
+		Spherical:   g.spherical,
+		MaxDistance: g.maxDistance,
+		Distance: func(doc *types.Document) float64 {
+			v, err := doc.Get(g.sortedField)
+			if err != nil {
+				return math.MaxFloat64
+			}
+			return g.computeDistance(v)
+		},
+	}
+}
+
+func (g *geoNear) ReadsSorted(field string) { g.sortedField = field }
 
 func newGeoNear(stage *types.Document) (aggregations.Stage, error) {
 	spec, err := common.GetRequiredParam[*types.Document](stage, "$geoNear")
@@ -87,6 +118,9 @@ func newGeoNear(stage *types.Document) (aggregations.Stage, error) {
 		if err != nil {
 			return nil, err
 		}
+		if !finitePoint(lon, lat) {
+			return nil, invalidNearArgument("type")
+		}
 		g.nearLon, g.nearLat = lon, lat
 	case *types.Array:
 		// Legacy [lon, lat]
@@ -104,6 +138,9 @@ func newGeoNear(stage *types.Document) (aggregations.Stage, error) {
 		lat, err := geoToFloat64(must.NotFail(nv.Get(1)))
 		if err != nil {
 			return nil, err
+		}
+		if !finitePoint(lon, lat) {
+			return nil, invalidNearArgument("0")
 		}
 		g.nearLon, g.nearLat = lon, lat
 	default:
@@ -206,6 +243,18 @@ func newGeoNear(stage *types.Document) (aggregations.Stage, error) {
 		g.distanceMultiplier = dm
 	}
 
+	// +Inf is a valid bound; NaN and negatives are not.
+	if math.IsNaN(g.maxDistance) || g.maxDistance < 0 {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrBadValue, "maxDistance must be nonnegative", "$geoNear (stage)",
+		)
+	}
+	if math.IsNaN(g.minDistance) || g.minDistance < 0 {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrBadValue, "minDistance must be nonnegative", "$geoNear (stage)",
+		)
+	}
+
 	// Validate near coordinates when spherical
 	if g.spherical {
 		if g.nearLon < -180 || g.nearLon > 180 || g.nearLat < -90 || g.nearLat > 90 {
@@ -220,10 +269,15 @@ func newGeoNear(stage *types.Document) (aggregations.Stage, error) {
 	return g, nil
 }
 
-// Process reads its input incrementally but must sort what it keeps by
-// distance. MongoDB streams $geoNear from a geo index; DumboDB sorts in memory,
-// so the documents it keeps are limited like $sort's.
+// Process streams an input read nearest first from a geo index, as MongoDB
+// streams $geoNear. Any other input it must sort by distance in memory, so the
+// documents it keeps are limited like $sort's.
 func (g *geoNear) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) {
+	if g.sortedField != "" {
+		res := &geoNearSortedIter{g: g, input: iter}
+		closer.Add(res)
+		return res, nil
+	}
 	defer iter.Close()
 
 	type docWithDist struct {
@@ -243,47 +297,12 @@ func (g *geoNear) Process(ctx context.Context, iter types.DocumentsIterator, clo
 			return nil, err
 		}
 
-		// Apply optional query filter.
-		if g.query != nil {
-			match, err := common.FilterDocument(doc, g.query)
-			if err != nil {
-				return nil, err
-			}
-			if !match {
-				continue
-			}
+		out, dist, err := g.annotate(doc, g.key)
+		if err != nil {
+			return nil, err
 		}
-
-		// Find the geo field.
-		geoField := g.key
-		if geoField == "" {
-			geoField = g.autoDetectGeoField(doc)
-		}
-		if geoField == "" {
+		if out == nil {
 			continue
-		}
-
-		fieldVal, e := doc.Get(geoField)
-		if e != nil {
-			continue
-		}
-
-		dist := g.computeDistance(fieldVal)
-		if dist < g.minDistance || dist > g.maxDistance {
-			continue
-		}
-
-		// Clone the doc and add the distanceField.
-		out := doc.DeepCopy()
-		scaledDist := dist * g.distanceMultiplier
-		if g.distanceField != "" {
-			out.Set(g.distanceField, scaledDist)
-		}
-		if g.includeLocs != "" {
-			// Set includeLocs to the value of the geo field.
-			if locVal, e := doc.Get(geoField); e == nil {
-				out.Set(g.includeLocs, locVal)
-			}
 		}
 
 		if err = budget.ChargeDocument(out); err != nil {
@@ -306,6 +325,63 @@ func (g *geoNear) Process(ctx context.Context, iter types.DocumentsIterator, clo
 	closer.Add(res)
 	return res, nil
 }
+
+// annotate returns doc with the distance and location fields set, or nil
+// when it does not pass the stage's query and distance bounds. An empty
+// geoField is detected from the document.
+func (g *geoNear) annotate(doc *types.Document, geoField string) (*types.Document, float64, error) {
+	if g.query != nil {
+		match, err := common.FilterDocument(doc, g.query)
+		if err != nil || !match {
+			return nil, 0, err
+		}
+	}
+	if geoField == "" {
+		if geoField = g.autoDetectGeoField(doc); geoField == "" {
+			return nil, 0, nil
+		}
+	}
+	fieldVal, err := doc.Get(geoField)
+	if err != nil {
+		return nil, 0, nil
+	}
+	dist := g.computeDistance(fieldVal)
+	if dist < g.minDistance || dist > g.maxDistance {
+		return nil, 0, nil
+	}
+	out := doc.DeepCopy()
+	if g.distanceField != "" {
+		out.Set(g.distanceField, dist*g.distanceMultiplier)
+	}
+	if g.includeLocs != "" {
+		out.Set(g.includeLocs, fieldVal)
+	}
+	return out, dist, nil
+}
+
+// geoNearSortedIter streams an input that arrives nearest first.
+type geoNearSortedIter struct {
+	g     *geoNear
+	input types.DocumentsIterator
+}
+
+func (it *geoNearSortedIter) Next() (struct{}, *types.Document, error) {
+	for {
+		_, doc, err := it.input.Next()
+		if err != nil {
+			return struct{}{}, nil, err
+		}
+		out, _, err := it.g.annotate(doc, it.g.sortedField)
+		if err != nil {
+			return struct{}{}, nil, err
+		}
+		if out != nil {
+			return struct{}{}, out, nil
+		}
+	}
+}
+
+func (it *geoNearSortedIter) Close() { it.input.Close() }
 
 // autoDetectGeoField returns the first field that looks like a GeoJSON geometry or
 // legacy coordinate pair.  Returns "" if none found.
@@ -343,53 +419,7 @@ func (g *geoNear) autoDetectGeoField(doc *types.Document) string {
 
 // computeDistance returns the distance from the query point to fieldVal.
 func (g *geoNear) computeDistance(fieldVal any) float64 {
-	switch v := fieldVal.(type) {
-	case *types.Document:
-		lon, lat, err := extractGeoJSONPointCoords(v)
-		if err != nil {
-			return math.MaxFloat64
-		}
-		if g.spherical {
-			return haversineDistMeters(g.nearLon, g.nearLat, lon, lat)
-		}
-		return euclideanDist(g.nearLon, g.nearLat, lon, lat)
-	case *types.Array:
-		if v.Len() < 2 {
-			return math.MaxFloat64
-		}
-		lon, err := geoToFloat64(must.NotFail(v.Get(0)))
-		if err != nil {
-			return math.MaxFloat64
-		}
-		lat, err := geoToFloat64(must.NotFail(v.Get(1)))
-		if err != nil {
-			return math.MaxFloat64
-		}
-		if g.spherical {
-			return haversineDistMeters(g.nearLon, g.nearLat, lon, lat)
-		}
-		return euclideanDist(g.nearLon, g.nearLat, lon, lat)
-	}
-	return math.MaxFloat64
-}
-
-const earthRadiusM = 6378137.0
-
-func haversineDistMeters(lon1, lat1, lon2, lat2 float64) float64 {
-	const pi180 = math.Pi / 180
-	dLat := (lat2 - lat1) * pi180
-	dLon := (lon2 - lon1) * pi180
-	a := math.Sin(dLat/2)*math.Sin(dLat/2) +
-		math.Cos(lat1*pi180)*math.Cos(lat2*pi180)*
-			math.Sin(dLon/2)*math.Sin(dLon/2)
-	c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
-	return earthRadiusM * c
-}
-
-func euclideanDist(x1, y1, x2, y2 float64) float64 {
-	dx := x2 - x1
-	dy := y2 - y1
-	return math.Sqrt(dx*dx + dy*dy)
+	return common.GeoDistance(fieldVal, g.nearLon, g.nearLat, g.spherical)
 }
 
 func extractGeoJSONPointCoords(doc *types.Document) (float64, float64, error) {
@@ -433,3 +463,15 @@ func geoToFloat64(v any) (float64, error) {
 }
 
 var _ aggregations.Stage = (*geoNear)(nil)
+
+func finitePoint(x, y float64) bool {
+	return !math.IsNaN(x) && !math.IsInf(x, 0) && !math.IsNaN(y) && !math.IsInf(y, 0)
+}
+
+// invalidNearArgument is MongoDB's error for a non-finite near point; field
+// names the offending part, "type" for a GeoJSON point, "0" for a pair.
+func invalidNearArgument(field string) error {
+	return handlererrors.NewCommandErrorMsgWithArgument(
+		handlererrors.ErrBadValue, "invalid argument in geo near query: "+field, "$geoNear (stage)",
+	)
+}

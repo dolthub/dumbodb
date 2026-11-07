@@ -33,144 +33,248 @@ import (
 	"github.com/dolthub/dumbodb/internal/version"
 )
 
-// countExplainExecution runs a best-effort counting pass for executionStats
-// verbosity; any backend error returns zeros so the caller still produces a
-// structurally valid executionStats document. It pulls documents the way the
-// query pipeline does: when no blocking sort is needed (no sort, or the backend
-// walked an index in sort order) a limit stops the pass, otherwise every
-// candidate is examined and the limit only caps nReturned. When the winning
-// plan contains an IXSCAN node every examined doc was reached via the index,
-// so totalKeysExamined = totalDocsExamined. count and distinct return zeros
-// today.
-func countExplainExecution(ctx context.Context, coll backends.Collection, qp *backends.ExplainParams, winningPlan *types.Document) (nReturned, totalDocsExamined, totalKeysExamined int32) {
-	if qp.Command != "find" && qp.Command != "aggregate" {
-		return 0, 0, 0
-	}
-	usesIndex := planContainsIndexScan(winningPlan)
+// explainRun is what running an explained command did: how many documents
+// its plan's stages returned, and the index keys and documents it read.
+type explainRun struct {
+	// returned is the root stage's nReturned: the documents the command
+	// returns, or zero for a write or count.
+	returned int32
+	// matched is what the stage that fetches or scans documents returned:
+	// those matching the filter.
+	matched int32
+	// scanned is what the leaf index scan returned.
+	scanned int32
+	// writes, when set, is what reaches a write's root stage from the stages
+	// below it: a sorted single-document write sorts every match and writes
+	// one.
+	writes     *int32
+	keys, docs int64
+	// branches are the counts of the index scans under an OR or SORT_MERGE
+	// stage.
+	branches []backends.ExplainBranchCounts
+}
 
-	limit := int32(qp.Limit)
-	if limit < 0 {
-		limit = -limit
+// outerDocs are the documents run read outside the fetches under an OR.
+func (run explainRun) outerDocs() int64 {
+	docs := run.docs
+	for _, b := range run.branches {
+		docs -= b.DocsExamined
 	}
+	return docs
+}
+
+// runExplained runs the explained command's read the way the command itself
+// runs it, counting the index keys and documents it reads. A backend error
+// leaves the counts reached so far, so the caller still produces a
+// structurally valid executionStats document.
+func (h *Handler) runExplained(ctx context.Context, coll backends.Collection, params *common.ExplainParams, qp *backends.ExplainParams, viaView bool) explainRun {
+	ctx, examined := backends.WithExaminedCounts(ctx)
+	var run explainRun
+	switch {
+	case qp.Command == "count" && !viaView:
+		run = h.runExplainedCount(ctx, coll, params, qp)
+	case qp.Command == "distinct" && !viaView:
+		run = h.runExplainedDistinct(ctx, coll, params, qp)
+	case qp.Command == "update" || qp.Command == "delete" || qp.Command == "findAndModify":
+		run = runExplainedWrite(ctx, coll, qp)
+	default:
+		run = runExplainedFind(ctx, coll, qp)
+	}
+	run.keys, run.docs, run.branches = examined.Keys(), examined.Docs(), examined.Branches()
+	// A scan streaming index entries counts what it returned; the stage
+	// above it filters them.
+	if entries := examined.Entries(); entries > 0 {
+		run.scanned = int32(entries)
+	}
+	return run
+}
+
+func (h *Handler) runExplainedCount(ctx context.Context, coll backends.Collection, params *common.ExplainParams, qp *backends.ExplainParams) explainRun {
+	cp, err := common.GetCountParams(params.Command, h.L)
+	if err != nil {
+		return explainRun{}
+	}
+	common.CanonicalizeFilter(cp.Filter)
+	cp.Collation = qp.Collation
+	n, _ := h.execCount(ctx, coll, cp, collation.Parse(qp.Collation).Comparator())
+	return explainRun{matched: n, scanned: n}
+}
+
+func (h *Handler) runExplainedDistinct(ctx context.Context, coll backends.Collection, params *common.ExplainParams, qp *backends.ExplainParams) explainRun {
+	dp, err := common.GetDistinctParams(params.Command, h.L)
+	if err != nil {
+		return explainRun{}
+	}
+	dp.Collation = qp.Collation
+	values, err := h.execDistinct(ctx, coll, dp, collation.Parse(qp.Collation).Comparator())
+	if err != nil {
+		return explainRun{}
+	}
+	n := int32(values.Len())
+	return explainRun{returned: n, matched: n, scanned: n}
+}
+
+// runExplainedWrite reads the documents an update, delete or findAndModify
+// would write, the way the write does, without writing them, under its hint,
+// collation and sort. A single-document write stops at its first match unless
+// it must sort every match first.
+func runExplainedWrite(ctx context.Context, coll backends.Collection, qp *backends.ExplainParams) explainRun {
+	var run explainRun
+	single := qp.Command == "findAndModify" || !qp.Multi
 	query := &backends.QueryParams{Filter: qp.Filter, Collated: qp.Collated, Collation: qp.Collation, Hint: qp.Hint}
+	if qp.Sort.Len() == 1 {
+		query.Sort = qp.Sort
+	}
+	run.matched = scanMatching(ctx, coll, query, qp, single)
+	run.scanned = run.matched
+	written := run.matched
+	if single {
+		written = min(written, 1)
+	}
+	run.writes = &written
+	if qp.Command == "findAndModify" {
+		run.returned = written
+	}
+	return run
+}
+
+// runExplainedFind pulls documents the way the query pipeline does, reading
+// only qp's fields when set: when no blocking sort is needed (no sort, or the
+// backend walked an index in sort order) a limit stops the pass, otherwise
+// every candidate is examined and the limit only caps what is returned.
+func runExplainedFind(ctx context.Context, coll backends.Collection, qp *backends.ExplainParams) explainRun {
+	limit := int32(max(qp.Limit, -qp.Limit))
+	query := &backends.QueryParams{Filter: qp.Filter, Collated: qp.Collated, Collation: qp.Collation, Hint: qp.Hint, Fields: qp.Fields}
 	if limit > 0 {
 		query.LimitHint = qp.Skip + int64(limit)
 	}
 	if qp.Sort.Len() == 1 {
 		query.Sort = qp.Sort
 	}
+	var run explainRun
+	run.matched = scanMatching(ctx, coll, query, qp, false)
+	run.returned = run.matched
+	if limit > 0 && run.returned > limit {
+		run.returned = limit
+	}
+	run.scanned = run.matched
+	return run
+}
+
+// scanMatching runs query and returns how many of its documents match qp's
+// filter, stopping at the first when single is set, or at qp's limit when the
+// query's order is the requested one.
+func scanMatching(ctx context.Context, coll backends.Collection, query *backends.QueryParams, qp *backends.ExplainParams, single bool) int32 {
 	qres, err := coll.Query(ctx, query)
 	if err != nil || qres == nil || qres.Iter == nil {
-		return 0, 0, 0
+		return 0
 	}
 	defer qres.Iter.Close()
 
+	limit := int32(max(qp.Limit, -qp.Limit))
+	if single {
+		limit = 1
+	}
 	stopAtLimit := limit > 0 && (qp.Sort.Len() == 0 || qres.Sorted)
+	cmp := collation.Parse(qp.Collation).Comparator()
 
-	for !stopAtLimit || nReturned < limit {
+	var matched int32
+	for !stopAtLimit || matched < limit {
 		_, doc, err := qres.Iter.Next()
 		if err != nil {
 			break
 		}
-		totalDocsExamined++
-		if qp.Filter == nil || qp.Filter.Len() == 0 {
-			nReturned++
-			continue
-		}
-		match, ferr := common.FilterDocument(doc, qp.Filter)
-		if ferr == nil && match {
-			nReturned++
+		if ok, ferr := common.FilterDocumentColl(doc, qp.Filter, cmp); ferr == nil && ok {
+			matched++
 		}
 	}
-
-	if limit > 0 && nReturned > limit {
-		nReturned = limit
-	}
-	if usesIndex {
-		totalKeysExamined = totalDocsExamined
-	}
-	return
+	return matched
 }
 
-// buildExecutionStages clones the winningPlan tree shape into the
-// executionStages document. nReturned is reported at the root only;
-// intermediate per-stage row flow is left at zero, enough for
-// stage/indexName parity without full row-counting instrumentation.
-func buildExecutionStages(plan *types.Document, rootStage string, nReturned int32) *types.Document {
+// buildExecutionStages clones the winningPlan tree into the executionStages
+// document, with the counts run measured. Below a stage with more than one
+// input, counts are left at zero.
+func buildExecutionStages(plan *types.Document, rootStage string, run explainRun) *types.Document {
 	if plan == nil {
 		return must.NotFail(types.NewDocument(
 			"stage", rootStage,
-			"nReturned", nReturned,
+			"nReturned", run.returned,
 			"executionTimeMillisEstimate", int64(0),
 		))
 	}
-	return cloneExecutionStage(plan, nReturned)
+	return cloneExecutionStage(plan, run, true, true)
 }
 
-func cloneExecutionStage(node *types.Document, nReturned int32) *types.Document {
+// cloneExecutionStage copies node with the counts run measured. root marks
+// the plan's top stage; aboveMatch marks a stage above the one that fetches or
+// scans documents, which returns what the command returns.
+func cloneExecutionStage(node *types.Document, run explainRun, root, aboveMatch bool) *types.Document {
 	d := must.NotFail(types.NewDocument())
-	if s, _ := node.Get("stage"); s != nil {
-		d.Set("stage", s)
+	stage, _ := node.Get("stage")
+	if stage != nil {
+		d.Set("stage", stage)
+	}
+	child, _ := node.Get("inputStage")
+	childDoc, _ := child.(*types.Document)
+	children, _ := node.Get("inputStages")
+	childArr, _ := children.(*types.Array)
+
+	var nReturned int32
+	switch {
+	case root:
+		nReturned = run.returned
+	case childArr != nil:
+		// An OR or SORT_MERGE returns each document its branches found once,
+		// all fetched.
+		nReturned = int32(run.outerDocs())
+	case stage == "FETCH" || stage == "COLLSCAN" || stage == "CLUSTERED_IXSCAN":
+		nReturned = run.matched
+	case childDoc == nil || !aboveMatch:
+		nReturned = run.scanned
+	case run.writes != nil:
+		nReturned = *run.writes
+	default:
+		nReturned = run.returned
+	}
+	if stage == "FETCH" || stage == "COLLSCAN" || stage == "CLUSTERED_IXSCAN" {
+		aboveMatch = false
 	}
 	d.Set("nReturned", nReturned)
 	d.Set("executionTimeMillisEstimate", int64(0))
+	switch stage {
+	case "IXSCAN", "COUNT_SCAN", "DISTINCT_SCAN":
+		d.Set("keysExamined", int32(run.keys))
+	case "FETCH", "COLLSCAN", "CLUSTERED_IXSCAN":
+		d.Set("docsExamined", int32(run.outerDocs()))
+	case "EXPRESS_CLUSTERED_IXSCAN", "EXPRESS_UPDATE", "EXPRESS_DELETE":
+		d.Set("keysExamined", int32(run.keys))
+		d.Set("docsExamined", int32(run.docs))
+	}
 	if v, _ := node.Get("indexName"); v != nil {
 		d.Set("indexName", v)
 	}
 	if v, _ := node.Get("keyPattern"); v != nil {
 		d.Set("keyPattern", v)
 	}
-	if v, _ := node.Get("inputStage"); v != nil {
-		if child, ok := v.(*types.Document); ok {
-			d.Set("inputStage", cloneExecutionStage(child, 0))
-		}
+	if childDoc != nil {
+		d.Set("inputStage", cloneExecutionStage(childDoc, run, false, aboveMatch))
 	}
-	if v, _ := node.Get("inputStages"); v != nil {
-		if arr, ok := v.(*types.Array); ok {
-			out := types.MakeArray(arr.Len())
-			for i := 0; i < arr.Len(); i++ {
-				c, _ := arr.Get(i)
-				if child, ok := c.(*types.Document); ok {
-					out.Append(cloneExecutionStage(child, 0))
-				}
+	if childArr != nil {
+		out := types.MakeArray(childArr.Len())
+		for i := 0; i < childArr.Len(); i++ {
+			var branch explainRun
+			if i < len(run.branches) {
+				b := run.branches[i]
+				branch = explainRun{scanned: int32(b.NReturned), keys: b.KeysExamined, docs: b.DocsExamined, matched: int32(b.Matched)}
 			}
-			d.Set("inputStages", out)
+			c, _ := childArr.Get(i)
+			if cd, ok := c.(*types.Document); ok {
+				out.Append(cloneExecutionStage(cd, branch, false, false))
+			}
 		}
+		d.Set("inputStages", out)
 	}
 	return d
-}
-
-// planContainsIndexScan walks the winningPlan tree for any IXSCAN,
-// COUNT_SCAN, or DISTINCT_SCAN node, descending both inputStage and
-// inputStages so OR/AND multi-index plans count correctly.
-func planContainsIndexScan(plan *types.Document) bool {
-	if plan == nil {
-		return false
-	}
-	if s, _ := plan.Get("stage"); s != nil {
-		if str, ok := s.(string); ok {
-			switch str {
-			case "IXSCAN", "COUNT_SCAN", "DISTINCT_SCAN":
-				return true
-			}
-		}
-	}
-	if v, _ := plan.Get("inputStage"); v != nil {
-		if child, ok := v.(*types.Document); ok && planContainsIndexScan(child) {
-			return true
-		}
-	}
-	if v, _ := plan.Get("inputStages"); v != nil {
-		if arr, ok := v.(*types.Array); ok {
-			for i := 0; i < arr.Len(); i++ {
-				c, _ := arr.Get(i)
-				if child, ok := c.(*types.Document); ok && planContainsIndexScan(child) {
-					return true
-				}
-			}
-		}
-	}
-	return false
 }
 
 // explainableCommands are the commands, by canonical name, that MongoDB 8.0
@@ -264,7 +368,9 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 	// derive the pushdown from the view's resolved pipeline (the same leading
 	// $match viewSourceIterator pushes), so the plan reflects a base-collection
 	// index used through the view instead of scanning the view namespace.
+	var viaView bool
 	if info, ierr := lookupCollectionInfo(connCtx, db, params.Collection); ierr == nil && info != nil && info.IsView {
+		viaView = true
 		baseName, _, rawStages, rerr := resolveViewChain(connCtx, db, info.Name, info.ViewOn, info.ViewPipeline, nil)
 		if rerr != nil {
 			return nil, rerr
@@ -274,7 +380,9 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 			return nil, lazyerrors.Error(err)
 		}
 
-		params.Filter, _ = aggregations.GetPushdownQuery(rawStages)
+		// The command's own filter applies after the view's.
+		viewFilter, _ := aggregations.GetPushdownQuery(rawStages)
+		params.Filter = andFilters(viewFilter, params.Filter)
 		common.CanonicalizeFilter(params.Filter)
 		params.Aggregate = false
 		params.StagesDocs = nil
@@ -302,12 +410,28 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 	qp.Projection = params.Projection
 	qp.Command = params.CommandName
 	qp.DistinctKey = params.DistinctKey
+	qp.Multi = params.Multi
+	qp.Remove = params.Remove
+	switch {
+	case h.DisablePushdown:
+	case params.CommandName == "find":
+		qp.Fields, _ = findRootFields(&common.FindParams{Filter: params.Filter, Sort: params.Sort, Projection: params.Projection})
+	case params.Aggregate && !viaView:
+		qp.Fields, _ = pipelineRootFields(params.StagesDocs)
+	}
+	var afterCount []any
+	if params.Aggregate && !viaView && !h.DisablePushdown {
+		afterCount, qp.CountOnly = countingPipeline(params.StagesDocs)
+	}
 
 	var opCollation *types.Document
 	if params.Command != nil {
 		if cv, _ := params.Command.Get("collation"); cv != nil {
 			opCollation, _ = cv.(*types.Document)
 		}
+	}
+	if opCollation == nil {
+		opCollation = params.StatementCollation
 	}
 	effColl := h.effectiveCollation(connCtx, db, params.Collection, opCollation)
 	qp.Collation = effColl
@@ -366,7 +490,7 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 	}
 
 	response := must.NotFail(types.NewDocument(
-		"explainVersion", "1",
+		"explainVersion", explainVersion(params, viaView),
 		"queryPlanner", res.QueryPlanner,
 	))
 
@@ -386,18 +510,33 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 			}
 		}
 
-		nReturned, totalDocsExamined, totalKeysExamined := countExplainExecution(connCtx, coll, qp, winningPlanDoc)
+		runCtx := connCtx
+		if qp.CountOnly {
+			runCtx = backends.WithSeekEachRange(connCtx)
+		}
+		run := h.runExplained(runCtx, coll, params, qp, viaView)
+		if qp.CountOnly {
+			run.returned = min(run.returned, 1)
+		}
 
-		executionStages := buildExecutionStages(winningPlanDoc, execStage, nReturned)
+		executionStages := buildExecutionStages(winningPlanDoc, execStage, run)
 		executionStats := must.NotFail(types.NewDocument(
 			"executionSuccess", true,
-			"nReturned", nReturned,
+			"nReturned", run.returned,
 			"executionTimeMillis", int64(0),
-			"totalKeysExamined", totalKeysExamined,
-			"totalDocsExamined", totalDocsExamined,
+			"totalKeysExamined", int32(run.keys),
+			"totalDocsExamined", int32(run.docs),
 			"executionStages", executionStages,
 		))
 		response.Set("executionStats", executionStats)
+	}
+
+	if qp.CountOnly {
+		explainCountingGroup(response, afterCount)
+	}
+
+	if params.Aggregate && !viaView {
+		explainLookups(connCtx, db, params.DB, params.StagesDocs, response, params.Verbosity != "queryPlanner", qp.Collated)
 	}
 
 	if params.Verbosity == "allPlansExecution" {
@@ -409,4 +548,25 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 	response.Set("ok", float64(1))
 
 	return documentOpMsg(response)
+}
+
+// andFilters returns a filter matching both a and b, either of which may be
+// empty.
+func andFilters(a, b *types.Document) *types.Document {
+	switch {
+	case a.Len() == 0:
+		return b
+	case b.Len() == 0:
+		return a
+	}
+	return must.NotFail(types.NewDocument("$and", must.NotFail(types.NewArray(a, b))))
+}
+
+// explainVersion is "2" where MongoDB runs the command as a pipeline: a count
+// on a view.
+func explainVersion(params *common.ExplainParams, viaView bool) string {
+	if viaView && params.CommandName == "count" {
+		return "2"
+	}
+	return "1"
 }

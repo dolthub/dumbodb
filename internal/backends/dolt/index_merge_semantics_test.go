@@ -551,3 +551,38 @@ func TestIndexRedefinitionByCollationOrHiddenWinsMerge(t *testing.T) {
 func sameIndexCollation(a, b *types.Document) bool {
 	return collation.Parse(a).Identity() == collation.Parse(b).Identity()
 }
+
+// A resolution that keeps a unique-indexed value collides with no document
+// but its own entry, so it succeeds.
+func TestResolveKeepsOwnUniqueEntry(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	b := newTestBackend(t)
+
+	insertDoc(t, b, "testdb", "items", mustDoc(t, "_id", int32(1), "field", "alpha", "s", "base"))
+	coll := collAt(t, b, "testdb", "main", "items")
+	if _, err := coll.CreateIndexes(ctx, &backends.CreateIndexesParams{
+		Indexes: []backends.IndexInfo{{Name: "by_field_unique", Key: []backends.IndexKeyPair{{Field: "field"}}, Unique: true}},
+	}); err != nil {
+		t.Fatalf("CreateIndexes: %v", err)
+	}
+	commitDB(t, b, "testdb", "base")
+	branchFrom(t, b, "testdb", "main", "feat")
+
+	updateDoc(t, ctx, coll, mustDoc(t, "_id", int32(1), "field", "alpha", "s", "ours"))
+	commitBranch(t, b, "testdb", "main", "main: ours")
+	updateDoc(t, ctx, collAt(t, b, "testdb", "feat", "items"), mustDoc(t, "_id", int32(1), "field", "alpha", "s", "theirs"))
+	commitBranch(t, b, "testdb", "feat", "feat: theirs")
+
+	conflicts := mergeExpectConflicts(t, b, "testdb", "main", "feat", "items")
+	if len(conflicts) != 1 {
+		t.Fatalf("%d conflicts, want 1", len(conflicts))
+	}
+	if err := resolveConflict(t, b, "testdb", "main", "items", conflicts[0].ConflictID, "theirs", nil); err != nil {
+		t.Fatalf("resolving with theirs: %v", err)
+	}
+	continueMerge(t, b, "testdb", "main")
+	if got := equalityLookupIDs(t, ctx, coll, "field", "alpha"); !reflect.DeepEqual(got, []int32{1}) {
+		t.Errorf("lookup by alpha = %v, want [1]", got)
+	}
+}

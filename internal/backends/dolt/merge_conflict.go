@@ -15,6 +15,7 @@
 package dolt
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/binary"
@@ -654,18 +655,18 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 
 	// Resolution is a write: the chosen state is re-indexed and must
 	// not collide on a unique index.
-	resolveIdxAM, err := indexAMFromAM(ctx, db.cs, db.ns, ms.resolvedAM, params.Collection)
+	resolvedIndexes, err := secondaryIndexesFromAM(ctx, db.cs, db.ns, ms.resolvedAM, params.Collection)
 	if err != nil {
-		return nil, fmt.Errorf("DumboDBResolveConflict: reading index AM for %q: %w", params.Collection, err)
+		return nil, fmt.Errorf("DumboDBResolveConflict: reading secondary indexes for %q: %w", params.Collection, err)
 	}
-	idxSet, err := indexSetFromAM(ctx, db, resolveIdxAM)
+	idxSet, err := indexSetOf(ctx, resolvedIndexes)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBResolveConflict: resolving indexes for %q: %w", params.Collection, err)
 	}
 	idxInfos := make([]backends.IndexInfo, 0, len(idxSet))
 	idxMaps := make(map[string]prolly.Map, len(idxSet))
 	for _, entry := range idxSet {
-		m, merr := openIndexMap(ctx, db.vs, db.ns, entry.mapRoot)
+		m, merr := openIndexMap(ctx, db.ns, entry.mapRoot)
 		if merr != nil {
 			return nil, fmt.Errorf("DumboDBResolveConflict: opening index %q: %w", entry.info.Name, merr)
 		}
@@ -698,8 +699,7 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 	if !ok {
 		return nil, fmt.Errorf("DumboDBResolveConflict: conflict key missing id bytes")
 	}
-	var selfHash [20]byte
-	copy(selfHash[:], rawKeyIDBytes)
+	selfKey := bytes.Clone(rawKeyIDBytes)
 
 	var oldDoc *types.Document
 	if err := collMap.Get(ctx, target.rawKey, func(_, v val.Tuple) error {
@@ -729,7 +729,7 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 				continue
 			}
 			for _, row := range rows {
-				conflict, perr := idxpkg.UniqueConflict(ctx, idxMaps[idx.Name], row, selfHash[:])
+				conflict, perr := idxpkg.UniqueConflict(ctx, idxMaps[idx.Name], row, selfKey)
 				if perr != nil {
 					return nil, fmt.Errorf("DumboDBResolveConflict: unique probe on %s: %w", idx.Name, perr)
 				}
@@ -789,9 +789,9 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 			return nil, fmt.Errorf("DumboDBResolveConflict: indexing resolved document: %w", err)
 		}
 	}
-	newIdxAM, err := buildIndexAM(ctx, db, resolvedIdxInfos, resolvedIdxMaps)
+	newIndexes, err := buildSecondaryIndexes(ctx, db, resolvedIdxInfos, resolvedIdxMaps)
 	if err != nil {
-		return nil, fmt.Errorf("DumboDBResolveConflict: building index AM: %w", err)
+		return nil, fmt.Errorf("DumboDBResolveConflict: building secondary indexes: %w", err)
 	}
 
 	updatedAM, err := removeConflictArtifact(ctx, db, ms.resolvedAM, params.Collection, target.rawKey, ms.theirHash())
@@ -831,7 +831,7 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 			return nil, fmt.Errorf("DumboDBResolveConflict: deleting collection %q from AM: %w", params.Collection, err)
 		}
 	} else {
-		newCollHash, hashErr := db.dtblHashForCollection(ctx, params.Collection, newCollMap, newIdxAM, newArtHash)
+		newCollHash, hashErr := db.dtblHashForCollection(ctx, params.Collection, newCollMap, newIndexes, newArtHash)
 		if hashErr != nil {
 			return nil, fmt.Errorf("DumboDBResolveConflict: getting DTBL hash for %q: %w", params.Collection, hashErr)
 		}
@@ -1052,12 +1052,12 @@ func removeConflictArtifact(ctx context.Context, state *dbState, am prolly.Addre
 		return am, fmt.Errorf("opening collection map for %q: %w", collName, err)
 	}
 
-	curIdxAM, err := indexAMFromAM(ctx, state.cs, state.ns, am, collName)
+	curIndexes, err := secondaryIndexesFromAM(ctx, state.cs, state.ns, am, collName)
 	if err != nil {
-		return am, fmt.Errorf("reading current index AM for %q: %w", collName, err)
+		return am, fmt.Errorf("reading current secondary indexes for %q: %w", collName, err)
 	}
 
-	newDTBLHash, err := state.dtblHashForCollection(ctx, collName, collMap, curIdxAM, newArtHash)
+	newDTBLHash, err := state.dtblHashForCollection(ctx, collName, collMap, curIndexes, newArtHash)
 	if err != nil {
 		return am, fmt.Errorf("building DTBL for %q: %w", collName, err)
 	}
@@ -1730,32 +1730,27 @@ func mergeCollectionDTBL(
 		return hash.Hash{}, nil, fmt.Errorf("opening base collection %q: %w", name, err)
 	}
 
-	intoIdxAM, err := indexAMForDTBL(ctx, state.cs, state.ns, intoH)
+	intoIndexes, err := secondaryIndexesForDTBL(ctx, state.cs, state.ns, intoH)
 	if err != nil {
-		return hash.Hash{}, nil, fmt.Errorf("reading into index AM for %q: %w", name, err)
+		return hash.Hash{}, nil, fmt.Errorf("reading into secondary indexes for %q: %w", name, err)
 	}
-	fromIdxAM, err := indexAMForDTBL(ctx, state.cs, state.ns, fromH)
+	fromIndexes, err := secondaryIndexesForDTBL(ctx, state.cs, state.ns, fromH)
 	if err != nil {
-		return hash.Hash{}, nil, fmt.Errorf("reading from index AM for %q: %w", name, err)
+		return hash.Hash{}, nil, fmt.Errorf("reading from secondary indexes for %q: %w", name, err)
 	}
-	var baseIdxAM prolly.AddressMap
-	if baseH.IsEmpty() {
-		baseIdxAM, err = prolly.NewEmptyAddressMap(state.ns)
-	} else {
-		baseIdxAM, err = indexAMForDTBL(ctx, state.cs, state.ns, baseH)
-	}
+	baseIndexes, err := secondaryIndexesForDTBL(ctx, state.cs, state.ns, baseH)
 	if err != nil {
-		return hash.Hash{}, nil, fmt.Errorf("reading base index AM for %q: %w", name, err)
+		return hash.Hash{}, nil, fmt.Errorf("reading base secondary indexes for %q: %w", name, err)
 	}
-	intoSet, err := indexSetFromAM(ctx, state, intoIdxAM)
+	intoSet, err := indexSetOf(ctx, intoIndexes)
 	if err != nil {
 		return hash.Hash{}, nil, fmt.Errorf("resolving into indexes for %q: %w", name, err)
 	}
-	fromSet, err := indexSetFromAM(ctx, state, fromIdxAM)
+	fromSet, err := indexSetOf(ctx, fromIndexes)
 	if err != nil {
 		return hash.Hash{}, nil, fmt.Errorf("resolving from indexes for %q: %w", name, err)
 	}
-	baseSet, err := indexSetFromAM(ctx, state, baseIdxAM)
+	baseSet, err := indexSetOf(ctx, baseIndexes)
 	if err != nil {
 		return hash.Hash{}, nil, fmt.Errorf("resolving base indexes for %q: %w", name, err)
 	}
@@ -1780,11 +1775,11 @@ func mergeCollectionDTBL(
 			return hash.Hash{}, nil, fmt.Errorf("building conflict artifacts for %q: %w", name, err)
 		}
 	}
-	mergedIdxAM, err := applier.finalize(ctx)
+	mergedIndexes, err := applier.finalize(ctx)
 	if err != nil {
 		return hash.Hash{}, nil, fmt.Errorf("finalizing merged indexes of %q: %w", name, err)
 	}
-	mergedH, err := state.dtblHashForCollection(ctx, name, mergedMap, mergedIdxAM, artHash)
+	mergedH, err := state.dtblHashForCollection(ctx, name, mergedMap, mergedIndexes, artHash)
 	if err != nil {
 		return hash.Hash{}, nil, fmt.Errorf("writing merged collection %q: %w", name, err)
 	}

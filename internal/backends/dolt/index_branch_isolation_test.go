@@ -207,16 +207,16 @@ func TestWrite_OnFeat_DoesNotCorruptMainDTBL(t *testing.T) {
 	insertOne(t, ctx, collAt(t, b, "testdb", "main", "items"), mustDoc(t, "_id", int32(3), "age", int32(31), "name", "gamma"))
 	commitDB(t, b, "testdb", "main: another doc")
 
-	mainOnDisk := indexAMOnDisk(t, ctx, b, "testdb", "main", "items")
-	gotMain := indexNamesInAM(t, ctx, mainOnDisk)
+	mainOnDisk := secondaryIndexesOnDisk(t, ctx, b, "testdb", "main", "items")
+	gotMain := secondaryIndexNames(t, ctx, mainOnDisk)
 	wantMain := []string{"by_age"}
 	if !reflect.DeepEqual(gotMain, wantMain) {
 		t.Errorf("main's on-disk DTBL secondary_indexes = %v, want %v "+
 			"(feat's by_name leaked into main's DTBL)", gotMain, wantMain)
 	}
 
-	featOnDisk := indexAMOnDisk(t, ctx, b, "testdb", "feat", "items")
-	gotFeat := indexNamesInAM(t, ctx, featOnDisk)
+	featOnDisk := secondaryIndexesOnDisk(t, ctx, b, "testdb", "feat", "items")
+	gotFeat := secondaryIndexNames(t, ctx, featOnDisk)
 	// feat inherits by_age from main at branch-from time and adds by_name.
 	wantFeat := []string{"by_age", "by_name"}
 	if !reflect.DeepEqual(gotFeat, wantFeat) {

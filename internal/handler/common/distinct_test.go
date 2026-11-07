@@ -65,9 +65,8 @@ func TestDistinctSet_TypeBuckets(t *testing.T) {
 	}
 }
 
-// TestDistinctSet_Decimal128 verifies the Decimal128 carve-out: convertible
-// decimals dedup by numeric value within the Decimal128 bucket but never
-// against int / float of the same magnitude.
+// TestDistinctSet_Decimal128 verifies decimals dedup by numeric value, against
+// each other and against ints and doubles of the same value, as MongoDB does.
 func TestDistinctSet_Decimal128(t *testing.T) {
 	t.Parallel()
 
@@ -78,9 +77,9 @@ func TestDistinctSet_Decimal128(t *testing.T) {
 	s.add(d42a)
 	s.add(d42b)
 	s.add(int32(42))
+	s.add(42.0)
 
-	// Decimal128 collapses to one entry; int32(42) is its own bucket.
-	if got, want := s.array().Len(), 2; got != want {
+	if got, want := s.array().Len(), 1; got != want {
 		t.Fatalf("expected %d distinct, got %d (%v)", want, got, s.array())
 	}
 }

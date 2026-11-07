@@ -38,6 +38,9 @@ type Document struct {
 	// extra holds rarely set state, keeping Document in a small size class.
 	extra    *documentExtra
 	recordID int64
+	// recordKey is the KeyString of _id that MongoDB returns as a clustered
+	// collection's RecordId; nil when not read from storage.
+	recordKey []byte
 }
 
 type documentExtra struct {
@@ -175,6 +178,21 @@ func (d *Document) RecordID() int64 {
 
 func (d *Document) SetRecordID(recordID int64) {
 	d.recordID = recordID
+}
+
+// RecordKey returns the KeyString RecordId set by SetRecordKey, or nil.
+func (d *Document) RecordKey() []byte {
+	return d.recordKey
+}
+
+// SetRecordKey sets the KeyString RecordId; key must not be modified after.
+func (d *Document) SetRecordKey(key []byte) {
+	d.recordKey = key
+}
+
+// CopyRecordIdentity gives d the RecordID and RecordKey of from.
+func (d *Document) CopyRecordIdentity(from *Document) {
+	d.recordID, d.recordKey = from.recordID, from.recordKey
 }
 
 // Freeze prevents document from further field modifications.

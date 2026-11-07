@@ -139,6 +139,16 @@ func TestIndexFieldValue(t *testing.T) {
 	if !ok || got.Len() != 3 {
 		t.Fatalf("arr.v = %v, want flattened [1 2 3]", got)
 	}
+
+	// As on MongoDB, an array element missing the field indexes null.
+	partial := must.NotFail(types.NewDocument("a", must.NotFail(types.NewArray(
+		must.NotFail(types.NewDocument("b", int32(5))),
+		must.NotFail(types.NewDocument("c", int32(1))),
+	))))
+	keys, ok := indexFieldValue(partial, "a.b").(*types.Array)
+	if !ok || keys.Len() != 2 || must.NotFail(keys.Get(0)) != int32(5) || must.NotFail(keys.Get(1)) != types.Null {
+		t.Fatalf("a.b over [{b: 5}, {c: 1}] = %v, want [5 null]", keys)
+	}
 }
 
 func nestedDoc(id int32, inner *types.Document) *types.Document {

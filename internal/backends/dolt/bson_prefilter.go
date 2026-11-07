@@ -282,21 +282,8 @@ func bsonValueEqualsOrContains(typeByte byte, valueBytes []byte, target any) boo
 // equivalence rules; non-numeric types match on native shape only.
 func scalarMatch(typeByte byte, valueBytes []byte, target any) bool {
 	switch t := target.(type) {
-	case int32:
-		f, ok := bsonNumericAsFloat(typeByte, valueBytes)
-		return ok && f == float64(t)
-	case int64:
-		f, ok := bsonNumericAsFloat(typeByte, valueBytes)
-		return ok && f == float64(t)
-	case float64:
-		f, ok := bsonNumericAsFloat(typeByte, valueBytes)
-		if !ok {
-			return false
-		}
-		if math.IsNaN(t) || math.IsNaN(f) {
-			return false
-		}
-		return f == t
+	case int32, int64, float64:
+		return numericMayMatch(typeByte, valueBytes, t)
 	case string:
 		if typeByte != bsonTypeString {
 			return false
@@ -329,6 +316,40 @@ func scalarMatch(typeByte byte, valueBytes []byte, target any) bool {
 	return false
 }
 
+// numericMayMatch reports whether a stored value may equal target, a number:
+// false only when it is certainly a different value. NaN equals NaN, as in
+// MongoDB's equality. A stored decimal, or a long that no double holds exactly,
+// is left to the full filter.
+func numericMayMatch(typeByte byte, valueBytes []byte, target any) bool {
+	switch typeByte {
+	case bsonTypeDecimal:
+		return true
+	case bsonTypeInt64:
+		if n, ok := target.(int64); ok && len(valueBytes) >= 8 {
+			return int64(binary.LittleEndian.Uint64(valueBytes)) == n
+		}
+	}
+	f, ok := bsonNumericAsFloat(typeByte, valueBytes)
+	if !ok {
+		return typeByte == bsonTypeInt64
+	}
+	switch t := target.(type) {
+	case int32:
+		return f == float64(t)
+	case int64:
+		if float64(t) >= 0x1p63 || int64(float64(t)) != t {
+			return true
+		}
+		return f == float64(t)
+	case float64:
+		if math.IsNaN(t) {
+			return math.IsNaN(f)
+		}
+		return f == t
+	}
+	return false
+}
+
 // bsonNumericAsFloat returns ok=false for int64 values outside the
 // float64-exact range so the predicate falls back to permissive.
 func bsonNumericAsFloat(typeByte byte, valueBytes []byte) (float64, bool) {
@@ -344,7 +365,7 @@ func bsonNumericAsFloat(typeByte byte, valueBytes []byte) (float64, bool) {
 		}
 		n := int64(binary.LittleEndian.Uint64(valueBytes))
 		f := float64(n)
-		if int64(f) != n {
+		if f >= 0x1p63 || int64(f) != n {
 			return 0, false
 		}
 		return f, true

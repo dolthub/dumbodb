@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // Adjacent pairs of MongoDB's documented BSON type-comparison order
@@ -34,8 +35,8 @@ func TestKeyStringTypeBracketOrder(t *testing.T) {
 		name string
 		v    any
 	}{
-		{"undefined (a top-level empty array)", types.Undefined},
 		{"MinKey", types.MinKey},
+		{"undefined (a top-level empty array)", types.Undefined},
 		{"Null", types.Null},
 		{"NaN", math.NaN()},
 		{"-Inf", math.Inf(-1)},
@@ -180,11 +181,11 @@ func TestTimestampRegexEncodingOrder(t *testing.T) {
 func TestEncodeValueLossy(t *testing.T) {
 	t.Parallel()
 
-	if !EncodeValueLossy(types.Decimal128{H: 1, L: 2}) {
-		t.Errorf("Decimal128 must be lossy")
+	if !EncodeValueLossy(struct{}{}) {
+		t.Errorf("a type without an encoding must be lossy")
 	}
 	for _, v := range []any{
-		nil, types.Null, true, int32(1), int64(1), float64(1.5), math.NaN(),
+		nil, types.Null, true, int32(1), int64(1), float64(1.5), math.NaN(), types.Decimal128{H: 1, L: 2},
 		"s", types.ObjectID{}, time.Unix(0, 0), types.Binary{},
 		types.Timestamp(9), types.Regex{Pattern: "a"},
 		types.MakeDocument(0), types.MakeArray(0),
@@ -244,33 +245,79 @@ func TestBracketRangeContainsValues(t *testing.T) {
 	}
 }
 
-// TestValueLossy_LargeFloat64 pins that large-magnitude integral doubles --
-// whose integer part falls outside the encodable int64/uint64 range -- are
-// flagged lossy, so an index containing them is not consulted (encodeFloat64
-// would otherwise perform an out-of-range float-to-integer conversion).
+// Doubles of any magnitude encode exactly, in order: large ones are not lossy.
 func TestValueLossy_LargeFloat64(t *testing.T) {
-	cases := []struct {
-		v     any
-		lossy bool
-	}{
-		{1.5, false},
-		{0.0, false},
-		{float64(9e18), false},   // < MaxInt64: integer fast path
-		{float64(-9e18), false},  // > MinInt64
-		{float64(5e19), true},    // > MaxUint64: uint64 overflow
-		{float64(1e25), true},
-		{float64(-1e25), true},   // < MinInt64
-		{float64(1e30), true},
-		{math.Inf(1), false},
-		{math.Inf(-1), false},
-		{math.NaN(), false},
-		{int32(42), false},
-		{int64(1 << 40), false},
-		{"str", false},
-	}
-	for _, c := range cases {
-		if got := ValueLossy(c.v); got != c.lossy {
-			t.Errorf("ValueLossy(%v) = %v, want %v", c.v, got, c.lossy)
+	ordered := []float64{-1e30, -1e25, float64(-9e18), -1.5, 0, 1.5, float64(9e18), float64(5e19), 1e25, 1e30}
+	for i, f := range ordered {
+		if ValueLossy(f) {
+			t.Errorf("ValueLossy(%v) = true, want false", f)
 		}
+		if i > 0 && bytes.Compare(EncodeValue(ordered[i-1]), EncodeValue(f)) >= 0 {
+			t.Errorf("%v must encode before %v", ordered[i-1], f)
+		}
+	}
+}
+
+func decimal128(coefficient uint64, exponent int, negative bool) types.Decimal128 {
+	h := uint64(exponent+6176) << 49
+	if negative {
+		h |= 1 << 63
+	}
+	return types.Decimal128{H: h, L: coefficient}
+}
+
+// A Decimal128 equal to an integer or double encodes as it, and inexact ones
+// fall between their neighboring doubles.
+func TestDecimal128Encoding(t *testing.T) {
+	for _, c := range []struct {
+		dec  types.Decimal128
+		same any
+	}{
+		{decimal128(3, 0, false), int32(3)},
+		{decimal128(30, -1, false), 3.0},
+		{decimal128(35, -1, true), -3.5},
+		{decimal128(9007199254740993, 0, false), int64(9007199254740993)},
+		{decimal128(0, 5, true), int32(0)},
+		{types.Decimal128{H: 0x7800000000000000}, math.Inf(1)},
+		{types.Decimal128{H: 0x7c00000000000000}, math.NaN()},
+	} {
+		if !bytes.Equal(EncodeValue(c.dec), EncodeValue(c.same)) {
+			t.Errorf("%v encodes %x, want %x like %v", c.dec, EncodeValue(c.dec), EncodeValue(c.same), c.same)
+		}
+	}
+	ordered := []any{
+		math.Inf(-1), decimal128(1, 400, true), -math.MaxFloat64, decimal128(1, 300, true), -1e299,
+		decimal128(1, -1, true), decimal128(1, -400, true), int32(0), decimal128(1, -400, false), 1e-300,
+		decimal128(1, -1, false), 0.1, decimal128(123456789012345678, -1, false), 1.2345678901234568e16,
+		decimal128(1, 300, false), math.MaxFloat64, decimal128(1, 400, false), math.Inf(1),
+	}
+	for i := 1; i < len(ordered); i++ {
+		if bytes.Compare(EncodeValue(ordered[i-1]), EncodeValue(ordered[i])) >= 0 {
+			t.Errorf("%v (%x) must encode before %v (%x)", ordered[i-1], EncodeValue(ordered[i-1]), ordered[i], EncodeValue(ordered[i]))
+		}
+	}
+	key := EncodeValue(int32(7))
+	for _, v := range ordered {
+		key = append(key, EncodeValue(v)...)
+	}
+	if _, ok := SplitKeyValues(key, len(ordered)+1); !ok {
+		t.Errorf("decimals with continuations do not split")
+	}
+}
+
+// EncodeValue orders embedded fields canonically, as stored, except within
+// _id; EncodeID keeps an _id's order.
+func TestEncodeCanonicalFieldOrder(t *testing.T) {
+	doc := func(pairs ...any) *types.Document { return must.NotFail(types.NewDocument(pairs...)) }
+	ba := doc("b", int32(1), "a", int32(2), "_id", doc("y", int32(1), "x", int32(2)))
+	ab := doc("_id", doc("y", int32(1), "x", int32(2)), "a", int32(2), "b", int32(1))
+	if !bytes.Equal(EncodeValue(ba), EncodeValue(ab)) {
+		t.Errorf("EncodeValue depends on field order: %x vs %x", EncodeValue(ba), EncodeValue(ab))
+	}
+	if bytes.Equal(EncodeValue(ba), EncodeValue(doc("_id", doc("x", int32(2), "y", int32(1)), "a", int32(2), "b", int32(1)))) {
+		t.Error("EncodeValue reordered fields within _id")
+	}
+	if bytes.Equal(EncodeID(ba), EncodeID(ab)) {
+		t.Error("EncodeID reordered fields")
 	}
 }

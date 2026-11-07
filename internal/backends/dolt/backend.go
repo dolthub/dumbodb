@@ -484,7 +484,39 @@ func newBackend(dataDir string, l *slog.Logger, autoCommit bool, sessionTimeout,
 	go b.sessionSweepLoop()
 	go b.droppedDatabaseGCLoop()
 
+	if err := b.checkAdminLayout(context.Background()); err != nil {
+		b.Close()
+		return nil, err
+	}
+
 	return b, nil
+}
+
+// checkAdminLayout refuses a data dir whose admin database an older version
+// wrote (see errUnsupportedLayout). Users live in admin, so serving it would
+// fail every login as "Authentication failed", and admin cannot be dropped to
+// recover.
+func (b *Backend) checkAdminLayout(ctx context.Context) error {
+	state, err := b.getOrOpenDB(ctx, "admin", false)
+	if err != nil {
+		return fmt.Errorf("opening admin database: %w", err)
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	am, err := state.getOrInitBranchAM(ctx, defaultBranch)
+	if err != nil {
+		return fmt.Errorf("reading admin database: %w", err)
+	}
+	return am.IterAll(ctx, func(collName string, dtblHash hash.Hash) error {
+		_, err := secondaryIndexesForDTBL(ctx, state.cs, state.ns, dtblHash)
+		if errors.Is(err, errUnsupportedLayout) {
+			return fmt.Errorf("data directory %q was written by an older version whose storage layout this version does not read (admin.%s); start with an empty data directory", b.dataDir, collName)
+		}
+		if err != nil {
+			return fmt.Errorf("checking admin.%s: %w", collName, err)
+		}
+		return nil
+	})
 }
 
 // checkDataDirExists refuses a missing dataDir rather than creating it, as
@@ -551,7 +583,7 @@ func (b *Backend) Close() {
 			b.l.Error("closing database", "db", name, "err", err)
 		}
 		db.mu.Unlock()
-		forgetEmptyIndexAM(db.ns)
+		forgetEmptySecondaryIndexes(db.ns)
 	}
 
 	b.dbs = make(map[string]*dbState)
@@ -725,7 +757,7 @@ func (b *Backend) dropDatabaseLocked(params *backends.DropDatabaseParams) error 
 		db.mu.Lock()
 		_ = db.doltDB.Close()
 		db.mu.Unlock()
-		forgetEmptyIndexAM(db.ns)
+		forgetEmptySecondaryIndexes(db.ns)
 		delete(b.dbs, params.Name)
 	}
 	b.provider.forgetDatabase(params.Name)
@@ -1093,8 +1125,8 @@ func (b *Backend) getOrOpenDBLocked(ctx context.Context, dbName string, create b
 		branchWS: make(map[string]*branchWS),
 	}
 
-	// Write the shared DSCH chunk once; the empty secondary-index AM is
-	// memoized per-NodeStore in emptyIndexAMCache (see index_resolve.go).
+	// Write the shared DSCH chunk once; the empty secondary indexes are
+	// memoized per-NodeStore in emptySecondaryIndexesCache (see index_resolve.go).
 	schemaMsg := buildCollectionTableSchema()
 	schemaRef, err := vs.WriteValue(ctx, dolttypes.SerialMessage(schemaMsg))
 	if err != nil {

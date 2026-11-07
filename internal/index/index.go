@@ -17,6 +17,7 @@ package index
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 
@@ -59,6 +60,9 @@ func BuildSecondaryKey(fieldValues []any, primaryIDBytes []byte) []byte {
 
 func BuildIndexEntry(fieldValues []any, primaryIDBytes []byte) (val.Tuple, val.Tuple, error) {
 	compositeKey := BuildSecondaryKey(fieldValues, primaryIDBytes)
+	if err := CheckKeyLength(compositeKey); err != nil {
+		return nil, nil, err
+	}
 
 	ktb := val.NewTupleBuilder(idxKeyDesc, nil)
 	ktb.PutByteString(0, compositeKey)
@@ -68,7 +72,7 @@ func BuildIndexEntry(fieldValues []any, primaryIDBytes []byte) (val.Tuple, val.T
 	}
 
 	vtb := val.NewTupleBuilder(idxValDesc, nil)
-	vtb.PutByteString(0, []byte{})
+	vtb.PutByteString(0, TypeTags(fieldValues))
 	valTuple, err := vtb.Build(context.Background(), idxBufPool)
 	if err != nil {
 		return nil, nil, fmt.Errorf("index: building val tuple: %w", err)
@@ -159,10 +163,64 @@ func UpperBoundInclusive(fieldValue any) []byte {
 	return out
 }
 
+// MaxKeyLength is the longest key DumboDB stores, in encoded bytes: a primary
+// key (KeyString(_id)), or a secondary entry of its values and primary key.
+// Longer keys are refused with ErrKeyTooLong.
+//
+// Tested up to 32K (2026-11-07): a prolly node holds at most 64KB and an
+// internal node at least two keys, so the largest key that fits is 32741
+// encoded bytes; one byte more panics the chunker with "impossible node" on
+// the second insert. 400 documents with 32700-byte string _ids, inserted in
+// random order, stored and read back correctly (point, range and secondary
+// lookups, deletes), but each internal node held two keys, making the tree
+// binary and deep, and loading them took seconds where small keys take
+// milliseconds. 4096 keeps nodes wide; it can be raised toward 32741.
+const MaxKeyLength = 4096
+
+// ErrKeyTooLong reports a key longer than MaxKeyLength.
+var ErrKeyTooLong = errors.New("key too large to index")
+
+// ErrCannotExtractGeoKeys reports a value a 2dsphere index cannot hold.
+var ErrCannotExtractGeoKeys = errors.New("Can't extract geo keys")
+
+// CheckKeyLength returns ErrKeyTooLong for a key longer than MaxKeyLength.
+func CheckKeyLength(key []byte) error {
+	if len(key) > MaxKeyLength {
+		return fmt.Errorf("%w: %d bytes, the limit is %d", ErrKeyTooLong, len(key), MaxKeyLength)
+	}
+	return nil
+}
+
+// ClampBound shortens a range bound to MaxKeyLength+1 bytes. No stored key is
+// longer than MaxKeyLength, so the shortened bound orders against every
+// stored key as the full one does, and it always fits in a tuple.
+func ClampBound(bound []byte) []byte {
+	if len(bound) > MaxKeyLength+1 {
+		return bound[:MaxKeyLength+1]
+	}
+	return bound
+}
+
+// ValueBound converts a bound from LowerBound*, UpperBound* or BracketRange,
+// which bound index entries, into the same bound on bare value encodings such
+// as primary keys.
+func ValueBound(entryBound []byte) []byte {
+	if len(entryBound) <= 1 {
+		return entryBound
+	}
+	value := bytes.Clone(entryBound[:len(entryBound)-1])
+	if entryBound[len(entryBound)-1] == discriminator {
+		return value
+	}
+	// Value encodings are prefix-free, so value+0x00 is the least key past value.
+	return append(value, 0x00)
+}
+
 // boundTuple wraps a raw composite-key byte slice in the index's val.Tuple
 // shape so it can be passed to prolly.Map.IterKeyRange. A nil/empty slice
 // produces a nil tuple, which IterKeyRange interprets as an open bound.
 func boundTuple(key []byte) (val.Tuple, error) {
+	key = ClampBound(key)
 	if len(key) == 0 {
 		return nil, nil
 	}
@@ -236,25 +294,13 @@ func rangeLookupCapped(ctx context.Context, m prolly.Map, startKey, stopKey []by
 			continue
 		}
 
-		// The primary ID byte width is fixed at 20 (see hashID in the dolt
-		// backend), so the primary ID is unambiguously the last 20 bytes of
-		// the composite key. We can't scan from the left for the discriminator
-		// because 0x04 may legitimately appear inside KeyString-encoded
-		// values (e.g. as a single-byte integer payload).
-		const primaryIDLen = 20
-		if len(compositeKey) < primaryIDLen+1 {
+		vals, id, ok := SplitEntry(compositeKey)
+		if !ok {
 			continue
 		}
-		idStart := len(compositeKey) - primaryIDLen
-		if compositeKey[idStart-1] != discriminator {
-			continue
-		}
-
-		idCopy := make([]byte, primaryIDLen)
-		copy(idCopy, compositeKey[idStart:])
-		results = append(results, idCopy)
+		results = append(results, bytes.Clone(id))
 		if keepValues {
-			values = append(values, bytes.Clone(compositeKey[:idStart-1]))
+			values = append(values, bytes.Clone(vals))
 		}
 
 		if maxResults >= 0 && len(results) > maxResults {
@@ -317,12 +363,17 @@ func ValDescriptor() *val.TupleDesc {
 // RangeIDIter yields the primary ids of the entries in [startKey, stopKey),
 // reading the index only as far as the caller consumes.
 type RangeIDIter struct {
-	m        prolly.Map
-	reverse  bool
-	entries  prolly.MapIter
-	lo, hi   uint64
-	chunk    uint64
-	buffered [][]byte
+	m       prolly.Map
+	reverse bool
+	entries prolly.MapIter
+	lo, hi  uint64
+	chunk   uint64
+	// buffered holds entries read backward, yielded last first.
+	buffered []rangeEntry
+}
+
+type rangeEntry struct {
+	composite, tags []byte
 }
 
 // NewRangeIDIter iterates [startKey, stopKey) forward, or backward when
@@ -338,7 +389,10 @@ func NewRangeIDIter(ctx context.Context, m prolly.Map, startKey, stopKey []byte,
 	}
 	it := &RangeIDIter{m: m, reverse: reverse}
 	if !reverse {
-		it.entries, err = m.IterKeyRange(ctx, startTup, stopTup)
+		var ok bool
+		if it.entries, ok, err = SeekKeyRange(ctx, m, startKey, stopKey); !ok {
+			it.entries = nil
+		}
 		return it, err
 	}
 	if startTup != nil {
@@ -359,32 +413,72 @@ func NewRangeIDIter(ctx context.Context, m prolly.Map, startKey, stopKey []byte,
 
 // Next returns the next primary id, or nil at the end of the range.
 func (it *RangeIDIter) Next(ctx context.Context) ([]byte, error) {
+	_, _, id, err := it.NextEntry(ctx)
+	return id, err
+}
+
+// NextEntry returns the next entry's encoded index values, their type tags
+// (empty in an entry written before tags), and its primary id, or a nil id
+// at the end of the range.
+func (it *RangeIDIter) NextEntry(ctx context.Context) (values, tags, id []byte, err error) {
 	for {
 		if it.reverse {
 			if len(it.buffered) > 0 {
-				id := it.buffered[len(it.buffered)-1]
+				e := it.buffered[len(it.buffered)-1]
 				it.buffered = it.buffered[:len(it.buffered)-1]
-				return id, nil
+				values, id, _ = splitComposite(e.composite)
+				return values, e.tags, id, nil
 			}
 			if it.hi <= it.lo {
-				return nil, nil
+				return nil, nil, nil, nil
 			}
 			if err := it.fillBackward(ctx); err != nil {
-				return nil, err
+				return nil, nil, nil, err
 			}
 			continue
 		}
-		k, _, err := it.entries.Next(ctx)
-		if err == io.EOF || (err == nil && k == nil) {
-			return nil, nil
+		if it.entries == nil {
+			return nil, nil, nil, nil
+		}
+		k, v, err := it.entries.Next(ctx)
+		if err == io.EOF || (err == nil && len(k) == 0) {
+			return nil, nil, nil, nil
 		}
 		if err != nil {
-			return nil, fmt.Errorf("index: reading secondary index: %w", err)
+			return nil, nil, nil, fmt.Errorf("index: reading secondary index: %w", err)
 		}
-		if id, ok := entryPrimaryID(k); ok {
-			return id, nil
+		if composite, ok := idxKeyDesc.GetBytes(0, k); ok {
+			if values, id, ok := splitComposite(composite); ok {
+				return values, entryTags(v), id, nil
+			}
 		}
 	}
+}
+
+// DecodeEntry splits an index map entry into its encoded index values, their
+// type tags, and its primary id.
+func DecodeEntry(k, v val.Tuple) (values, tags, id []byte, ok bool) {
+	composite, ok := idxKeyDesc.GetBytes(0, k)
+	if !ok {
+		return nil, nil, nil, false
+	}
+	values, id, ok = splitComposite(composite)
+	return values, entryTags(v), id, ok
+}
+
+// SkipValues returns the key just past every entry of the encoded values
+// prefix, whatever their primary ids.
+func SkipValues(values []byte) []byte {
+	return append(bytes.Clone(values), discriminator+1)
+}
+
+// entryTags returns a copy of the type tags in an entry's value tuple.
+func entryTags(v val.Tuple) []byte {
+	if len(v) == 0 {
+		return nil
+	}
+	tags, _ := idxValDesc.GetBytes(0, v)
+	return bytes.Clone(tags)
 }
 
 // fillBackward buffers the ids of the chunk of entries ending at hi, doubling
@@ -399,15 +493,17 @@ func (it *RangeIDIter) fillBackward(ctx context.Context) error {
 		return err
 	}
 	for {
-		k, _, err := entries.Next(ctx)
-		if err == io.EOF || (err == nil && k == nil) {
+		k, v, err := entries.Next(ctx)
+		if err == io.EOF || (err == nil && len(k) == 0) {
 			break
 		}
 		if err != nil {
 			return fmt.Errorf("index: reading secondary index: %w", err)
 		}
-		if id, ok := entryPrimaryID(k); ok {
-			it.buffered = append(it.buffered, id)
+		if composite, ok := idxKeyDesc.GetBytes(0, k); ok {
+			if _, _, ok := splitComposite(composite); ok {
+				it.buffered = append(it.buffered, rangeEntry{composite: bytes.Clone(composite), tags: entryTags(v)})
+			}
 		}
 	}
 	it.hi = from
@@ -416,16 +512,37 @@ func (it *RangeIDIter) fillBackward(ctx context.Context) error {
 }
 
 func entryPrimaryID(k val.Tuple) ([]byte, bool) {
-	const primaryIDLen = 20
 	compositeKey, ok := idxKeyDesc.GetBytes(0, k)
-	if !ok || len(compositeKey) < primaryIDLen+1 {
+	if !ok {
 		return nil, false
 	}
-	idStart := len(compositeKey) - primaryIDLen
-	if compositeKey[idStart-1] != discriminator {
-		return nil, false
+	_, id, ok := SplitEntry(compositeKey)
+	return bytes.Clone(id), ok
+}
+
+// SplitEntry splits an index entry key, [values][0x04][primary key], into its
+// encoded values and primary key. Every value encoding delimits itself and
+// none begins with 0x04, so the first 0x04 at a value boundary ends the
+// values.
+func SplitEntry(compositeKey []byte) (values, primaryKey []byte, ok bool) {
+	for i := 0; i < len(compositeKey); {
+		if compositeKey[i] == discriminator {
+			return compositeKey[:i], compositeKey[i+1:], i+1 < len(compositeKey)
+		}
+		l, ok := valueLen(compositeKey[i:])
+		if !ok {
+			return nil, nil, false
+		}
+		i += l
 	}
-	return bytes.Clone(compositeKey[idStart:]), true
+	return nil, nil, false
+}
+
+// splitComposite splits an entry's composite key into its encoded index
+// values and a copy of its primary id.
+func splitComposite(compositeKey []byte) (values, id []byte, ok bool) {
+	values, id, ok = SplitEntry(compositeKey)
+	return bytes.Clone(values), bytes.Clone(id), ok
 }
 
 // IterKeyRange iterates the entries in [startKey, stopKey); a nil or empty
@@ -442,6 +559,25 @@ func IterKeyRange(ctx context.Context, m prolly.Map, startKey, stopKey []byte) (
 	return m.IterKeyRange(ctx, startTup, stopTup)
 }
 
+// SeekKeyRange is IterKeyRange for a range that may start after every entry,
+// where a prolly iterator reads past the end of the map: ok is false then,
+// and there is nothing to iterate.
+func SeekKeyRange(ctx context.Context, m prolly.Map, startKey, stopKey []byte) (iter prolly.MapIter, ok bool, err error) {
+	if len(startKey) > 0 {
+		// The root holds the last key, so this costs no descent.
+		lastKey := m.LastKey(ctx)
+		if len(lastKey) == 0 {
+			return nil, false, nil
+		}
+		last, ok := idxKeyDesc.GetBytes(0, lastKey)
+		if !ok || bytes.Compare(last, startKey) < 0 {
+			return nil, false, nil
+		}
+	}
+	iter, err = IterKeyRange(ctx, m, startKey, stopKey)
+	return iter, err == nil, err
+}
+
 // RangeCardinality returns the number of entries in [startKey, stopKey)
 // without reading them; a nil or empty bound is open on that side.
 func RangeCardinality(ctx context.Context, m prolly.Map, startKey, stopKey []byte) (uint64, error) {
@@ -454,4 +590,42 @@ func RangeCardinality(ctx context.Context, m prolly.Map, startKey, stopKey []byt
 		return 0, err
 	}
 	return m.GetKeyRangeCardinality(ctx, startTup, stopTup)
+}
+
+// AdjacentKey returns the composite key of the first entry at or after bound,
+// or with before, of the last entry before it; ok is false when there is none.
+func AdjacentKey(ctx context.Context, m prolly.Map, bound []byte, before bool) (composite []byte, ok bool, err error) {
+	tup, err := boundTuple(bound)
+	if err != nil {
+		return nil, false, err
+	}
+	ord, err := m.GetOrdinalForKey(ctx, tup)
+	if err != nil {
+		return nil, false, err
+	}
+	n, err := m.Count()
+	if err != nil {
+		return nil, false, err
+	}
+	if before {
+		if ord == 0 {
+			return nil, false, nil
+		}
+		ord--
+	} else if ord >= uint64(n) {
+		return nil, false, nil
+	}
+	entries, err := m.IterOrdinalRange(ctx, ord, ord+1)
+	if err != nil {
+		return nil, false, err
+	}
+	k, _, err := entries.Next(ctx)
+	if err == io.EOF || (err == nil && len(k) == 0) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("index: reading secondary index: %w", err)
+	}
+	composite, ok = idxKeyDesc.GetBytes(0, k)
+	return bytes.Clone(composite), ok, nil
 }

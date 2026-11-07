@@ -28,9 +28,9 @@ import (
 
 func hashFor(t *testing.T, idVal any) string {
 	t.Helper()
-	h, err := hashID(idVal)
+	h, err := primaryKey(idVal)
 	require.NoError(t, err)
-	return hashFromArray(h).String()
+	return keyLockID(h).String()
 }
 
 func TestResolvePreciseScalarID(t *testing.T) {
