@@ -15,6 +15,7 @@
 package dolt
 
 import (
+	"bytes"
 	"container/heap"
 	"context"
 	"fmt"
@@ -361,6 +362,7 @@ func (it *geoNearIter) scanKeys(lo, hi int64) error {
 			continue
 		}
 		doc.SetRecordID(keyBytesToRecordID(id))
+		doc.SetRecordKey(bytes.Clone(id))
 		heap.Push(&it.found, nearDoc{doc: doc, dist: it.params.Distance(doc), order: len(it.seen)})
 	}
 }

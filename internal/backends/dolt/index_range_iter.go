@@ -15,6 +15,7 @@
 package dolt
 
 import (
+	"bytes"
 	"context"
 	"slices"
 	"strings"
@@ -135,6 +136,7 @@ func entryDocument(ctx context.Context, primary prolly.Map, ns tree.NodeStore, e
 		}
 	}
 	doc.SetRecordID(keyBytesToRecordID(e.id))
+	doc.SetRecordKey(bytes.Clone(e.id))
 	return doc, nil
 }
 

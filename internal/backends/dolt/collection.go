@@ -620,6 +620,7 @@ func pointLookupByID(ctx context.Context, ns tree.NodeStore, m prolly.Map, idVal
 			return err
 		}
 		d.SetRecordID(recordID)
+		d.SetRecordKey(bytes.Clone(keyBytes))
 		doc = d
 		return nil
 	})
@@ -4783,6 +4784,7 @@ func (it *mapIter) Next() (struct{}, *types.Document, error) {
 		}
 
 		doc.SetRecordID(recordID)
+		doc.SetRecordKey(bytes.Clone(keyBytes))
 		it.count++
 
 		return struct{}{}, doc, nil
