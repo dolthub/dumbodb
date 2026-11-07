@@ -26,6 +26,8 @@ import (
 type ExaminedCounts struct {
 	keys atomic.Int64
 	docs atomic.Int64
+	// entries counts the index entries a single index scan returned.
+	entries atomic.Int64
 
 	mu       sync.Mutex
 	branches []ExplainBranchCounts
@@ -34,6 +36,17 @@ type ExaminedCounts struct {
 func (e *ExaminedCounts) Keys() int64 { return e.keys.Load() }
 
 func (e *ExaminedCounts) Docs() int64 { return e.docs.Load() }
+
+// Entries is what an index scan returned: its entries inside the bounds,
+// each document once, before any filter on the documents.
+func (e *ExaminedCounts) Entries() int64 { return e.entries.Load() }
+
+// AddEntries counts n index entries returned; a nil e counts nothing.
+func (e *ExaminedCounts) AddEntries(n int) {
+	if e != nil {
+		e.entries.Add(int64(n))
+	}
+}
 
 // Branches returns the counts of each index scan under an OR or SORT_MERGE
 // stage, in plan order.
