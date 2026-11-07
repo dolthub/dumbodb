@@ -118,6 +118,9 @@ func newGeoNear(stage *types.Document) (aggregations.Stage, error) {
 		if err != nil {
 			return nil, err
 		}
+		if !finitePoint(lon, lat) {
+			return nil, invalidNearArgument("type")
+		}
 		g.nearLon, g.nearLat = lon, lat
 	case *types.Array:
 		// Legacy [lon, lat]
@@ -135,6 +138,9 @@ func newGeoNear(stage *types.Document) (aggregations.Stage, error) {
 		lat, err := geoToFloat64(must.NotFail(nv.Get(1)))
 		if err != nil {
 			return nil, err
+		}
+		if !finitePoint(lon, lat) {
+			return nil, invalidNearArgument("0")
 		}
 		g.nearLon, g.nearLat = lon, lat
 	default:
@@ -235,6 +241,18 @@ func newGeoNear(stage *types.Document) (aggregations.Stage, error) {
 			return nil, err
 		}
 		g.distanceMultiplier = dm
+	}
+
+	// +Inf is a valid bound; NaN and negatives are not.
+	if math.IsNaN(g.maxDistance) || g.maxDistance < 0 {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrBadValue, "maxDistance must be nonnegative", "$geoNear (stage)",
+		)
+	}
+	if math.IsNaN(g.minDistance) || g.minDistance < 0 {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrBadValue, "minDistance must be nonnegative", "$geoNear (stage)",
+		)
 	}
 
 	// Validate near coordinates when spherical
@@ -491,3 +509,15 @@ func geoToFloat64(v any) (float64, error) {
 }
 
 var _ aggregations.Stage = (*geoNear)(nil)
+
+func finitePoint(x, y float64) bool {
+	return !math.IsNaN(x) && !math.IsInf(x, 0) && !math.IsNaN(y) && !math.IsInf(y, 0)
+}
+
+// invalidNearArgument is MongoDB's error for a non-finite near point; field
+// names the offending part, "type" for a GeoJSON point, "0" for a pair.
+func invalidNearArgument(field string) error {
+	return handlererrors.NewCommandErrorMsgWithArgument(
+		handlererrors.ErrBadValue, "invalid argument in geo near query: "+field, "$geoNear (stage)",
+	)
+}

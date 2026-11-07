@@ -32,7 +32,15 @@ const earthRadiusMeters = 6378137.0
 // geoFormatBSON formats a float64 like MongoDB's BSON coordinate representation:
 // whole numbers show ".0" suffix (e.g. 200.0 -> "200.0"), others as-is (e.g. 40.7 -> "40.7").
 func geoFormatBSON(f float64) string {
-	if f == math.Trunc(f) && !math.IsInf(f, 0) {
+	switch {
+	case math.IsNaN(f):
+		return "nan.0"
+	case math.IsInf(f, 1):
+		return "inf.0"
+	case math.IsInf(f, -1):
+		return "-inf.0"
+	}
+	if f == math.Trunc(f) {
 		return fmt.Sprintf("%.1f", f)
 	}
 	return fmt.Sprintf("%g", f)
@@ -196,10 +204,30 @@ func ValidateGeoFilter(filter *types.Document) error {
 			if opKey != "$near" && opKey != "$nearSphere" {
 				continue
 			}
+			if err := validateNearDistances(expr, opKey); err != nil {
+				return err
+			}
 			opVal := must.NotFail(expr.Get(opKey))
+			if arr, ok := opVal.(*types.Array); ok {
+				if !finitePair(arr) {
+					return handlererrors.NewCommandErrorMsgWithArgument(
+						handlererrors.ErrBadValue, "invalid argument in geo near query: 0", opKey,
+					)
+				}
+				continue
+			}
 			opDoc, ok := opVal.(*types.Document)
 			if !ok {
 				continue
+			}
+			for _, bound := range []string{"$maxDistance", "$minDistance"} {
+				if v, err := opDoc.Get(bound); err == nil {
+					if d, err := toFloat64(v); err == nil && (math.IsNaN(d) || math.IsInf(d, 0) || d < 0) {
+						return handlererrors.NewCommandErrorMsgWithArgument(
+							handlererrors.ErrBadValue, bound+" must be non-negative", opKey,
+						)
+					}
+				}
 			}
 			geomAny, err2 := opDoc.Get("$geometry")
 			if err2 != nil {
@@ -212,6 +240,21 @@ func ValidateGeoFilter(filter *types.Document) error {
 			lon, lat, err2 := extractPointCoords(geomDoc)
 			if err2 != nil {
 				continue
+			}
+			if !finite(lon) || !finite(lat) {
+				return handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrBadValue,
+					fmt.Sprintf(`invalid point in geo near query $geometry argument: { type: "Point", coordinates: [ %s, %s ] }  Point coordinates must be finite numbers`,
+						geoFormatBSON(lon), geoFormatBSON(lat)),
+					opKey,
+				)
+			}
+			if v, err := expr.Get("$maxDistance"); err == nil {
+				return handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrBadValue,
+					"geo near accepts just one argument when querying for a GeoJSON point. Extra field found: $maxDistance: "+geoFormatValue(v),
+					opKey,
+				)
 			}
 			if lon < -180 || lon > 180 || lat < -90 || lat > 90 {
 				return handlererrors.NewCommandErrorMsgWithArgument(
@@ -1183,4 +1226,48 @@ func toFloat64(v any) (float64, error) {
 		return float64(n), nil
 	}
 	return 0, fmt.Errorf("expected numeric value, got %T", v)
+}
+
+// validateNearDistances checks the $maxDistance and $minDistance written
+// beside a $near or $nearSphere, as {field: {$near: ..., $maxDistance: n}}.
+func validateNearDistances(expr *types.Document, opKey string) error {
+	for _, b := range []struct {
+		name string
+		code handlererrors.ErrorCode
+	}{
+		{"$maxDistance", handlererrors.ErrNearMaxDistanceNegative},
+		{"$minDistance", handlererrors.ErrNearMinDistanceNegative},
+	} {
+		v, err := expr.Get(b.name)
+		if err != nil {
+			continue
+		}
+		if d, err := toFloat64(v); err == nil && (math.IsNaN(d) || d < 0) {
+			return handlererrors.NewCommandErrorMsgWithArgument(b.code, b.name+" must be non-negative", opKey)
+		}
+	}
+	return nil
+}
+
+func finite(f float64) bool { return !math.IsNaN(f) && !math.IsInf(f, 0) }
+
+// finitePair reports whether a legacy [x, y] point's coordinates are finite.
+func finitePair(arr *types.Array) bool {
+	for i := 0; i < arr.Len() && i < 2; i++ {
+		if f, err := toFloat64(must.NotFail(arr.Get(i))); err == nil && !finite(f) {
+			return false
+		}
+	}
+	return true
+}
+
+// geoFormatValue formats a number as MongoDB prints it in geo errors.
+func geoFormatValue(v any) string {
+	if f, err := toFloat64(v); err == nil {
+		if _, isDouble := v.(float64); isDouble {
+			return geoFormatBSON(f)
+		}
+		return fmt.Sprintf("%v", v)
+	}
+	return fmt.Sprintf("%v", v)
 }
