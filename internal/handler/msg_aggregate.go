@@ -441,7 +441,8 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		// cannot honor a collation, so skip it when one is set and let the
 		// regular pipeline path re-check $match through the collator (mirrors
 		// the count command). workspace-4jf.
-		if !cInfo.IsView && collCmp == nil {
+		hint, _ := document.Get("hint")
+		if !cInfo.IsView && collCmp == nil && (hint == nil || backends.HintIsNatural(hint)) {
 			if info, ok := tryCountAggregateShortcut(aggregationStages); ok {
 				countRes, cerr := c.Count(ctx, &backends.CountParams{Filter: info.filter})
 				if cerr != nil {

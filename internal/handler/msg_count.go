@@ -151,9 +151,13 @@ func (h *Handler) MsgCount(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMs
 // execCount counts the documents of collection c that match params, by the
 // fastest path available. cmp is params' collation comparator, nil when simple.
 func (h *Handler) execCount(ctx context.Context, c backends.Collection, params *common.CountParams, cmp *collation.Comparator) (int32, error) {
+	// A hinted index decides which documents are counted (a sparse one holds
+	// only some), so a hint skips both shortcuts.
+	hinted := params.Hint != nil && !backends.HintIsNatural(params.Hint)
+
 	// Fast path: unfiltered count. The backend can return the entry count from
 	// tree metadata in O(1) instead of scanning every document.
-	if params.Filter.Len() == 0 {
+	if params.Filter.Len() == 0 && !hinted {
 		countRes, err := c.Count(ctx, &backends.CountParams{})
 		if err != nil {
 			return 0, lazyerrors.Error(err)
@@ -177,7 +181,7 @@ func (h *Handler) execCount(ctx context.Context, c backends.Collection, params *
 	// without fetching documents (e.g. via a covering single-field index).
 	// The backend signals success via Filtered=true; otherwise we fall
 	// through to the scan path below.
-	if !h.DisablePushdown && cmp == nil {
+	if !h.DisablePushdown && cmp == nil && !hinted {
 		countRes, cerr := c.Count(ctx, &backends.CountParams{Filter: params.Filter, Collation: params.Collation})
 		if cerr != nil {
 			return 0, lazyerrors.Error(cerr)
@@ -200,6 +204,7 @@ func (h *Handler) execCount(ctx context.Context, c backends.Collection, params *
 
 	var qp backends.QueryParams
 	qp.Collated = cmp != nil
+	qp.Hint = params.Hint
 	if !h.DisablePushdown {
 		qp.Filter = params.Filter
 	}
