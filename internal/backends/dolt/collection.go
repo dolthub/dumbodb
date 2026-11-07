@@ -538,7 +538,7 @@ const (
 // simpleIDEquality reports whether filter contains an "_id" field bound to a
 // concrete value that can be hashed into a primary key, either bare or as the
 // literal operand of {$eq: x}. It rejects other operator forms, array
-// equality ({_id: [1,2]}), regex, and bare null.
+// equality ({_id: [1,2]}), bare null and a regex, which matches a pattern.
 // Other filter fields are allowed  -- the handler re-checks them on the result.
 func simpleIDEquality(filter *types.Document) (any, bool) {
 	v, err := filter.Get("_id")
@@ -565,7 +565,8 @@ func simpleIDEquality(filter *types.Document) (any, bool) {
 		return v, true
 	}
 	switch v.(type) {
-	case *types.Array, types.NullType:
+	case *types.Array, types.NullType, types.Regex:
+		// A regex matches a pattern rather than equal values.
 		return nil, false
 	default:
 		return v, true
