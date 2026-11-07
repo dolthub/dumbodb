@@ -43,7 +43,11 @@ type explainRun struct {
 	// those matching the filter.
 	matched int32
 	// scanned is what the leaf index scan returned.
-	scanned    int32
+	scanned int32
+	// writes, when set, is what reaches a write's root stage from the stages
+	// below it: a sorted single-document write sorts every match and writes
+	// one.
+	writes     *int32
 	keys, docs int64
 	// branches are the counts of the index scans under an OR or SORT_MERGE
 	// stage.
@@ -106,16 +110,26 @@ func (h *Handler) runExplainedDistinct(ctx context.Context, coll backends.Collec
 }
 
 // runExplainedWrite reads the documents an update, delete or findAndModify
-// would write, the way the write does, without writing them. A single-document
-// write stops at its first match.
+// would write, the way the write does, without writing them, under its hint,
+// collation and sort. A single-document write stops at its first match unless
+// it must sort every match first.
 func runExplainedWrite(ctx context.Context, coll backends.Collection, qp *backends.ExplainParams) explainRun {
 	var run explainRun
 	single := qp.Command == "findAndModify" || !qp.Multi
-	run.matched = scanMatching(ctx, coll, &backends.QueryParams{Filter: qp.Filter, Collated: qp.Collated}, qp, single)
-	if qp.Command == "findAndModify" {
-		run.returned = run.matched
+	query := &backends.QueryParams{Filter: qp.Filter, Collated: qp.Collated, Collation: qp.Collation, Hint: qp.Hint}
+	if qp.Sort.Len() == 1 {
+		query.Sort = qp.Sort
 	}
+	run.matched = scanMatching(ctx, coll, query, qp, single)
 	run.scanned = run.matched
+	written := run.matched
+	if single {
+		written = min(written, 1)
+	}
+	run.writes = &written
+	if qp.Command == "findAndModify" {
+		run.returned = written
+	}
 	return run
 }
 
@@ -156,7 +170,7 @@ func scanMatching(ctx context.Context, coll backends.Collection, query *backends
 	if single {
 		limit = 1
 	}
-	stopAtLimit := limit > 0 && (single || qp.Sort.Len() == 0 || qres.Sorted)
+	stopAtLimit := limit > 0 && (qp.Sort.Len() == 0 || qres.Sorted)
 	cmp := collation.Parse(qp.Collation).Comparator()
 
 	var matched int32
@@ -212,6 +226,8 @@ func cloneExecutionStage(node *types.Document, run explainRun, root, aboveMatch 
 		nReturned = run.matched
 	case childDoc == nil || !aboveMatch:
 		nReturned = run.scanned
+	case run.writes != nil:
+		nReturned = *run.writes
 	default:
 		nReturned = run.returned
 	}
@@ -406,6 +422,9 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 		if cv, _ := params.Command.Get("collation"); cv != nil {
 			opCollation, _ = cv.(*types.Document)
 		}
+	}
+	if opCollation == nil {
+		opCollation = params.StatementCollation
 	}
 	effColl := h.effectiveCollation(connCtx, db, params.Collection, opCollation)
 	qp.Collation = effColl

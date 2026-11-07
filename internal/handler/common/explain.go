@@ -56,6 +56,10 @@ type ExplainParams struct {
 	// Remove is set for a findAndModify that deletes its document.
 	Remove bool `dumbo:"-"`
 
+	// StatementCollation is the collation of the update or delete statement
+	// explained, which applies when the command sets none.
+	StatementCollation *types.Document `dumbo:"-"`
+
 	// Verbosity controls what explain returns:
 	// "queryPlanner" (default), "executionStats", or "allPlansExecution".
 	Verbosity string
@@ -132,19 +136,29 @@ func GetExplainParams(document *types.Document, l *slog.Logger) (*ExplainParams,
 	}
 	// update / delete carry the predicate inside the first element of the
 	// updates / deletes array as "q", not as a top-level filter.
+	// Its sort, hint and collation sit in the statement too.
 	var multi bool
+	var write, statementCollation *types.Document
 	if filter == nil {
-		if write := firstWriteStatement(explain, commandName); write != nil {
+		if write = firstWriteStatement(explain, commandName); write != nil {
 			if q, _ := write.Get("q"); q != nil {
 				filter, _ = q.(*types.Document)
 			}
 			multi = writeIsMulti(write, commandName)
+			if c, _ := write.Get("collation"); c != nil {
+				statementCollation, _ = c.(*types.Document)
+			}
 		}
 	}
 
 	sort, err = GetOptionalParam(explain, "sort", sort)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
+	}
+	if sort == nil && write != nil {
+		if s, _ := write.Get("sort"); s != nil {
+			sort, _ = s.(*types.Document)
+		}
 	}
 
 	var projection *types.Document
@@ -163,6 +177,8 @@ func GetExplainParams(document *types.Document, l *slog.Logger) (*ExplainParams,
 	var hint any
 	if hintVal, _ := explain.Get("hint"); hintVal != nil {
 		hint = hintVal
+	} else if write != nil {
+		hint, _ = write.Get("hint")
 	}
 
 	var limit, skip int64
@@ -248,6 +264,8 @@ func GetExplainParams(document *types.Document, l *slog.Logger) (*ExplainParams,
 		Hint:        hint,
 		Multi:       multi,
 		Remove:      remove,
+
+		StatementCollation: statementCollation,
 	}, nil
 }
 
