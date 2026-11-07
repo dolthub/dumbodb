@@ -35,7 +35,18 @@ func tryStreamMergedRanges(ctx context.Context, state *dbState, primary prolly.M
 	if params.Filter == nil || params.Filter.Has("$or") {
 		return nil, nil, false, nil
 	}
-	choice, ok := chooseIndexRange(idxInfos, params.Filter, params.Hint, params.Collation, params.Fields)
+	// Any index able to merge serves; the best range for the filter alone
+	// may be a single-field index that cannot.
+	hint := params.Hint
+	if hint == nil {
+		for _, info := range idxInfos {
+			if mergesSortedRanges(info, params) {
+				hint = info.Name
+				break
+			}
+		}
+	}
+	choice, ok := chooseIndexRange(idxInfos, params.Filter, hint, params.Collation, params.Fields)
 	if !ok || len(choice.pointRanges) < 2 || len(choice.pointRanges) > maxMergedScans {
 		return nil, nil, false, nil
 	}
@@ -83,7 +94,11 @@ func mergesSortedRanges(info backends.IndexInfo, params *backends.QueryParams) b
 	if !ok || pos != 1 {
 		return false
 	}
-	in, _ := must.NotFail(params.Filter.Get(info.Key[0].Field)).(*types.Document)
+	lead, err := params.Filter.Get(info.Key[0].Field)
+	if err != nil {
+		return false
+	}
+	in, _ := lead.(*types.Document)
 	if in == nil || in.Len() != 1 || in.Keys()[0] != "$in" {
 		return false
 	}
