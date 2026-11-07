@@ -290,8 +290,9 @@ func validateProjectionShape(projection *types.Document) (*types.Document, bool,
 					return nil, false, err
 				}
 
-				inclusionField = true
 				validated.Set(key, value)
+				// $meta is neutral: it adds a field in either mode.
+				continue
 
 			default:
 				if value.Len() == 0 {
