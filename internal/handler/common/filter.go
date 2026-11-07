@@ -706,6 +706,17 @@ func filterFieldOperators(doc *types.Document, filterKey, filterSuffix string, e
 			}
 		}
 
+		// A clustered collection's _id range stays within MinKey's or
+		// MaxKey's own type, as a clustered mongod scans it.
+		if filterKey != "_id" {
+			if matched, ok := minMaxKeyRange(exprKey, fieldValue, exprValue); ok {
+				if !matched {
+					return false, nil
+				}
+				continue
+			}
+		}
+
 		if !strings.HasPrefix(exprKey, "$") {
 			// An array matches if it, or one of its elements, equals expr.
 			switch fieldValue.(type) {
@@ -2510,4 +2521,52 @@ func textContainsWord(s, word string, caseSensitive, diacriticSensitive bool) bo
 func isWordChar(r rune) bool {
 	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' ||
 		r > 127 // include unicode characters as word chars
+}
+
+// minMaxKeyRange evaluates $gt, $gte, $lt or $lte against MinKey or MaxKey,
+// which are not type-bracketed: they bound every value, a missing field (null)
+// included. ok is false for any other operator or operand. An array matches
+// when it or any of its elements does.
+func minMaxKeyRange(op string, fieldValue, bound any) (matched, ok bool) {
+	var minKey bool
+	switch bound.(type) {
+	case types.MinKeyType:
+		minKey = true
+	case types.MaxKeyType:
+	default:
+		return false, false
+	}
+	test := func(v any) bool {
+		_, isMin := v.(types.MinKeyType)
+		_, isMax := v.(types.MaxKeyType)
+		switch {
+		case minKey && op == "$gt":
+			return !isMin
+		case minKey && op == "$gte", !minKey && op == "$lte":
+			return true
+		case minKey && op == "$lte":
+			return isMin
+		case !minKey && op == "$gte":
+			return isMax
+		case !minKey && op == "$lt":
+			return !isMax
+		}
+		return false
+	}
+	switch op {
+	case "$gt", "$gte", "$lt", "$lte":
+	default:
+		return false, false
+	}
+	if test(fieldValue) {
+		return true, true
+	}
+	if arr, isArr := fieldValue.(*types.Array); isArr {
+		for i := 0; i < arr.Len(); i++ {
+			if test(must.NotFail(arr.Get(i))) {
+				return true, true
+			}
+		}
+	}
+	return false, true
 }
