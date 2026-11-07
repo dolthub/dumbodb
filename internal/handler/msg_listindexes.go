@@ -63,10 +63,13 @@ func (h *Handler) MsgListIndexes(connCtx context.Context, msg *wire.OpMsg) (*wir
 		return nil, lazyerrors.Error(err)
 	}
 
-	if info, verr := lookupCollectionInfo(connCtx, db, collection); verr == nil && info != nil && info.IsView {
+	info, verr := lookupCollectionInfo(connCtx, db, collection)
+	if verr == nil && info != nil && info.IsView {
 		msg := fmt.Sprintf("Namespace %s.%s is a view, not a collection", dbName, collection)
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCommandNotSupportedOnView, msg, document.Command())
 	}
+	// A time-series collection has no _id index of its own.
+	timeSeries := verr == nil && info != nil && info.IsTimeSeries
 
 	c, err := db.Collection(collection)
 	if err != nil {
@@ -91,6 +94,9 @@ func (h *Handler) MsgListIndexes(connCtx context.Context, msg *wire.OpMsg) (*wir
 	firstBatch := types.MakeArray(len(res.Indexes))
 
 	for _, index := range res.Indexes {
+		if timeSeries && index.Name == backends.DefaultIndexName {
+			continue
+		}
 		indexKey := must.NotFail(types.NewDocument())
 
 		for _, key := range index.Key {
