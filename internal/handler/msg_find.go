@@ -104,6 +104,10 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 	)
 
 	if cInfo.IsView {
+		if params.ShowRecordId {
+			return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrInvalidPipelineOperator,
+				"Option showRecordId not supported in aggregation.")
+		}
 		isView = true
 		viewName = cInfo.Name
 		viewOn = cInfo.ViewOn
