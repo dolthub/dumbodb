@@ -164,13 +164,28 @@ func listCollections(ctx context.Context, client requestClient, database string)
 	return collections, nil
 }
 
+// listIndexes returns the source's ready indexes. With includeBuildUUIDs, an
+// unfinished build is listed as {spec, buildUUID}; it is left out because its
+// commitIndexBuild or abortIndexBuild entry follows the begin-apply position,
+// and applying that entry creates the index or leaves it absent.
 func listIndexes(ctx context.Context, client requestClient, database string, sourceUUID types.Binary) ([]*types.Document, error) {
 	uuidBinary := wirebson.Binary{Subtype: wirebson.BinarySubtype(sourceUUID.Subtype), B: sourceUUID.B}
 	cursor := wirebson.MakeDocument(0)
-	return readCommandCursor(ctx, client, wire.MustOpMsg(
+	documents, err := readCommandCursor(ctx, client, wire.MustOpMsg(
 		"listIndexes", uuidBinary, "cursor", cursor, "includeBuildUUIDs", true,
 		"$readPreference", secondaryPreferred(), "$db", database,
 	), database)
+	if err != nil {
+		return nil, err
+	}
+	ready := documents[:0]
+	for _, document := range documents {
+		if document.Has("buildUUID") {
+			continue
+		}
+		ready = append(ready, document)
+	}
+	return ready, nil
 }
 
 func readCommandCursor(ctx context.Context, client requestClient, request *wire.OpMsg, database string) ([]*types.Document, error) {
