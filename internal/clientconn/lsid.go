@@ -122,6 +122,13 @@ func isUncommittedChangesRefusal(command string, err error) bool {
 		errors.As(err, &ce) && ce.Code() == handlererrors.ErrConflictingOperationInProgress
 }
 
+// isExplainInTransactionRefusal reports whether err refuses an explain inside a
+// transaction, which mongod rejects without aborting the transaction.
+func isExplainInTransactionRefusal(command string, err error) bool {
+	var ce *handlererrors.CommandError
+	return command == "explain" && errors.As(err, &ce) && ce.Code() == handlererrors.ErrOperationNotSupportedInTransaction
+}
+
 // writeErrorCommands are the commands whose ok replies can carry
 // writeErrors.
 var writeErrorCommands = map[string]bool{"insert": true, "update": true, "delete": true, "bulkWrite": true}

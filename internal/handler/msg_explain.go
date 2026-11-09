@@ -23,6 +23,7 @@ import (
 	"github.com/FerretDB/wire"
 
 	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
@@ -317,6 +318,13 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 		return nil, err
 	}
 
+	// mongod refuses explain in a transaction, which stays open.
+	if conninfo.Get(connCtx).InTransaction() {
+		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationNotSupportedInTransaction,
+			"Cannot run 'explain' in a multi-document transaction.")
+	}
+
+
 	if inner, ok := must.NotFail(document.Get(document.Command())).(*types.Document); ok && inner.Len() > 0 {
 		if err = h.checkExplainable(inner.Command()); err != nil {
 			return nil, err
@@ -570,3 +578,4 @@ func explainVersion(params *common.ExplainParams, viaView bool) string {
 	}
 	return "1"
 }
+
