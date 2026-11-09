@@ -336,58 +336,87 @@ func (s *indexIDStream) takeGapKeys(e indexEntry) indexEntry {
 	return e
 }
 
-// coveredRead is coveredKeysFor the fields params reads, fetching a null key's
-// document when params' filter tests for null.
+// coveredRead is coveredKeysFor the fields params reads. A null key stands
+// for null or a missing field; the read reports null only when params' filter
+// cannot tell the two apart, and otherwise fetches the document.
 func coveredRead(info backends.IndexInfo, params *backends.QueryParams) *coveredKeys {
 	c := coveredKeysFor(info, params.Fields)
 	if c != nil {
-		c.fetchNull = filterTestsNull(params.Filter)
+		c.fetchNull = !nullBlindFilter(params.Filter)
 	}
 	return c
 }
 
-// filterTestsNull reports whether filter compares a field with null.
-func filterTestsNull(filter *types.Document) bool {
+// nullBlindFilter reports whether filter treats a null field and a missing
+// one alike: it holds only comparisons ($eq, $ne, ranges, $in, $nin) with
+// values other than null and arrays, joined by $and or $or.
+func nullBlindFilter(filter *types.Document) bool {
 	if filter == nil {
-		return false
+		return true
 	}
 	for _, k := range filter.Keys() {
 		v := must.NotFail(filter.Get(k))
 		switch k {
-		case "$and", "$or", "$nor":
-			arr, _ := v.(*types.Array)
-			for i := 0; arr != nil && i < arr.Len(); i++ {
-				if sub, ok := must.NotFail(arr.Get(i)).(*types.Document); ok && filterTestsNull(sub) {
-					return true
+		case "$and", "$or":
+			arr, ok := v.(*types.Array)
+			if !ok {
+				return false
+			}
+			for i := 0; i < arr.Len(); i++ {
+				sub, ok := must.NotFail(arr.Get(i)).(*types.Document)
+				if !ok || !nullBlindFilter(sub) {
+					return false
 				}
 			}
 			continue
 		}
-		if isNull(v) {
-			return true
+		if strings.HasPrefix(k, "$") {
+			return false
 		}
 		ops, ok := v.(*types.Document)
 		if !ok {
+			if !nullBlindValue(v) {
+				return false
+			}
+			continue
+		}
+		if ops.Len() == 0 || !strings.HasPrefix(ops.Keys()[0], "$") {
+			// An embedded document equality.
 			continue
 		}
 		for _, op := range ops.Keys() {
 			ov := must.NotFail(ops.Get(op))
 			switch op {
-			case "$eq", "$gte", "$lte":
-				if isNull(ov) {
-					return true
+			case "$eq", "$ne", "$gt", "$gte", "$lt", "$lte":
+				if !nullBlindValue(ov) {
+					return false
 				}
-			case "$in":
-				arr, _ := ov.(*types.Array)
-				for i := 0; arr != nil && i < arr.Len(); i++ {
-					if isNull(must.NotFail(arr.Get(i))) {
-						return true
+			case "$in", "$nin":
+				arr, ok := ov.(*types.Array)
+				if !ok {
+					return false
+				}
+				for i := 0; i < arr.Len(); i++ {
+					if !nullBlindValue(must.NotFail(arr.Get(i))) {
+						return false
 					}
 				}
+			default:
+				return false
 			}
 		}
 	}
-	return false
+	return true
+}
+
+// nullBlindValue reports whether comparing with v gives a null field and a
+// missing one the same result.
+func nullBlindValue(v any) bool {
+	switch v.(type) {
+	case types.NullType, *types.Array:
+		return false
+	}
+	return true
 }
 
 func isNull(v any) bool {
