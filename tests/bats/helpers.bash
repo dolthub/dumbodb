@@ -490,16 +490,19 @@ seed_git_bare_repo() {
 }
 
 # setup_dolt_hack <data-dir>
-# Given a dumbodb data dir, create the .dolt directory structure so that
-# dolt commands run from <data-dir>/.. will see the dumbodb data.
+# Create a dolt repo dir that exposes the dumbodb data to the dolt CLI and set
+# DOLT_HACK_DIR to it; run dolt commands from there. The repo dir holds only
+# .dolt and is private to <data-dir>. It must not be the shared $TMPDIR: dolt
+# stats every entry of its working dir at startup and exits with "failed to
+# load database names" if another process deletes one mid-scan, and concurrent
+# runs would clobber and delete each other's .dolt.
 #
 # dumbodb stores its default database in <data-dir>/test/.
-# We symlink <data-dir>/../.dolt/noms -> <data-dir>/test so dolt can read it.
+# We symlink $DOLT_HACK_DIR/.dolt/noms -> <data-dir>/test so dolt can read it.
 setup_dolt_hack() {
     local data_dir="$1"
-    local parent_dir
-    parent_dir="$(cd "$data_dir/.." && pwd)"
-    local dolt_dir="${parent_dir}/.dolt"
+    DOLT_HACK_DIR="$(dolt_hack_dir "$data_dir")"
+    local dolt_dir="${DOLT_HACK_DIR}/.dolt"
 
     mkdir -p "$dolt_dir"
 
@@ -510,4 +513,10 @@ setup_dolt_hack() {
     cat > "${dolt_dir}/repo_state.json" <<'EOF'
 {"head":"refs/heads/main","remotes":{},"backups":{},"branches":{}}
 EOF
+}
+
+# dolt_hack_dir <data-dir>
+# Print the repo dir setup_dolt_hack uses for <data-dir>.
+dolt_hack_dir() {
+    echo "${1}.dolt-hack"
 }

@@ -19,10 +19,7 @@ setup() {
 teardown() {
     stop_dumbodb
     rm -rf "$DUMBODB_DATA_DIR"
-    # Remove the .dolt dir created by setup_dolt_hack.
-    local parent_dir
-    parent_dir="$(dirname "$DUMBODB_DATA_DIR")"
-    rm -rf "${parent_dir}/.dolt"
+    rm -rf "$(dolt_hack_dir "$DUMBODB_DATA_DIR")"
 }
 
 @test 'insert two docs, verify dolt storage' {
@@ -40,7 +37,7 @@ teardown() {
 
     stop_dumbodb
     setup_dolt_hack "$DUMBODB_DATA_DIR"
-    cd "$(dirname "$DUMBODB_DATA_DIR")"
+    cd "$DOLT_HACK_DIR"
 
     # Verify dolt storage integrity.
     run dolt fsck
@@ -68,7 +65,7 @@ teardown() {
 
     stop_dumbodb
     setup_dolt_hack "$DUMBODB_DATA_DIR"
-    cd "$(dirname "$DUMBODB_DATA_DIR")"
+    cd "$DOLT_HACK_DIR"
 
     run dolt diff --result-format=sql
     [ "$status" -eq 0 ]
@@ -97,7 +94,7 @@ teardown() {
 
     stop_dumbodb
     setup_dolt_hack "$DUMBODB_DATA_DIR"
-    cd "$(dirname "$DUMBODB_DATA_DIR")"
+    cd "$DOLT_HACK_DIR"
 
     run dolt sql -q 'show create table col1'
 
@@ -129,7 +126,7 @@ teardown() {
 
   stop_dumbodb
   setup_dolt_hack "$DUMBODB_DATA_DIR"
-  cd "$(dirname "$DUMBODB_DATA_DIR")"
+  cd "$DOLT_HACK_DIR"
 
   run dolt show
 
@@ -155,7 +152,7 @@ teardown() {
 
   stop_dumbodb
   setup_dolt_hack "$DUMBODB_DATA_DIR"
-  cd "$(dirname "$DUMBODB_DATA_DIR")"
+  cd "$DOLT_HACK_DIR"
 
   # dolt branch must list the new branch.
   run dolt branch
@@ -181,7 +178,7 @@ teardown() {
 
   stop_dumbodb
   setup_dolt_hack "$DUMBODB_DATA_DIR"
-  cd "$(dirname "$DUMBODB_DATA_DIR")"
+  cd "$DOLT_HACK_DIR"
 
   # dolt tag must list the new tag.
   run dolt tag
