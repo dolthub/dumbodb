@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 
 	"github.com/FerretDB/wire"
@@ -308,7 +309,7 @@ func (h *Handler) checkExplainable(name string) error {
 	return nil
 }
 
-func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *wire.OpMsg, err error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
@@ -324,6 +325,17 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 			"Cannot run 'explain' in a multi-document transaction.")
 	}
 
+	maxTimeMS, err := explainMaxTimeMS(document)
+	if err != nil {
+		return nil, err
+	}
+	connCtx, cancel := withMaxTimeMS(connCtx, maxTimeMS)
+	defer cancel()
+	defer func() {
+		if err != nil && maxTimeMS != 0 && errors.Is(connCtx.Err(), context.DeadlineExceeded) {
+			reply, err = nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrMaxTimeMSExpired, "operation exceeded time limit")
+		}
+	}()
 
 	if inner, ok := must.NotFail(document.Get(document.Command())).(*types.Document); ok && inner.Len() > 0 {
 		if err = h.checkExplainable(inner.Command()); err != nil {
@@ -579,3 +591,30 @@ func explainVersion(params *common.ExplainParams, viaView bool) string {
 	return "1"
 }
 
+// explainMaxTimeMS returns the maxTimeMS beside the explained command, 0 when
+// unset, validated as mongod validates a command's maxTimeMS.
+func explainMaxTimeMS(document *types.Document) (int64, error) {
+	v, _ := document.Get("maxTimeMS")
+	if v == nil {
+		return 0, nil
+	}
+	var ms int64
+	switch n := v.(type) {
+	case int32:
+		ms = int64(n)
+	case int64:
+		ms = n
+	case float64:
+		if n >= 0 && n != math.Trunc(n) {
+			return 0, handlererrors.NewCommandErrorMsg(handlererrors.ErrBadValue, "maxTimeMS has non-integral value")
+		}
+		ms = int64(math.Max(math.Min(math.Trunc(n), math.MaxInt64), math.MinInt64))
+	default:
+		return 0, handlererrors.NewCommandErrorMsg(handlererrors.ErrBadValue, "maxTimeMS must be a number")
+	}
+	if ms < 0 || ms > math.MaxInt32 {
+		return 0, handlererrors.NewCommandErrorMsg(handlererrors.ErrBadValue,
+			fmt.Sprintf("%d value for maxTimeMS is out of range [0, 2147483647]", ms))
+	}
+	return ms, nil
+}
