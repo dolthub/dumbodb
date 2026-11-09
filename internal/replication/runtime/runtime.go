@@ -212,7 +212,7 @@ func (r *Runtime) runInitialSync(ctx context.Context, source string) error {
 	coordinator, err := initialsync.NewCoordinator(initialsync.CoordinatorOptions{
 		Source: source, Client: client, Store: r.store, Manager: r.manager,
 		Fetcher: fetcher, Buffer: buffer, Resetter: r.backend, Catalog: catalogApplier,
-		Applier: applier, Publisher: r.publisher,
+		Applier: applier.ForInitialSync(), Publisher: r.publisher,
 		Special:       initialsync.NewSpecialDatabaseHandler(specialApplier),
 		LoaderLimits:  initialsync.LoaderLimits{Documents: 10000, Bytes: 64 << 20},
 		CatchUpLimits: initialsync.CatchUpLimits{Entries: 1000, Bytes: 16 << 20},
