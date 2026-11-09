@@ -190,6 +190,101 @@ func TestCoordinatorPreservesDataUntilSourceIsValidated(t *testing.T) {
 	}
 }
 
+func TestCoordinatorRetryAfterFailedAttemptClonesOnlyReadyIndexes(t *testing.T) {
+	ctx := context.Background()
+	backend, err := dolt.NewBackend(t.TempDir(), slog.Default(), false, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backend.Close()
+	store, err := control.Open(backend, control.Configuration{SetName: "rs0", MemberHost: "dumbo.example:27017"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := initialSyncTestManager(t, store)
+	catalogApplier, err := catalog.NewApplier(backend, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buffer := must.NotFail(oplog.NewBuffer(oplog.BufferLimits{Entries: 10, Bytes: 4096}))
+	sourceUUID := uuid.MustParse("12345678-1234-4234-9234-123456789abc")
+	buildUUID := uuid.MustParse("87654321-4321-4321-8321-cba987654321")
+	idIndex := must.NotFail(types.NewDocument("v", int32(2), "key", must.NotFail(types.NewDocument("_id", int32(1))), "name", "_id_"))
+	unfinishedIndex := must.NotFail(types.NewDocument(
+		"spec", must.NotFail(types.NewDocument("v", int32(2), "key", must.NotFail(types.NewDocument("score", int32(1))), "name", "score_1")),
+		"buildUUID", types.Binary{Subtype: types.BinaryUUID, B: buildUUID[:]},
+	))
+	attemptResponses := func(clonedID int32, indexes ...*types.Document) []*wire.OpMsg {
+		databases := must.NotFail(types.NewArray(must.NotFail(types.NewDocument("name", "orders"))))
+		collectionInfo := must.NotFail(types.NewDocument(
+			"name", "items", "type", "collection", "options", must.NotFail(types.NewDocument()),
+			"info", must.NotFail(types.NewDocument("readOnly", false, "uuid", types.Binary{Subtype: types.BinaryUUID, B: sourceUUID[:]})),
+		))
+		return []*wire.OpMsg{
+			responseMessage(t, must.NotFail(types.NewDocument("rbid", int32(17), "ok", float64(1)))),
+			cursorResponse(t, oplogBoundaryDocument(1, 8)),
+			cursorResponse(t),
+			cursorResponse(t, oplogBoundaryDocument(2, 8)),
+			cursorResponse(t),
+			responseMessage(t, must.NotFail(types.NewDocument("databases", databases, "ok", float64(1)))),
+			cursorResponse(t, collectionInfo),
+			cursorResponse(t, indexes...),
+			cloneCursorResponse(t, "firstBatch", 0, "orders.items", must.NotFail(types.NewDocument("$recordId", int64(1))),
+				must.NotFail(types.NewDocument("_id", clonedID, "sku", "book")),
+			),
+			cursorResponse(t, oplogBoundaryDocument(4, 8)),
+			responseMessage(t, must.NotFail(types.NewDocument("rbid", int32(17), "ok", float64(1)))),
+		}
+	}
+	newCoordinator := func(responses []*wire.OpMsg, applier oplogEntryApplier) *Coordinator {
+		coordinator, err := NewCoordinator(CoordinatorOptions{
+			Source: "primary.example:27017", Client: &boundaryClient{responses: responses}, Store: store, Manager: manager,
+			Fetcher: &coordinatorFetcher{buffer: buffer, manager: manager, expected: catchUpOpTime(1)}, Buffer: buffer,
+			Resetter: backend.(backends.InitialSyncResetter), Catalog: catalogApplier, Applier: applier,
+			Publisher:    &recordingInitialSyncPublisher{},
+			LoaderLimits: LoaderLimits{Documents: 10, Bytes: 4096}, CatchUpLimits: CatchUpLimits{Entries: 2, Bytes: 4096},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return coordinator
+	}
+
+	applyErr := errors.New("first attempt apply failure")
+	first := newCoordinator(attemptResponses(7, idIndex), failingEntryApplier{err: applyErr})
+	if _, err := first.Run(ctx); !errors.Is(err, applyErr) {
+		t.Fatalf("first attempt error = %v, want %v", err, applyErr)
+	}
+
+	retry := newCoordinator(attemptResponses(8, idIndex, unfinishedIndex), &recordingEntryApplier{})
+	if err := retry.Reset(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := retry.Run(ctx); err != nil {
+		t.Fatalf("retry after a failed attempt: %v", err)
+	}
+	if phase := store.Snapshot().InitialSyncPhase; phase != control.InitialSyncComplete {
+		t.Fatalf("phase after retry = %q", phase)
+	}
+	database := must.NotFail(backend.Database("orders"))
+	collection := must.NotFail(database.Collection("items"))
+	assertMainCollectionCount(t, ctx, backend, "orders", "items", 1)
+	indexes := must.NotFail(collection.ListIndexes(ctx, nil))
+	for _, index := range indexes.Indexes {
+		if index.Name == "score_1" {
+			t.Fatalf("retry built the unfinished index: %+v", indexes.Indexes)
+		}
+	}
+}
+
+type failingEntryApplier struct {
+	err error
+}
+
+func (a failingEntryApplier) Apply(context.Context, oplog.Entry) error {
+	return a.err
+}
+
 type failingInitialSyncClient struct{}
 
 func (failingInitialSyncClient) Request(context.Context, *wire.OpMsg) (*wire.OpMsg, error) {

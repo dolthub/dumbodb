@@ -21,6 +21,7 @@ import (
 	"github.com/FerretDB/wire"
 	"github.com/google/uuid"
 
+	"github.com/dolthub/dumbodb/internal/replication/catalog"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
@@ -75,6 +76,37 @@ func TestDiscoverCatalogExcludesLocalAndUsesCollectionUUID(t *testing.T) {
 	listRequest := decodeRequest(t, client.requests[1])
 	if listRequest.Has("filter") {
 		t.Fatalf("listCollections request unexpectedly filters collection types: %v", listRequest)
+	}
+}
+
+func TestDiscoverCatalogOmitsUnfinishedIndexBuilds(t *testing.T) {
+	sourceUUID := uuid.MustParse("12345678-1234-4234-9234-123456789abc")
+	buildUUID := uuid.MustParse("87654321-4321-4321-8321-cba987654321")
+	databases := must.NotFail(types.NewArray(must.NotFail(types.NewDocument("name", "orders"))))
+	collectionInfo := must.NotFail(types.NewDocument(
+		"name", "items", "type", "collection", "options", must.NotFail(types.NewDocument()),
+		"info", must.NotFail(types.NewDocument("readOnly", false, "uuid", types.Binary{Subtype: types.BinaryUUID, B: sourceUUID[:]})),
+	))
+	ready := must.NotFail(types.NewDocument("v", int32(2), "key", must.NotFail(types.NewDocument("_id", int32(1))), "name", "_id_"))
+	unfinished := must.NotFail(types.NewDocument(
+		"spec", must.NotFail(types.NewDocument("v", int32(2), "key", must.NotFail(types.NewDocument("score", int32(1))), "name", "score_1")),
+		"buildUUID", types.Binary{Subtype: types.BinaryUUID, B: buildUUID[:]},
+	))
+	client := &boundaryClient{responses: []*wire.OpMsg{
+		responseMessage(t, must.NotFail(types.NewDocument("databases", databases, "ok", float64(1)))),
+		cursorResponse(t, collectionInfo),
+		cursorResponse(t, unfinished, ready),
+	}}
+	discovered, err := DiscoverCatalog(context.Background(), client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	collection := discovered[0].Collections[0]
+	if len(collection.Indexes) != 1 || types.Compare(collection.Indexes[0], ready) != types.Equal {
+		t.Fatalf("indexes = %v, want only the ready _id index", collection.Indexes)
+	}
+	if _, err := catalog.PreflightCollection("orders", collection.Name, collection.Options, collection.Indexes); err != nil {
+		t.Fatalf("preflight: %v", err)
 	}
 }
 

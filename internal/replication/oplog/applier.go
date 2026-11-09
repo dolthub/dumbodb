@@ -41,10 +41,11 @@ import (
 var ErrUnsupportedOplogOperation = errors.New("unsupported oplog operation")
 
 type Applier struct {
-	backend backends.Backend
-	catalog *catalog.Applier
-	special *special.Applier
-	store   *control.Store
+	backend     backends.Backend
+	catalog     *catalog.Applier
+	special     *special.Applier
+	store       *control.Store
+	initialSync bool
 }
 
 func NewApplier(backend backends.Backend, store *control.Store) (*Applier, error) {
@@ -64,6 +65,19 @@ func NewApplierWithAuthGeneration(backend backends.Backend, store *control.Store
 		return nil, err
 	}
 	return &Applier{backend: backend, catalog: catalogApplier, special: specialApplier, store: store}, nil
+}
+
+// ForInitialSync returns an applier with mongod's initial-sync application
+// rules. The clone reads the catalog and each collection after the
+// begin-apply position, so the buffered oplog can describe a state older than
+// the clone holds. An insert whose _id was already cloned replaces it; an
+// update of a missing document, a write to a missing collection, and a
+// collection command the clone already reflects are skipped. Later entries in
+// the oplog bring the data to the stop position's state.
+func (a *Applier) ForInitialSync() *Applier {
+	initialSync := *a
+	initialSync.initialSync = true
+	return &initialSync
 }
 
 func (a *Applier) Apply(ctx context.Context, entry Entry) error {
@@ -224,14 +238,17 @@ func (a *Applier) applyOperation(ctx context.Context, operation operation, opTim
 			return fmt.Errorf("%s operation for %q has no collection UUID", operation.Kind, operation.Namespace)
 		}
 		_, collection, err := a.catalog.ResolveCollection(ctx, operation.SourceUUID)
+		if a.initialSync && errors.Is(err, catalog.ErrSourceUUIDNotFound) {
+			return nil
+		}
 		if err != nil {
 			return err
 		}
 		switch operation.Kind {
 		case "i":
-			return applyInsert(ctx, collection, operation.Object)
+			return applyInsert(ctx, collection, operation.Object, a.initialSync)
 		case "u":
-			return applyUpdate(ctx, collection, operation.Object, operation.Object2)
+			return applyUpdate(ctx, collection, operation.Object, operation.Object2, a.initialSync)
 		default:
 			return applyDelete(ctx, collection, operation.Object)
 		}
@@ -309,6 +326,12 @@ func (a *Applier) applyCommand(ctx context.Context, operation operation, opTime 
 	}
 	if databaseName == "admin" || databaseName == "config" {
 		return fmt.Errorf("%w command at reserved database %q", special.ErrUnsupportedSpecialNamespace, databaseName)
+	}
+	if a.initialSync && operation.SourceUUID != "" {
+		reflected, err := a.cloneReflectsCommand(ctx, commandName, operation)
+		if err != nil || reflected {
+			return err
+		}
 	}
 	switch commandName {
 	case "create":
@@ -433,6 +456,28 @@ func (a *Applier) applyCommand(ctx context.Context, operation operation, opTime 
 		return a.catalog.DropDatabase(ctx, databaseName, opTime)
 	default:
 		return fmt.Errorf("%w command %q at %q", ErrUnsupportedOplogOperation, commandName, operation.Namespace)
+	}
+}
+
+// cloneReflectsCommand reports whether the cloned catalog already shows the
+// effect of a collection command or of a later one: the collection already
+// exists or sits at the rename target, or it is gone.
+func (a *Applier) cloneReflectsCommand(ctx context.Context, commandName string, operation operation) (bool, error) {
+	location, err := a.catalog.Resolve(ctx, operation.SourceUUID)
+	if errors.Is(err, catalog.ErrSourceUUIDNotFound) {
+		return commandName != "create", nil
+	}
+	if err != nil {
+		return false, err
+	}
+	switch commandName {
+	case "create":
+		return true, nil
+	case "renameCollection":
+		target, _ := operation.Object.Get("to")
+		return target == location.Database+"."+location.Collection, nil
+	default:
+		return false, nil
 	}
 }
 
@@ -828,7 +873,7 @@ func documentWithout(document *types.Document, excluded ...string) (*types.Docum
 	}
 }
 
-func applyInsert(ctx context.Context, collection backends.Collection, document *types.Document) error {
+func applyInsert(ctx context.Context, collection backends.Collection, document *types.Document, replaceExisting bool) error {
 	id, getErr := document.Get("_id")
 	if getErr != nil {
 		return errors.New("insert oplog document has no _id")
@@ -841,13 +886,16 @@ func applyInsert(ctx context.Context, collection backends.Collection, document *
 		if types.Compare(existing, document) == types.Equal {
 			return nil
 		}
-		return fmt.Errorf("insert oplog document conflicts with existing _id %v", id)
+		if !replaceExisting {
+			return fmt.Errorf("insert oplog document conflicts with existing _id %v", id)
+		}
+		return replaceDocument(ctx, collection, id, document)
 	}
 	_, err = collection.InsertAll(ctx, &backends.InsertAllParams{Docs: []*types.Document{document.DeepCopy()}})
 	return err
 }
 
-func applyUpdate(ctx context.Context, collection backends.Collection, update, criteria *types.Document) error {
+func applyUpdate(ctx context.Context, collection backends.Collection, update, criteria *types.Document, ignoreMissing bool) error {
 	if criteria == nil {
 		return errors.New("update oplog entry has no o2 document key")
 	}
@@ -860,6 +908,9 @@ func applyUpdate(ctx context.Context, collection backends.Collection, update, cr
 		return err
 	}
 	if !found {
+		if ignoreMissing {
+			return nil
+		}
 		return fmt.Errorf("update oplog target _id %v does not exist", id)
 	}
 	postImage, err := updatedDocument(existing, update, criteria)
@@ -869,7 +920,11 @@ func applyUpdate(ctx context.Context, collection backends.Collection, update, cr
 	if types.Compare(existing, postImage) == types.Equal {
 		return nil
 	}
-	result, err := collection.UpdateAll(ctx, &backends.UpdateAllParams{Docs: []*types.Document{postImage.DeepCopy()}})
+	return replaceDocument(ctx, collection, id, postImage)
+}
+
+func replaceDocument(ctx context.Context, collection backends.Collection, id any, document *types.Document) error {
+	result, err := collection.UpdateAll(ctx, &backends.UpdateAllParams{Docs: []*types.Document{document.DeepCopy()}})
 	if err != nil {
 		return err
 	}
