@@ -1241,6 +1241,8 @@ func (plan *indexLookupPlan) fetch(ctx context.Context, state *dbState, primary 
 		}
 		if doc != nil {
 			examined.docs(ctx, 1)
+			doc.SetRecordID(keyBytesToRecordID(idBytes))
+			doc.SetRecordKey(bytes.Clone(idBytes))
 			docs = append(docs, doc)
 		}
 	}

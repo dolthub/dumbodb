@@ -1078,10 +1078,14 @@ func processStagesDocuments(ctx context.Context, closer *iterator.MultiCloser, p
 
 	for _, s := range p.stages {
 		if queryRes.Sorted && s == p.sortStage {
+			iter = withoutRecordKeys(iter)
 			continue
 		}
 		if iter, err = s.Process(ctx, iter, closer); err != nil {
 			return nil, err
+		}
+		if !stages.KeepsRecordID(s) {
+			iter = withoutRecordKeys(iter)
 		}
 	}
 
@@ -1526,4 +1530,21 @@ func documentsNotFirst(stage *types.Document, i int) error {
 		"$documents is only valid as the first stage in a pipeline",
 		"$documents",
 	)
+}
+
+// withoutRecordKeys yields iter's documents without their RecordId key.
+func withoutRecordKeys(iter types.DocumentsIterator) types.DocumentsIterator {
+	return &recordKeyDropper{iter}
+}
+
+type recordKeyDropper struct {
+	types.DocumentsIterator
+}
+
+func (d *recordKeyDropper) Next() (struct{}, *types.Document, error) {
+	zero, doc, err := d.DocumentsIterator.Next()
+	if doc != nil {
+		doc.SetRecordKey(nil)
+	}
+	return zero, doc, err
 }

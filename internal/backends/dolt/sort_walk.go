@@ -314,6 +314,7 @@ func (it *sortWalkIter) fetch(e *sortWalkEntry) (*types.Document, error) {
 		return nil, err
 	}
 	doc.SetRecordID(keyBytesToRecordID(e.id))
+	doc.SetRecordKey(bytes.Clone(e.id))
 	return doc, nil
 }
 

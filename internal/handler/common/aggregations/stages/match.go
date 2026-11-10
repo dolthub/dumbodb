@@ -119,3 +119,10 @@ func SeesStoredDocuments(pipeline []any, i int) bool {
 	}
 	return true
 }
+
+// KeepsRecordID reports whether documents leaving s keep their RecordId: only
+// $match passes it on, as in mongod.
+func KeepsRecordID(s aggregations.Stage) bool {
+	_, ok := s.(*match)
+	return ok
+}

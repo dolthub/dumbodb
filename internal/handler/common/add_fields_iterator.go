@@ -68,7 +68,7 @@ func (iter *addFieldsIterator) Next() (struct{}, *types.Document, error) {
 	if err != nil {
 		return unused, nil, lazyerrors.Error(err)
 	}
-	// A reshaped document has no RecordId; see operators.ProjectInclusionTree.
+	// mongod gives $set and $addFields no RecordId metadata.
 	doc.SetRecordKey(nil)
 
 	if iter.tree {
