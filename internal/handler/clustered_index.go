@@ -102,7 +102,7 @@ func validateClusteredIndexSpec(spec *types.Document, fail func(handlererrors.Er
 			case types.NullType, int32, int64, float64, types.Decimal128:
 			default:
 				return fail(handlererrors.ErrTypeMismatch, fmt.Sprintf(
-					"BSON field 'create.clusteredIndex.v' is the wrong type '%s', expected types '[int, long, double, decimal']",
+					"BSON field 'create.clusteredIndex.v' is the wrong type '%s', expected types '[long, int, double, decimal']",
 					handlerparams.AliasFromType(value)))
 			}
 		default:
