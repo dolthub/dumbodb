@@ -78,3 +78,18 @@ func (c *examinedCounter) entries(ctx context.Context, n int) {
 func (c *examinedCounter) branchKeys(ctx context.Context, branch int, keys, returned int64) {
 	c.resolve(ctx).AddBranchKeys(branch, keys, returned)
 }
+
+// recordKeyCache resolves backends.WantsRecordKeys once for a read.
+type recordKeyCache struct {
+	state int8 // 0 unresolved, 1 no, 2 yes
+}
+
+func (c *recordKeyCache) wanted(ctx context.Context) bool {
+	if c.state == 0 {
+		c.state = 1
+		if backends.WantsRecordKeys(ctx) {
+			c.state = 2
+		}
+	}
+	return c.state == 2
+}

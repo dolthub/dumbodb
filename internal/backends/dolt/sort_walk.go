@@ -270,15 +270,16 @@ type sortWalkEntry struct {
 // value; nested arrays share one marker group, ordered by value like
 // subdocuments.
 type sortWalkIter struct {
-	index    string
-	ctx      context.Context
-	ns       tree.NodeStore
-	primary  prolly.Map
-	entries  prolly.MapIter
-	fields   []string
-	seen     map[string]struct{}
-	release  func()
-	examined examinedCounter
+	recordKeys recordKeyCache
+	index      string
+	ctx        context.Context
+	ns         tree.NodeStore
+	primary    prolly.Map
+	entries    prolly.MapIter
+	fields     []string
+	seen       map[string]struct{}
+	release    func()
+	examined   examinedCounter
 }
 
 func (it *sortWalkIter) nextEntry() (*sortWalkEntry, error) {
@@ -320,7 +321,9 @@ func (it *sortWalkIter) fetch(e *sortWalkEntry) (*types.Document, error) {
 		return nil, err
 	}
 	doc.SetRecordID(keyBytesToRecordID(e.id))
-	doc.SetRecordKey(bytes.Clone(e.id))
+	if it.recordKeys.wanted(it.ctx) {
+		doc.SetRecordKey(bytes.Clone(e.id))
+	}
 	return doc, nil
 }
 
@@ -464,11 +467,12 @@ type idStream interface {
 // planSortedIter yields documents in id order. Subdocument sort values share
 // one index key, so a run of them is read whole and ordered by value.
 type planSortedIter struct {
-	ctx     context.Context
-	ns      tree.NodeStore
-	primary prolly.Map
-	ids     [][]byte
-	stream  idStream
+	recordKeys recordKeyCache
+	ctx        context.Context
+	ns         tree.NodeStore
+	primary    prolly.Map
+	ids        [][]byte
+	stream     idStream
 	// covered, when set, builds the stream's documents from their entries.
 	covered *coveredKeys
 	fields  []string
@@ -481,7 +485,7 @@ func (it *planSortedIter) nextFetched() (*types.Document, error) {
 		if err != nil || e.id == nil {
 			return nil, err
 		}
-		doc, err := entryDocument(it.ctx, it.primary, it.ns, e, it.fields, it.covered)
+		doc, err := entryDocument(it.ctx, it.primary, it.ns, e, it.fields, it.covered, it.recordKeys.wanted(it.ctx))
 		if err != nil {
 			return nil, err
 		}

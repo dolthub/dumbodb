@@ -150,3 +150,18 @@ func SeeksEachRange(ctx context.Context) bool {
 	seeks, _ := ctx.Value(seekEachRangeKey{}).(bool)
 	return seeks
 }
+
+type recordKeysKey struct{}
+
+// WithRecordKeys returns a context whose reads set each document's RecordKey,
+// which only showRecordId and $meta "recordId" read; other reads skip it.
+func WithRecordKeys(ctx context.Context) context.Context {
+	return context.WithValue(ctx, recordKeysKey{}, true)
+}
+
+// WantsRecordKeys reports whether ctx is from WithRecordKeys. A read that sets
+// keys on many documents resolves it once.
+func WantsRecordKeys(ctx context.Context) bool {
+	want, _ := ctx.Value(recordKeysKey{}).(bool)
+	return want
+}

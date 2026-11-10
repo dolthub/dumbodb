@@ -191,6 +191,9 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 	}
 
 	ctx := connCtx
+	if params.ShowRecordId || common.MentionsRecordIDMeta(params.Projection) {
+		ctx = backends.WithRecordKeys(ctx)
+	}
 	cancel := func() {}
 
 	if params.MaxTimeMS != 0 {

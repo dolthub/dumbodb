@@ -624,7 +624,9 @@ func pointLookupByID(ctx context.Context, ns tree.NodeStore, m prolly.Map, idVal
 			return err
 		}
 		d.SetRecordID(recordID)
-		d.SetRecordKey(bytes.Clone(keyBytes))
+		if backends.WantsRecordKeys(ctx) {
+			d.SetRecordKey(keyBytes)
+		}
 		doc = d
 		return nil
 	})
@@ -1248,6 +1250,7 @@ func flattenOrBranches(branches any) ([]*types.Document, bool) {
 func (plan *indexLookupPlan) fetch(ctx context.Context, state *dbState, primary prolly.Map, fields []string) ([]*types.Document, error) {
 	docs := make([]*types.Document, 0, len(plan.ids))
 	var examined examinedCounter
+	wantKeys := backends.WantsRecordKeys(ctx)
 	for _, idBytes := range plan.ids {
 		doc, err := readPrimaryDoc(ctx, state.ns, primary, idBytes, fields)
 		if err != nil {
@@ -1256,7 +1259,9 @@ func (plan *indexLookupPlan) fetch(ctx context.Context, state *dbState, primary 
 		if doc != nil {
 			examined.docs(ctx, 1)
 			doc.SetRecordID(keyBytesToRecordID(idBytes))
-			doc.SetRecordKey(bytes.Clone(idBytes))
+			if wantKeys {
+				doc.SetRecordKey(bytes.Clone(idBytes))
+			}
 			docs = append(docs, doc)
 		}
 	}
@@ -4798,6 +4803,9 @@ func keyBytesToRecordID(keyBytes []byte) int64 {
 
 // mapIter implements types.DocumentsIterator over a prolly.Map.
 type mapIter struct {
+	// arena supplies documents' record key state in batches.
+	arena        types.DocumentArena
+	recordKeys   recordKeyCache
 	ctx          context.Context
 	ns           tree.NodeStore
 	iter         prolly.MapIter
@@ -4916,7 +4924,11 @@ func (it *mapIter) Next() (struct{}, *types.Document, error) {
 		}
 
 		doc.SetRecordID(recordID)
-		doc.SetRecordKey(bytes.Clone(keyBytes))
+		// keyBytes points into an immutable tree node, so the key is kept
+		// without a copy.
+		if it.recordKeys.wanted(it.ctx) {
+			it.arena.SetRecordKey(doc, keyBytes)
+		}
 		it.count++
 
 		return struct{}{}, doc, nil

@@ -363,6 +363,9 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 	}
 
 	ctx := connCtx
+	if common.MentionsRecordIDMeta(pipeline) {
+		ctx = backends.WithRecordKeys(ctx)
+	}
 	cancel := func() {}
 
 	if maxTimeMS != 0 {

@@ -96,11 +96,12 @@ func pinRoots(state *dbState, maps ...prolly.Map) func() {
 // indexRangeIter fetches the documents of an index id stream, one point
 // lookup per id as it is read.
 type indexRangeIter struct {
-	ctx     context.Context
-	ns      tree.NodeStore
-	primary prolly.Map
-	ids     *indexIDStream
-	fields  []string
+	recordKeys recordKeyCache
+	ctx        context.Context
+	ns         tree.NodeStore
+	primary    prolly.Map
+	ids        *indexIDStream
+	fields     []string
 	// covered, when set, builds documents from their index entries.
 	covered *coveredKeys
 	release func()
@@ -115,7 +116,7 @@ func (it *indexRangeIter) Next() (struct{}, *types.Document, error) {
 		if e.id == nil {
 			return struct{}{}, nil, iterator.ErrIteratorDone
 		}
-		doc, err := entryDocument(it.ctx, it.primary, it.ns, e, it.fields, it.covered)
+		doc, err := entryDocument(it.ctx, it.primary, it.ns, e, it.fields, it.covered, it.recordKeys.wanted(it.ctx))
 		if err != nil {
 			return struct{}{}, nil, err
 		}
@@ -127,7 +128,7 @@ func (it *indexRangeIter) Next() (struct{}, *types.Document, error) {
 
 // entryDocument returns the document of index entry e: built from the entry
 // when covered can, otherwise fetched, nil when it is gone.
-func entryDocument(ctx context.Context, primary prolly.Map, ns tree.NodeStore, e indexEntry, fields []string, covered *coveredKeys) (*types.Document, error) {
+func entryDocument(ctx context.Context, primary prolly.Map, ns tree.NodeStore, e indexEntry, fields []string, covered *coveredKeys, wantKeys bool) (*types.Document, error) {
 	doc, ok := covered.document(e)
 	if !ok {
 		var err error
@@ -136,7 +137,9 @@ func entryDocument(ctx context.Context, primary prolly.Map, ns tree.NodeStore, e
 		}
 	}
 	doc.SetRecordID(keyBytesToRecordID(e.id))
-	doc.SetRecordKey(bytes.Clone(e.id))
+	if wantKeys {
+		doc.SetRecordKey(bytes.Clone(e.id))
+	}
 	return doc, nil
 }
 

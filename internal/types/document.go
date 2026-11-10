@@ -38,12 +38,6 @@ type Document struct {
 	// extra holds rarely set state, keeping Document in a small size class.
 	extra    *documentExtra
 	recordID int64
-	// recordKey is the KeyString of _id that MongoDB returns as a clustered
-	// collection's RecordId; nil when not read from storage.
-	recordKey []byte
-	// recordKeyVisible marks a projection evaluating the document, the only
-	// place mongod's $meta "recordId" sees the RecordId.
-	recordKeyVisible bool
 }
 
 type documentExtra struct {
@@ -52,6 +46,30 @@ type documentExtra struct {
 	raw     []byte
 	decoded bool
 	frozen  bool
+	// recordKeyVisible marks a projection evaluating the document, the only
+	// place mongod's $meta "recordId" sees the RecordId.
+	recordKeyVisible bool
+	// recordKey is the KeyString of _id that MongoDB returns as a clustered
+	// collection's RecordId; nil when not read from storage.
+	recordKey []byte
+}
+
+// DocumentArena hands out documents' rarely set state in batches, so a scan
+// that sets every document's RecordKey does not allocate it one by one.
+type DocumentArena struct {
+	free []documentExtra
+}
+
+// SetRecordKey is d.SetRecordKey, taking d's extra state from a when it has
+// none.
+func (a *DocumentArena) SetRecordKey(d *Document, key []byte) {
+	if d.extra == nil {
+		if len(a.free) == 0 {
+			a.free = make([]documentExtra, 128)
+		}
+		d.extra, a.free = &a.free[0], a.free[1:]
+	}
+	d.extra.recordKey = key
 }
 
 var rawDecoder func(raw []byte) (*Document, error)
@@ -185,33 +203,46 @@ func (d *Document) SetRecordID(recordID int64) {
 
 // RecordKey returns the KeyString RecordId set by SetRecordKey, or nil.
 func (d *Document) RecordKey() []byte {
-	return d.recordKey
+	if d.extra == nil {
+		return nil
+	}
+	return d.extra.recordKey
 }
 
 // SetRecordKey sets the KeyString RecordId; key must not be modified after.
 func (d *Document) SetRecordKey(key []byte) {
-	d.recordKey = key
+	if d.extra == nil {
+		if key == nil {
+			return
+		}
+		d.extra = new(documentExtra)
+	}
+	d.extra.recordKey = key
 }
 
 // VisibleRecordKey returns the RecordKey while a projection evaluates d, nil
 // otherwise.
 func (d *Document) VisibleRecordKey() []byte {
-	if !d.recordKeyVisible {
+	if d.extra == nil || !d.extra.recordKeyVisible {
 		return nil
 	}
-	return d.recordKey
+	return d.extra.recordKey
 }
 
 // ShowRecordKey makes d's RecordKey visible to $meta until the returned func
 // runs.
 func (d *Document) ShowRecordKey() func() {
-	d.recordKeyVisible = true
-	return func() { d.recordKeyVisible = false }
+	if d.extra == nil || d.extra.recordKey == nil {
+		return func() {}
+	}
+	d.extra.recordKeyVisible = true
+	return func() { d.extra.recordKeyVisible = false }
 }
 
 // CopyRecordIdentity gives d the RecordID and RecordKey of from.
 func (d *Document) CopyRecordIdentity(from *Document) {
-	d.recordID, d.recordKey = from.recordID, from.recordKey
+	d.recordID = from.recordID
+	d.SetRecordKey(from.RecordKey())
 }
 
 // Freeze prevents document from further field modifications.

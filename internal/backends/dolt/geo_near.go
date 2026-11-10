@@ -246,12 +246,13 @@ func (c *collection) GeoNear(ctx context.Context, params *backends.GeoNearParams
 // bounds, and returns, in order of distance, those no farther than its
 // radius, as no unread document can be nearer.
 type geoNearIter struct {
-	ctx     context.Context
-	ns      tree.NodeStore
-	primary prolly.Map
-	idxMap  prolly.Map
-	params  *backends.GeoNearParams
-	sphere  bool
+	recordKeys recordKeyCache
+	ctx        context.Context
+	ns         tree.NodeStore
+	primary    prolly.Map
+	idxMap     prolly.Map
+	params     *backends.GeoNearParams
+	sphere     bool
 	// radius is the ring read so far, -1 before the first.
 	radius  float64
 	done    bool
@@ -362,7 +363,9 @@ func (it *geoNearIter) scanKeys(lo, hi int64) error {
 			continue
 		}
 		doc.SetRecordID(keyBytesToRecordID(id))
-		doc.SetRecordKey(bytes.Clone(id))
+		if it.recordKeys.wanted(it.ctx) {
+			doc.SetRecordKey(bytes.Clone(id))
+		}
 		heap.Push(&it.found, nearDoc{doc: doc, dist: it.params.Distance(doc), order: len(it.seen)})
 	}
 }

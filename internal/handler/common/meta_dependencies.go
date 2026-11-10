@@ -140,3 +140,27 @@ func filterHasText(filter any) bool {
 	}
 	return false
 }
+
+// MentionsRecordIDMeta reports whether v, a projection or pipeline, holds
+// {$meta: "recordId"} anywhere, so its reads must keep RecordIds.
+func MentionsRecordIDMeta(v any) bool {
+	switch v := v.(type) {
+	case *types.Document:
+		for _, k := range v.Keys() {
+			field := must.NotFail(v.Get(k))
+			if k == "$meta" && field == "recordId" {
+				return true
+			}
+			if MentionsRecordIDMeta(field) {
+				return true
+			}
+		}
+	case *types.Array:
+		for i := 0; i < v.Len(); i++ {
+			if MentionsRecordIDMeta(must.NotFail(v.Get(i))) {
+				return true
+			}
+		}
+	}
+	return false
+}
