@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"runtime/debug"
 	"time"
 
 	"github.com/dolthub/dumbodb/internal/backends"
@@ -86,11 +87,20 @@ func New(
 	}, nil
 }
 
+// Run replicates until ctx is done or replication stops on a terminal
+// failure. It recovers panics, so a bad replicated entry cannot exit the
+// process.
 func (r *Runtime) Run(ctx context.Context) {
 	r.manager.SetRuntimePhase("starting")
 	defer func() {
 		if ctx.Err() != nil {
 			r.manager.SetRuntimePhase("stopped")
+		}
+	}()
+	defer func() {
+		if value := recover(); value != nil {
+			r.stopReplication("replication runtime", "panic", fmt.Sprintf("panic: %v", value),
+				"MongoDB replication stopped by a panic", "panic", value, "stack", string(debug.Stack()))
 		}
 	}()
 	if failure := r.store.Snapshot().InitialSyncFailure; failure != nil {
@@ -121,6 +131,9 @@ func (r *Runtime) Run(ctx context.Context) {
 		if r.store.Snapshot().InitialSyncPhase != control.InitialSyncComplete {
 			r.manager.SetRuntimePhase("initial_sync")
 			if err := r.runInitialSync(ctx, state.SyncSource); err != nil {
+				if r.stopOnApplyPanic(err) {
+					return
+				}
 				if failure, terminal := terminalInitialSyncFailure(err); terminal {
 					if recordErr := r.manager.MarkInitialSyncFailed(failure); recordErr != nil {
 						r.logger.Error("recording terminal initial-sync failure", "err", errors.Join(err, recordErr))
@@ -141,6 +154,9 @@ func (r *Runtime) Run(ctx context.Context) {
 			}
 			if errors.Is(err, oplog.ErrSourceChanged) {
 				continue
+			}
+			if r.stopOnApplyPanic(err) {
+				return
 			}
 			if errors.Is(err, oplog.ErrTooStale) || errors.Is(err, oplog.ErrContinuityLost) ||
 				errors.Is(err, topology.ErrSourceRollbackIDChanged) {
@@ -429,6 +445,31 @@ func (r *Runtime) waitForSource(ctx context.Context) (topology.Snapshot, error) 
 		case <-ticker.C:
 		}
 	}
+}
+
+// stopOnApplyPanic stops replication when err carries a panic raised while
+// applying an oplog entry. Retrying would reapply the entry and panic again.
+func (r *Runtime) stopOnApplyPanic(err error) bool {
+	var panicErr *oplog.ApplyPanicError
+	if !errors.As(err, &panicErr) {
+		return false
+	}
+	r.stopReplication("applying oplog entry", "apply_panic", err.Error(),
+		"MongoDB replication stopped by a panic applying an oplog entry",
+		"opTime", panicErr.OpTime, "ns", panicErr.Namespace, "op", panicErr.Operation,
+		"err", err, "stack", string(panicErr.Stack))
+	return true
+}
+
+func (r *Runtime) stopReplication(stage, classification, message, logMessage string, logArgs ...any) {
+	r.manager.SetRuntimePhase("failed")
+	failure := control.ReplicationFailure{
+		Stage: stage, Classification: classification, Message: message, Retryable: false,
+	}
+	if recordErr := r.manager.RecordFailure(failure); recordErr != nil {
+		r.logger.Error("recording replication failure", "err", recordErr)
+	}
+	r.logger.Error(logMessage, logArgs...)
 }
 
 func (r *Runtime) retry(ctx context.Context, message string, err error) {

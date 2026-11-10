@@ -90,14 +90,14 @@ func (d *Document) validateData(isTopLevel bool) error {
 
 		value := values[i]
 
+		if isTopLevel && key == "_id" {
+			if err := ValidateID(value); err != nil {
+				return err
+			}
+		}
+
 		switch value := value.(type) {
 		case *Document:
-			if isTopLevel && key == "_id" {
-				if err := validateNoDollarInID(value); err != nil {
-					return err
-				}
-			}
-
 			err := value.validateData(false)
 			if err != nil {
 				var vErr *ValidationError
@@ -109,10 +109,6 @@ func (d *Document) validateData(isTopLevel bool) error {
 				return err
 			}
 		case *Array:
-			if isTopLevel && key == "_id" {
-				return newValidationError(ErrWrongIDType, fmt.Errorf("The '_id' value cannot be of type array"))
-			}
-
 			for i := 0; i < value.Len(); i++ {
 				if doc, ok := must.NotFail(value.Get(i)).(*Document); ok {
 					err := doc.validateData(false)
@@ -127,10 +123,6 @@ func (d *Document) validateData(isTopLevel bool) error {
 					}
 				}
 			}
-		case Regex:
-			if isTopLevel && key == "_id" {
-				return newValidationError(ErrWrongIDType, fmt.Errorf("The '_id' value cannot be of type regex"))
-			}
 		}
 	}
 
@@ -138,6 +130,20 @@ func (d *Document) validateData(isTopLevel bool) error {
 		return newValidationError(ErrIDNotFound, fmt.Errorf("invalid document: document must contain '_id' field"))
 	}
 
+	return nil
+}
+
+// ValidateID checks id against the rules MongoDB applies to a stored
+// top-level _id. It returns *ValidationError.
+func ValidateID(id any) error {
+	switch id := id.(type) {
+	case *Document:
+		return validateNoDollarInID(id)
+	case *Array:
+		return newValidationError(ErrWrongIDType, fmt.Errorf("The '_id' value cannot be of type array"))
+	case Regex:
+		return newValidationError(ErrWrongIDType, fmt.Errorf("The '_id' value cannot be of type regex"))
+	}
 	return nil
 }
 
