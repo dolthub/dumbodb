@@ -1122,13 +1122,14 @@ func singlePredicate(branch *types.Document) bool {
 // orOfEqualitiesOnOneField reports whether every branch is a literal equality
 // on one same field, an $or MongoDB rewrites to an $in.
 // loneOrPlannedPerBranch reports whether filter is a lone $or that MongoDB
-// plans per branch, under SUBPLAN: any but one it rewrites as an $in.
+// plans per branch, under SUBPLAN: one of two or more branches, other than
+// one it rewrites as an $in.
 func loneOrPlannedPerBranch(filter *types.Document) bool {
 	if filter.Len() != 1 || !filter.Has("$or") {
 		return false
 	}
 	flat, ok := flattenOrBranches(must.NotFail(filter.Get("$or")))
-	return ok && !orOfEqualitiesOnOneField(flat)
+	return ok && len(flat) > 1 && !orOfEqualitiesOnOneField(flat)
 }
 
 func orOfEqualitiesOnOneField(flat []*types.Document) bool {
