@@ -45,6 +45,13 @@ const (
 	decimalAbove   = 3 // continuation; above it
 )
 
+// minDoubleDecade and maxDoubleDecade bound the decades doubles reach:
+// 10^-324 is below the smallest double and 10^309 above the largest.
+const (
+	minDoubleDecade = -324
+	maxDoubleDecade = 308
+)
+
 var (
 	smallestDoubleBits = smallBits(math.SmallestNonzeroFloat64)
 	largestDoubleBits  = largeBits(math.MaxFloat64)
@@ -131,6 +138,15 @@ func appendDecimal128(out []byte, d128 types.Decimal128) []byte {
 	case d.coef.Sign() == 0:
 		return append(out, ctypeZero)
 	}
+	// The value lies in [10^(top-1), 10^top). Deciding the wide forms from
+	// that skips a rational of thousands of digits for an extreme exponent.
+	digits := len(d.coef.String())
+	switch top := d.exp + digits; {
+	case top <= minDoubleDecade:
+		return appendWide(out, d, digits, ctypePosSmall, ctypeNegSmall, false)
+	case top-1 > maxDoubleDecade:
+		return appendWide(out, d, digits, ctypePosLarge, ctypeNegLarge, true)
+	}
 	mag := d.rat()
 	if f, exact := mag.Float64(); exact {
 		if d.negative {
@@ -145,7 +161,7 @@ func appendDecimal128(out []byte, d128 types.Decimal128) []byte {
 	switch {
 	case mag.Cmp(ratOne) < 0:
 		if mag.Cmp(smallestDouble) < 0 {
-			return appendWide(out, d, ctypePosSmall, ctypeNegSmall, false)
+			return appendWide(out, d, digits, ctypePosSmall, ctypeNegSmall, false)
 		}
 		start := len(out)
 		if mag.Cmp(twoMinus255) < 0 {
@@ -196,7 +212,7 @@ func appendDecimal128(out []byte, d128 types.Decimal128) []byte {
 		return signedMagnitude(out, start, d.negative)
 	}
 	if mag.Cmp(maxDouble) > 0 {
-		return appendWide(out, d, ctypePosLarge, ctypeNegLarge, true)
+		return appendWide(out, d, digits, ctypePosLarge, ctypeNegLarge, true)
 	}
 	lead := truncDouble(mag)
 	start := len(out)
@@ -290,15 +306,12 @@ func appendContinuation(out []byte, mag, lead *big.Rat) []byte {
 }
 
 // appendWide appends a decimal beyond the double range: the range bit, the
-// biased exponent and the coefficient scaled up to 34 digits as far as the
-// exponent allows.
-func appendWide(out []byte, d decimal, pos, neg byte, large bool) []byte {
-	coef := new(big.Int).Set(d.coef)
-	exp := d.exp
-	for len(coef.String()) < 34 && exp > -6176 {
-		coef.Mul(coef, big.NewInt(10))
-		exp--
-	}
+// biased exponent and the coefficient, of digits digits, scaled up to 34
+// digits as far as the exponent allows.
+func appendWide(out []byte, d decimal, digits int, pos, neg byte, large bool) []byte {
+	shift := min(34-digits, d.exp+6176)
+	coef := new(big.Int).Mul(d.coef, pow10(shift))
+	exp := d.exp - shift
 	word := new(big.Int).Lsh(big.NewInt(int64(exp+6176)), 113)
 	word.Or(word, coef)
 	if large {

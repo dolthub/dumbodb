@@ -16,6 +16,7 @@ package index
 
 import (
 	"testing"
+	"time"
 
 	"github.com/dolthub/dumbodb/internal/types"
 )
@@ -26,5 +27,26 @@ func BenchmarkEncodeTinyDecimal(b *testing.B) {
 	d := types.Decimal128{H: uint64(6176-330)<<49 | 0x0001ED09BEAD87C0, L: 0x378D8E63FFFFFFFF}
 	for i := 0; i < b.N; i++ {
 		EncodeID(d)
+	}
+}
+
+// TestEncodeExtremeDecimalIsCheap: a decimal beyond the double range, down to
+// the smallest exponent, encodes faster than one inside it, without arithmetic
+// on its full value, which once cost several times as much.
+func TestEncodeExtremeDecimalIsCheap(t *testing.T) {
+	const n = 1000
+	cost := func(biased uint64) time.Duration {
+		d := types.Decimal128{H: biased<<49 | 0x0001ED09BEAD87C0, L: 0x378D8E63FFFFFFFF}
+		start := time.Now()
+		for i := 0; i < n; i++ {
+			EncodeID(d)
+		}
+		return time.Since(start)
+	}
+	inRange := cost(6176 - 330)
+	for _, biased := range []uint64{0, 78, 6176 + 6111} {
+		if extreme := cost(biased); extreme > inRange {
+			t.Errorf("biased exponent %d: %v for %d encodes, more than %v in the double range", biased, extreme, n, inRange)
+		}
 	}
 }
