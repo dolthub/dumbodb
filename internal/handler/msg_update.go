@@ -231,7 +231,7 @@ statements:
 				return 0, 0, nil, nil, err
 			}
 			if order != nil {
-				if iter, err = common.SortIteratorWithCollation(iter, closer, order, cmp); err != nil {
+				if iter, err = common.SortIteratorInIndexOrder(iter, closer, order, u.Filter, cmp); err != nil {
 					return 0, 0, nil, nil, err
 				}
 			}

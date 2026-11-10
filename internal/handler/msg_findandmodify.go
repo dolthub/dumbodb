@@ -184,14 +184,18 @@ func (h *Handler) findAndModifyDocument(ctx context.Context, params *common.Find
 
 	iter := common.FilterIteratorColl(iterator.WithContext(ctx, queryRes.Iter), closer, params.Query, cmp)
 
-	sort := params.Sort
-	if sort.Len() == 0 {
+	if params.Sort.Len() > 0 {
+		iter, err = common.SortIteratorWithCollation(iter, closer, params.Sort, cmp)
+	} else {
 		// The first match is in the hinted index's order.
-		if sort, err = hintedDescendingOrder(ctx, c, params.Hint); err != nil {
+		var order *types.Document
+		if order, err = hintedDescendingOrder(ctx, c, params.Hint); err != nil {
 			return nil, err
 		}
+		if order != nil {
+			iter, err = common.SortIteratorInIndexOrder(iter, closer, order, params.Query, cmp)
+		}
 	}
-	iter, err = common.SortIteratorWithCollation(iter, closer, sort, cmp)
 	if err != nil {
 		var pathErr *types.PathError
 		if errors.As(err, &pathErr) && pathErr.Code() == types.ErrPathElementEmpty {

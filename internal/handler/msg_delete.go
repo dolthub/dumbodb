@@ -182,7 +182,7 @@ func (h *Handler) execDelete(ctx context.Context, c backends.Collection, p *comm
 		if order != nil {
 			closer := iterator.NewMultiCloser(q.Iter)
 			defer closer.Close()
-			if q.Iter, err = common.SortIteratorWithCollation(q.Iter, closer, order, cmp); err != nil {
+			if q.Iter, err = common.SortIteratorInIndexOrder(q.Iter, closer, order, p.Filter, cmp); err != nil {
 				return 0, err
 			}
 		}

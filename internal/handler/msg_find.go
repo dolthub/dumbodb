@@ -439,6 +439,8 @@ func (h *Handler) makeFindIter(iter types.DocumentsIterator, closer *iterator.Mu
 		if !sorted {
 			iter, sortErr = common.GeoDistanceSortIterator(iter, closer, geoSort)
 		}
+	} else if !sorted && params.SortInMemory {
+		iter, sortErr = common.SortIteratorInIndexOrder(iter, closer, params.Sort, filterDoc, cmp)
 	} else if !sorted {
 		iter, sortErr = common.SortIteratorWithCollation(iter, closer, params.Sort, cmp)
 	}
