@@ -2372,6 +2372,9 @@ func buildCountOrDistinctPlan(ctx context.Context, params *backends.ExplainParam
 		case indexPicked && hintedOffFilter(params, picked):
 			// A hinted index the filter does not lead fetches every entry.
 			leaf = fetchStage(ixscanStage(picked))
+		case indexPicked && filterIsIn(params.Filter):
+			// An $in counts from an IXSCAN of its ranges, without a FETCH.
+			leaf = ixscanStage(picked)
 		case indexPicked:
 			leaf = &explainStage{stage: "COUNT_SCAN", indexName: picked.Name, keyPattern: keyPatternOf(picked)}
 		default:
@@ -3589,6 +3592,12 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 		v = collateFilterValue(v, queryCmp)
 	}
 
+	// An $in reads one range per value, as MongoDB's IXSCAN does, counting
+	// each document once.
+	if ranges, ok := indexPointRangesForIn(v); ok {
+		return streamedIndexCount(ctx, newIndexIDStream(ctx, idxMap, ranges, false, true), stop)
+	}
+
 	startKey, stopKey, ok := indexBoundsForFilterValue(v)
 	if !ok {
 		return 0, false, nil
@@ -3612,6 +3621,32 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 	var examined examinedCounter
 	examined.keys(ctx, int(read))
 	examined.entries(ctx, int(read))
+	return n, true, nil
+}
+
+// filterIsIn reports whether filter is one field's $in.
+func filterIsIn(filter *types.Document) bool {
+	if filter.Len() != 1 {
+		return false
+	}
+	_, ok := indexPointRangesForIn(must.NotFail(filter.Get(filter.Keys()[0])))
+	return ok
+}
+
+// streamedIndexCount counts the documents ids yields, stopping once it has
+// found stop of them when stop is positive.
+func streamedIndexCount(ctx context.Context, ids *indexIDStream, stop int64) (int64, bool, error) {
+	var n int64
+	for stop <= 0 || n < stop {
+		e, err := ids.next()
+		if err != nil {
+			return 0, false, err
+		}
+		if e.id == nil {
+			break
+		}
+		n++
+	}
 	return n, true, nil
 }
 
