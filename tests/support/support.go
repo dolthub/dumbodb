@@ -19,15 +19,18 @@
 package support
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"math/rand/v2"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -42,48 +45,24 @@ import (
 var buildOnce sync.Once
 
 type Env struct {
-	cmd       *exec.Cmd
+	server    *server
 	Client    *mongo.Client
 	dataDir   string
 	Port      int
 	extraArgs []string
 }
 
-// Restart stops the server and starts a fresh one on the same port, data dir,
-// and flags, then reconnects the client.
+// Restart stops the server and starts a fresh one with the same data dir and
+// flags, on the same port when it is still free, then reconnects the client.
 func (env *Env) Restart(tb testing.TB) {
 	tb.Helper()
 	if env.Client != nil {
 		env.Client.Disconnect(context.Background()) //nolint:errcheck
 	}
-	env.cmd.Process.Kill() //nolint:errcheck
-	env.cmd.Wait()         //nolint:errcheck
+	env.server.stop()
 
-	addr := fmt.Sprintf("127.0.0.1:%d", env.Port)
-	binary := filepath.Join(RepoRoot(), ".runtime", "bin", "dolt")
-	args := append([]string{"--addr", addr, "--data-dir", env.dataDir}, env.extraArgs...)
-	cmd := exec.Command(binary, args...)
-	require.NoError(tb, cmd.Start())
-	env.cmd = cmd
-	tb.Cleanup(func() {
-		cmd.Process.Kill() //nolint:errcheck
-		cmd.Wait()         //nolint:errcheck
-	})
-
-	deadline := time.Now().Add(15 * time.Second)
-	for time.Now().Before(deadline) {
-		conn, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
-		if err == nil {
-			conn.Close()
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	client, err := mongo.Connect(options.Client().
-		ApplyURI(fmt.Sprintf("mongodb://%s/", addr)).
-		SetBSONOptions(&options.BSONOptions{DefaultDocumentM: true}))
-	require.NoError(tb, err)
-	env.Client = client
+	env.server, env.Port = startServer(tb, env.Port, env.dataDir, env.extraArgs)
+	env.Client = connect(tb, env.Port)
 }
 
 // DataDir returns the server's --data-dir, for tests that inspect on-disk state.
@@ -102,13 +81,9 @@ func RepoRoot() string {
 func StartDumboDB(tb testing.TB, extraArgs ...string) *Env {
 	tb.Helper()
 
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(tb, err)
-	port := listener.Addr().(*net.TCPAddr).Port
-	listener.Close()
-
+	port := freePort(tb)
 	dataDir := tb.TempDir()
-	binary := filepath.Join(RepoRoot(), ".runtime", "bin", "dolt")
+	binary := serverBinary()
 
 	var buildErr error
 	buildOnce.Do(func() {
@@ -137,47 +112,113 @@ func StartDumboDB(tb testing.TB, extraArgs ...string) *Env {
 		tb.Fatalf("failed to build dumbodb: %v", buildErr)
 	}
 
-	addr := fmt.Sprintf("127.0.0.1:%d", port)
-	args := append([]string{"--addr", addr, "--data-dir", dataDir}, extraArgs...)
-	cmd := exec.Command(binary, args...)
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-	require.NoError(tb, cmd.Start())
-
 	env := &Env{
-		cmd:       cmd,
 		dataDir:   dataDir,
-		Port:      port,
 		extraArgs: extraArgs,
 	}
-
+	env.server, env.Port = startServer(tb, port, dataDir, extraArgs)
 	tb.Cleanup(func() {
 		if env.Client != nil {
 			env.Client.Disconnect(context.Background()) //nolint:errcheck
 		}
-		cmd.Process.Kill() //nolint:errcheck
-		cmd.Wait()         //nolint:errcheck
 	})
-
-	deadline := time.Now().Add(15 * time.Second)
-	for time.Now().Before(deadline) {
-		conn, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
-		if err == nil {
-			conn.Close()
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-
-	// DefaultDocumentM decodes sub-documents into bson.M when the surrounding
-	// element type is interface{}, which most tests type-assert against.
-	client, err := mongo.Connect(options.Client().
-		ApplyURI(fmt.Sprintf("mongodb://%s/", addr)).
-		SetBSONOptions(&options.BSONOptions{DefaultDocumentM: true}))
-	require.NoError(tb, err)
-	env.Client = client
+	env.Client = connect(tb, env.Port)
 
 	return env
+}
+
+func serverBinary() string {
+	return filepath.Join(RepoRoot(), ".runtime", "bin", "dolt")
+}
+
+func freePort(tb testing.TB) int {
+	tb.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(tb, err)
+	defer listener.Close()
+	return listener.Addr().(*net.TCPAddr).Port
+}
+
+// server is a running dumbodb process. exited closes when the process ends.
+type server struct {
+	cmd    *exec.Cmd
+	exited chan struct{}
+}
+
+func (s *server) stop() {
+	s.cmd.Process.Kill() //nolint:errcheck
+	<-s.exited
+}
+
+// startServer starts dumbodb on port and returns once that process itself
+// logs that it is listening. A free port can be taken by another test's server
+// before this one binds it, and a dial would then reach that server, so a
+// process that exits before listening is retried on a new port. Returns the
+// port in use.
+func startServer(tb testing.TB, port int, dataDir string, extraArgs []string) (*server, int) {
+	tb.Helper()
+
+	const attempts = 5
+	for attempt := 1; ; attempt++ {
+		s, listening := launchServer(tb, port, dataDir, extraArgs)
+		select {
+		case <-listening:
+			return s, port
+		case <-s.exited:
+			if attempt == attempts {
+				tb.Fatalf("dumbodb exited before listening on port %d, %d attempts", port, attempts)
+			}
+			port = freePort(tb)
+		case <-time.After(15 * time.Second):
+			s.stop()
+			tb.Fatalf("dumbodb did not listen on port %d within 15s", port)
+		}
+	}
+}
+
+// launchServer starts one dumbodb process. listening closes when the process
+// logs that it is listening on addr, which it does only after binding it.
+func launchServer(tb testing.TB, port int, dataDir string, extraArgs []string) (*server, <-chan struct{}) {
+	tb.Helper()
+
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	args := append([]string{"--addr", addr, "--data-dir", dataDir}, extraArgs...)
+	cmd := exec.Command(serverBinary(), args...)
+	stderr, err := cmd.StderrPipe()
+	require.NoError(tb, err)
+	require.NoError(tb, cmd.Start())
+
+	s := &server{cmd: cmd, exited: make(chan struct{})}
+	listening := make(chan struct{})
+	go func() {
+		scanner := bufio.NewScanner(stderr)
+		scanner.Buffer(make([]byte, 64<<10), 1<<20)
+		announced := false
+		for scanner.Scan() {
+			line := scanner.Text()
+			if !announced && strings.Contains(line, "Listening on ") && strings.Contains(line, " "+addr+"...") {
+				announced = true
+				close(listening)
+			}
+		}
+		io.Copy(io.Discard, stderr) //nolint:errcheck
+		cmd.Wait()                  //nolint:errcheck
+		close(s.exited)
+	}()
+	tb.Cleanup(s.stop)
+	return s, listening
+}
+
+// connect returns a client for the server on port. DefaultDocumentM decodes
+// sub-documents into bson.M when the surrounding element type is interface{},
+// which most tests type-assert against.
+func connect(tb testing.TB, port int) *mongo.Client {
+	tb.Helper()
+	client, err := mongo.Connect(options.Client().
+		ApplyURI(fmt.Sprintf("mongodb://127.0.0.1:%d/", port)).
+		SetBSONOptions(&options.BSONOptions{DefaultDocumentM: true}))
+	require.NoError(tb, err)
+	return client
 }
 
 func (env *Env) Collection(tb testing.TB) *mongo.Collection {
