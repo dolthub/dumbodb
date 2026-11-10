@@ -407,6 +407,7 @@ func validateProjectionShape(projection *types.Document) (*types.Document, bool,
 // - ErrOperatorWrongLenOfArgs when the operator has an invalid number of arguments.
 // - ErrInvalidPipelineOperator when an the operator does not exist.
 func ProjectDocument(doc, projection, filter *types.Document, inclusion bool) (*types.Document, error) {
+	defer doc.ShowRecordKey()()
 	if inclusion && !hasFindProjectionOperator(projection) && operators.SpecHasComputedPath(projection, true) {
 		return operators.ProjectInclusionTree(doc, projection)
 	}

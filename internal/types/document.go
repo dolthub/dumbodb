@@ -41,6 +41,9 @@ type Document struct {
 	// recordKey is the KeyString of _id that MongoDB returns as a clustered
 	// collection's RecordId; nil when not read from storage.
 	recordKey []byte
+	// recordKeyVisible marks a projection evaluating the document, the only
+	// place mongod's $meta "recordId" sees the RecordId.
+	recordKeyVisible bool
 }
 
 type documentExtra struct {
@@ -188,6 +191,22 @@ func (d *Document) RecordKey() []byte {
 // SetRecordKey sets the KeyString RecordId; key must not be modified after.
 func (d *Document) SetRecordKey(key []byte) {
 	d.recordKey = key
+}
+
+// VisibleRecordKey returns the RecordKey while a projection evaluates d, nil
+// otherwise.
+func (d *Document) VisibleRecordKey() []byte {
+	if !d.recordKeyVisible {
+		return nil
+	}
+	return d.recordKey
+}
+
+// ShowRecordKey makes d's RecordKey visible to $meta until the returned func
+// runs.
+func (d *Document) ShowRecordKey() func() {
+	d.recordKeyVisible = true
+	return func() { d.recordKeyVisible = false }
 }
 
 // CopyRecordIdentity gives d the RecordID and RecordKey of from.

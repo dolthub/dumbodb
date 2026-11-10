@@ -76,7 +76,7 @@ func newMeta(args ...any) (Operator, error) {
 // attach.
 func (op *metaOp) Process(doc *types.Document) (any, error) {
 	if op.name == "recordId" && doc != nil {
-		if recordKey := doc.RecordKey(); recordKey != nil {
+		if recordKey := doc.VisibleRecordKey(); recordKey != nil {
 			return types.Binary{Subtype: types.BinaryGeneric, B: recordKey}, nil
 		}
 	}
