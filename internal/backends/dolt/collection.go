@@ -3595,7 +3595,7 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 	// documents are counted by id, still without fetching one; equality
 	// counts stay exact (one entry per value and document).
 	if _, isOp := v.(*types.Document); isOp && chosen.Multikey {
-		return multikeyRangeCount(ctx, idxMap, startKey, stopKey)
+		return multikeyRangeCount(ctx, idxMap, [][2][]byte{{startKey, stopKey}}, stop)
 	}
 
 	n, err := idxpkg.RangeCount(ctx, idxMap, startKey, stopKey)
@@ -3612,19 +3612,36 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 	return n, true, nil
 }
 
-// multikeyRangeCount counts the distinct documents of a multikey index range.
-func multikeyRangeCount(ctx context.Context, idxMap prolly.Map, startKey, stopKey []byte) (int64, bool, error) {
-	entries, err := idxpkg.RangeLookup(ctx, idxMap, startKey, stopKey)
-	if err != nil {
-		return 0, false, err
-	}
-	seen := make(map[string]struct{}, len(entries))
-	for _, id := range entries {
-		seen[string(id)] = struct{}{}
-	}
+// multikeyRangeCount counts the distinct documents of multikey index ranges,
+// stopping once it has found stop of them when stop is positive, as MongoDB's
+// count reads only as far as skip plus limit.
+func multikeyRangeCount(ctx context.Context, idxMap prolly.Map, ranges [][2][]byte, stop int64) (int64, bool, error) {
+	seen := make(map[string]struct{})
 	var examined examinedCounter
-	examined.keys(ctx, len(entries))
-	examined.entries(ctx, len(seen))
+	for _, r := range ranges {
+		iter, err := idxpkg.NewRangeIDIter(ctx, idxMap, r[0], r[1], false)
+		if err != nil {
+			return 0, false, err
+		}
+		for {
+			id, err := iter.Next(ctx)
+			if err != nil {
+				return 0, false, err
+			}
+			if id == nil {
+				break
+			}
+			examined.keys(ctx, 1)
+			if _, dup := seen[string(id)]; dup {
+				continue
+			}
+			seen[string(id)] = struct{}{}
+			examined.entries(ctx, 1)
+			if stop > 0 && int64(len(seen)) >= stop {
+				return int64(len(seen)), true, nil
+			}
+		}
+	}
 	return int64(len(seen)), true, nil
 }
 
