@@ -49,9 +49,11 @@ const (
 
 // buildBSONFieldPredicate returns a sound predicate for (field, value),
 // or nil when no sound predicate can be expressed (dotted paths, regex,
-// $in/$nin/$ne, NaN/Inf, decimal128, ...). Supported: scalar equality on
-// numeric/string/bool/time/ObjectID, numeric range via $gt/$gte/$lt/$lte,
-// and top-level array containment of a scalar.
+// $in/$nin/$ne, a Decimal128 or null literal, ...). Supported: scalar equality
+// on numeric (NaN and infinities included)/string/bool/time/ObjectID, numeric
+// range via $gt/$gte/$lt/$lte, and top-level array containment of a scalar. A
+// numeric predicate passes any stored value it cannot rule out to the full
+// filter (numericMayMatch).
 // scanPredicate reports whether a stored document may match, given all of it
 // or, when not complete, a prefix of it.
 type scanPredicate func(stored []byte, complete bool) bool

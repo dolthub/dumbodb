@@ -166,7 +166,9 @@ func (s *mergedIDStream) Less(i, j int) bool {
 	if c != 0 {
 		return c < 0
 	}
-	// Ties come in range order, reversed with the scan, as MongoDB's bounds.
+	// Ties come in range order, reversed with the scan. mongod's tie order
+	// follows its merge heap and is unspecified; this one is deterministic but
+	// does not always match it.
 	if s.reverse {
 		return s.heads[i].branch > s.heads[j].branch
 	}

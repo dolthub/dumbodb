@@ -124,8 +124,11 @@ A double's word there always ends in a 0 bit, so a decimal never shares a
 double's bytes and sorts strictly between its truncated double and the next
 one. mongod derives the continuation from Decimal128 arithmetic on the scaled
 value, which rounds; DumboDB uses the exact value. The leading 9 bytes always
-match, and the continuation usually does: in `TestKeyStringMatchesMongod`'s
-corpus, 3 of 3145 values differ, in the continuation's last digits.
+match, so order and uniqueness against every other value are the same, but the
+continuation often differs: in the PR 209 review's sweep of about 21,400 such
+decimals, 2,290 differed in the continuation, including ordinary values such
+as `2.225073858507201E-308`. `TestKeyStringMatchesMongod`'s smaller corpus
+checks order for every band value and exact bytes elsewhere.
 
 | Decimal | mongod | DumboDB |
 |---|---|---|
