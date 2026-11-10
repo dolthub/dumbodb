@@ -21,40 +21,95 @@ import (
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// validateHintExists returns MongoDB's error when hint names an index that does
-// not exist on the collection. A nil, empty, or $natural hint is always
-// accepted. Matches MongoDB, which fails such a query rather than silently
-// ignoring the hint and falling back to default index selection.
+// checkHintType returns mongod's FailedToParse for a hint that is neither a
+// string nor a document, which mongod refuses before planning, as a command
+// error even in a write statement.
+func checkHintType(hint any) error {
+	switch hint.(type) {
+	case nil, string, *types.Document:
+		return nil
+	}
+	return handlererrors.NewCommandErrorMsg(handlererrors.ErrFailedToParse, "Hint must be a string or an object")
+}
+
+// validateHintExists is validateHint for a read without a sort or upsert.
 func validateHintExists(ctx context.Context, coll backends.Collection, hint any, command string) error {
+	return validateHint(ctx, coll, hint, command, nil, false)
+}
+
+// validateHint returns mongod's error for a hint the command cannot use: a
+// {$natural: n} with n other than 1 or -1, or in the opposite direction from a
+// $natural sort; or a name or key pattern of no index on the collection. An
+// empty name is no index's. A missing collection has no indexes, which mongod
+// overlooks for a read but not for an upsert, which would create it.
+func validateHint(ctx context.Context, coll backends.Collection, hint any, command string, sort *types.Document, upsert bool) error {
+	if d, ok := hint.(*types.Document); ok && backends.HintIsNatural(d) {
+		dir, ok := naturalDirection(must.NotFail(d.Get("$natural")))
+		if !ok {
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
+				"$natural hint cannot be set to a value other than -1 or 1.", command)
+		}
+		if sort.Len() == 1 && sort.Has("$natural") {
+			if sortDir, ok := naturalDirection(must.NotFail(sort.Get("$natural"))); ok && sortDir != dir {
+				return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
+					"$natural hint must be in the same direction as $natural sort order", command)
+			}
+		}
+		return nil
+	}
+	notIndexed := handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
+		"hint provided does not correspond to an existing index", command)
+	if hint == "" {
+		return notIndexed
+	}
 	if !backends.HintRequiresExistingIndex(hint) {
 		return nil
 	}
 
 	idxRes, err := coll.ListIndexes(ctx, nil)
 	if err != nil {
-		// MongoDB does not validate a hint against a non-existent namespace
-		// (the query just returns no documents), so skip validation when the
-		// collection or database does not exist. Any other error is a real
-		// backend failure and must propagate rather than letting an
-		// unvalidated hint through.
+		// A read of a missing collection returns no documents, so mongod does
+		// not validate its hint; an upsert would create the collection.
 		if backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist) ||
 			backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseDoesNotExist) {
+			if upsert {
+				return notIndexed
+			}
 			return nil
 		}
 		return lazyerrors.Error(err)
 	}
 
 	if backends.MatchHintedIndex(hint, idxRes.Indexes) == "" {
-		return handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrBadValue,
-			"hint provided does not correspond to an existing index",
-			command,
-		)
+		return notIndexed
 	}
 
 	return nil
+}
+
+// naturalDirection returns 1 or -1 for a $natural hint or sort value.
+func naturalDirection(v any) (int, bool) {
+	var f float64
+	switch n := v.(type) {
+	case int32:
+		f = float64(n)
+	case int64:
+		f = float64(n)
+	case float64:
+		f = n
+	default:
+		return 0, false
+	}
+	switch f {
+	case 1:
+		return 1, true
+	case -1:
+		return -1, true
+	}
+	return 0, false
 }
 
 // hintedDescendingOrder returns the key pattern of the index hint names when

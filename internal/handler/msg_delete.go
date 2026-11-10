@@ -88,6 +88,13 @@ func (h *Handler) MsgDelete(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 	var deleted int32
 	writeErrors := types.MakeArray(0)
 
+	// mongod refuses a hint of the wrong type for the whole command.
+	for _, p := range params.Deletes {
+		if err = checkHintType(p.Hint); err != nil {
+			return nil, err
+		}
+	}
+
 	for i, p := range params.Deletes {
 		p.Collation = h.effectiveCollation(connCtx, db, params.Collection, p.Collation)
 		var d int32
@@ -148,7 +155,7 @@ func (h *Handler) execDelete(ctx context.Context, c backends.Collection, p *comm
 		return 0, err
 	}
 
-	if err := validateHintExists(ctx, c, p.Hint, "delete"); err != nil {
+	if err := validateHint(ctx, c, p.Hint, "delete", nil, false); err != nil {
 		return 0, err
 	}
 

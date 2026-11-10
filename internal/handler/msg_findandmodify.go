@@ -161,7 +161,10 @@ func (h *Handler) findAndModifyDocument(ctx context.Context, params *common.Find
 
 	cmp := collation.Parse(params.Collation).Comparator()
 
-	if err = validateHintExists(ctx, c, params.Hint, "findAndModify"); err != nil {
+	if err = checkHintType(params.Hint); err != nil {
+		return nil, err
+	}
+	if err = validateHint(ctx, c, params.Hint, "findAndModify", params.Sort, params.Upsert); err != nil {
 		return nil, err
 	}
 

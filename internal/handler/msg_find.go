@@ -172,7 +172,10 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 
 	// A hint naming an index that does not exist is an error, matching MongoDB.
 	if !isView {
-		if err = validateHintExists(connCtx, coll, params.Hint, "find"); err != nil {
+		if err = checkHintType(params.Hint); err != nil {
+			return nil, err
+		}
+		if err = validateHint(connCtx, coll, params.Hint, "find", params.Sort, false); err != nil {
 			return nil, err
 		}
 		if params.Sort.Len() == 0 {
