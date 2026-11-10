@@ -68,6 +68,20 @@ Table (DTBL)         schema -> TableSchema (DSCH)
   walks a RootValue's table map (status, diff, merge) therefore expects every
   value in that map to be a Table.
 
+### Key size limit
+
+Primary keys (`KeyString(_id)`) and secondary index keys (the indexed values'
+KeyStrings, then the `_id`'s) are capped at 4096 encoded bytes
+(`index.MaxKeyLength`); a longer key fails the write with `KeyTooLong` (17280).
+A prolly node is 64KB and an internal node needs at least two keys, so Dolt
+itself panics with "impossible node" somewhere above about 32KB; the cap leaves
+room below that. The encoded size can exceed the value's size: strings carry a
+terminator and escape NUL bytes, collation indexes store sort keys, and hashed
+and text indexes store the values and words themselves. The README's
+Limitations section lists these cases. The column is still declared
+`varbinary(16383)`, which `dolt sql`, `dolt diff` and `dolt fsck` read without
+trouble for keys under the cap.
+
 ### Prolly trees
 
 `ProllyTreeNode` and `AddressMap` are both prolly-tree nodes (`serial/prolly.fbs`,

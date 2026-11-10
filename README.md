@@ -72,7 +72,11 @@ Parity is verified against a specific MongoDB release: **MongoDB 8.0.28**. This 
   - Secondary index entries carry the encoded `_id`, so large `_id`s (long strings, embedded documents) make secondary indexes larger.
   - `mongodump` of a DumboDB database restored into MongoDB creates clustered collections.
   - A custom clustered index `name` is not recorded; the index is always reported as `_id_`.
-- Key Size: an encoded key may be at most 4096 bytes: an `_id`, or an index entry (its indexed values plus the `_id`). A longer key is refused with a `KeyTooLong` (17280) error. MongoDB accepts much larger keys (up to 8MB for a clustered `_id`).
+- Key Size: an encoded key may be at most 4096 bytes: an `_id`, or an index entry (its indexed values plus the `_id`). A longer key is refused with a `KeyTooLong` (17280) error. MongoDB accepts much larger keys (up to 8MB for a clustered `_id`). The limit applies to the encoded size, which can exceed the value's own size:
+  - Strings carry a terminator, and each NUL byte inside one takes two bytes, so a 4095-character ASCII `_id` encodes to 4097 bytes.
+  - An index with a collation stores each string's collation sort key, which can be longer than the string; at strength 3, 1500 'e-acute' characters (3000 bytes of UTF-8) become a 4540-byte key.
+  - A hashed index stores the value itself rather than a 64-bit hash, so a long string on a hashed field is subject to the limit.
+  - A text index stores each word, so a single word longer than the limit is refused.
 - Query Plans: when an `$or` uses several indexes, DumboDB runs their scans in index name order; MongoDB uses index creation order, which DumboDB does not record. Results are the same; only the order of unsorted results and explain output differ.
 - Geo points stored as documents: MongoDB reads a legacy point stored as an embedded document from its first two fields, x then y, whatever their names (`{lng: 10, lat: 1}` is (10, 1), and `{lat: 1, lng: 10}` is (1, 10)). DumboDB stores every document with sorted keys, which loses that order, so it does not treat a stored embedded document as a point: `$near`, `$geoWithin` and geo indexes skip it. Store points as `[x, y]` arrays or GeoJSON, which work as in MongoDB.
 - RecordIds: `showRecordId()` and `$recordId` return MongoDB's KeyString bytes for the `_id`, except for a Decimal128 `_id` below 2^-255 that is not exactly a double, whose last bytes can differ (see [mongodb-keystring.md](docs/reference/mongodb-keystring.md#known-deviation-small-decimals)). Order and uniqueness are unaffected.
