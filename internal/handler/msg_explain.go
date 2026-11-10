@@ -101,8 +101,13 @@ func (h *Handler) runExplainedCount(ctx context.Context, coll backends.Collectio
 	}
 	common.CanonicalizeFilter(cp.Filter)
 	cp.Collation = qp.Collation
-	n, _ := h.execCount(ctx, coll, cp, collation.Parse(qp.Collation).Comparator())
-	return explainRun{matched: n, scanned: n}
+	n, read, _ := h.execCountReading(ctx, coll, cp, collation.Parse(qp.Collation).Comparator())
+	matched := n
+	if read > 0 {
+		// A FETCH returns every match it read, skipped ones included.
+		matched = read
+	}
+	return explainRun{matched: matched, scanned: matched}
 }
 
 func (h *Handler) runExplainedDistinct(ctx context.Context, coll backends.Collection, params *common.ExplainParams, qp *backends.ExplainParams) explainRun {

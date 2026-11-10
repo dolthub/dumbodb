@@ -151,6 +151,14 @@ func (h *Handler) MsgCount(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMs
 // execCount counts the documents of collection c that match params, by the
 // fastest path available. cmp is params' collation comparator, nil when simple.
 func (h *Handler) execCount(ctx context.Context, c backends.Collection, params *common.CountParams, cmp *collation.Comparator) (int32, error) {
+	n, _, err := h.execCountReading(ctx, c, params, cmp)
+	return n, err
+}
+
+// execCountReading is execCount that also returns, when it fetched documents,
+// how many matched before the skip: what explain's FETCH returns. It is zero
+// when the count came from an index.
+func (h *Handler) execCountReading(ctx context.Context, c backends.Collection, params *common.CountParams, cmp *collation.Comparator) (n, read int32, err error) {
 	// A hinted index decides which documents are counted (a sparse one holds
 	// only some), so a hint skips both shortcuts.
 	hinted := params.Hint != nil && !backends.HintIsNatural(params.Hint)
@@ -160,7 +168,7 @@ func (h *Handler) execCount(ctx context.Context, c backends.Collection, params *
 	if params.Filter.Len() == 0 && !hinted {
 		countRes, err := c.Count(ctx, &backends.CountParams{})
 		if err != nil {
-			return 0, lazyerrors.Error(err)
+			return 0, 0, lazyerrors.Error(err)
 		}
 
 		total := countRes.Count
@@ -174,7 +182,7 @@ func (h *Handler) execCount(ctx context.Context, c backends.Collection, params *
 			total = params.Limit
 		}
 
-		return int32(total), nil
+		return int32(total), 0, nil
 	}
 
 	// Fast path: ask the backend whether it can satisfy the filtered count
@@ -188,7 +196,7 @@ func (h *Handler) execCount(ctx context.Context, c backends.Collection, params *
 		}
 		countRes, cerr := c.Count(ctx, &backends.CountParams{Filter: params.Filter, Collation: params.Collation, Stop: stop})
 		if cerr != nil {
-			return 0, lazyerrors.Error(cerr)
+			return 0, 0, lazyerrors.Error(cerr)
 		}
 		if countRes.Filtered {
 			total := countRes.Count
@@ -202,7 +210,7 @@ func (h *Handler) execCount(ctx context.Context, c backends.Collection, params *
 				total = params.Limit
 			}
 
-			return int32(total), nil
+			return int32(total), 0, nil
 		}
 	}
 
@@ -215,7 +223,7 @@ func (h *Handler) execCount(ctx context.Context, c backends.Collection, params *
 
 	queryRes, err := c.Query(ctx, &qp)
 	if err != nil {
-		return 0, lazyerrors.Error(err)
+		return 0, 0, lazyerrors.Error(err)
 	}
 
 	iter := iterator.WithContext(ctx, queryRes.Iter)
@@ -225,7 +233,8 @@ func (h *Handler) execCount(ctx context.Context, c backends.Collection, params *
 
 	iter = common.FilterIteratorColl(iter, closer, params.Filter, cmp)
 
-	iter = common.SkipIterator(iter, closer, params.Skip)
+	matched := &countingIterator{DocumentsIterator: iter}
+	iter = common.SkipIterator(matched, closer, params.Skip)
 
 	iter = common.LimitIterator(iter, closer, params.Limit)
 
@@ -237,10 +246,24 @@ func (h *Handler) execCount(ctx context.Context, c backends.Collection, params *
 	}
 
 	if err != nil {
-		return 0, handleMaxTimeMSError(err, params.MaxTimeMS, "count")
+		return 0, 0, handleMaxTimeMSError(err, params.MaxTimeMS, "count")
 	}
 
 	count, _ := res.Get("count")
-	n, _ := count.(int32)
-	return n, nil
+	n, _ = count.(int32)
+	return n, matched.n, nil
+}
+
+// countingIterator counts the documents it yields.
+type countingIterator struct {
+	types.DocumentsIterator
+	n int32
+}
+
+func (it *countingIterator) Next() (struct{}, *types.Document, error) {
+	zero, doc, err := it.DocumentsIterator.Next()
+	if err == nil {
+		it.n++
+	}
+	return zero, doc, err
 }
