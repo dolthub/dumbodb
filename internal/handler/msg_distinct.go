@@ -133,7 +133,7 @@ func (h *Handler) execDistinct(ctx context.Context, c backends.Collection, param
 	if params.Filter.Len() == 0 && cmp == nil {
 		idx, err := distinctScanIndex(ctx, c, params.Key)
 		if err != nil {
-			return nil, lazyerrors.Error(err)
+			return nil, handleMaxTimeMSError(err, params.MaxTimeMS, "distinct")
 		}
 		// A hint to another index rules out the scan of this one.
 		if idx != nil && hinted && backends.MatchHintedIndex(params.Hint, []backends.IndexInfo{*idx}) != idx.Name {
@@ -142,7 +142,7 @@ func (h *Handler) execDistinct(ctx context.Context, c backends.Collection, param
 		if idx != nil {
 			distinct, err := distinctFromIndexKeys(ctx, c, params.Key, idx)
 			if err != nil {
-				return nil, lazyerrors.Error(err)
+				return nil, handleMaxTimeMSError(err, params.MaxTimeMS, "distinct")
 			}
 			return distinct, nil
 		}
@@ -152,12 +152,12 @@ func (h *Handler) execDistinct(ctx context.Context, c backends.Collection, param
 		if ds, ok := c.(backends.DistinctScanner); ok {
 			res, err := ds.DistinctScan(ctx, &backends.DistinctParams{Key: params.Key, Filter: params.Filter})
 			if err != nil {
-				return nil, lazyerrors.Error(err)
+				return nil, handleMaxTimeMSError(err, params.MaxTimeMS, "distinct")
 			}
 			if res != nil {
 				distinct, err := common.DedupDistinctValues(res.Values)
 				if err != nil {
-					return nil, lazyerrors.Error(err)
+					return nil, handleMaxTimeMSError(err, params.MaxTimeMS, "distinct")
 				}
 				return distinct, nil
 			}

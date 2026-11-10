@@ -84,7 +84,7 @@ func (h *Handler) MsgCount(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMs
 	collParam := backends.ListCollectionsParams{Name: params.Collection}
 	cList, err := db.ListCollections(connCtx, &collParam)
 	if err != nil {
-		return nil, lazyerrors.Error(err)
+		return nil, handleMaxTimeMSError(err, params.MaxTimeMS, "count")
 	}
 
 	isView := len(cList.Collections) > 0 && cList.Collections[0].IsView

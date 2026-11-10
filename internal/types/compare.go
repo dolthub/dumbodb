@@ -290,6 +290,9 @@ func compareNumeric(v1, v2 any) (CompareResult, bool) {
 		return res, true
 	}
 
+	if !isNumber(v1) || !isNumber(v2) {
+		return Equal, false
+	}
 	c1, r1, ok1 := numericParts(v1)
 	c2, r2, ok2 := numericParts(v2)
 	if !ok1 || !ok2 {
@@ -329,6 +332,16 @@ func compareNumericFast(v1, v2 any) (CompareResult, bool) {
 		return compareFloats(f1, float64(i2)), true
 	}
 	return Equal, false
+}
+
+// isNumber reports whether v is a BSON number, before numericParts converts it,
+// which costs a large power of ten for an extreme Decimal128 exponent.
+func isNumber(v any) bool {
+	switch v.(type) {
+	case int32, int64, float64, Decimal128:
+		return true
+	}
+	return false
 }
 
 func asInt64(v any) (int64, bool) {
