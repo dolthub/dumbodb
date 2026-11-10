@@ -2237,9 +2237,14 @@ func (c *collection) Explain(ctx context.Context, params *backends.ExplainParams
 	return &backends.ExplainResult{QueryPlanner: qp}, nil
 }
 
-// explainQueryParams is the QueryParams the explained command runs with.
+// explainQueryParams is the QueryParams the explained command runs with. As
+// in find, only a single-field sort reaches the backend; a longer one is
+// applied in memory over the filter's plan.
 func explainQueryParams(params *backends.ExplainParams) *backends.QueryParams {
-	qp := &backends.QueryParams{Filter: params.Filter, Sort: params.Sort, Hint: params.Hint, Collated: params.Collated, Collation: params.Collation, Fields: params.Fields}
+	qp := &backends.QueryParams{Filter: params.Filter, Hint: params.Hint, Collated: params.Collated, Collation: params.Collation, Fields: params.Fields}
+	if params.Sort.Len() == 1 {
+		qp.Sort = params.Sort
+	}
 	if params.Limit != 0 {
 		qp.LimitHint = params.Skip + max(params.Limit, -params.Limit)
 	}
