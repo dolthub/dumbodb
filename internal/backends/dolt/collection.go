@@ -333,7 +333,7 @@ func (c *collection) query(ctx context.Context, params *backends.QueryParams) (*
 			}
 			if ok {
 				stage := collscanStage()
-				if _, _, ranged := clusteredIDRange(params.Filter); ranged {
+				if _, _, ranged := clusteredIDRange(ctx, params.Filter); ranged {
 					stage = clusteredStage()
 				}
 				return res, stage, nil
@@ -2210,7 +2210,7 @@ func (c *collection) Explain(ctx context.Context, params *backends.ExplainParams
 	var winning *explainStage
 	switch params.Command {
 	case "count", "distinct":
-		winning = buildCountOrDistinctPlan(params, idxInfos)
+		winning = buildCountOrDistinctPlan(ctx, params, idxInfos)
 	default:
 		res, scan, err := c.query(ctx, explainQueryParams(params))
 		if err != nil {
@@ -2331,7 +2331,7 @@ func countingScan(filter *types.Document, scan *explainStage) *explainStage {
 }
 
 // buildCountOrDistinctPlan composes the stage tree for a count or distinct.
-func buildCountOrDistinctPlan(params *backends.ExplainParams, idxInfos []backends.IndexInfo) *explainStage {
+func buildCountOrDistinctPlan(ctx context.Context, params *backends.ExplainParams, idxInfos []backends.IndexInfo) *explainStage {
 	var picked backends.IndexInfo
 	var indexPicked bool
 	if !hintIsNatural(params.Hint) {
@@ -2356,7 +2356,7 @@ func buildCountOrDistinctPlan(params *backends.ExplainParams, idxInfos []backend
 		case indexPicked:
 			leaf = &explainStage{stage: "COUNT_SCAN", indexName: picked.Name, keyPattern: keyPatternOf(picked)}
 		default:
-			if _, _, ranged := clusteredIDRange(params.Filter); ranged && !params.Collated && !hintIsNatural(params.Hint) {
+			if _, _, ranged := clusteredIDRange(ctx, params.Filter); ranged && !params.Collated && !hintIsNatural(params.Hint) {
 				leaf = clusteredStage()
 			}
 		}

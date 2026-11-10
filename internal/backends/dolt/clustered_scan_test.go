@@ -19,6 +19,9 @@ import (
 	"hash/fnv"
 	"slices"
 	"testing"
+	"time"
+
+	"go.mongodb.org/mongo-driver/bson/primitive"
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -106,5 +109,28 @@ func TestClusteredInEmptyFieldName(t *testing.T) {
 	defer res.Iter.Close()
 	if _, d, err := res.Iter.Next(); err != nil || d == nil {
 		t.Fatalf("want the document, got %v, %v", d, err)
+	}
+}
+
+// TestClusteredInRangeStopsWhenCanceled: encoding a small Decimal128 is slow at
+// extreme exponents, so a large _id $in stops once its context ends.
+func TestClusteredInRangeStopsWhenCanceled(t *testing.T) {
+	d, err := primitive.ParseDecimal128("1.234567890123456789012345678901234E-6065")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hi, lo := d.GetBytes()
+	values := make([]any, 100_000)
+	for i := range values {
+		values[i] = types.Decimal128{H: hi, L: lo + uint64(i)}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	start := time.Now()
+	if _, _, ok := clusteredInRange(ctx, must.NotFail(types.NewArray(values...))); ok {
+		t.Fatal("a canceled $in range was built")
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("a canceled $in of %d values took %v", len(values), elapsed)
 	}
 }

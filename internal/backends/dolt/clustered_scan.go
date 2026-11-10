@@ -30,8 +30,8 @@ import (
 
 // clusteredIDRange returns the primary key range [start, stop) that the _id
 // condition of filter bounds. An $in is bounded by its least and greatest
-// values, as MongoDB scans a clustered collection.
-func clusteredIDRange(filter *types.Document) (start, stop []byte, ok bool) {
+// values, as MongoDB scans a clustered collection. ok is false once ctx ends.
+func clusteredIDRange(ctx context.Context, filter *types.Document) (start, stop []byte, ok bool) {
 	if filter == nil {
 		return nil, nil, false
 	}
@@ -59,7 +59,7 @@ func clusteredIDRange(filter *types.Document) (start, stop []byte, ok bool) {
 		return nil, nil, false
 	}
 	if in, err := ops.Get("$in"); err == nil && ops.Len() == 1 {
-		return clusteredInRange(in)
+		return clusteredInRange(ctx, in)
 	}
 	start, stop, ok = indexBoundsForFilterValue(v)
 	if !ok {
@@ -68,13 +68,18 @@ func clusteredIDRange(filter *types.Document) (start, stop []byte, ok bool) {
 	return idxpkg.ValueBound(start), idxpkg.ValueBound(stop), true
 }
 
-func clusteredInRange(in any) (start, stop []byte, ok bool) {
+func clusteredInRange(ctx context.Context, in any) (start, stop []byte, ok bool) {
 	arr, isArr := in.(*types.Array)
 	if !isArr || arr.Len() == 0 {
 		return nil, nil, false
 	}
 	var lo, hi []byte
 	for i := 0; i < arr.Len(); i++ {
+		// Encoding a small Decimal128 can take hundreds of microseconds, so a
+		// large $in checks for maxTimeMS and disconnects as it goes.
+		if i%256 == 255 && ctx.Err() != nil {
+			return nil, nil, false
+		}
 		v, err := arr.Get(i)
 		if err != nil {
 			return nil, nil, false
@@ -211,7 +216,10 @@ func (it *reverseKeyIter) Next(ctx context.Context) (val.Tuple, val.Tuple, error
 // bounds, in the order of an _id sort. ok is false when params has neither.
 func clusteredQuery(ctx context.Context, state *dbState, m prolly.Map, params *backends.QueryParams) (*backends.QueryResult, bool, error) {
 	idSort, descending := sortIsID(params.Sort)
-	start, stop, ranged := clusteredIDRange(params.Filter)
+	start, stop, ranged := clusteredIDRange(ctx, params.Filter)
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
 	if !ranged && !idSort {
 		return nil, false, nil
 	}
