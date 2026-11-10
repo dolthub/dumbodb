@@ -16,6 +16,9 @@ package handler
 
 import (
 	"fmt"
+	"strconv"
+
+	"go.mongodb.org/mongo-driver/v2/bson"
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
@@ -95,6 +98,13 @@ func validateClusteredIndexSpec(spec *types.Document, fail func(handlererrors.Er
 					"BSON field 'create.clusteredIndex.name' is the wrong type '%s', expected type 'string'", handlerparams.AliasFromType(value)))
 			}
 		case "v":
+			switch value.(type) {
+			case types.NullType, int32, int64, float64, types.Decimal128:
+			default:
+				return fail(handlererrors.ErrTypeMismatch, fmt.Sprintf(
+					"BSON field 'create.clusteredIndex.v' is the wrong type '%s', expected types '[int, long, double, decimal']",
+					handlerparams.AliasFromType(value)))
+			}
 		default:
 			return fail(handlererrors.ErrIDLUnknownField, fmt.Sprintf("BSON field 'create.clusteredIndex.%s' is an unknown field.", field))
 		}
@@ -112,8 +122,8 @@ func validateClusteredIndexSpec(spec *types.Document, fail func(handlererrors.Er
 	if !must.NotFail(spec.Get("unique")).(bool) {
 		return fail(handlererrors.ErrClusteredIndexNotUnique, "The clusteredIndex option requires unique: true to be specified")
 	}
-	if v, _ := spec.Get("v"); v != nil {
-		if !isNumber(v, 2) {
+	if v, ok := clusteredIndexVersion(spec); ok {
+		if v != 2 {
 			return fail(handlererrors.ErrClusteredIndexVersion, fmt.Sprintf(
 				"Invalid clusteredIndex specification %s; cannot create a clusteredIndex with v=%v", formatClusteredIndexSpec(spec), v))
 		}
@@ -127,12 +137,9 @@ func formatClusteredIndexSpec(spec *types.Document) string {
 	if n, _ := spec.Get("name"); n != nil {
 		name = n.(string)
 	}
-	version := must.NotFail(spec.Get("v"))
-	if whole, err := handlerparams.GetWholeNumberParam(version); err == nil {
-		version = int32(whole)
-	}
+	version, _ := clusteredIndexVersion(spec)
 	normalized := must.NotFail(types.NewDocument(
-		"v", version,
+		"v", int32(version),
 		"key", must.NotFail(spec.Get("key")),
 		"name", name,
 		"unique", must.NotFail(spec.Get("unique")),
@@ -162,4 +169,25 @@ func clusteredIndexHasCustomName(document *types.Document) bool {
 	}
 	name, _ := spec.Get("name")
 	return name != nil && name != backends.DefaultIndexName
+}
+
+// clusteredIndexVersion returns spec's v truncated to an integer, as mongod
+// reads it, or false when v is unset or null.
+func clusteredIndexVersion(spec *types.Document) (int64, bool) {
+	value, _ := spec.Get("v")
+	switch v := value.(type) {
+	case int32:
+		return int64(v), true
+	case int64:
+		return v, true
+	case float64:
+		return int64(v), true
+	case types.Decimal128:
+		f, err := strconv.ParseFloat(bson.NewDecimal128(v.H, v.L).String(), 64)
+		if err != nil {
+			return 0, true
+		}
+		return int64(f), true
+	}
+	return 0, false
 }
