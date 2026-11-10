@@ -1119,8 +1119,6 @@ func singlePredicate(branch *types.Document) bool {
 	return !isDoc || ops.Len() <= 1 || !strings.HasPrefix(ops.Keys()[0], "$")
 }
 
-// orOfEqualitiesOnOneField reports whether every branch is a literal equality
-// on one same field, an $or MongoDB rewrites to an $in.
 // loneOrPlannedPerBranch reports whether filter is a lone $or that MongoDB
 // plans per branch, under SUBPLAN: one of two or more branches, other than
 // one it rewrites as an $in.
@@ -1132,6 +1130,8 @@ func loneOrPlannedPerBranch(filter *types.Document) bool {
 	return ok && len(flat) > 1 && !orOfEqualitiesOnOneField(flat)
 }
 
+// orOfEqualitiesOnOneField reports whether every branch is a literal equality
+// on one same field, an $or MongoDB rewrites to an $in.
 func orOfEqualitiesOnOneField(flat []*types.Document) bool {
 	for _, branch := range flat {
 		if branch.Len() != 1 || branch.Keys()[0] != flat[0].Keys()[0] {

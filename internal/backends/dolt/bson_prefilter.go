@@ -47,6 +47,10 @@ const (
 	bsonTypeMaxKey   byte = 0x7F
 )
 
+// scanPredicate reports whether a stored document may match, given all of it
+// or, when not complete, a prefix of it.
+type scanPredicate func(stored []byte, complete bool) bool
+
 // buildBSONFieldPredicate returns a sound predicate for (field, value),
 // or nil when no sound predicate can be expressed (dotted paths, regex,
 // $in/$nin/$ne, a Decimal128 or null literal, ...). Supported: scalar equality
@@ -54,10 +58,6 @@ const (
 // range via $gt/$gte/$lt/$lte, and top-level array containment of a scalar. A
 // numeric predicate passes any stored value it cannot rule out to the full
 // filter (numericMayMatch).
-// scanPredicate reports whether a stored document may match, given all of it
-// or, when not complete, a prefix of it.
-type scanPredicate func(stored []byte, complete bool) bool
-
 func buildBSONFieldPredicate(field string, value any) scanPredicate {
 	if opDoc, ok := value.(*types.Document); ok {
 		return buildBSONNumericRangePredicate(field, opDoc)
