@@ -592,7 +592,10 @@ func explainVersion(params *common.ExplainParams, viaView bool) string {
 }
 
 // explainMaxTimeMS returns the maxTimeMS beside the explained command, 0 when
-// unset, validated as mongod validates a command's maxTimeMS.
+// unset, validated as mongod validates a command's generic maxTimeMS. It is
+// not shared with getMore's and aggregate's checks because mongod's errors
+// differ by command: a string is BadValue here but TypeMismatch for getMore,
+// and a negative fraction is truncated here but "must be >= 0" for aggregate.
 func explainMaxTimeMS(document *types.Document) (int64, error) {
 	v, _ := document.Get("maxTimeMS")
 	if v == nil {
