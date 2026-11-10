@@ -19,6 +19,7 @@ import (
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 )
 
@@ -54,4 +55,41 @@ func validateHintExists(ctx context.Context, coll backends.Collection, hint any,
 	}
 
 	return nil
+}
+
+// hintedDescendingOrder returns the key pattern of the index hint names when
+// it has a descending key, else nil. An unsorted hinted read returns index
+// order, but DumboDB stores every key ascending, so such a read sorts by the
+// pattern; the sort is stable over _id order, as mongod's index orders equal
+// keys by RecordId.
+func hintedDescendingOrder(ctx context.Context, coll backends.Collection, hint any) (*types.Document, error) {
+	if !backends.HintRequiresExistingIndex(hint) {
+		return nil, nil
+	}
+	idxRes, err := coll.ListIndexes(ctx, nil)
+	if err != nil {
+		return nil, nil
+	}
+	name := backends.MatchHintedIndex(hint, idxRes.Indexes)
+	for _, idx := range idxRes.Indexes {
+		if idx.Name != name {
+			continue
+		}
+		descending := false
+		order := types.MakeDocument(len(idx.Key))
+		for _, k := range idx.Key {
+			if k.Text || k.Geo2D || k.Geo2DSphere || k.Hashed {
+				return nil, nil
+			}
+			dir := int32(1)
+			if k.Descending {
+				dir, descending = -1, true
+			}
+			order.Set(k.Field, dir)
+		}
+		if descending {
+			return order, nil
+		}
+	}
+	return nil, nil
 }

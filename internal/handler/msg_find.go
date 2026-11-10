@@ -175,6 +175,14 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 		if err = validateHintExists(connCtx, coll, params.Hint, "find"); err != nil {
 			return nil, err
 		}
+		if params.Sort.Len() == 0 {
+			if params.Sort, err = hintedDescendingOrder(connCtx, coll, params.Hint); err != nil {
+				return nil, err
+			}
+			// The backend reads the hinted index ascending, equal keys in _id
+			// order; sorting that stably gives mongod's index order.
+			params.SortInMemory = params.Sort != nil
+		}
 	}
 
 	qp, err := h.makeFindQueryParams(connCtx, params, &cInfo)
@@ -343,7 +351,7 @@ func (h *Handler) makeFindQueryParams(ctx context.Context, params *common.FindPa
 	case params.Sort.Len() == 0 && cInfo.Capped():
 		// Capped collections default to $natural (recordID) order.
 		qp.Sort = must.NotFail(types.NewDocument("$natural", int64(1)))
-	case params.Sort.Len() == 1:
+	case params.Sort.Len() == 1 && !params.SortInMemory:
 		// A $natural sort is honored by the scan; a field sort may be served by
 		// walking an index, which the backend reports with QueryResult.Sorted.
 		qp.Sort = params.Sort

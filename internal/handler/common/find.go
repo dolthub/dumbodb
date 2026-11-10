@@ -42,10 +42,13 @@ type FindParams struct {
 	Collation *types.Document `dumbo:"collation,opt"`
 	Let       *types.Document `dumbo:"let,unimplemented"`
 
-	AllowDiskUse     bool            `dumbo:"allowDiskUse,ignored"`
-	ReadConcern      *types.Document `dumbo:"readConcern,ignored"`
-	Max              *types.Document `dumbo:"max,opt"`
-	Min              *types.Document `dumbo:"min,opt"`
+	AllowDiskUse bool            `dumbo:"allowDiskUse,ignored"`
+	ReadConcern  *types.Document `dumbo:"readConcern,ignored"`
+	Max          *types.Document `dumbo:"max,opt"`
+	Min          *types.Document `dumbo:"min,opt"`
+	// SortInMemory keeps Sort out of the backend query.
+	SortInMemory bool `dumbo:"-"`
+
 	Hint             any             `dumbo:"hint,opt"`
 	LSID             any             `dumbo:"lsid,ignored"`
 	TxnNumber        int64           `dumbo:"txnNumber,ignored"`
