@@ -25,12 +25,14 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// Point returns the point a field value holds, as mongod reads one: a GeoJSON
-// Point, a legacy [x, y] array, or a legacy document's first two values. Extra
-// elements are ignored. Coordinates are finite numbers of any numeric type.
+// Point returns the point a stored field value holds: a GeoJSON Point or a
+// legacy [x, y] array, read as mongod reads them. Extra elements are ignored.
+// Coordinates are finite numbers of any numeric type.
 //
-// Documents are stored with sorted keys, so a legacy document's "first two
-// values" are those of its first two keys in sorted order, not insertion order.
+// mongod also reads a legacy point from a document's first two fields, x then
+// y, whatever their names. Stored documents have sorted keys, which loses that
+// order ({lng: 10, lat: 1} is stored as {lat: 1, lng: 10}), so such a document
+// is not a point here.
 func Point(v any) (x, y float64, ok bool) {
 	switch v := v.(type) {
 	case *types.Array:
@@ -46,9 +48,6 @@ func Point(v any) (x, y float64, ok bool) {
 				return 0, 0, false
 			}
 			return numberPair(must.NotFail(arr.Get(0)), must.NotFail(arr.Get(1)))
-		}
-		if values := v.Values(); len(values) >= 2 {
-			return numberPair(values[0], values[1])
 		}
 	}
 	return 0, 0, false
