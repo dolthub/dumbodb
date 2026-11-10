@@ -17,6 +17,7 @@ package handler
 import (
 	"context"
 	"slices"
+	"strings"
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/stages"
@@ -91,8 +92,15 @@ func explainLookups(ctx context.Context, db backends.Database, dbName string, pi
 	}
 	response.Remove("queryPlanner")
 	out := must.NotFail(types.NewArray(must.NotFail(types.NewDocument("$cursor", cursor))))
-	for _, stage := range rest {
+	for i := 0; i < len(rest); i++ {
+		stage := rest[i]
 		entry := stage.DeepCopy()
+		// A classic $lookup absorbs the $unwind of its join array.
+		if spec, _ := must.NotFail(entry.Get(entry.Command())).(*types.Document); entry.Command() == "$lookup" && spec != nil &&
+			i+1 < len(rest) && unwindsJoin(spec, rest[i+1]) {
+			spec.Set("unwinding", unwindingSpec(rest[i+1]))
+			i++
+		}
 		if spec, _ := must.NotFail(stage.Get(stage.Command())).(*types.Document); execStats && stage.Command() == "$lookup" && spec != nil {
 			used := types.MakeArray(0)
 			for _, name := range lookupIndexesUsed(ctx, fetcher, spec) {
@@ -193,11 +201,83 @@ func unwindsJoin(spec, next *types.Document) bool {
 	return path == "$"+as
 }
 
+// unwindingSpec is the unwinding field of a $lookup that absorbs unwind.
+func unwindingSpec(unwind *types.Document) *types.Document {
+	out := must.NotFail(types.NewDocument("preserveNullAndEmptyArrays", false))
+	if d, ok := must.NotFail(unwind.Get("$unwind")).(*types.Document); ok {
+		if v, _ := d.Get("preserveNullAndEmptyArrays"); v != nil {
+			out.Set("preserveNullAndEmptyArrays", v)
+		}
+		if v, _ := d.Get("includeArrayIndex"); v != nil {
+			out.Set("includeArrayIndex", v)
+		}
+	}
+	return out
+}
+
+// moveMatchesBeforeLookups moves each $match that follows a $lookup ahead of
+// it when the match does not read the join's output, as mongod's optimizer
+// does, so the match can reach the query and an $unwind can follow its join.
+func moveMatchesBeforeLookups(pipeline []any) []any {
+	out := append([]any{}, pipeline...)
+	for moved := true; moved; {
+		moved = false
+		for i := 0; i+1 < len(out); i++ {
+			lookupStage, _ := out[i].(*types.Document)
+			matchStage, _ := out[i+1].(*types.Document)
+			if lookupStage == nil || matchStage == nil || lookupStage.Len() == 0 || matchStage.Len() == 0 ||
+				lookupStage.Command() != "$lookup" || matchStage.Command() != "$match" {
+				continue
+			}
+			spec, _ := must.NotFail(lookupStage.Get("$lookup")).(*types.Document)
+			filter, _ := must.NotFail(matchStage.Get("$match")).(*types.Document)
+			as, ok := specString(spec, "as")
+			if spec == nil || filter == nil || !ok || filterReadsPath(filter, as) {
+				continue
+			}
+			out[i], out[i+1] = out[i+1], out[i]
+			moved = true
+		}
+	}
+	return out
+}
+
+// filterReadsPath reports whether filter may read path or a field below it;
+// operators other than $and, $or and $nor count as reading anything.
+func filterReadsPath(filter *types.Document, path string) bool {
+	for _, k := range filter.Keys() {
+		switch {
+		case k == "$and" || k == "$or" || k == "$nor":
+			arr, ok := must.NotFail(filter.Get(k)).(*types.Array)
+			if !ok {
+				return true
+			}
+			for i := 0; i < arr.Len(); i++ {
+				sub, ok := must.NotFail(arr.Get(i)).(*types.Document)
+				if !ok || filterReadsPath(sub, path) {
+					return true
+				}
+			}
+		case strings.HasPrefix(k, "$"):
+			return true
+		case k == path || strings.HasPrefix(k, path+".") || strings.HasPrefix(path, k+"."):
+			return true
+		}
+	}
+	return false
+}
+
 // lookupIndexesUsed returns the foreign indexes the $lookup spec reads,
 // including those of $lookups in its sub-pipeline.
 func lookupIndexesUsed(ctx context.Context, fetcher *foreignFetcher, spec *types.Document) []string {
 	var used []string
 	from, _ := specString(spec, "from")
+	// A join of a view reads its base collection's indexes.
+	if info, err := lookupCollectionInfo(ctx, fetcher.db, from); err == nil && info != nil && info.IsView {
+		if base, _, _, err := resolveViewChain(ctx, fetcher.db, info.Name, info.ViewOn, info.ViewPipeline, nil); err == nil {
+			from = base
+		}
+	}
 	if idx, ok := fetcher.indexOn(ctx, from, stages.LookupJoinField(spec)); ok {
 		used = append(used, idx.Name)
 	}

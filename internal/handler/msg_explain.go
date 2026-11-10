@@ -450,6 +450,7 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 	qp := new(backends.ExplainParams)
 
 	if params.Aggregate {
+		params.StagesDocs = moveMatchesBeforeLookups(params.StagesDocs)
 		params.Filter, params.Sort = aggregations.GetPushdownQuery(params.StagesDocs)
 		common.CanonicalizeFilter(params.Filter)
 		params.Limit = pushdownLimit(params.StagesDocs)
