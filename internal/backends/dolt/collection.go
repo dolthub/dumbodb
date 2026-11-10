@@ -157,7 +157,7 @@ func (c *collection) query(ctx context.Context, params *backends.QueryParams) (*
 	var idxInfos []backends.IndexInfo
 
 	if !naturalHint && params != nil && params.Filter != nil && (params.Sort.Len() == 0 || fieldSort) &&
-		(!params.Collated || params.Collation != nil) {
+		(!params.Collated || params.Collation != nil) && !idSortedMinMaxKeyRead(params) {
 		state.mu.RLock()
 		var idxMaps []prolly.Map
 		idxInfos, idxMaps, err = resolveIndexes(ctx, c, state)
@@ -743,7 +743,7 @@ func readIndexLookup(ctx context.Context, ns tree.NodeStore, primary prolly.Map,
 	if !ok {
 		return nil, nil
 	}
-	if hint != nil {
+	if hint != nil || idxInfos[choice.mapIdx].Sparse {
 		return scanIndexChoice(ctx, idxInfos, idxMaps, choice, keepValues, -1)
 	}
 	var plan *indexLookupPlan
@@ -764,6 +764,19 @@ func readIndexLookup(ctx context.Context, ns tree.NodeStore, primary prolly.Map,
 // it: a range that ends within them costs less to read than to count, and so
 // little either way that it is always read.
 const narrowRangeEntries = 128
+
+// anySparseIndex reports whether a scan reads a sparse index. MongoDB reads an
+// eligible index rather than scan the collection, which for a sparse index
+// leaves out the documents without its field, so a sparse index is read
+// however wide its ranges.
+func anySparseIndex(idxInfos []backends.IndexInfo, scans []indexRangeChoice) bool {
+	for _, scan := range scans {
+		if idxInfos[scan.mapIdx].Sparse {
+			return true
+		}
+	}
+	return false
+}
 
 // indexRangesWithinHalf reports whether some index ranges are narrow or hold
 // at most half of primary's documents; past that, one point lookup per entry
@@ -983,6 +996,11 @@ func chooseIndexRange(idxInfos []backends.IndexInfo, filter *types.Document, hin
 		if !ok && isExistsTrue(v) && existsIndexable(idxInfos[entry.mapIdx]) {
 			s, e, ok = nil, nil, true
 		}
+		// A MinKey or MaxKey bound matches a missing field, but mongod reads
+		// it from a sparse index, which leaves those documents out.
+		if !ok && idxInfos[entry.mapIdx].Sparse {
+			s, e, ok = minMaxKeyBounds(v)
+		}
 		if !ok {
 			continue
 		}
@@ -1026,13 +1044,17 @@ func planOrUnion(ctx context.Context, ns tree.NodeStore, primary prolly.Map, idx
 	}
 	scans := orBranchScans(idxInfos, flat, choices, collation.Parse(queryCollation).IsSimple())
 	var union *indexLookupPlan
-	within, err := indexRangesWithinHalf(primary, func(n int) (bool, error) {
-		var err error
-		union, err = unionIndexChoices(ctx, ns, primary, idxInfos, idxMaps, scans, n)
-		return union != nil, err
-	}, func() (uint64, error) {
-		return indexRangeEntries(ctx, idxMaps, scans...)
-	})
+	var err error
+	within := anySparseIndex(idxInfos, scans)
+	if !within {
+		within, err = indexRangesWithinHalf(primary, func(n int) (bool, error) {
+			var err error
+			union, err = unionIndexChoices(ctx, ns, primary, idxInfos, idxMaps, scans, n)
+			return union != nil, err
+		}, func() (uint64, error) {
+			return indexRangeEntries(ctx, idxMaps, scans...)
+		})
+	}
 	if err == nil && within && union == nil {
 		union, err = unionIndexChoices(ctx, ns, primary, idxInfos, idxMaps, scans, -1)
 	}
@@ -3641,7 +3663,7 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 		// mongod counts a MinKey or MaxKey bound from the index, so a sparse
 		// index leaves out the documents without the field, though find
 		// returns them.
-		if startKey, stopKey, ok = minMaxKeyCountBounds(v); !ok {
+		if startKey, stopKey, ok = minMaxKeyBounds(v); !ok {
 			return 0, false, nil
 		}
 	}
@@ -3667,9 +3689,9 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 	return n, true, nil
 }
 
-// minMaxKeyCountBounds returns the index range of a lone $gt or $gte MinKey,
+// minMaxKeyBounds returns the index range of a lone $gt or $gte MinKey,
 // or $lt or $lte MaxKey: every key, less the bound itself when exclusive.
-func minMaxKeyCountBounds(v any) (start, stop []byte, ok bool) {
+func minMaxKeyBounds(v any) (start, stop []byte, ok bool) {
 	ops, isDoc := v.(*types.Document)
 	if !isDoc || ops.Len() != 1 {
 		return nil, nil, false
@@ -3685,6 +3707,22 @@ func minMaxKeyCountBounds(v any) (start, stop []byte, ok bool) {
 		return nil, nil, false
 	}
 	return start, stop, true
+}
+
+// idSortedMinMaxKeyRead reports whether params sorts by _id alone and filters
+// one field by a MinKey or MaxKey bound. Only a sparse index serves that
+// bound, and mongod prefers the clustered scan, which needs no sort, so the
+// documents without the field are returned.
+func idSortedMinMaxKeyRead(params *backends.QueryParams) bool {
+	if params.Sort.Len() != 1 || params.Sort.Keys()[0] != "_id" || params.Filter.Len() != 1 {
+		return false
+	}
+	field := params.Filter.Keys()[0]
+	if strings.HasPrefix(field, "$") {
+		return false
+	}
+	_, _, ok := minMaxKeyBounds(must.NotFail(params.Filter.Get(field)))
+	return ok
 }
 
 // filterIsIn reports whether filter is one field's $in.
