@@ -86,6 +86,11 @@ func EncodeValue(v any) []byte {
 	return appendValue(nil, v, true)
 }
 
+// AppendValue appends EncodeValue(v) to out.
+func AppendValue(out []byte, v any) []byte {
+	return appendValue(out, v, true)
+}
+
 // EncodeID encodes an _id value, keeping its fields in the order given, as
 // storage keeps them; for any other value use EncodeValue.
 func EncodeID(v any) []byte {

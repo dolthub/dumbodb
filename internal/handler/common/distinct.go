@@ -115,7 +115,7 @@ func distinctKey(v any) ([]byte, bool) {
 
 	case int32, int64, float64, types.Decimal128:
 		// Numbers equal in value share a KeyString, whatever their types.
-		return append([]byte{tagNumeric}, index.EncodeValue(val)...), true
+		return index.AppendValue([]byte{tagNumeric}, val), true
 
 	case string:
 		b := make([]byte, 1+len(val))
@@ -328,6 +328,8 @@ type distinctSet struct {
 	values  []any
 	// cmp, when set, makes strings equal under the collation duplicates.
 	cmp *collation.Comparator
+	// scratch holds the key of the value being added.
+	scratch []byte
 }
 
 func newDistinctSet() *distinctSet {
@@ -338,6 +340,18 @@ func newDistinctSet() *distinctSet {
 func (s *distinctSet) add(v any) {
 	if str, isString := v.(string); isString && s.cmp != nil {
 		s.addKeyed(append([]byte{tagString}, s.cmp.Key(str)...), v)
+		return
+	}
+	// Scalars most often repeat: key them in a reused buffer, so a value
+	// already seen allocates nothing.
+	switch val := v.(type) {
+	case int32, int64, float64, types.Decimal128:
+		s.scratch = index.AppendValue(append(s.scratch[:0], tagNumeric), val)
+		s.addKeyed(s.scratch, v)
+		return
+	case string:
+		s.scratch = append(append(s.scratch[:0], tagString), val...)
+		s.addKeyed(s.scratch, v)
 		return
 	}
 	if k, ok := distinctKey(v); ok {
@@ -357,11 +371,10 @@ func (s *distinctSet) add(v any) {
 }
 
 func (s *distinctSet) addKeyed(key []byte, v any) {
-	ks := string(key)
-	if _, dup := s.seen[ks]; dup {
+	if _, dup := s.seen[string(key)]; dup {
 		return
 	}
-	s.seen[ks] = struct{}{}
+	s.seen[string(key)] = struct{}{}
 	s.values = append(s.values, v)
 }
 
