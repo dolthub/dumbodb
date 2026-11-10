@@ -259,6 +259,9 @@ func indexEntriesForDoc(doc *types.Document, idx backends.IndexInfo) (rows [][]a
 			rows[i] = collateRowValues(rows[i], cmp)
 		}
 	}
+	if multikey {
+		rows = firstOfEqualRows(rows)
+	}
 	for _, row := range rows {
 		for _, v := range row {
 			if idxpkg.ValueLossy(v) {
@@ -267,6 +270,26 @@ func indexEntriesForDoc(doc *types.Document, idx backends.IndexInfo) (rows [][]a
 		}
 	}
 	return rows, multikey, lossy
+}
+
+// firstOfEqualRows drops each row whose key equals an earlier row's. Equal
+// keys share one index entry, and mongod keeps the first element's value:
+// {a: [2, 2.0]} indexes 2, and {a: [2.0, 2]} indexes 2.0.
+func firstOfEqualRows(rows [][]any) [][]any {
+	if len(rows) < 2 {
+		return rows
+	}
+	seen := make(map[string]struct{}, len(rows))
+	out := rows[:0]
+	for _, row := range rows {
+		key := string(idxpkg.BuildSecondaryKey(row, nil))
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, row)
+	}
+	return out
 }
 
 // applyInsertsToIndexes is pure: inputs are not mutated; the returned infos
