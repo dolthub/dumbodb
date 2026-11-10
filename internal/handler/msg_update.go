@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/FerretDB/wire"
+	"go.mongodb.org/mongo-driver/v2/mongo"
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/collation"
@@ -54,8 +55,6 @@ func (h *Handler) MsgUpdate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		return nil, err
 	}
 
-	_ = params.Ordered
-
 	ctx := connCtx
 	if params.MaxTimeMS > 0 {
 		var cancel context.CancelFunc
@@ -63,7 +62,7 @@ func (h *Handler) MsgUpdate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		defer cancel()
 	}
 
-	matched, modified, upserted, err := h.updateDocument(ctx, params)
+	matched, modified, upserted, writeErrors, err := h.updateDocument(ctx, params)
 	if err != nil {
 		if params.MaxTimeMS > 0 && (errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)) {
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(
@@ -84,6 +83,9 @@ func (h *Handler) MsgUpdate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 	}
 
 	res.Set("nModified", modified)
+	if writeErrors.Len() > 0 {
+		res.Set("writeErrors", writeErrors)
+	}
 	res.Set("ok", float64(1))
 
 	return documentOpMsg(
@@ -92,7 +94,10 @@ func (h *Handler) MsgUpdate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 }
 
 // updateDocument iterate through all documents in collection and update them.
-func (h *Handler) updateDocument(ctx context.Context, params *common.UpdateParams) (int32, int32, *types.Array, error) {
+// updateDocument runs params' statements and returns the documents matched and
+// modified, the upserted ids, and the statements' write errors. An ordered
+// update stops at its first write error, as mongod's does.
+func (h *Handler) updateDocument(ctx context.Context, params *common.UpdateParams) (int32, int32, *types.Array, *types.Array, error) {
 	var matched, modified int32
 	var upserted types.Array
 
@@ -100,17 +105,17 @@ func (h *Handler) updateDocument(ctx context.Context, params *common.UpdateParam
 	if err != nil {
 		if backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseNameIsInvalid) {
 			msg := fmt.Sprintf("Invalid namespace specified '%s.%s'", params.DB, params.Collection)
-			return 0, 0, nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace, msg, "update")
+			return 0, 0, nil, nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace, msg, "update")
 		}
 
-		return 0, 0, nil, lazyerrors.Error(err)
+		return 0, 0, nil, nil, lazyerrors.Error(err)
 	}
 
 	// Check if collection is a view  -- views don't support write operations.
 	if collRes, collErr := db.ListCollections(ctx, &backends.ListCollectionsParams{Name: params.Collection}); collErr == nil {
 		if len(collRes.Collections) == 1 && collRes.Collections[0].IsView {
 			msg := fmt.Sprintf("namespace '%s.%s' is a view, not a collection", params.DB, params.Collection)
-			return 0, 0, nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCommandNotSupportedOnView, msg, "update")
+			return 0, 0, nil, nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCommandNotSupportedOnView, msg, "update")
 		}
 	}
 
@@ -123,9 +128,9 @@ func (h *Handler) updateDocument(ctx context.Context, params *common.UpdateParam
 		// nothing
 	case backends.ErrorCodeIs(err, backends.ErrorCodeCollectionNameIsInvalid):
 		msg := fmt.Sprintf("Invalid collection name: %s", params.Collection)
-		return 0, 0, nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace, msg, "insert")
+		return 0, 0, nil, nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace, msg, "insert")
 	default:
-		return 0, 0, nil, common.TranslateBackendWriteError(ctx, err)
+		return 0, 0, nil, nil, common.TranslateBackendWriteError(ctx, err)
 	}
 
 	var validator *types.Document
@@ -134,16 +139,32 @@ func (h *Handler) updateDocument(ctx context.Context, params *common.UpdateParam
 		validator, valLevel, valAction = collectionValidator(ctx, db, params.Collection)
 	}
 
+	// mongod refuses a hint of the wrong type for the whole command.
 	for _, u := range params.Updates {
+		if err := checkHintType(u.Hint); err != nil {
+			return 0, 0, nil, nil, err
+		}
+	}
+
+	writeErrors := types.MakeArray(0)
+	// statementFailed records statement i's write error and reports whether
+	// the update stops there.
+	statementFailed := func(i int, ce *handlererrors.CommandError) bool {
+		writeErrors.Append(WriteErrorDocument(&mongo.WriteError{Index: i, Code: int(ce.Code()), Message: ce.Err().Error()}))
+		return params.Ordered
+	}
+
+statements:
+	for i, u := range params.Updates {
 		u.Collation = h.effectiveCollation(ctx, db, params.Collection, u.Collation)
 		c, err := db.Collection(params.Collection)
 		if err != nil {
 			if backends.ErrorCodeIs(err, backends.ErrorCodeCollectionNameIsInvalid) {
 				msg := fmt.Sprintf("Invalid collection name: %s", params.Collection)
-				return 0, 0, nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace, msg, "insert")
+				return 0, 0, nil, nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace, msg, "insert")
 			}
 
-			return 0, 0, nil, lazyerrors.Error(err)
+			return 0, 0, nil, nil, lazyerrors.Error(err)
 		}
 
 		u.Validator = validator
@@ -163,18 +184,24 @@ func (h *Handler) updateDocument(ctx context.Context, params *common.UpdateParam
 			var ce *handlererrors.CommandError
 			if errors.As(err, &ce) && ce.Code() != handlererrors.ErrStageInvalid &&
 				ce.Code() != handlererrors.ErrStageUnrecognized {
-				return 0, 0, nil, handlererrors.NewWriteErrorMsg(ce.Code(), ce.Err().Error())
+				if statementFailed(i, ce) {
+					break statements
+				}
+				continue
 			}
-			return 0, 0, nil, err
+			return 0, 0, nil, nil, err
 		}
 
-		if err = validateHintExists(ctx, c, u.Hint, "update"); err != nil {
+		if err = validateHint(ctx, c, u.Hint, "update", nil, u.Upsert); err != nil {
 			// mongod reports an unusable hint as the statement's write error.
 			var ce *handlererrors.CommandError
 			if errors.As(err, &ce) {
-				return 0, 0, nil, handlererrors.NewWriteErrorMsg(ce.Code(), ce.Err().Error())
+				if statementFailed(i, ce) {
+					break statements
+				}
+				continue
 			}
-			return 0, 0, nil, err
+			return 0, 0, nil, nil, err
 		}
 
 		var qp backends.QueryParams
@@ -186,7 +213,7 @@ func (h *Handler) updateDocument(ctx context.Context, params *common.UpdateParam
 
 		res, err := c.Query(ctx, &qp)
 		if err != nil {
-			return 0, 0, nil, lazyerrors.Error(err)
+			return 0, 0, nil, nil, lazyerrors.Error(err)
 		}
 
 		closer := iterator.NewMultiCloser()
@@ -201,11 +228,11 @@ func (h *Handler) updateDocument(ctx context.Context, params *common.UpdateParam
 			// index's order.
 			order, err := hintedDescendingOrder(ctx, c, u.Hint)
 			if err != nil {
-				return 0, 0, nil, err
+				return 0, 0, nil, nil, err
 			}
 			if order != nil {
 				if iter, err = common.SortIteratorWithCollation(iter, closer, order, cmp); err != nil {
-					return 0, 0, nil, err
+					return 0, 0, nil, nil, err
 				}
 			}
 			iter = common.LimitIterator(iter, closer, 1)
@@ -214,12 +241,12 @@ func (h *Handler) updateDocument(ctx context.Context, params *common.UpdateParam
 		result, err := common.UpdateDocument(ctx, c, "update", iter, &u)
 		if err != nil {
 			if backends.ErrorCodeIs(err, backends.ErrorCodeReadOnlyDatabase, backends.ErrorCodeReadOnlyCollection, backends.ErrorCodeBranchInConflict) {
-				return 0, 0, nil, common.TranslateBackendWriteError(ctx, err)
+				return 0, 0, nil, nil, common.TranslateBackendWriteError(ctx, err)
 			}
 			if backends.ErrorCodeIs(err, backends.ErrorCodeWriteConflict) {
-				return 0, 0, nil, common.TranslateBackendWriteError(ctx, err)
+				return 0, 0, nil, nil, common.TranslateBackendWriteError(ctx, err)
 			}
-			return 0, 0, nil, lazyerrors.Error(err)
+			return 0, 0, nil, nil, lazyerrors.Error(err)
 		}
 
 		matched += result.Matched.Count
@@ -242,5 +269,5 @@ func (h *Handler) updateDocument(ctx context.Context, params *common.UpdateParam
 		}
 	}
 
-	return matched, modified, &upserted, nil
+	return matched, modified, &upserted, writeErrors, nil
 }

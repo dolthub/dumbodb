@@ -35,7 +35,7 @@ type UpdateParams struct {
 
 	Let *types.Document `dumbo:"let,unimplemented"`
 
-	Ordered                  bool            `dumbo:"ordered,ignored"`
+	Ordered                  bool            `dumbo:"ordered,opt"`
 	BypassDocumentValidation bool            `dumbo:"bypassDocumentValidation,opt"`
 	BypassEmptyTsReplacement bool            `dumbo:"bypassEmptyTsReplacement,ignored"`
 	WriteConcern             *types.Document `dumbo:"writeConcern,opt"`
@@ -104,7 +104,7 @@ type UpdateResult struct {
 }
 
 func GetUpdateParams(document *types.Document, l *slog.Logger) (*UpdateParams, error) {
-	var params UpdateParams
+	params := UpdateParams{Ordered: true}
 
 	err := handlerparams.ExtractParams(document, "update", &params, l)
 	if err != nil {
