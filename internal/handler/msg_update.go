@@ -168,8 +168,18 @@ func (h *Handler) updateDocument(ctx context.Context, params *common.UpdateParam
 			return 0, 0, nil, err
 		}
 
+		if err = validateHintExists(ctx, c, u.Hint, "update"); err != nil {
+			// mongod reports an unusable hint as the statement's write error.
+			var ce *handlererrors.CommandError
+			if errors.As(err, &ce) {
+				return 0, 0, nil, handlererrors.NewWriteErrorMsg(ce.Code(), ce.Err().Error())
+			}
+			return 0, 0, nil, err
+		}
+
 		var qp backends.QueryParams
 		qp.Collated = cmp != nil
+		qp.Hint = u.Hint
 		if !h.DisablePushdown {
 			qp.Filter = u.Filter
 		}

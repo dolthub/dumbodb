@@ -77,7 +77,7 @@ type Update struct {
 	Collation    *types.Document `dumbo:"collation,opt"`
 	ArrayFilters *types.Array    `dumbo:"arrayFilters,opt"`
 
-	Hint string `dumbo:"hint,ignored"`
+	Hint any `dumbo:"hint,opt"`
 }
 
 // UpdateResult is the result type returned from common.UpdateDocument.

@@ -148,8 +148,13 @@ func (h *Handler) execDelete(ctx context.Context, c backends.Collection, p *comm
 		return 0, err
 	}
 
+	if err := validateHintExists(ctx, c, p.Hint, "delete"); err != nil {
+		return 0, err
+	}
+
 	var qp backends.QueryParams
 	qp.Collated = cmp != nil
+	qp.Hint = p.Hint
 	if !h.DisablePushdown {
 		qp.Filter = p.Filter
 	}

@@ -161,8 +161,13 @@ func (h *Handler) findAndModifyDocument(ctx context.Context, params *common.Find
 
 	cmp := collation.Parse(params.Collation).Comparator()
 
+	if err = validateHintExists(ctx, c, params.Hint, "findAndModify"); err != nil {
+		return nil, err
+	}
+
 	var qp backends.QueryParams
 	qp.Collated = cmp != nil
+	qp.Hint = params.Hint
 	if !h.DisablePushdown {
 		qp.Filter = params.Query
 	}
