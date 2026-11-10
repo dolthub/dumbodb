@@ -28,9 +28,8 @@ func TestBackgroundGCRootsProvider_PinnedRootsAreRefCountedPerDB(t *testing.T) {
 
 	visited := func(db string) []hash.Hash {
 		var got []hash.Hash
-		require.NoError(t, p.VisitGCRoots(context.Background(), db, func(h hash.Hash) bool {
+		require.NoError(t, p.VisitGCRoots(context.Background(), db, func(h hash.Hash) {
 			got = append(got, h)
-			return false
 		}))
 		return got
 	}
@@ -48,11 +47,12 @@ func TestBackgroundGCRootsProvider_PinnedRootsAreRefCountedPerDB(t *testing.T) {
 	require.Empty(t, visited("db1"))
 }
 
-func TestBackgroundGCRootsProvider_ReportsUnkeepableRoot(t *testing.T) {
+func TestSessionAwareSafepoint_ReportsUnkeepableRoot(t *testing.T) {
 	var p backgroundGCRootsProvider
 	release := p.pinRoot("db1", hash.Of([]byte("root")))
 	defer release()
 
-	err := p.VisitGCRoots(context.Background(), "db1", func(hash.Hash) bool { return true })
+	sc := &sessionAwareSafepoint{dbname: "db1", keeper: func(hash.Hash) bool { return true }}
+	err := sc.visit(context.Background(), &p)
 	require.Error(t, err)
 }

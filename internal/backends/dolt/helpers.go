@@ -540,7 +540,11 @@ func (state *dbState) getOrInitBranchWS(ctx context.Context, branch string) (*do
 				return nil, fmt.Errorf("getOrInitBranchWS: LookupDbState for %q: %w", qualified, err)
 			}
 			if ok {
-				if ws := sessState.WorkingSet(); ws != nil {
+				ws, err := sessState.WorkingSet(sqlCtx)
+				if err != nil {
+					return nil, fmt.Errorf("getOrInitBranchWS: working set for %q: %w", qualified, err)
+				}
+				if ws != nil {
 					return ws, nil
 				}
 			}
@@ -663,7 +667,10 @@ func (state *dbState) reconcileBranchForSession(
 	if !sok {
 		return nil, nil
 	}
-	ours := sessState.WorkingSet()
+	ours, err := sessState.WorkingSet(sqlCtx)
+	if err != nil {
+		return nil, fmt.Errorf("working set for %q: %w", qualified, err)
+	}
 	if ours == nil {
 		return nil, nil
 	}

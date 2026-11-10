@@ -154,6 +154,24 @@ func (s *dbState) reloadBranchWSFromDisk(ctx context.Context, branch string) err
 // never reach the client as a failure. ErrOptimisticLockFailed is the
 // working-set ref moving; ErrMergeNeeded is HEAD moving while the ref stayed
 // put, which happens when the working set was already clean.
+// commitWithWorkingSet publishes |ws| and a commit of |pending| on its branch in one storage transaction, provided the
+// working set is still |prevHash|.
+func commitWithWorkingSet(ctx context.Context, ddb *doltdb.DoltDB, pending *doltdb.PendingCommit, ws *doltdb.WorkingSet, prevHash hash.Hash) (*doltdb.Commit, error) {
+	headRef, err := ws.Ref().ToHeadRef()
+	if err != nil {
+		return nil, err
+	}
+	var rsc doltdb.ReplicationStatusController
+	heads, err := ddb.CommitHeadUpdates(ctx, []doltdb.HeadUpdate{
+		doltdb.WorkingSetUpdate{WorkingSet: ws, PrevHash: prevHash, Meta: doltdb.TodoWorkingSetMeta()},
+		doltdb.BranchHeadUpdate{HeadRef: headRef, Root: pending.Roots.Staged, CommitOptions: pending.CommitOptions},
+	}, &rsc)
+	if err != nil {
+		return nil, err
+	}
+	return doltdb.HashToCommit(ctx, ddb.ValueReadWriter(), ddb.NodeStore(), heads[1])
+}
+
 func autoCommitRaceLost(err error) bool {
 	return errors.Is(err, datas.ErrOptimisticLockFailed) || errors.Is(err, datas.ErrMergeNeeded)
 }
@@ -219,10 +237,6 @@ func (s *dbState) tryCommitBranchWS(ctx context.Context, branch, message, author
 		return false, nil
 	}
 
-	headRef, err := wsRef.ToHeadRef()
-	if err != nil {
-		return false, fmt.Errorf("commitBranchWS: head ref for %q: %w", branch, err)
-	}
 	if author == "" {
 		author = "dumbodb <dumbodb@localhost>"
 	}
@@ -240,8 +254,7 @@ func (s *dbState) tryCommitBranchWS(ctx context.Context, branch, message, author
 	}
 
 	cleanWS := current.WithStagedRoot(workingRoot).ClearMerge()
-	var rsc doltdb.ReplicationStatusController
-	if _, err := s.doltDB.CommitWithWorkingSet(ctx, headRef, wsRef, pending, cleanWS, forkPoint, doltdb.TodoWorkingSetMeta(), &rsc); err != nil {
+	if _, err := commitWithWorkingSet(ctx, s.doltDB, pending, cleanWS, forkPoint); err != nil {
 		if autoCommitRaceLost(err) {
 			return false, fmt.Errorf("%w: %q moved while auto-committing it", backends.ErrWriteRaced, branch)
 		}

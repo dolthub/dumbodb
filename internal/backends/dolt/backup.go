@@ -324,7 +324,7 @@ type gcSession struct {
 	_ byte
 }
 
-func (*gcSession) VisitGCRoots(context.Context, string, func(hash.Hash) bool) error {
+func (*gcSession) VisitGCRoots(context.Context, string, func(hash.Hash)) error {
 	return nil
 }
 
