@@ -49,7 +49,10 @@ type explainRun struct {
 	// writes, when set, is what reaches a write's root stage from the stages
 	// below it: a sorted single-document write sorts every match and writes
 	// one.
-	writes     *int32
+	writes *int32
+	// sorted, when set, is a find's SORT stage nReturned: the matches it keeps,
+	// at most skip plus limit.
+	sorted     *int32
 	keys, docs int64
 	// branches are the counts of the index scans under an OR or SORT_MERGE
 	// stage.
@@ -155,17 +158,20 @@ func runExplainedFind(ctx context.Context, coll backends.Collection, qp *backend
 	}
 	var run explainRun
 	run.matched = scanMatching(ctx, coll, query, qp, false)
-	run.returned = run.matched
-	if limit > 0 && run.returned > limit {
-		run.returned = limit
-	}
 	run.scanned = run.matched
+	skip := int32(min(qp.Skip, math.MaxInt32))
+	sorted := run.matched
+	if limit > 0 {
+		sorted = min(sorted, skip+limit)
+	}
+	run.sorted = &sorted
+	run.returned = max(sorted-skip, 0)
 	return run
 }
 
 // scanMatching runs query and returns how many of its documents match qp's
-// filter, stopping at the first when single is set, or at qp's limit when the
-// query's order is the requested one.
+// filter, stopping at the first when single is set, or at qp's skip plus limit
+// when the query's order is the requested one.
 func scanMatching(ctx context.Context, coll backends.Collection, query *backends.QueryParams, qp *backends.ExplainParams, single bool) int32 {
 	qres, err := coll.Query(ctx, query)
 	if err != nil || qres == nil || qres.Iter == nil {
@@ -174,6 +180,9 @@ func scanMatching(ctx context.Context, coll backends.Collection, query *backends
 	defer qres.Iter.Close()
 
 	limit := int32(max(qp.Limit, -qp.Limit))
+	if limit > 0 {
+		limit += int32(min(qp.Skip, math.MaxInt32-int64(limit)))
+	}
 	if single {
 		limit = 1
 	}
@@ -231,6 +240,8 @@ func cloneExecutionStage(node *types.Document, run explainRun, root, aboveMatch 
 		nReturned = int32(run.outerDocs())
 	case stage == "FETCH" || stage == "COLLSCAN" || stage == "CLUSTERED_IXSCAN":
 		nReturned = run.matched
+	case stage == "SORT" && aboveMatch && run.sorted != nil:
+		nReturned = *run.sorted
 	case childDoc == nil || !aboveMatch:
 		nReturned = run.scanned
 	case run.writes != nil:
