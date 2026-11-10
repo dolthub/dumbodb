@@ -295,7 +295,6 @@ func (it *sortWalkIter) nextEntry() (*sortWalkEntry, error) {
 		if !ok {
 			continue
 		}
-		it.examined.entries(it.ctx, 1)
 		return &sortWalkEntry{prefix: prefix, id: bytes.Clone(id)}, nil
 	}
 }
@@ -309,6 +308,8 @@ func (it *sortWalkIter) fetch(e *sortWalkEntry) (*types.Document, error) {
 		}
 		it.seen[string(e.id)] = struct{}{}
 	}
+	// The scan returns each document once, as a multikey IXSCAN does.
+	it.examined.entries(it.ctx, 1)
 	doc, err := lookupDocFromPrimary(it.ctx, it.primary, it.ns, e.id, it.fields)
 	if err != nil || doc == nil {
 		return nil, err

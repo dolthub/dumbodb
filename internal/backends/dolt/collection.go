@@ -184,7 +184,9 @@ func (c *collection) query(ctx context.Context, params *backends.QueryParams) (*
 					return nil, nil, err
 				}
 				if run == walkReachedTarget {
-					return &backends.QueryResult{Iter: iter, Sorted: true}, walkStage(idxInfos, walk.index), nil
+					stage := walkStage(idxInfos, walk.index)
+					stage.subplan = loneOrPlannedPerBranch(params.Filter)
+					return &backends.QueryResult{Iter: iter, Sorted: true}, stage, nil
 				}
 			} else if ok {
 				walk.Close()
@@ -252,7 +254,7 @@ func (c *collection) query(ctx context.Context, params *backends.QueryParams) (*
 					walk := walkStage(idxInfos, iter.rest.index)
 					// A lone $or is planned per branch, under SUBPLAN, even
 					// when a walk of the sort index wins.
-					walk.subplan = plan.union && !plan.inRewrite
+					walk.subplan = loneOrPlannedPerBranch(params.Filter)
 					return &backends.QueryResult{Iter: iter, Sorted: true}, walk, nil
 				case trialFilterWon:
 					c.db.backend.planCache.put(cacheKey, newPlanCacheEntry(idxInfos, params, "", plan.index, filterPlanWorks(plan, params)))
@@ -292,7 +294,9 @@ func (c *collection) query(ctx context.Context, params *backends.QueryParams) (*
 					return nil, nil, err
 				}
 			}
-			return &backends.QueryResult{Iter: iter, Sorted: true}, walkStage(idxInfos, iter.index), nil
+			stage := walkStage(idxInfos, iter.index)
+			stage.subplan = loneOrPlannedPerBranch(params.Filter)
+			return &backends.QueryResult{Iter: iter, Sorted: true}, stage, nil
 		}
 	}
 
@@ -1115,6 +1119,16 @@ func singlePredicate(branch *types.Document) bool {
 
 // orOfEqualitiesOnOneField reports whether every branch is a literal equality
 // on one same field, an $or MongoDB rewrites to an $in.
+// loneOrPlannedPerBranch reports whether filter is a lone $or that MongoDB
+// plans per branch, under SUBPLAN: any but one it rewrites as an $in.
+func loneOrPlannedPerBranch(filter *types.Document) bool {
+	if filter.Len() != 1 || !filter.Has("$or") {
+		return false
+	}
+	flat, ok := flattenOrBranches(must.NotFail(filter.Get("$or")))
+	return ok && !orOfEqualitiesOnOneField(flat)
+}
+
 func orOfEqualitiesOnOneField(flat []*types.Document) bool {
 	for _, branch := range flat {
 		if branch.Len() != 1 || branch.Keys()[0] != flat[0].Keys()[0] {
