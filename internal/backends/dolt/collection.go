@@ -3600,7 +3600,12 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 
 	startKey, stopKey, ok := indexBoundsForFilterValue(v)
 	if !ok {
-		return 0, false, nil
+		// mongod counts a MinKey or MaxKey bound from the index, so a sparse
+		// index leaves out the documents without the field, though find
+		// returns them.
+		if startKey, stopKey, ok = minMaxKeyCountBounds(v); !ok {
+			return 0, false, nil
+		}
 	}
 
 	// A multikey range holds a document once per matching element, so its
@@ -3622,6 +3627,26 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 	examined.keys(ctx, int(read))
 	examined.entries(ctx, int(read))
 	return n, true, nil
+}
+
+// minMaxKeyCountBounds returns the index range of a lone $gt or $gte MinKey,
+// or $lt or $lte MaxKey: every key, less the bound itself when exclusive.
+func minMaxKeyCountBounds(v any) (start, stop []byte, ok bool) {
+	ops, isDoc := v.(*types.Document)
+	if !isDoc || ops.Len() != 1 {
+		return nil, nil, false
+	}
+	start, stop = idxpkg.LowerBoundInclusive(types.MinKey), idxpkg.UpperBoundInclusive(types.MaxKey)
+	switch op, bound := ops.Keys()[0], must.NotFail(ops.Get(ops.Keys()[0])); {
+	case op == "$gte" && bound == types.MinKey, op == "$lte" && bound == types.MaxKey:
+	case op == "$gt" && bound == types.MinKey:
+		start = idxpkg.LowerBoundExclusive(types.MinKey)
+	case op == "$lt" && bound == types.MaxKey:
+		stop = idxpkg.UpperBoundExclusive(types.MaxKey)
+	default:
+		return nil, nil, false
+	}
+	return start, stop, true
 }
 
 // filterIsIn reports whether filter is one field's $in.
