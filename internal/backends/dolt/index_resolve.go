@@ -237,15 +237,15 @@ func resolveBranchIndexState(ctx context.Context, c *collection, state *dbState)
 // error counts as non-membership), multikey expansion, and the
 // Lossy/Multikey flag detection. Every build, insert, update, delete,
 // and merge path routes through it.
-func indexEntriesForDoc(doc *types.Document, idx backends.IndexInfo) (rows [][]any, multikey, lossy bool) {
+func indexEntriesForDoc(ctx context.Context, doc *types.Document, idx backends.IndexInfo) (rows [][]any, multikey, lossy bool, err error) {
 	if idx.MatchesPartialFilter != nil {
 		match, err := idx.MatchesPartialFilter(doc)
 		if err != nil || !match {
-			return nil, false, false
+			return nil, false, false, nil
 		}
 	}
 	if sparseExcludes(doc, idx) {
-		return nil, false, false
+		return nil, false, false, nil
 	}
 	fieldVals := extractIndexFieldValues(doc, idx)
 	for _, v := range fieldVals {
@@ -260,7 +260,9 @@ func indexEntriesForDoc(doc *types.Document, idx backends.IndexInfo) (rows [][]a
 		}
 	}
 	if multikey {
-		rows = firstOfEqualRows(rows)
+		if rows, err = firstOfEqualRows(ctx, rows); err != nil {
+			return nil, false, false, err
+		}
 	}
 	for _, row := range rows {
 		for _, v := range row {
@@ -269,19 +271,24 @@ func indexEntriesForDoc(doc *types.Document, idx backends.IndexInfo) (rows [][]a
 			}
 		}
 	}
-	return rows, multikey, lossy
+	return rows, multikey, lossy, nil
 }
 
 // firstOfEqualRows drops each row whose key equals an earlier row's. Equal
 // keys share one index entry, and mongod keeps the first element's value:
 // {a: [2, 2.0]} indexes 2, and {a: [2.0, 2]} indexes 2.0.
-func firstOfEqualRows(rows [][]any) [][]any {
+func firstOfEqualRows(ctx context.Context, rows [][]any) ([][]any, error) {
 	if len(rows) < 2 {
-		return rows
+		return rows, nil
 	}
 	seen := make(map[string]struct{}, len(rows))
 	out := rows[:0]
-	for _, row := range rows {
+	for j, row := range rows {
+		// A key can cost microseconds to encode, and an array holds one
+		// per element.
+		if j%256 == 255 && ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		key := string(idxpkg.BuildSecondaryKey(row, nil))
 		if _, dup := seen[key]; dup {
 			continue
@@ -289,7 +296,7 @@ func firstOfEqualRows(rows [][]any) [][]any {
 		seen[key] = struct{}{}
 		out = append(out, row)
 	}
-	return out
+	return out, nil
 }
 
 // applyInsertsToIndexes is pure: inputs are not mutated; the returned infos
@@ -322,10 +329,17 @@ func applyInsertsToIndexes(ctx context.Context, infos []backends.IndexInfo, maps
 			if err := checkGeoKeys(doc, info); err != nil {
 				return nil, nil, err
 			}
-			rows, multikey, lossy := indexEntriesForDoc(doc, info)
+			rows, multikey, lossy, err := indexEntriesForDoc(ctx, doc, info)
+			if err != nil {
+				return nil, nil, err
+			}
 			outInfos[i].Multikey = outInfos[i].Multikey || multikey
 			outInfos[i].Lossy = outInfos[i].Lossy || lossy
-			for _, fv := range rows {
+			for j, fv := range rows {
+				// As in firstOfEqualRows.
+				if j%256 == 255 && ctx.Err() != nil {
+					return nil, nil, ctx.Err()
+				}
 				if err := idxpkg.InsertEntry(ctx, mut, fv, idBytes); err != nil {
 					return nil, nil, fmt.Errorf("applyInsertsToIndexes: inserting entry into %q: %w", info.Name, err)
 				}
@@ -340,15 +354,18 @@ func applyInsertsToIndexes(ctx context.Context, infos []backends.IndexInfo, maps
 	return outInfos, out, nil
 }
 
-func entryKeysForRows(rows [][]any, idBytes []byte) map[string][]any {
+func entryKeysForRows(ctx context.Context, rows [][]any, idBytes []byte) (map[string][]any, error) {
 	if len(rows) == 0 {
-		return nil
+		return nil, nil
 	}
 	out := make(map[string][]any, len(rows))
-	for _, row := range rows {
+	for j, row := range rows {
+		if j%256 == 255 && ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		out[string(idxpkg.BuildSecondaryKey(row, idBytes))] = row
 	}
-	return out
+	return out, nil
 }
 
 // applyUpdatesToIndexes deletes/inserts only the entry-set difference
@@ -385,16 +402,28 @@ func applyUpdatesToIndexes(ctx context.Context, infos []backends.IndexInfo, maps
 			}
 			idBytes := h
 
-			oldRows, _, _ := indexEntriesForDoc(oldDocs[d], info)
+			oldRows, _, _, err := indexEntriesForDoc(ctx, oldDocs[d], info)
+			if err != nil {
+				return nil, nil, err
+			}
 			if err := checkGeoKeys(newDocs[d], info); err != nil {
 				return nil, nil, err
 			}
-			newRows, multikey, lossy := indexEntriesForDoc(newDocs[d], info)
+			newRows, multikey, lossy, err := indexEntriesForDoc(ctx, newDocs[d], info)
+			if err != nil {
+				return nil, nil, err
+			}
 			outInfos[i].Multikey = outInfos[i].Multikey || multikey
 			outInfos[i].Lossy = outInfos[i].Lossy || lossy
 
-			oldKeys := entryKeysForRows(oldRows, idBytes)
-			newKeys := entryKeysForRows(newRows, idBytes)
+			oldKeys, err := entryKeysForRows(ctx, oldRows, idBytes)
+			if err != nil {
+				return nil, nil, err
+			}
+			newKeys, err := entryKeysForRows(ctx, newRows, idBytes)
+			if err != nil {
+				return nil, nil, err
+			}
 
 			for k, row := range oldKeys {
 				if _, keep := newKeys[k]; keep {
@@ -453,7 +482,10 @@ func applyDeletesToIndexes(ctx context.Context, infos []backends.IndexInfo, maps
 				return nil, fmt.Errorf("applyDeletesToIndexes: hashing _id for index %q: %w", info.Name, err)
 			}
 			idBytes := h
-			rows, _, _ := indexEntriesForDoc(doc, info)
+			rows, _, _, err := indexEntriesForDoc(ctx, doc, info)
+			if err != nil {
+				return nil, err
+			}
 			for _, row := range rows {
 				if err := idxpkg.DeleteEntry(ctx, mut, row, idBytes); err != nil {
 					return nil, fmt.Errorf("applyDeletesToIndexes: deleting entry from %q: %w", info.Name, err)

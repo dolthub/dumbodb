@@ -724,7 +724,10 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 			if !idx.Unique {
 				continue
 			}
-			rows, _, lossy := indexEntriesForDoc(chosenDoc, idx)
+			rows, _, lossy, err := indexEntriesForDoc(ctx, chosenDoc, idx)
+			if err != nil {
+				return nil, err
+			}
 			if len(rows) == 0 || lossy || idx.Lossy {
 				continue
 			}

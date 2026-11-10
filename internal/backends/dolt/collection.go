@@ -2976,7 +2976,10 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 		// Unique constraints: one bounded index probe per entry row;
 		// membership and multikey expansion via indexEntriesForDoc.
 		for i, idx := range uniqueIndexes {
-			rows, _, lossy := indexEntriesForDoc(doc, idx)
+			rows, _, lossy, err := indexEntriesForDoc(ctx, doc, idx)
+			if err != nil {
+				return nil, err
+			}
 			if len(rows) == 0 {
 				continue
 			}
@@ -4327,7 +4330,10 @@ func (c *collection) buildSecondaryIndex(ctx context.Context, state *dbState, id
 		if err := checkGeoKeys(doc, idx); err != nil {
 			return prolly.Map{}, false, false, err
 		}
-		rows, rowMultikey, rowLossy := indexEntriesForDoc(doc, idx)
+		rows, rowMultikey, rowLossy, err := indexEntriesForDoc(ctx, doc, idx)
+		if err != nil {
+			return prolly.Map{}, false, false, err
+		}
 		multikey = multikey || rowMultikey
 		lossy = lossy || rowLossy
 
@@ -4474,7 +4480,10 @@ func (c *collection) validateUniqueOnUpdate(ctx context.Context, state *dbState,
 		if !idx.Unique {
 			continue
 		}
-		rows, _, lossy := indexEntriesForDoc(newDoc, idx)
+		rows, _, lossy, err := indexEntriesForDoc(ctx, newDoc, idx)
+		if err != nil {
+			return err
+		}
 		if len(rows) == 0 {
 			continue
 		}

@@ -215,7 +215,10 @@ func (s *indexMergeSurvivor) deleteDoc(ctx context.Context, doc *types.Document,
 	if doc == nil {
 		return nil
 	}
-	rows, _, _ := indexEntriesForDoc(doc, s.info)
+	rows, _, _, err := indexEntriesForDoc(ctx, doc, s.info)
+	if err != nil {
+		return err
+	}
 	for _, row := range rows {
 		if err := idxpkg.DeleteEntry(ctx, s.mut, row, idBytes); err != nil {
 			return err
@@ -236,7 +239,10 @@ func (s *indexMergeSurvivor) insertDoc(ctx context.Context, doc *types.Document,
 	if doc == nil {
 		return nil
 	}
-	rows, multikey, lossy := indexEntriesForDoc(doc, s.info)
+	rows, multikey, lossy, err := indexEntriesForDoc(ctx, doc, s.info)
+	if err != nil {
+		return err
+	}
 	s.info.Multikey = s.info.Multikey || multikey
 	s.info.Lossy = s.info.Lossy || lossy
 	for _, row := range rows {
@@ -257,7 +263,10 @@ func (s *indexMergeSurvivor) uniqueCollision(ctx context.Context, doc *types.Doc
 	if !s.info.Unique || doc == nil {
 		return nil, false, false, nil
 	}
-	rows, _, lossy := indexEntriesForDoc(doc, s.info)
+	rows, _, lossy, err := indexEntriesForDoc(ctx, doc, s.info)
+	if err != nil {
+		return nil, false, false, err
+	}
 	if lossy || s.info.Lossy {
 		// No faithful encoding: probes would collide on collapsed
 		// bytes. Skip merge-time enforcement for this index; write-path
