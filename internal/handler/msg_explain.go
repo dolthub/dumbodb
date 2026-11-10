@@ -29,6 +29,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 	"github.com/dolthub/dumbodb/internal/util/must"
@@ -344,6 +345,11 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 	maxTimeMS, err := explainMaxTimeMS(document)
 	if err != nil {
 		return nil, err
+	}
+	if inner, ok := must.NotFail(document.Get(document.Command())).(*types.Document); ok && inner.Len() > 0 {
+		if err = checkInnerMaxTimeMS(inner); err != nil {
+			return nil, err
+		}
 	}
 	connCtx, cancel := withMaxTimeMS(connCtx, maxTimeMS)
 	defer cancel()
@@ -730,33 +736,42 @@ func explainVersion(params *common.ExplainParams, viaView bool) string {
 	return "1"
 }
 
+// checkInnerMaxTimeMS returns mongod's error for the maxTimeMS of an explained
+// find or aggregate: its command's type check, then a negative value refused.
+// mongod applies no other check to it under explain.
+func checkInnerMaxTimeMS(inner *types.Document) error {
+	field := map[string]string{"find": "FindCommandRequest", "aggregate": "aggregate"}[inner.Command()]
+	v, _ := inner.Get("maxTimeMS")
+	if field == "" || v == nil {
+		return nil
+	}
+	var ms float64
+	switch n := v.(type) {
+	case types.NullType:
+		return nil
+	case int32:
+		ms = float64(n)
+	case int64:
+		ms = float64(n)
+	case float64:
+		ms = math.Trunc(n)
+	case types.Decimal128:
+		return nil
+	default:
+		return handlererrors.NewCommandErrorMsg(handlererrors.ErrTypeMismatch, fmt.Sprintf(
+			"BSON field '%s.maxTimeMS' is the wrong type '%s', expected types '[decimal, long, int, double']",
+			field, handlerparams.AliasFromType(v)))
+	}
+	if ms < 0 {
+		return handlererrors.NewCommandErrorMsg(handlererrors.ErrBadValue,
+			fmt.Sprintf("BSON field 'maxTimeMS' value must be >= 0, actual value '%d'", int64(ms)))
+	}
+	return nil
+}
+
 // explainMaxTimeMS returns the maxTimeMS beside the explained command, 0 when
-// unset, validated as mongod validates a command's generic maxTimeMS. It is
-// not shared with getMore's and aggregate's checks because mongod's errors
-// differ by command: a string is BadValue here but TypeMismatch for getMore,
-// and a negative fraction is truncated here but "must be >= 0" for aggregate.
+// unset, read as count and distinct read theirs (handlerparams.CommandMaxTimeMS).
 func explainMaxTimeMS(document *types.Document) (int64, error) {
 	v, _ := document.Get("maxTimeMS")
-	if v == nil {
-		return 0, nil
-	}
-	var ms int64
-	switch n := v.(type) {
-	case int32:
-		ms = int64(n)
-	case int64:
-		ms = n
-	case float64:
-		if n >= 0 && n != math.Trunc(n) {
-			return 0, handlererrors.NewCommandErrorMsg(handlererrors.ErrBadValue, "maxTimeMS has non-integral value")
-		}
-		ms = int64(math.Max(math.Min(math.Trunc(n), math.MaxInt64), math.MinInt64))
-	default:
-		return 0, handlererrors.NewCommandErrorMsg(handlererrors.ErrBadValue, "maxTimeMS must be a number")
-	}
-	if ms < 0 || ms > math.MaxInt32 {
-		return 0, handlererrors.NewCommandErrorMsg(handlererrors.ErrBadValue,
-			fmt.Sprintf("%d value for maxTimeMS is out of range [0, 2147483647]", ms))
-	}
-	return ms, nil
+	return handlerparams.CommandMaxTimeMS(v)
 }

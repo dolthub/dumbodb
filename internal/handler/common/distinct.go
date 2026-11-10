@@ -43,9 +43,10 @@ type DistinctParams struct {
 
 	Query any `dumbo:"query,opt"`
 
-	Collation *types.Document `dumbo:"collation,opt"`
-	MaxTimeMS int64           `dumbo:"maxTimeMS,opt,wholePositiveNumber"`
-	Hint      any             `dumbo:"hint,opt"`
+	Collation      *types.Document `dumbo:"collation,opt"`
+	MaxTimeMSValue any             `dumbo:"maxTimeMS,opt"`
+	MaxTimeMS      int64           `dumbo:"-"`
+	Hint           any             `dumbo:"hint,opt"`
 
 	ReadConcern    *types.Document `dumbo:"readConcern,ignored"`
 	LSID           any             `dumbo:"lsid,ignored"`
@@ -61,6 +62,9 @@ func GetDistinctParams(document *types.Document, l *slog.Logger) (*DistinctParam
 	var dp DistinctParams
 
 	err := handlerparams.ExtractParams(document, "distinct", &dp, l)
+	if err == nil {
+		dp.MaxTimeMS, err = handlerparams.CommandMaxTimeMS(dp.MaxTimeMSValue)
+	}
 	if err != nil {
 		return nil, err
 	}
