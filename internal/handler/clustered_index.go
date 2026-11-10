@@ -151,3 +151,15 @@ func isNumber(v any, want int32) bool {
 	}
 	return false
 }
+
+// clusteredIndexHasCustomName reports whether document's clusteredIndex spec
+// names its index something other than the default _id_.
+func clusteredIndexHasCustomName(document *types.Document) bool {
+	v, _ := document.Get("clusteredIndex")
+	spec, ok := v.(*types.Document)
+	if !ok {
+		return false
+	}
+	name, _ := spec.Get("name")
+	return name != nil && name != backends.DefaultIndexName
+}
