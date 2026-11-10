@@ -17,6 +17,7 @@ package common
 import (
 	"log/slog"
 
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -227,6 +228,9 @@ func GetExplainParams(document *types.Document, l *slog.Logger) (*ExplainParams,
 			)
 		}
 
+		if err := aggregations.CheckPipelineLength(pipeline.Len()); err != nil {
+			return nil, err
+		}
 		stagesDocs = must.NotFail(iterator.ConsumeValues(pipeline.Iterator()))
 		for _, d := range stagesDocs {
 			if _, ok := d.(*types.Document); !ok {

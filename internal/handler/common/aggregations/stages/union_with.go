@@ -64,6 +64,9 @@ func NewUnionWithStage(stage *types.Document, fetcher CollectionFetcher) (aggreg
 				if !ok {
 					return nil, unionWithWrongType(key, value, "array")
 				}
+				if err := aggregations.CheckPipelineLength(pipeline.Len()); err != nil {
+					return nil, err
+				}
 				sub.pipeline = pipeline
 			default:
 				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIDLUnknownField,

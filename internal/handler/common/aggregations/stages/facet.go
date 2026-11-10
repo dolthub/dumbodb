@@ -115,6 +115,9 @@ func newFacet(stage *types.Document) (aggregations.Stage, error) {
 				"$facet (stage)",
 			)
 		}
+		if err := aggregations.CheckPipelineLength(pipelineArr.Len()); err != nil {
+			return nil, err
+		}
 
 		// Validate that each element is a document (basic validation at parse time).
 		for i := 0; i < pipelineArr.Len(); i++ {

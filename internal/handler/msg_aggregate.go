@@ -241,6 +241,9 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			document.Command(),
 		)
 	}
+	if err = aggregations.CheckPipelineLength(pipeline.Len()); err != nil {
+		return nil, err
+	}
 
 	aggregationStages := aggregations.MoveMatchesAhead(must.NotFail(iterator.ConsumeValues(pipeline.Iterator())))
 	stagesDocuments := make([]aggregations.Stage, 0, len(aggregationStages))
@@ -514,6 +517,11 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 				closer.Close()
 				return nil, handleMaxTimeMSError(vErr, maxTimeMS, "aggregate")
 			}
+			if len(viewStages)+len(aggregationStages) > aggregations.MaxPipelineLength {
+				closer.Close()
+				return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrViewPipelineTooLong,
+					"Pipeline length must be no longer than 1000 stages")
+			}
 			srcInfo, srcErr := lookupCollectionInfo(ctx, db, baseCollection)
 			if srcErr != nil {
 				closer.Close()
@@ -651,6 +659,9 @@ func (h *Handler) aggregateDatabase(connCtx context.Context, document *types.Doc
 			"'pipeline' option must be specified as an array",
 			document.Command(),
 		)
+	}
+	if err = aggregations.CheckPipelineLength(pipeline.Len()); err != nil {
+		return nil, err
 	}
 
 	if pipeline.Len() == 0 {

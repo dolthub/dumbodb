@@ -223,6 +223,9 @@ func NewLookupStage(stage *types.Document, fetcher CollectionFetcher) (aggregati
 				"$lookup (stage)",
 			)
 		}
+		if err := aggregations.CheckPipelineLength(pipelineArr.Len()); err != nil {
+			return nil, err
+		}
 
 		l.pipeline = pipelineArr
 

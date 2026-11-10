@@ -527,6 +527,13 @@ const (
 	// ErrClusteredIndexVersion indicates a clusteredIndex with v other than 2.
 	ErrClusteredIndexVersion = ErrorCode(5979704) // Location5979704
 
+	// ErrPipelineTooLong indicates a pipeline of more than 1000 stages.
+	ErrPipelineTooLong = ErrorCode(7749501) // Location7749501
+
+	// ErrViewPipelineTooLong indicates a view's and a query's stages together
+	// exceed 1000.
+	ErrViewPipelineTooLong = ErrorCode(5054701) // Location5054701
+
 	// ErrClusteredIndexOnView indicates a clusteredIndex on a view.
 	ErrClusteredIndexOnView = ErrorCode(6026500) // Location6026500
 

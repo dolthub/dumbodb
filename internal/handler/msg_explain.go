@@ -428,7 +428,12 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 			// A view that reshapes documents runs before the command, so the
 			// command is explained as an aggregate of the view's stages and
 			// its own, as mongod does.
-			params.StagesDocs = mergeLeadingMatches(dropShapingBeforeCount(aggregations.MoveMatchesAhead(append(append([]any{}, rawStages...), commandStages(params)...))))
+			combined := append(append([]any{}, rawStages...), commandStages(params)...)
+			if len(combined) > aggregations.MaxPipelineLength {
+				return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrViewPipelineTooLong,
+					"Pipeline length must be no longer than 1000 stages")
+			}
+			params.StagesDocs = mergeLeadingMatches(dropShapingBeforeCount(aggregations.MoveMatchesAhead(combined)))
 			params.Aggregate = true
 			params.CommandName = "aggregate"
 			params.Filter, params.Sort, params.Skip, params.Limit = nil, nil, 0, 0

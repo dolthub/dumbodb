@@ -25,6 +25,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -223,6 +224,11 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 					"'pipeline' option must be an array",
 					"create",
 				)
+			}
+			if err := aggregations.CheckPipelineLength(pipeline.Len()); err != nil {
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrPipelineTooLong,
+					fmt.Sprintf("Invalid pipeline for view %s.%s :: caused by :: Pipeline length must be no longer than 1000 stages.", dbName, collectionName),
+					"create")
 			}
 			params.ViewPipeline = pipeline
 		}
