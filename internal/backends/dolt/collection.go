@@ -3496,7 +3496,7 @@ func (c *collection) Count(ctx context.Context, params *backends.CountParams) (*
 	}
 
 	if params != nil && params.Filter != nil && params.Filter.Len() > 0 {
-		n, used, ferr := c.tryIndexedCount(ctx, state, params.Filter, params.Collation, params.Stop)
+		n, used, ferr := c.tryIndexedCount(ctx, state, params.Filter, params.Collation, params.Stop, params.Hint)
 		if ferr != nil {
 			return nil, ferr
 		}
@@ -3525,7 +3525,7 @@ func (c *collection) Count(ctx context.Context, params *backends.CountParams) (*
 //
 // Returns (0, false, nil) when the filter shape is unsupported  -- caller
 // falls back to the scan path.
-func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter *types.Document, queryCollation *types.Document, stop int64) (int64, bool, error) {
+func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter *types.Document, queryCollation *types.Document, stop int64, hint any) (int64, bool, error) {
 	if filter == nil || filter.Len() != 1 {
 		return 0, false, nil
 	}
@@ -3574,6 +3574,9 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 		}
 	}
 	if !found {
+		return 0, false, nil
+	}
+	if backends.HintRequiresExistingIndex(hint) && backends.MatchHintedIndex(hint, []backends.IndexInfo{chosen}) != chosen.Name {
 		return 0, false, nil
 	}
 

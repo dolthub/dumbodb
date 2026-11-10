@@ -198,6 +198,10 @@ type CountParams struct {
 	// Stop, when positive, is skip + limit: a count reads no further keys
 	// than that, as MongoDB's COUNT stage stops pulling from its scan.
 	Stop int64
+
+	// Hint, when it names an index, limits the count to that index: the
+	// backend declines unless it would count from it anyway.
+	Hint any
 }
 
 type CountResult struct {

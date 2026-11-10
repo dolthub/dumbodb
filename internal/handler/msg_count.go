@@ -160,7 +160,7 @@ func (h *Handler) execCount(ctx context.Context, c backends.Collection, params *
 // when the count came from an index.
 func (h *Handler) execCountReading(ctx context.Context, c backends.Collection, params *common.CountParams, cmp *collation.Comparator) (n, read int32, err error) {
 	// A hinted index decides which documents are counted (a sparse one holds
-	// only some), so a hint skips both shortcuts.
+	// only some), so a hint skips the unfiltered shortcut.
 	hinted := params.Hint != nil && !backends.HintIsNatural(params.Hint)
 
 	// Fast path: unfiltered count. The backend can return the entry count from
@@ -189,12 +189,14 @@ func (h *Handler) execCountReading(ctx context.Context, c backends.Collection, p
 	// without fetching documents (e.g. via a covering single-field index).
 	// The backend signals success via Filtered=true; otherwise we fall
 	// through to the scan path below.
-	if !h.DisablePushdown && cmp == nil && !hinted {
+	// A hint still allows the index count when it names the index the count
+	// would read; the backend declines any other.
+	if !h.DisablePushdown && cmp == nil && params.Filter.Len() > 0 {
 		stop := int64(0)
 		if params.Limit > 0 {
 			stop = params.Skip + params.Limit
 		}
-		countRes, cerr := c.Count(ctx, &backends.CountParams{Filter: params.Filter, Collation: params.Collation, Stop: stop})
+		countRes, cerr := c.Count(ctx, &backends.CountParams{Filter: params.Filter, Collation: params.Collation, Stop: stop, Hint: params.Hint})
 		if cerr != nil {
 			return 0, 0, lazyerrors.Error(cerr)
 		}
