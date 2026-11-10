@@ -180,7 +180,7 @@ func (h *Handler) execDistinct(ctx context.Context, c backends.Collection, param
 
 	queryRes, err := c.Query(ctx, &qp)
 	if err != nil {
-		return nil, lazyerrors.Error(err)
+		return nil, handleMaxTimeMSError(err, params.MaxTimeMS, "distinct")
 	}
 
 	closer.Add(queryRes.Iter)

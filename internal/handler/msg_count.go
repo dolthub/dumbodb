@@ -198,7 +198,7 @@ func (h *Handler) execCountReading(ctx context.Context, c backends.Collection, p
 		}
 		countRes, cerr := c.Count(ctx, &backends.CountParams{Filter: params.Filter, Collation: params.Collation, Stop: stop, Hint: params.Hint})
 		if cerr != nil {
-			return 0, 0, lazyerrors.Error(cerr)
+			return 0, 0, handleMaxTimeMSError(cerr, params.MaxTimeMS, "count")
 		}
 		if countRes.Filtered {
 			total := countRes.Count
@@ -225,7 +225,7 @@ func (h *Handler) execCountReading(ctx context.Context, c backends.Collection, p
 
 	queryRes, err := c.Query(ctx, &qp)
 	if err != nil {
-		return 0, 0, lazyerrors.Error(err)
+		return 0, 0, handleMaxTimeMSError(err, params.MaxTimeMS, "count")
 	}
 
 	iter := iterator.WithContext(ctx, queryRes.Iter)

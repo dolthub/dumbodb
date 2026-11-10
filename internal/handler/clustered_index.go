@@ -16,8 +16,9 @@ package handler
 
 import (
 	"fmt"
-	"strconv"
+	"math"
 
+	"github.com/cockroachdb/apd/v3"
 	"go.mongodb.org/mongo-driver/v2/bson"
 
 	"github.com/dolthub/dumbodb/internal/backends"
@@ -139,7 +140,7 @@ func formatClusteredIndexSpec(spec *types.Document) string {
 	}
 	version, _ := clusteredIndexVersion(spec)
 	normalized := must.NotFail(types.NewDocument(
-		"v", int32(version),
+		"v", version,
 		"key", must.NotFail(spec.Get("key")),
 		"name", name,
 		"unique", must.NotFail(spec.Get("unique")),
@@ -171,23 +172,55 @@ func clusteredIndexHasCustomName(document *types.Document) bool {
 	return name != nil && name != backends.DefaultIndexName
 }
 
-// clusteredIndexVersion returns spec's v truncated to an integer, as mongod
-// reads it, or false when v is unset or null.
-func clusteredIndexVersion(spec *types.Document) (int64, bool) {
+// clusteredIndexVersion returns spec's v as mongod reads it into an int32,
+// or false when v is unset or null: a double truncates toward zero, a
+// Decimal128 rounds half to even, both saturate at the int32 bounds, and NaN
+// is 0.
+func clusteredIndexVersion(spec *types.Document) (int32, bool) {
 	value, _ := spec.Get("v")
 	switch v := value.(type) {
 	case int32:
-		return int64(v), true
-	case int64:
 		return v, true
+	case int64:
+		return int32(max(min(v, math.MaxInt32), math.MinInt32)), true
 	case float64:
-		return int64(v), true
+		return saturatedInt32(math.Trunc(v)), true
 	case types.Decimal128:
-		f, err := strconv.ParseFloat(bson.NewDecimal128(v.H, v.L).String(), 64)
+		d, _, err := apd.NewFromString(bson.NewDecimal128(v.H, v.L).String())
+		if err != nil || d.Form == apd.NaN || d.Form == apd.NaNSignaling {
+			return 0, true
+		}
+		if d.Form == apd.Infinite {
+			if d.Negative {
+				return math.MinInt32, true
+			}
+			return math.MaxInt32, true
+		}
+		var rounded apd.Decimal
+		ctx := apd.BaseContext.WithPrecision(40)
+		ctx.Rounding = apd.RoundHalfEven
+		if _, err := ctx.RoundToIntegralValue(&rounded, d); err != nil {
+			return 0, true
+		}
+		f, err := rounded.Float64()
 		if err != nil {
 			return 0, true
 		}
-		return int64(f), true
+		return saturatedInt32(f), true
 	}
 	return 0, false
+}
+
+// saturatedInt32 converts an integral f to int32, clamping it to the int32
+// range, with NaN as 0.
+func saturatedInt32(f float64) int32 {
+	switch {
+	case math.IsNaN(f):
+		return 0
+	case f >= math.MaxInt32:
+		return math.MaxInt32
+	case f <= math.MinInt32:
+		return math.MinInt32
+	}
+	return int32(f)
 }
