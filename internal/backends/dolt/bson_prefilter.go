@@ -284,7 +284,18 @@ func bsonValueEqualsOrContains(typeByte byte, valueBytes []byte, target any) boo
 // equivalence rules; non-numeric types match on native shape only.
 func scalarMatch(typeByte byte, valueBytes []byte, target any) bool {
 	switch t := target.(type) {
-	case int32, int64, float64:
+	case int32:
+		// The common case, decided without converting to a double.
+		switch {
+		case typeByte == bsonTypeInt32 && len(valueBytes) >= 4:
+			return int32(binary.LittleEndian.Uint32(valueBytes)) == t
+		case typeByte == bsonTypeInt64 && len(valueBytes) >= 8:
+			return int64(binary.LittleEndian.Uint64(valueBytes)) == int64(t)
+		case typeByte == bsonTypeDouble && len(valueBytes) >= 8:
+			return math.Float64frombits(binary.LittleEndian.Uint64(valueBytes)) == float64(t)
+		}
+		return numericMayMatch(typeByte, valueBytes, t)
+	case int64, float64:
 		return numericMayMatch(typeByte, valueBytes, t)
 	case string:
 		if typeByte != bsonTypeString {
