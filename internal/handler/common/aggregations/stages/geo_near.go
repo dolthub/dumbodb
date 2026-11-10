@@ -346,7 +346,9 @@ func (g *geoNear) annotate(doc *types.Document, geoField string) (*types.Documen
 		return nil, 0, nil
 	}
 	dist := g.computeDistance(fieldVal)
-	if dist < g.minDistance || dist > g.maxDistance {
+	// GeoDistance reports a field holding no point as MaxFloat64, which an
+	// unbounded maxDistance would admit.
+	if dist == math.MaxFloat64 || dist < g.minDistance || dist > g.maxDistance {
 		return nil, 0, nil
 	}
 	out := doc.DeepCopy()
