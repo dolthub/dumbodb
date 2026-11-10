@@ -416,12 +416,30 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 			return nil, lazyerrors.Error(err)
 		}
 
-		// The command's own filter applies after the view's.
-		viewFilter, _ := aggregations.GetPushdownQuery(rawStages)
-		params.Filter = andFilters(viewFilter, params.Filter)
-		common.CanonicalizeFilter(params.Filter)
-		params.Aggregate = false
-		params.StagesDocs = nil
+		switch {
+		case onlyMatchStages(rawStages) && params.CommandName != "aggregate":
+			// The command's own filter applies after the view's.
+			viewFilter, _ := aggregations.GetPushdownQuery(rawStages)
+			params.Filter = andFilters(viewFilter, params.Filter)
+			common.CanonicalizeFilter(params.Filter)
+			params.Aggregate = false
+			params.StagesDocs = nil
+		case params.CommandName == "find" || params.CommandName == "count" || params.CommandName == "aggregate":
+			// A view that reshapes documents runs before the command, so the
+			// command is explained as an aggregate of the view's stages and
+			// its own, as mongod does.
+			params.StagesDocs = mergeLeadingMatches(append(append([]any{}, rawStages...), commandStages(params)...))
+			params.Aggregate = true
+			params.CommandName = "aggregate"
+			params.Filter, params.Sort, params.Skip, params.Limit = nil, nil, 0, 0
+			viaView = false
+		default:
+			viewFilter, _ := aggregations.GetPushdownQuery(rawStages)
+			params.Filter = andFilters(viewFilter, params.Filter)
+			common.CanonicalizeFilter(params.Filter)
+			params.Aggregate = false
+			params.StagesDocs = nil
+		}
 	}
 
 	// A hint naming an index that does not exist is an error, matching MongoDB.
@@ -551,7 +569,8 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 			runCtx = backends.WithSeekEachRange(connCtx)
 		}
 		run := h.runExplained(runCtx, coll, params, qp, viaView)
-		if qp.CountOnly {
+		// A counting GROUP returns one document, the count.
+		if qp.CountOnly || (viaView && params.CommandName == "count") {
 			run.returned = min(run.returned, 1)
 		}
 
@@ -584,6 +603,64 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 	response.Set("ok", float64(1))
 
 	return documentOpMsg(response)
+}
+
+// onlyMatchStages reports whether a view pipeline holds only $match stages.
+func onlyMatchStages(stages []any) bool {
+	for _, stage := range stages {
+		d, ok := stage.(*types.Document)
+		if !ok || d.Command() != "$match" {
+			return false
+		}
+	}
+	return true
+}
+
+// mergeLeadingMatches joins a pipeline's leading $match stages into one, as
+// mongod coalesces adjacent $match stages before pushing the result down.
+func mergeLeadingMatches(stages []any) []any {
+	var merged *types.Document
+	i := 0
+	for ; i < len(stages); i++ {
+		d, ok := stages[i].(*types.Document)
+		if !ok || d.Command() != "$match" {
+			break
+		}
+		filter, ok := must.NotFail(d.Get("$match")).(*types.Document)
+		if !ok {
+			break
+		}
+		merged = andFilters(merged, filter)
+	}
+	if i < 2 {
+		return stages
+	}
+	return append([]any{must.NotFail(types.NewDocument("$match", merged))}, stages[i:]...)
+}
+
+// commandStages are the aggregation stages a find, count or aggregate applies
+// to a view's documents.
+func commandStages(params *common.ExplainParams) []any {
+	if params.CommandName == "aggregate" {
+		return params.StagesDocs
+	}
+	var stages []any
+	if params.Filter.Len() > 0 {
+		stages = append(stages, must.NotFail(types.NewDocument("$match", params.Filter)))
+	}
+	if params.CommandName == "find" && params.Sort.Len() > 0 {
+		stages = append(stages, must.NotFail(types.NewDocument("$sort", params.Sort)))
+	}
+	if params.Skip > 0 {
+		stages = append(stages, must.NotFail(types.NewDocument("$skip", params.Skip)))
+	}
+	if params.Limit != 0 {
+		stages = append(stages, must.NotFail(types.NewDocument("$limit", max(params.Limit, -params.Limit))))
+	}
+	if params.CommandName == "count" {
+		stages = append(stages, must.NotFail(types.NewDocument("$count", "count")))
+	}
+	return stages
 }
 
 // andFilters returns a filter matching both a and b, either of which may be
