@@ -218,53 +218,116 @@ func unwindingSpec(unwind *types.Document) *types.Document {
 // moveMatchesBeforeLookups moves each $match that follows a $lookup ahead of
 // it when the match does not read the join's output, as mongod's optimizer
 // does, so the match can reach the query and an $unwind can follow its join.
+// A $match moves past $lookups only, never past another $match, so within a
+// run of $lookup and $match stages each match lands just after the last
+// $lookup whose output it reads, and no earlier than the match before it.
+// One pass: each match looks up its fields against the run's join outputs.
 func moveMatchesBeforeLookups(pipeline []any) []any {
-	out := append([]any{}, pipeline...)
-	for moved := true; moved; {
-		moved = false
-		for i := 0; i+1 < len(out); i++ {
-			lookupStage, _ := out[i].(*types.Document)
-			matchStage, _ := out[i+1].(*types.Document)
-			if lookupStage == nil || matchStage == nil || lookupStage.Len() == 0 || matchStage.Len() == 0 ||
-				lookupStage.Command() != "$lookup" || matchStage.Command() != "$match" {
-				continue
+	out := make([]any, 0, len(pipeline))
+	var run []any
+	flush := func() { out = append(out, run...); run = run[:0] }
+	var (
+		lookups     []*types.Document // the run's $lookups, in order
+		slots       [][]*types.Document
+		lastSlot    int
+		outputs     map[string]int // a join output path, or a prefix of one, to its latest $lookup
+		outputsSeen map[string]int // a join output path to its latest $lookup
+	)
+	reset := func() {
+		lookups, slots, lastSlot = nil, [][]*types.Document{nil}, 0
+		outputs, outputsSeen = map[string]int{}, map[string]int{}
+	}
+	emitRun := func() {
+		for i, l := range lookups {
+			for _, m := range slots[i] {
+				run = append(run, m)
 			}
-			spec, _ := must.NotFail(lookupStage.Get("$lookup")).(*types.Document)
-			filter, _ := must.NotFail(matchStage.Get("$match")).(*types.Document)
+			run = append(run, l)
+		}
+		for _, m := range slots[len(lookups)] {
+			run = append(run, m)
+		}
+		flush()
+		reset()
+	}
+	reset()
+	for _, stage := range pipeline {
+		d, _ := stage.(*types.Document)
+		switch {
+		case d != nil && d.Len() > 0 && d.Command() == "$lookup":
+			spec, _ := must.NotFail(d.Get("$lookup")).(*types.Document)
 			as, ok := specString(spec, "as")
-			if spec == nil || filter == nil || !ok || filterReadsPath(filter, as) {
-				continue
+			n := len(lookups) + 1
+			if ok {
+				outputsSeen[as] = n
+				for p := as; ; {
+					outputs[p] = n
+					i := strings.LastIndexByte(p, '.')
+					if i < 0 {
+						break
+					}
+					p = p[:i]
+				}
 			}
-			out[i], out[i+1] = out[i+1], out[i]
-			moved = true
+			lookups = append(lookups, d)
+			slots = append(slots, nil)
+		case d != nil && d.Len() > 0 && d.Command() == "$match" && len(lookups) > 0:
+			slot := len(lookups)
+			if filter, ok := must.NotFail(d.Get("$match")).(*types.Document); ok {
+				if dep, ok := lastJoinRead(filter, outputs, outputsSeen); ok {
+					slot = dep
+				}
+			}
+			slot = max(slot, lastSlot)
+			lastSlot = slot
+			slots[slot] = append(slots[slot], d)
+		default:
+			emitRun()
+			out = append(out, stage)
 		}
 	}
+	emitRun()
 	return out
 }
 
-// filterReadsPath reports whether filter may read path or a field below it;
-// operators other than $and, $or and $nor count as reading anything.
-func filterReadsPath(filter *types.Document, path string) bool {
+// lastJoinRead returns the latest $lookup (1-based, 0 for none) whose output
+// filter may read, or false when filter holds an operator it cannot follow.
+func lastJoinRead(filter *types.Document, outputs, outputsSeen map[string]int) (int, bool) {
+	latest := 0
 	for _, k := range filter.Keys() {
 		switch {
 		case k == "$and" || k == "$or" || k == "$nor":
 			arr, ok := must.NotFail(filter.Get(k)).(*types.Array)
 			if !ok {
-				return true
+				return 0, false
 			}
 			for i := 0; i < arr.Len(); i++ {
 				sub, ok := must.NotFail(arr.Get(i)).(*types.Document)
-				if !ok || filterReadsPath(sub, path) {
-					return true
+				if !ok {
+					return 0, false
 				}
+				n, ok := lastJoinRead(sub, outputs, outputsSeen)
+				if !ok {
+					return 0, false
+				}
+				latest = max(latest, n)
 			}
 		case strings.HasPrefix(k, "$"):
-			return true
-		case k == path || strings.HasPrefix(k, path+".") || strings.HasPrefix(path, k+"."):
-			return true
+			return 0, false
+		default:
+			// The field is a join output, under one, or above one.
+			latest = max(latest, outputs[k])
+			for p := k; ; {
+				latest = max(latest, outputsSeen[p])
+				i := strings.LastIndexByte(p, '.')
+				if i < 0 {
+					break
+				}
+				p = p[:i]
+			}
 		}
 	}
-	return false
+	return latest, true
 }
 
 // lookupIndexesUsed returns the foreign indexes the $lookup spec reads,

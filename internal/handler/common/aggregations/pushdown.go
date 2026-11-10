@@ -80,33 +80,46 @@ func GetPushdownQuery(stagesDocs []any) (match *types.Document, sort *types.Docu
 // unchanged or renamed from a plain path ({z: "$a"}), rewriting renamed fields
 // to their source, as mongod's optimizer does. The result is equivalent, and
 // the moved match can be pushed down to an index.
+//
+// One pass: after a match moves, it is compared with the stage now before it,
+// so each match moves as far as it can. The cost is bounded by the pipeline
+// length limit (MaxPipelineLength) squared.
 func MoveMatchesAhead(stagesDocs []any) []any {
 	out := append([]any{}, stagesDocs...)
-	for moved := true; moved; {
-		moved = false
-		for i := 0; i+1 < len(out); i++ {
-			shape, _ := out[i].(*types.Document)
-			match, _ := out[i+1].(*types.Document)
-			if shape == nil || match == nil || shape.Len() != 1 || match.Len() != 1 || match.Command() != "$match" {
-				continue
+	for i := 0; i+1 < len(out); {
+		shape, _ := out[i].(*types.Document)
+		match, _ := out[i+1].(*types.Document)
+		if moved, ok := moveMatchAhead(shape, match); ok {
+			out[i], out[i+1] = moved, shape
+			if i > 0 {
+				i--
 			}
-			fields, ok := stageFieldSources(shape)
-			if !ok {
-				continue
-			}
-			filter, ok := must.NotFail(match.Get("$match")).(*types.Document)
-			if !ok {
-				continue
-			}
-			rewritten, ok := rewriteFilterFields(filter, fields)
-			if !ok {
-				continue
-			}
-			out[i], out[i+1] = must.NotFail(types.NewDocument("$match", rewritten)), shape
-			moved = true
+			continue
 		}
+		i++
 	}
 	return out
+}
+
+// moveMatchAhead returns match rewritten to run before shape, or false when it
+// cannot move ahead of it.
+func moveMatchAhead(shape, match *types.Document) (*types.Document, bool) {
+	if shape == nil || match == nil || shape.Len() != 1 || match.Len() != 1 || match.Command() != "$match" {
+		return nil, false
+	}
+	fields, ok := stageFieldSources(shape)
+	if !ok {
+		return nil, false
+	}
+	filter, ok := must.NotFail(match.Get("$match")).(*types.Document)
+	if !ok {
+		return nil, false
+	}
+	rewritten, ok := rewriteFilterFields(filter, fields)
+	if !ok {
+		return nil, false
+	}
+	return must.NotFail(types.NewDocument("$match", rewritten)), true
 }
 
 // fieldSources says where a stage's output fields come from: source returns
