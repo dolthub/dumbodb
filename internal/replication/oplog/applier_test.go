@@ -87,6 +87,94 @@ func TestApplierCRUDBySourceUUID(t *testing.T) {
 	assertCollectionCount(t, ctx, backend, "orders", "items", 0)
 }
 
+func TestInitialSyncApplierToleratesCloneAheadOfOplog(t *testing.T) {
+	ctx := context.Background()
+	backend, steady, sourceUUID := newTestApplier(t)
+	createTestCollection(t, ctx, backend, steady, sourceUUID, "orders", "items")
+	initialSync := steady.ForInitialSync()
+
+	cloned := must.NotFail(types.NewDocument("_id", int32(1), "qty", int32(5)))
+	insertTestDocuments(t, ctx, backend, "orders", "items", cloned)
+	olderInsert := makeOplogEntry(t, 2, "i", "orders.items", sourceUUID, must.NotFail(types.NewDocument("_id", int32(1), "qty", int32(1))), nil)
+	if err := steady.Apply(ctx, olderInsert); err == nil {
+		t.Fatal("steady state accepted an insert that conflicts with an existing _id")
+	}
+	if err := initialSync.Apply(ctx, olderInsert); err != nil {
+		t.Fatalf("initial sync insert over a cloned _id: %v", err)
+	}
+	assertStoredDocument(t, ctx, backend, "orders", "items", must.NotFail(types.NewDocument("_id", int32(1), "qty", int32(1))))
+
+	diff := must.NotFail(types.NewDocument("u", must.NotFail(types.NewDocument("qty", int32(9)))))
+	missingUpdate := makeOplogEntry(t, 3, "u", "orders.items", sourceUUID,
+		must.NotFail(types.NewDocument("$v", int32(2), "diff", diff)), must.NotFail(types.NewDocument("_id", int32(2))))
+	if err := steady.Apply(ctx, missingUpdate); err == nil {
+		t.Fatal("steady state accepted an update of a missing document")
+	}
+	if err := initialSync.Apply(ctx, missingUpdate); err != nil {
+		t.Fatalf("initial sync update of a document deleted before the clone: %v", err)
+	}
+	assertCollectionCount(t, ctx, backend, "orders", "items", 1)
+
+	droppedUUID := "aaaaaaaa-1234-4234-9234-123456789abc"
+	for _, entry := range []Entry{
+		makeOplogEntry(t, 4, "i", "orders.dropped", droppedUUID, must.NotFail(types.NewDocument("_id", int32(3))), nil),
+		makeOplogEntry(t, 5, "u", "orders.dropped", droppedUUID,
+			must.NotFail(types.NewDocument("$v", int32(2), "diff", diff)), must.NotFail(types.NewDocument("_id", int32(3)))),
+		makeOplogEntry(t, 6, "d", "orders.dropped", droppedUUID, must.NotFail(types.NewDocument("_id", int32(3))), nil),
+	} {
+		if err := steady.Apply(ctx, entry); !errors.Is(err, catalog.ErrSourceUUIDNotFound) {
+			t.Fatalf("steady state %s on a missing collection = %v, want %v", entry.Operation, err, catalog.ErrSourceUUIDNotFound)
+		}
+		if err := initialSync.Apply(ctx, entry); err != nil {
+			t.Fatalf("initial sync %s on a collection dropped before the clone: %v", entry.Operation, err)
+		}
+	}
+}
+
+func TestInitialSyncApplierSkipsCatalogCommandsTheCloneReflects(t *testing.T) {
+	ctx := context.Background()
+	backend, steady, sourceUUID := newTestApplier(t)
+	createTestCollection(t, ctx, backend, steady, sourceUUID, "orders", "renamed")
+	initialSync := steady.ForInitialSync()
+
+	create := makeOplogEntry(t, 2, "c", "orders.$cmd", sourceUUID, must.NotFail(types.NewDocument("create", "items")), nil)
+	if err := steady.Apply(ctx, create); err == nil {
+		t.Fatal("steady state accepted a create of an existing collection UUID")
+	}
+	if err := initialSync.Apply(ctx, create); err != nil {
+		t.Fatalf("initial sync create of a cloned collection: %v", err)
+	}
+	rename := makeOplogEntry(t, 3, "c", "orders.$cmd", sourceUUID,
+		must.NotFail(types.NewDocument("renameCollection", "orders.items", "to", "orders.renamed", "stayTemp", false)), nil)
+	if err := initialSync.Apply(ctx, rename); err != nil {
+		t.Fatalf("initial sync rename the clone already reflects: %v", err)
+	}
+	location, err := steady.catalog.Resolve(ctx, sourceUUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if location.Database != "orders" || location.Collection != "renamed" {
+		t.Fatalf("location = %+v, want orders.renamed", location)
+	}
+
+	droppedUUID := "aaaaaaaa-1234-4234-9234-123456789abc"
+	createIndex := makeOplogEntry(t, 4, "c", "orders.$cmd", droppedUUID, must.NotFail(types.NewDocument(
+		"createIndexes", "gone", "v", int32(2), "key", must.NotFail(types.NewDocument("a", int32(1))), "name", "a_1",
+	)), nil)
+	drop := makeOplogEntry(t, 5, "c", "orders.$cmd", droppedUUID, must.NotFail(types.NewDocument("drop", "gone")), nil)
+	for _, entry := range []Entry{createIndex, drop} {
+		if err := steady.Apply(ctx, entry); err == nil {
+			t.Fatalf("steady state accepted a command for a missing collection at %v", entry.OpTime)
+		}
+		if err := initialSync.Apply(ctx, entry); err != nil {
+			t.Fatalf("initial sync command for a collection dropped before the clone: %v", err)
+		}
+	}
+	if _, err := steady.catalog.Resolve(ctx, droppedUUID); !errors.Is(err, catalog.ErrSourceUUIDNotFound) {
+		t.Fatalf("resolve dropped collection = %v", err)
+	}
+}
+
 func TestApplierRoutesReplicatedAuthAndInvalidatesGeneration(t *testing.T) {
 	ctx := context.Background()
 	bumps := 0

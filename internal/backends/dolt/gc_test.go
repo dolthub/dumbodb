@@ -298,3 +298,36 @@ func TestDumboDBGC_BranchSelectorIsStripped(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, dbName, res.DB, "branch selector should be stripped from the returned DB name")
 }
+
+// TestGCSafepointWaiter_BackToBackGCs: DumboDBGC runs one Waiter per GC and
+// waits for it before returning, so consecutive GCs create a new Waiter as
+// soon as the previous Wait returns. A visit of a quiesced session must be
+// fully retired by then; the dolt controller once signaled Wait before it
+// closed the session's visit channel, and the next Waiter's visit then
+// closed that channel a second time (dolthub/dumbodb#202).
+func TestGCSafepointWaiter_BackToBackGCs(t *testing.T) {
+	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, 0, 0)
+	require.NoError(t, err)
+	t.Cleanup(be.Close)
+
+	quiesced := make([]*outsideGCRootsProvider, 8)
+	for i := range quiesced {
+		quiesced[i] = &outsideGCRootsProvider{}
+		require.NoError(t, be.gcController.SessionCommandBegin(quiesced[i]))
+		be.gcController.SessionCommandEnd(quiesced[i])
+	}
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	gcRequester := &outsideGCRootsProvider{}
+	visit := func(context.Context, gcctx.GCRootsProvider) error { return nil }
+	for i := 0; i < 20000; i++ {
+		waiter := be.gcController.Waiter(context.Background(), gcRequester, visit)
+		if i%2 == 0 {
+			require.NoError(t, waiter.Wait(context.Background()))
+		} else {
+			// The CancelSafepoint path of sessionAwareSafepoint.
+			_ = waiter.Wait(canceled)
+		}
+	}
+}

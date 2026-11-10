@@ -16,6 +16,7 @@ package lineartest
 
 import (
 	"testing"
+	"time"
 )
 
 type recorder struct {
@@ -41,8 +42,11 @@ func TestAssert(t *testing.T) {
 		t.Error("linear work was reported as superlinear")
 	}
 
+	// Quadratic sleeps rather than quadratic spinning: CPU load can stretch
+	// every base run enough to hide 16x growth behind maxRatio, but it barely
+	// delays a sleep.
 	quadratic := &recorder{TB: t}
-	Assert(quadratic, 100, func(n int) { spin(n * n * 10) })
+	Assert(quadratic, 100, func(n int) { time.Sleep(time.Duration(n*n) * time.Microsecond) })
 	if !quadratic.failed {
 		t.Error("quadratic work was not reported")
 	}

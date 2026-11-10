@@ -16,9 +16,7 @@ setup() {
 teardown() {
     stop_dumbodb
     rm -rf "$DUMBODB_DATA_DIR"
-    local parent_dir
-    parent_dir="$(dirname "$DUMBODB_DATA_DIR")"
-    rm -rf "${parent_dir}/.dolt"
+    rm -rf "$(dolt_hack_dir "$DUMBODB_DATA_DIR")"
 }
 
 mongosh_eval() {
@@ -178,7 +176,7 @@ quit(0)"
     # surfaces here even when the wire response looks fine.
     stop_dumbodb
     setup_dolt_hack "$DUMBODB_DATA_DIR"
-    cd "$(dirname "$DUMBODB_DATA_DIR")"
+    cd "$DOLT_HACK_DIR"
 
     run dolt fsck
     [ "$status" -eq 0 ]
@@ -291,7 +289,7 @@ quit(0)"
     # cached as absent).
     stop_dumbodb
     setup_dolt_hack "$DUMBODB_DATA_DIR"
-    cd "$(dirname "$DUMBODB_DATA_DIR")"
+    cd "$DOLT_HACK_DIR"
 
     run dolt fsck
     [ "$status" -eq 0 ]

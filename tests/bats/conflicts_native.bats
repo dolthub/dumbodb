@@ -25,9 +25,7 @@ setup() {
 teardown() {
     stop_dumbodb
     rm -rf "$DUMBODB_DATA_DIR"
-    local parent_dir
-    parent_dir="$(dirname "$DUMBODB_DATA_DIR")"
-    rm -rf "${parent_dir}/.dolt"
+    rm -rf "$(dolt_hack_dir "$DUMBODB_DATA_DIR")"
 }
 
 # ---------------------------------------------------------------------------
@@ -105,7 +103,7 @@ mongosh_eval() {
     # ---- SQL: stop server, query dolt_conflicts_items ------------------------
     stop_dumbodb
     setup_dolt_hack "$DUMBODB_DATA_DIR"
-    cd "$(dirname "$DUMBODB_DATA_DIR")"
+    cd "$DOLT_HACK_DIR"
 
     run dolt sql -q 'select count(*) from dolt_conflicts_items' --result-format csv
     [ "$status" -eq 0 ]
@@ -185,7 +183,7 @@ mongosh_eval() {
     # ---- SQL: stop server, query dolt_conflicts_items ------------------------
     stop_dumbodb
     setup_dolt_hack "$DUMBODB_DATA_DIR"
-    cd "$(dirname "$DUMBODB_DATA_DIR")"
+    cd "$DOLT_HACK_DIR"
 
     run dolt sql -q 'select count(*) from dolt_conflicts_items' --result-format csv
     [ "$status" -eq 0 ]
@@ -263,7 +261,7 @@ mongosh_eval() {
     # ---- SQL: stop server, query dolt_conflicts_items on feature branch ------
     stop_dumbodb
     setup_dolt_hack "$DUMBODB_DATA_DIR"
-    cd "$(dirname "$DUMBODB_DATA_DIR")"
+    cd "$DOLT_HACK_DIR"
 
     # Switch to "feature" branch whose working set has the conflict artifacts.
     run dolt checkout feature
@@ -336,7 +334,7 @@ mongosh_eval() {
     # ---- SQL: stop server, query dolt_conflicts_items ------------------------
     stop_dumbodb
     setup_dolt_hack "$DUMBODB_DATA_DIR"
-    cd "$(dirname "$DUMBODB_DATA_DIR")"
+    cd "$DOLT_HACK_DIR"
 
     run dolt sql -q 'select count(*) from dolt_conflicts_items' --result-format csv
     [ "$status" -eq 0 ]
@@ -387,7 +385,7 @@ mongosh_eval() {
     # ---- Verify via dolt log that committer is set --------------------------
     stop_dumbodb
     setup_dolt_hack "$DUMBODB_DATA_DIR"
-    cd "$(dirname "$DUMBODB_DATA_DIR")"
+    cd "$DOLT_HACK_DIR"
 
     run dolt checkout feat
     [ "$status" -eq 0 ]

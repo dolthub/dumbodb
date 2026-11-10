@@ -10,11 +10,11 @@ require (
 	github.com/cockroachdb/apd/v3 v3.2.3
 	github.com/denisbrodbeck/machineid v1.0.1
 	github.com/dlclark/regexp2 v1.11.5
-	github.com/dolthub/dolt/go v0.40.5-0.20261008233414-f20b9f1b5df6
+	github.com/dolthub/dolt/go v0.40.5-0.20261015113813-5bbb97ae366b
 	github.com/dolthub/eventsapi_schema v0.0.0-20260715220557-d9b4a1c6b4d4
 	github.com/dolthub/flatbuffers/v23 v23.3.3-dh.2
 	github.com/dolthub/go-icu-collation v0.0.0-20260813204241-4b977bd17878
-	github.com/dolthub/go-mysql-server v0.20.1-0.20261008085126-6276e4e40e23
+	github.com/dolthub/go-mysql-server v0.20.1-0.20261013065220-3f7a971bed2e
 	github.com/golang/snappy v0.0.4
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/golang-lru/v2 v2.0.2
