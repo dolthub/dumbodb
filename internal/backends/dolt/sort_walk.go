@@ -34,13 +34,14 @@ import (
 )
 
 // sortWalkIndex returns the position in infos of an index whose in-order walk
-// yields sort's order: its leading field is the single sort field, and it is
-// complete (not sparse, partial, or hidden), exact (not lossy, hashed, text, or
-// geo), and collated like the query. A collated index must not be multikey: its
-// in-order walk yields a document at its collation-least element, which the
-// in-memory sort does not pick. sort must hold one non-$natural key.
+// yields sort's order: its leading keys are the sort fields (indexKeysMatchSort),
+// and it is complete (not sparse, partial, or hidden), exact (not lossy,
+// hashed, text, or geo), and collated like the query. A collated index must not
+// be multikey: its in-order walk yields a document at its collation-least
+// element, which the in-memory sort does not pick; nor may a multikey index
+// serve a sort on several fields.
 func sortWalkIndex(infos []backends.IndexInfo, sortDoc *types.Document, queryCollation *types.Document) (int, bool) {
-	if !sortIsSingleField(sortDoc) {
+	if !sortIsFieldSort(sortDoc) {
 		return 0, false
 	}
 	queryColl := collation.Parse(queryCollation)
@@ -55,8 +56,12 @@ func sortWalkIndex(infos []backends.IndexInfo, sortDoc *types.Document, queryCol
 		if len(idx.Key) == 0 || idx.Key[0].Field != field {
 			continue
 		}
-		lead := idx.Key[0]
-		if lead.Hashed || lead.Text || lead.Geo2D || lead.Geo2DSphere {
+		if !indexKeysMatchSort(idx, 0, sortDoc) {
+			continue
+		}
+		// A multikey walk orders a document by the element an entry holds,
+		// which serves one sort field only.
+		if sortDoc.Len() > 1 && idx.Multikey {
 			continue
 		}
 		if idx.Lossy || idx.Sparse || idx.Hidden || idx.PartialFilterExpression != nil {

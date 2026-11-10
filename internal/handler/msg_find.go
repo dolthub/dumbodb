@@ -351,7 +351,7 @@ func (h *Handler) makeFindQueryParams(ctx context.Context, params *common.FindPa
 	case params.Sort.Len() == 0 && cInfo.Capped():
 		// Capped collections default to $natural (recordID) order.
 		qp.Sort = must.NotFail(types.NewDocument("$natural", int64(1)))
-	case params.Sort.Len() == 1 && !params.SortInMemory:
+	case backends.PushableSort(params.Sort) && !params.SortInMemory:
 		// A $natural sort is honored by the scan; a field sort may be served by
 		// walking an index, which the backend reports with QueryResult.Sorted.
 		qp.Sort = params.Sort

@@ -132,7 +132,7 @@ func runExplainedWrite(ctx context.Context, coll backends.Collection, qp *backen
 	var run explainRun
 	single := qp.Command == "findAndModify" || !qp.Multi
 	query := &backends.QueryParams{Filter: qp.Filter, Collated: qp.Collated, Collation: qp.Collation, Hint: qp.Hint}
-	if qp.Sort.Len() == 1 {
+	if backends.PushableSort(qp.Sort) {
 		query.Sort = qp.Sort
 	}
 	run.matched = scanMatching(ctx, coll, query, qp, single)
@@ -158,7 +158,7 @@ func runExplainedFind(ctx context.Context, coll backends.Collection, qp *backend
 	if limit > 0 {
 		query.LimitHint = qp.Skip + int64(limit)
 	}
-	if qp.Sort.Len() == 1 {
+	if backends.PushableSort(qp.Sort) {
 		query.Sort = qp.Sort
 	}
 	var run explainRun

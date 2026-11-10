@@ -153,7 +153,7 @@ func (c *collection) query(ctx context.Context, params *backends.QueryParams) (*
 		}
 	}
 
-	fieldSort := params != nil && sortIsSingleField(params.Sort)
+	fieldSort := params != nil && sortIsFieldSort(params.Sort)
 	var idxInfos []backends.IndexInfo
 
 	if !naturalHint && params != nil && params.Filter != nil && (params.Sort.Len() == 0 || fieldSort) &&
@@ -2252,11 +2252,11 @@ func (c *collection) Explain(ctx context.Context, params *backends.ExplainParams
 }
 
 // explainQueryParams is the QueryParams the explained command runs with. As
-// in find, only a single-field sort reaches the backend; a longer one is
-// applied in memory over the filter's plan.
+// in find, only a pushable sort reaches the backend; another is applied in
+// memory over the filter's plan.
 func explainQueryParams(params *backends.ExplainParams) *backends.QueryParams {
 	qp := &backends.QueryParams{Filter: params.Filter, Hint: params.Hint, Collated: params.Collated, Collation: params.Collation, Fields: params.Fields}
-	if params.Sort.Len() == 1 {
+	if backends.PushableSort(params.Sort) {
 		qp.Sort = params.Sort
 	}
 	if params.Limit != 0 {
@@ -2541,6 +2541,37 @@ func sortIsSingleField(sort *types.Document) bool {
 	return sort.Keys()[0] != "$natural"
 }
 
+// sortIsFieldSort reports whether sort is on one field, or on several fields
+// all in the same direction (backends.PushableSort), so an index whose keys
+// are those fields in order can yield it.
+func sortIsFieldSort(sort *types.Document) bool {
+	if sortIsSingleField(sort) {
+		return true
+	}
+	return sort.Len() > 1 && backends.PushableSort(sort)
+}
+
+// indexKeysMatchSort reports whether idx's keys from pos on are sort's fields
+// in order, and, for a sort on several fields, all in one direction, as
+// MongoDB walks a compound index only when its directions agree with the
+// sort's or are all reversed.
+func indexKeysMatchSort(idx backends.IndexInfo, pos int, sort *types.Document) bool {
+	fields := sort.Keys()
+	if pos+len(fields) > len(idx.Key) {
+		return false
+	}
+	for j, f := range fields {
+		k := idx.Key[pos+j]
+		if k.Field != f || k.Hashed || k.Text || k.Geo2D || k.Geo2DSphere {
+			return false
+		}
+		if len(fields) > 1 && k.Descending != idx.Key[pos].Descending {
+			return false
+		}
+	}
+	return true
+}
+
 // sortDirectionAscending assumes sort is already single-field (see sortIsSingleField).
 func sortDirectionAscending(sort *types.Document) bool {
 	v, err := sort.Get(sort.Keys()[0])
@@ -2591,7 +2622,7 @@ func indexScanSortOrder(idx backends.IndexInfo, filter, sort, queryCollation *ty
 		if k.Field != sort.Keys()[0] {
 			continue
 		}
-		if !filterBindsEqualityPrefix(filter, idx.Key[:pos]) {
+		if !indexKeysMatchSort(idx, pos, sort) || !filterBindsEqualityPrefix(filter, idx.Key[:pos]) {
 			return false, false
 		}
 		return !sortDirectionAscending(sort), true
@@ -2604,7 +2635,7 @@ func indexScanSortOrder(idx backends.IndexInfo, filter, sort, queryCollation *ty
 // its min or max element, not the one an entry holds), the sort is a direction,
 // and both orders are binary.
 func indexKeysOrderSort(idx backends.IndexInfo, sort, queryCollation *types.Document) bool {
-	if idx.Multikey || !sortIsSingleField(sort) || !collation.Parse(queryCollation).IsSimple() || !collation.Parse(idx.Collation).IsSimple() {
+	if idx.Multikey || !sortIsFieldSort(sort) || !collation.Parse(queryCollation).IsSimple() || !collation.Parse(idx.Collation).IsSimple() {
 		return false
 	}
 	switch must.NotFail(sort.Get(sort.Keys()[0])).(type) {
@@ -2619,7 +2650,7 @@ func indexKeysOrderSort(idx backends.IndexInfo, sort, queryCollation *types.Docu
 // is fetched: the keys order the sort, and every filter field is an index key,
 // so the bounds alone decide a match.
 func indexKeySortPosition(idx backends.IndexInfo, filter, sort, queryCollation *types.Document) (int, bool) {
-	if filter == nil || !indexKeysOrderSort(idx, sort, queryCollation) {
+	if filter == nil || !sortIsSingleField(sort) || !indexKeysOrderSort(idx, sort, queryCollation) {
 		return 0, false
 	}
 	for _, f := range filter.Keys() {
