@@ -428,7 +428,7 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 			// A view that reshapes documents runs before the command, so the
 			// command is explained as an aggregate of the view's stages and
 			// its own, as mongod does.
-			params.StagesDocs = mergeLeadingMatches(append(append([]any{}, rawStages...), commandStages(params)...))
+			params.StagesDocs = mergeLeadingMatches(dropShapingBeforeCount(aggregations.MoveMatchesAhead(append(append([]any{}, rawStages...), commandStages(params)...))))
 			params.Aggregate = true
 			params.CommandName = "aggregate"
 			params.Filter, params.Sort, params.Skip, params.Limit = nil, nil, 0, 0
@@ -450,7 +450,7 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 	qp := new(backends.ExplainParams)
 
 	if params.Aggregate {
-		params.StagesDocs = moveMatchesBeforeLookups(params.StagesDocs)
+		params.StagesDocs = mergeLeadingMatches(dropShapingBeforeCount(aggregations.MoveMatchesAhead(moveMatchesBeforeLookups(params.StagesDocs))))
 		params.Filter, params.Sort = aggregations.GetPushdownQuery(params.StagesDocs)
 		common.CanonicalizeFilter(params.Filter)
 		params.Limit = pushdownLimit(params.StagesDocs)
@@ -615,6 +615,46 @@ func onlyMatchStages(stages []any) bool {
 		}
 	}
 	return true
+}
+
+// dropShapingBeforeCount removes the $project, $set, $addFields and $unset
+// stages directly before a $count, which reshape each document without
+// changing how many there are, as mongod's optimizer drops them.
+func dropShapingBeforeCount(stages []any) []any {
+	out := make([]any, 0, len(stages))
+	for i, stage := range stages {
+		d, _ := stage.(*types.Document)
+		if d != nil && d.Len() == 1 && shapingStage(d.Command()) && countFollows(stages[i+1:]) {
+			continue
+		}
+		out = append(out, stage)
+	}
+	return out
+}
+
+func shapingStage(name string) bool {
+	switch name {
+	case "$project", "$set", "$addFields", "$unset":
+		return true
+	}
+	return false
+}
+
+// countFollows reports whether stages start with shaping stages and then a
+// $count.
+func countFollows(stages []any) bool {
+	for _, stage := range stages {
+		d, _ := stage.(*types.Document)
+		switch {
+		case d == nil || d.Len() != 1:
+			return false
+		case d.Command() == "$count":
+			return true
+		case !shapingStage(d.Command()):
+			return false
+		}
+	}
+	return false
 }
 
 // mergeLeadingMatches joins a pipeline's leading $match stages into one, as

@@ -242,7 +242,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		)
 	}
 
-	aggregationStages := must.NotFail(iterator.ConsumeValues(pipeline.Iterator()))
+	aggregationStages := aggregations.MoveMatchesAhead(must.NotFail(iterator.ConsumeValues(pipeline.Iterator())))
 	stagesDocuments := make([]aggregations.Stage, 0, len(aggregationStages))
 	collStatsDocuments := make([]aggregations.Stage, 0, len(aggregationStages))
 
