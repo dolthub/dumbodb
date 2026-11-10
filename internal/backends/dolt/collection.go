@@ -684,8 +684,9 @@ type indexLookupPlan struct {
 	union bool
 	// branches are a union's index scans, without their ids.
 	branches []unionBranch
-	// inRewrite marks a union MongoDB plans as an $in, without SUBPLAN.
-	inRewrite bool
+	// withoutSubplan marks a union MongoDB plans without SUBPLAN: a lone
+	// branch, or equalities it rewrites as an $in.
+	withoutSubplan bool
 	// keys is the number of index entries scanned; ids holds each matched
 	// document once and, when kept, values its entry's encoded index values.
 	keys   int
@@ -1036,7 +1037,7 @@ func planOrUnion(ctx context.Context, ns tree.NodeStore, primary prolly.Map, idx
 		union, err = unionIndexChoices(ctx, ns, primary, idxInfos, idxMaps, scans, -1)
 	}
 	if union != nil {
-		union.inRewrite = orOfEqualitiesOnOneField(flat)
+		union.withoutSubplan = len(flat) == 1 || orOfEqualitiesOnOneField(flat)
 	}
 	return union, err
 }
@@ -2318,7 +2319,7 @@ func (plan *indexLookupPlan) stage() *explainStage {
 	}
 	if len(plan.branches) == 1 {
 		fetch := fetchStage(ixscanStage(plan.branches[0].info))
-		fetch.subplan = !plan.inRewrite
+		fetch.subplan = !plan.withoutSubplan
 		return fetch
 	}
 	or := &explainStage{stage: "OR"}
