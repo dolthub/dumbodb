@@ -197,6 +197,17 @@ func (h *Handler) updateDocument(ctx context.Context, params *common.UpdateParam
 		iter := common.FilterIteratorColl(iterator.WithContext(ctx, res.Iter), closer, u.Filter, cmp)
 
 		if !u.Multi {
+			// The one document updated is the first match in the hinted
+			// index's order.
+			order, err := hintedDescendingOrder(ctx, c, u.Hint)
+			if err != nil {
+				return 0, 0, nil, err
+			}
+			if order != nil {
+				if iter, err = common.SortIteratorWithCollation(iter, closer, order, cmp); err != nil {
+					return 0, 0, nil, err
+				}
+			}
 			iter = common.LimitIterator(iter, closer, 1)
 		}
 

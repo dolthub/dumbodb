@@ -164,6 +164,22 @@ func (h *Handler) execDelete(ctx context.Context, c backends.Collection, p *comm
 		return 0, lazyerrors.Error(err)
 	}
 	q.Iter = iterator.WithContext(ctx, q.Iter)
+	if p.Limited {
+		// The one document deleted is the first match in the hinted index's
+		// order.
+		order, err := hintedDescendingOrder(ctx, c, p.Hint)
+		if err != nil {
+			q.Iter.Close()
+			return 0, err
+		}
+		if order != nil {
+			closer := iterator.NewMultiCloser(q.Iter)
+			defer closer.Close()
+			if q.Iter, err = common.SortIteratorWithCollation(q.Iter, closer, order, cmp); err != nil {
+				return 0, err
+			}
+		}
+	}
 
 	var ids []any
 	for {
