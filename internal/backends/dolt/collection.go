@@ -2519,7 +2519,8 @@ func wrapScanPlan(params *backends.ExplainParams, scan *explainStage, sorted boo
 	node := scan
 	covered := false
 	if scan.stage == "FETCH" && scan.input != nil && scan.input.stage == "IXSCAN" && !scan.input.idPoint &&
-		!scan.input.index.Multikey && projectionIsCoveredBy(params.Projection, scan.input.index) {
+		!scan.input.index.Multikey && projectionIsCoveredBy(params.Projection, scan.input.index) &&
+		!leadingKeyUnfiltered(scan.input.index, params.Filter) {
 		node, covered = scan.input, true
 	}
 

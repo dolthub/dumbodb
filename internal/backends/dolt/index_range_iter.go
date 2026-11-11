@@ -343,11 +343,22 @@ func (s *indexIDStream) takeGapKeys(e indexEntry) indexEntry {
 // for null or a missing field; the read reports null only when params' filter
 // cannot tell the two apart, and otherwise fetches the document.
 func coveredRead(info backends.IndexInfo, params *backends.QueryParams) *coveredKeys {
+	if leadingKeyUnfiltered(info, params.Filter) {
+		return nil
+	}
 	c := coveredKeysFor(info, params.Fields)
 	if c != nil {
 		c.fetchNull = !nullBlindFilter(params.Filter)
 	}
 	return c
+}
+
+// leadingKeyUnfiltered reports whether filter constrains documents without
+// naming the index's leading field. mongod then reads the whole index and
+// fetches each document to filter it, so the read is not covered; with no
+// filter at all, it is, and a missing field reads as the key's null.
+func leadingKeyUnfiltered(info backends.IndexInfo, filter *types.Document) bool {
+	return filter.Len() > 0 && len(info.Key) > 0 && !filter.Has(info.Key[0].Field)
 }
 
 // nullBlindFilter reports whether filter treats a null field and a missing
