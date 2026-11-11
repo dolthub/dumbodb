@@ -276,7 +276,7 @@ func filterFieldExprBranches(branches []*types.Document, filterKey, filterSuffix
 	// Zero branches still evaluate once so invalid operator arguments surface.
 	errProbe := types.MakeDocument(0)
 
-	if expr.Len() == 0 || !strings.HasPrefix(expr.Keys()[0], "$") {
+	if expr.Len() == 0 || !strings.HasPrefix(expr.Keys()[0], "$") || isDBRefLiteral(expr) {
 		if _, err := filterFieldExpr(errProbe, filterKey, filterSuffix, expr, cmp); err != nil {
 			return false, err
 		}
@@ -596,8 +596,41 @@ func validatedExpr(exprValue any) (operators.Operator, error) {
 	return op, nil
 }
 
+// checkNoOperatorUnderIn rejects an operator expression as an $in or $nin
+// element. A DBRef is a literal value.
+func checkNoOperatorUnderIn(element *types.Document, operator string) error {
+	if isDBRefLiteral(element) {
+		return nil
+	}
+	for _, key := range element.Keys() {
+		if strings.HasPrefix(key, "$") {
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue, "cannot nest $ under $in", operator)
+		}
+	}
+	return nil
+}
+
+// isDBRefLiteral reports whether a filter value is a DBRef, which mongod
+// compares as a literal value rather than parsing as operators: its first key
+// is $ref, $id or $db, and it has both $ref and $id. Key order is not checked
+// because DumboDB stores non-_id documents with sorted keys.
+func isDBRefLiteral(doc *types.Document) bool {
+	if doc.Len() == 0 {
+		return false
+	}
+	switch doc.Keys()[0] {
+	case "$ref", "$id", "$db":
+		return doc.Has("$ref") && doc.Has("$id")
+	}
+	return false
+}
+
 // filterFieldExpr handles {field: {expr}} or {field: {document}} filter.
+// A DBRef is a literal value, as in mongod, not an operator expression.
 func filterFieldExpr(doc *types.Document, filterKey, filterSuffix string, expr *types.Document, cmp *collation.Comparator) (bool, error) {
+	if isDBRefLiteral(expr) {
+		return filterFieldExpr(doc, filterKey, filterSuffix, must.NotFail(types.NewDocument("$eq", expr)), cmp)
+	}
 	if expr.Len() == 0 {
 		fieldValue, err := doc.Get(filterSuffix)
 		if err != nil {
@@ -787,14 +820,8 @@ func filterFieldExpr(doc *types.Document, filterKey, filterSuffix string, expr *
 
 				switch arrValue := must.NotFail(arr.Get(i)).(type) {
 				case *types.Document:
-					for _, key := range arrValue.Keys() {
-						if strings.HasPrefix(key, "$") {
-							return false, handlererrors.NewCommandErrorMsgWithArgument(
-								handlererrors.ErrBadValue,
-								"cannot nest $ under $in",
-								exprKey,
-							)
-						}
+					if err := checkNoOperatorUnderIn(arrValue, exprKey); err != nil {
+						return false, err
 					}
 
 					if equalsOrHasElement(fieldValue, arrValue, cmp) {
@@ -838,14 +865,8 @@ func filterFieldExpr(doc *types.Document, filterKey, filterSuffix string, expr *
 
 				switch arrValue := must.NotFail(arr.Get(i)).(type) {
 				case *types.Document:
-					for _, key := range arrValue.Keys() {
-						if strings.HasPrefix(key, "$") {
-							return false, handlererrors.NewCommandErrorMsgWithArgument(
-								handlererrors.ErrBadValue,
-								"cannot nest $ under $in",
-								exprKey,
-							)
-						}
+					if err := checkNoOperatorUnderIn(arrValue, exprKey); err != nil {
+						return false, err
 					}
 
 					if equalsOrHasElement(fieldValue, arrValue, cmp) {

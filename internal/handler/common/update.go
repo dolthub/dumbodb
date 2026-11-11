@@ -154,6 +154,12 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 			return nil, lazyerrors.Error(err)
 		}
 
+		if upsert || param.IsPipeline || !param.HasUpdateOperators {
+			if err = types.ValidateReplacementID(must.NotFail(doc.Get("_id"))); err != nil {
+				return nil, lazyerrors.Error(err)
+			}
+		}
+
 		if param.Validator != nil {
 			mustValidate := true
 			if !upsert && param.ValidationLevel == "moderate" {

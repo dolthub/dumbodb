@@ -147,6 +147,42 @@ func ValidateID(id any) error {
 	return nil
 }
 
+// ValidateReplacementID checks the _id of a whole document an update produces
+// (a replacement, a pipeline update or an upsert). mongod applies a stricter
+// rule there than on insert: $-prefixed fields inside a DBRef's values are
+// rejected too. It returns *ValidationError.
+func ValidateReplacementID(id any) error {
+	if err := ValidateID(id); err != nil {
+		return err
+	}
+	return validateNoDollarInReplacementID(id, "_id")
+}
+
+func validateNoDollarInReplacementID(value any, path string) error {
+	switch value := value.(type) {
+	case *Document:
+		dbRef := isDBRef(value)
+		for i, key := range value.Keys() {
+			fieldPath := path + "." + key
+			if strings.HasPrefix(key, "$") && !(dbRef && (key == "$ref" || key == "$id" || key == "$db")) {
+				return newValidationError(ErrDollarPrefixedID, fmt.Errorf(
+					"The dollar ($) prefixed field '%s' in '%s' is not allowed in the context of an update's "+
+						"replacement document. Consider using an aggregation pipeline with $replaceWith.", key, fieldPath))
+			}
+			if err := validateNoDollarInReplacementID(value.Values()[i], fieldPath); err != nil {
+				return err
+			}
+		}
+	case *Array:
+		for i := 0; i < value.Len(); i++ {
+			if err := validateNoDollarInReplacementID(must.NotFail(value.Get(i)), fmt.Sprintf("%s.%d", path, i)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // validateNoDollarInID treats the values of a DBRef's $ref, $id and $db as
 // opaque, as mongod does; its other fields are still checked.
 func validateNoDollarInID(doc *Document) error {

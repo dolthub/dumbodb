@@ -70,7 +70,7 @@ func validateFilter(filter *types.Document, cmp *collation.Comparator, foldExpr 
 
 func validateFieldPredicate(empty *types.Document, key string, value any, cmp *collation.Comparator) error {
 	expr, ok := value.(*types.Document)
-	if !ok || expr.Len() == 0 || !strings.HasPrefix(expr.Keys()[0], "$") {
+	if !ok || expr.Len() == 0 || !strings.HasPrefix(expr.Keys()[0], "$") || isDBRefLiteral(expr) {
 		_, err := FilterDocumentColl(empty, must.NotFail(types.NewDocument(key, value)), cmp)
 		return err
 	}

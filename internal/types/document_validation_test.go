@@ -22,23 +22,24 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-func TestValidateIDMatchesMongodStorageRules(t *testing.T) {
+func TestIDValidationMatchesMongodRules(t *testing.T) {
 	doc := func(pairs ...any) *Document { return must.NotFail(NewDocument(pairs...)) }
 	arr := func(values ...any) *Array { return must.NotFail(NewArray(values...)) }
 	for _, tc := range []struct {
-		name  string
-		id    any
-		valid bool
+		name             string
+		id               any
+		valid            bool
+		replacementValid bool
 	}{
-		{name: "scalar", id: int32(1), valid: true},
-		{name: "null", id: Null, valid: true},
-		{name: "plain document", id: doc("a", int32(1)), valid: true},
-		{name: "dbref", id: doc("$ref", "x", "$id", int32(7)), valid: true},
+		{name: "scalar", id: int32(1), valid: true, replacementValid: true},
+		{name: "null", id: Null, valid: true, replacementValid: true},
+		{name: "plain document", id: doc("a", int32(1)), valid: true, replacementValid: true},
+		{name: "dbref", id: doc("$ref", "x", "$id", int32(7)), valid: true, replacementValid: true},
 		{name: "dbref operator-shaped id", id: doc("$ref", "x", "$id", doc("$gt", int32(1))), valid: true},
 		{name: "dbref nested dollar in id", id: doc("$ref", "x", "$id", doc("a", doc("$b", int32(1)))), valid: true},
 		{name: "dbref with db", id: doc("$ref", "x", "$id", doc("$gt", int32(2)), "$db", "d"), valid: true},
 		{name: "dbref dollar in array id", id: doc("$ref", "x", "$id", arr(doc("$x", int32(1)))), valid: true},
-		{name: "dbref extra field", id: doc("$ref", "x", "$id", int32(1), "meta", int32(1)), valid: true},
+		{name: "dbref extra field", id: doc("$ref", "x", "$id", int32(1), "meta", int32(1)), valid: true, replacementValid: true},
 		{name: "dbref dollar in extra field", id: doc("$ref", "x", "$id", int32(1), "meta", doc("$y", int32(1)))},
 		{name: "nested dbref", id: doc("a", doc("$ref", "x", "$id", doc("$gt", int32(1)))), valid: true},
 		{name: "operator", id: doc("$in", arr(int32(1)))},
@@ -52,6 +53,14 @@ func TestValidateIDMatchesMongodStorageRules(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			err := ValidateID(tc.id)
 			insertErr := doc("_id", tc.id).ValidateData()
+			replacementErr := ValidateReplacementID(tc.id)
+			if tc.replacementValid {
+				require.NoError(t, replacementErr)
+			} else {
+				var ve *ValidationError
+				require.ErrorAs(t, replacementErr, &ve)
+				require.Contains(t, []ValidationErrorCode{ErrDollarPrefixedID, ErrWrongIDType}, ve.Code())
+			}
 			if tc.valid {
 				require.NoError(t, err)
 				require.NoError(t, insertErr)
@@ -61,4 +70,12 @@ func TestValidateIDMatchesMongodStorageRules(t *testing.T) {
 			require.Equal(t, err.Error(), insertErr.Error())
 		})
 	}
+}
+
+func TestValidateReplacementIDNamesFieldPath(t *testing.T) {
+	doc := func(pairs ...any) *Document { return must.NotFail(NewDocument(pairs...)) }
+	id := doc("a", doc("$ref", "x", "$id", must.NotFail(NewArray(doc("$x", int32(1))))))
+	require.EqualError(t, ValidateReplacementID(id),
+		"The dollar ($) prefixed field '$x' in '_id.a.$id.0.$x' is not allowed in the context of an update's "+
+			"replacement document. Consider using an aggregation pipeline with $replaceWith.")
 }

@@ -60,6 +60,9 @@ func canonicalCondition(value any) any {
 	if !ok || !isOperatorDocument(doc) {
 		return sortedKeys(value)
 	}
+	if isDBRefLiteral(doc) {
+		return must.NotFail(types.NewDocument("$eq", sortedKeys(doc)))
+	}
 	for _, op := range doc.Keys() {
 		operand := must.NotFail(doc.Get(op))
 		switch op {
