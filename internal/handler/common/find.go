@@ -24,20 +24,21 @@ import (
 
 //nolint:vet // for readability
 type FindParams struct {
-	DB           string          `dumbo:"$db"`
-	Collection   string          `dumbo:"find,collection"`
-	Filter       *types.Document `dumbo:"filter,opt"`
-	Sort         *types.Document `dumbo:"sort,opt"`
-	Projection   *types.Document `dumbo:"projection,opt"`
-	Skip         int64           `dumbo:"skip,opt,positiveNumber"`
-	Limit        int64           `dumbo:"limit,opt,positiveNumber"`
-	BatchSize    int64           `dumbo:"batchSize,opt,positiveNumber"`
-	SingleBatch  bool            `dumbo:"singleBatch,opt"`
-	Comment      string          `dumbo:"comment,opt"`
-	MaxTimeMS    int64           `dumbo:"maxTimeMS,opt,wholePositiveNumber"`
-	ShowRecordId bool            `dumbo:"showRecordId,opt"`
-	Tailable     bool            `dumbo:"tailable,opt"`
-	AwaitData    bool            `dumbo:"awaitData,opt"`
+	DB             string          `dumbo:"$db"`
+	Collection     string          `dumbo:"find,collection"`
+	Filter         *types.Document `dumbo:"filter,opt"`
+	Sort           *types.Document `dumbo:"sort,opt"`
+	Projection     *types.Document `dumbo:"projection,opt"`
+	Skip           int64           `dumbo:"skip,opt,positiveNumber"`
+	Limit          int64           `dumbo:"limit,opt,positiveNumber"`
+	BatchSize      int64           `dumbo:"batchSize,opt,positiveNumber"`
+	SingleBatch    bool            `dumbo:"singleBatch,opt"`
+	Comment        string          `dumbo:"comment,opt"`
+	MaxTimeMSValue any             `dumbo:"maxTimeMS,opt"`
+	MaxTimeMS      int64           `dumbo:"-"`
+	ShowRecordId   bool            `dumbo:"showRecordId,opt"`
+	Tailable       bool            `dumbo:"tailable,opt"`
+	AwaitData      bool            `dumbo:"awaitData,opt"`
 
 	Collation *types.Document `dumbo:"collation,opt"`
 	Let       *types.Document `dumbo:"let,unimplemented"`
@@ -102,6 +103,13 @@ func GetFindParams(doc *types.Document, l *slog.Logger) (*FindParams, error) {
 
 	if err := handlerparams.ExtractParams(doc, "find", &params, l); err != nil {
 		return nil, err
+	}
+	if params.MaxTimeMSValue != nil {
+		ms, err := handlerparams.FindMaxTimeMS(params.MaxTimeMSValue, "FindCommandRequest")
+		if err != nil {
+			return nil, err
+		}
+		params.MaxTimeMS = ms
 	}
 
 	if params.AwaitData && !params.Tailable {

@@ -744,35 +744,22 @@ func explainVersion(params *common.ExplainParams, viaView bool) string {
 	return "1"
 }
 
-// checkInnerMaxTimeMS returns mongod's error for the maxTimeMS of an explained
-// find or aggregate: its command's type check, then a negative value refused.
-// mongod applies no other check to it under explain.
+// checkInnerMaxTimeMS returns mongod's error for the maxTimeMS of an
+// explained command: find, aggregate and count check only its type and sign,
+// distinct reads it as it does unexplained.
 func checkInnerMaxTimeMS(inner *types.Document) error {
-	field := map[string]string{"find": "FindCommandRequest", "aggregate": "aggregate"}[inner.Command()]
 	v, _ := inner.Get("maxTimeMS")
-	if field == "" || v == nil {
-		return nil
-	}
-	var ms float64
-	switch n := v.(type) {
-	case types.NullType:
-		return nil
-	case int32:
-		ms = float64(n)
-	case int64:
-		ms = float64(n)
-	case float64:
-		ms = math.Trunc(n)
-	case types.Decimal128:
-		return nil
-	default:
-		return handlererrors.NewCommandErrorMsg(handlererrors.ErrTypeMismatch, fmt.Sprintf(
-			"BSON field '%s.maxTimeMS' is the wrong type '%s', expected types '[decimal, long, int, double']",
-			field, handlerparams.AliasFromType(v)))
-	}
-	if ms < 0 {
-		return handlererrors.NewCommandErrorMsg(handlererrors.ErrBadValue,
-			fmt.Sprintf("BSON field 'maxTimeMS' value must be >= 0, actual value '%d'", int64(ms)))
+	switch inner.Command() {
+	case "find":
+		return handlerparams.TypedMaxTimeMS(v, "FindCommandRequest")
+	case "aggregate", "count":
+		return handlerparams.TypedMaxTimeMS(v, inner.Command())
+	case "distinct":
+		if v == nil {
+			return nil
+		}
+		_, err := handlerparams.CommandMaxTimeMS(v)
+		return err
 	}
 	return nil
 }

@@ -161,76 +161,9 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		v = int64(0)
 	}
 
-	// cannot use other existing handlerparams function, they return different error codes
-	maxTimeMS, err := handlerparams.GetWholeNumberParam(v)
+	maxTimeMS, err := handlerparams.FindMaxTimeMS(v, "aggregate")
 	if err != nil {
-		switch {
-		case errors.Is(err, handlerparams.ErrUnexpectedType):
-			if _, ok = v.(types.NullType); ok {
-				return nil, handlererrors.NewCommandErrorMsgWithArgument(
-					handlererrors.ErrBadValue,
-					"maxTimeMS must be a number",
-					document.Command(),
-				)
-			}
-
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrTypeMismatch,
-				fmt.Sprintf(
-					`BSON field 'aggregate.maxTimeMS' is the wrong type '%s', expected types '[long, int, decimal, double']`,
-					handlerparams.AliasFromType(v),
-				),
-				document.Command(),
-			)
-		case errors.Is(err, handlerparams.ErrNotWholeNumber):
-			// For negative non-integral floats, MongoDB reports a "must be >= 0" error
-			// using the floor (truncated toward -inf) integer value.
-			if fv, ok := v.(float64); ok && fv < 0 {
-				return nil, handlererrors.NewCommandErrorMsgWithArgument(
-					handlererrors.ErrValueNegative,
-					fmt.Sprintf("BSON field 'maxTimeMS' value must be >= 0, actual value '%d'", int64(math.Floor(fv))),
-					document.Command(),
-				)
-			}
-
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrBadValue,
-				"maxTimeMS has non-integral value",
-				document.Command(),
-			)
-		case errors.Is(err, handlerparams.ErrLongExceededPositive):
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrBadValue,
-				fmt.Sprintf("%d value for maxTimeMS is out of range [0, 2147483647]", int64(math.MaxInt64)),
-				document.Command(),
-			)
-		case errors.Is(err, handlerparams.ErrLongExceededNegative):
-			// For floats that exceed the int64 range in the negative direction, MongoDB
-			// reports the saturated int64 value (math.MinInt64) rather than the original float.
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrValueNegative,
-				fmt.Sprintf("BSON field 'maxTimeMS' value must be >= 0, actual value '%d'", int64(math.MinInt64)),
-				document.Command(),
-			)
-		default:
-			return nil, lazyerrors.Error(err)
-		}
-	}
-
-	if maxTimeMS < int64(0) {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrValueNegative,
-			fmt.Sprintf("BSON field 'maxTimeMS' value must be >= 0, actual value '%s'", types.FormatAnyValue(v)),
-			document.Command(),
-		)
-	}
-
-	if maxTimeMS > math.MaxInt32 {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrBadValue,
-			fmt.Sprintf("%v value for maxTimeMS is out of range [0, 2147483647]", v),
-			document.Command(),
-		)
+		return nil, err
 	}
 
 	pipeline, err := common.GetRequiredParam[*types.Array](document, "pipeline")

@@ -285,6 +285,52 @@ func CommandMaxTimeMS(v any) (int64, error) {
 	return ms, nil
 }
 
+// TypedMaxTimeMS checks maxTimeMS as mongod's typed command parsers do, for
+// the command or request named field: it must be a number, and once a double
+// is truncated and a Decimal128 rounded, not negative. Null passes.
+func TypedMaxTimeMS(v any, field string) error {
+	var ms int64
+	switch n := v.(type) {
+	case nil, types.NullType:
+		return nil
+	case int32:
+		ms = int64(n)
+	case int64:
+		ms = n
+	case float64:
+		switch t := math.Trunc(n); {
+		case math.IsNaN(n):
+		case t <= math.MinInt64:
+			ms = math.MinInt64
+		case t < 0:
+			ms = int64(t)
+		}
+	case types.Decimal128:
+		ms = decimalRoundedInt64(n)
+	default:
+		return handlererrors.NewCommandErrorMsg(handlererrors.ErrTypeMismatch, fmt.Sprintf(
+			"BSON field '%s.maxTimeMS' is the wrong type '%s', expected types '[long, int, decimal, double']",
+			field, AliasFromType(v)))
+	}
+	if ms < 0 {
+		return handlererrors.NewCommandErrorMsg(handlererrors.ErrBadValue,
+			fmt.Sprintf("BSON field 'maxTimeMS' value must be >= 0, actual value '%d'", ms))
+	}
+	return nil
+}
+
+// FindMaxTimeMS reads a find's or aggregate's maxTimeMS: TypedMaxTimeMS's
+// checks for field, then CommandMaxTimeMS's. Null is not a number here.
+func FindMaxTimeMS(v any, field string) (int64, error) {
+	if _, ok := v.(types.NullType); ok {
+		return 0, handlererrors.NewCommandErrorMsg(handlererrors.ErrBadValue, "maxTimeMS must be a number")
+	}
+	if err := TypedMaxTimeMS(v, field); err != nil {
+		return 0, err
+	}
+	return CommandMaxTimeMS(v)
+}
+
 // decimalRoundedInt64 rounds d half to even into an int64, saturating, with
 // NaN as 0.
 func decimalRoundedInt64(d types.Decimal128) int64 {
