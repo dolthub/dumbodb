@@ -88,8 +88,8 @@ func New(
 }
 
 // Run replicates until ctx is done or replication stops on a terminal
-// failure. It recovers panics, so a bad replicated entry cannot exit the
-// process.
+// failure. Panics on its goroutine and while fetching or applying the oplog
+// stop replication instead of exiting the process.
 func (r *Runtime) Run(ctx context.Context) {
 	r.manager.SetRuntimePhase("starting")
 	defer func() {
@@ -131,7 +131,7 @@ func (r *Runtime) Run(ctx context.Context) {
 		if r.store.Snapshot().InitialSyncPhase != control.InitialSyncComplete {
 			r.manager.SetRuntimePhase("initial_sync")
 			if err := r.runInitialSync(ctx, state.SyncSource); err != nil {
-				if r.stopOnApplyPanic(err) {
+				if r.stopOnPanic(err) {
 					return
 				}
 				if failure, terminal := terminalInitialSyncFailure(err); terminal {
@@ -155,7 +155,7 @@ func (r *Runtime) Run(ctx context.Context) {
 			if errors.Is(err, oplog.ErrSourceChanged) {
 				continue
 			}
-			if r.stopOnApplyPanic(err) {
+			if r.stopOnPanic(err) {
 				return
 			}
 			if errors.Is(err, oplog.ErrTooStale) || errors.Is(err, oplog.ErrContinuityLost) ||
@@ -447,18 +447,25 @@ func (r *Runtime) waitForSource(ctx context.Context) (topology.Snapshot, error) 
 	}
 }
 
-// stopOnApplyPanic stops replication when err carries a panic raised while
-// applying an oplog entry. Retrying would reapply the entry and panic again.
-func (r *Runtime) stopOnApplyPanic(err error) bool {
-	var panicErr *oplog.ApplyPanicError
-	if !errors.As(err, &panicErr) {
-		return false
+// stopOnPanic stops replication when err carries a panic raised while
+// fetching or applying the oplog. Retrying would hit the same entry again.
+func (r *Runtime) stopOnPanic(err error) bool {
+	var applyPanic *oplog.ApplyPanicError
+	if errors.As(err, &applyPanic) {
+		r.stopReplication("applying oplog entry", "apply_panic", err.Error(),
+			"MongoDB replication stopped by a panic applying an oplog entry",
+			"opTime", applyPanic.OpTime, "ns", applyPanic.Namespace, "op", applyPanic.Operation,
+			"err", err, "stack", string(applyPanic.Stack))
+		return true
 	}
-	r.stopReplication("applying oplog entry", "apply_panic", err.Error(),
-		"MongoDB replication stopped by a panic applying an oplog entry",
-		"opTime", panicErr.OpTime, "ns", panicErr.Namespace, "op", panicErr.Operation,
-		"err", err, "stack", string(panicErr.Stack))
-	return true
+	var fetchPanic *oplog.FetchPanicError
+	if errors.As(err, &fetchPanic) {
+		r.stopReplication("oplog_fetch", "fetch_panic", err.Error(),
+			"MongoDB replication stopped by a panic fetching the oplog",
+			"source", fetchPanic.Source, "err", err, "stack", string(fetchPanic.Stack))
+		return true
+	}
+	return false
 }
 
 func (r *Runtime) stopReplication(stage, classification, message, logMessage string, logArgs ...any) {

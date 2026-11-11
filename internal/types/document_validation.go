@@ -147,13 +147,16 @@ func ValidateID(id any) error {
 	return nil
 }
 
+// validateNoDollarInID treats a DBRef's field values as opaque, as mongod does.
 func validateNoDollarInID(doc *Document) error {
-	dbRef := isDBRef(doc)
+	if isDBRef(doc) {
+		return nil
+	}
 	keys := doc.Keys()
 	values := doc.Values()
 
 	for i, key := range keys {
-		if !dbRef && strings.HasPrefix(key, "$") {
+		if strings.HasPrefix(key, "$") {
 			return newValidationError(ErrDollarPrefixedID, fmt.Errorf(
 				"_id fields may not contain '$'-prefixed fields: %s is not valid for storage.", key))
 		}

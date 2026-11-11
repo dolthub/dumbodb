@@ -329,3 +329,29 @@ func testOplogDocument(increment uint32, term int64) *types.Document {
 func testFetchOpTime(increment uint32) control.OpTime {
 	return control.OpTime{Seconds: 100, Increment: increment, Term: 8}
 }
+
+type panickingFetchClient struct {
+	fakeFetchClient
+}
+
+func (c *panickingFetchClient) Request(context.Context, *wire.OpMsg) (*wire.OpMsg, error) {
+	panic("injected fetch panic")
+}
+
+func TestFetcherReturnsPanicAsErrorWithoutRetrying(t *testing.T) {
+	manager := configuredFetcherManager(t, testFetchOpTime(1))
+	buffer := must.NotFail(NewBuffer(BufferLimits{Entries: 10, Bytes: 1024 * 1024}))
+	fetcher := testFetcher(t, manager, buffer, &panickingFetchClient{})
+	fetcher.retryWait = time.Hour
+
+	var panicErr *FetchPanicError
+	if err := fetcher.FetchFrom(context.Background(), testFetchOpTime(5)); !errors.As(err, &panicErr) {
+		t.Fatalf("FetchFrom error = %v, want *FetchPanicError", err)
+	}
+	if panicErr.Value != "injected fetch panic" || len(panicErr.Stack) == 0 {
+		t.Fatalf("panic error = %+v", panicErr)
+	}
+	if err := fetcher.Run(context.Background()); !errors.As(err, &panicErr) {
+		t.Fatalf("Run error = %v, want *FetchPanicError", err)
+	}
+}

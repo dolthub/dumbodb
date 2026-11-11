@@ -129,6 +129,10 @@ func (c *Coordinator) Run(ctx context.Context) (result InitialSyncResult, err er
 			err = ctx.Err()
 			return
 		}
+		if errors.As(fetchErr, new(*oplog.FetchPanicError)) {
+			err = fmt.Errorf("initial sync oplog fetch ended: %w", fetchErr)
+			return
+		}
 		if err != nil && errors.Is(err, context.Canceled) && !errors.Is(fetchErr, context.Canceled) && !errors.Is(fetchErr, context.DeadlineExceeded) {
 			err = fmt.Errorf("initial sync oplog fetch ended: %w", fetchErr)
 			return

@@ -463,8 +463,8 @@ func TestApplyEntryPanicDiscardsPublicationAndStopsReplication(t *testing.T) {
 	if count := recoveryCount(t, ctx, collection); count != 1 {
 		t.Fatalf("document count after panic = %d, want 1", count)
 	}
-	if !replicationRuntime.stopOnApplyPanic(applyErr) {
-		t.Fatal("stopOnApplyPanic did not stop on an apply panic")
+	if !replicationRuntime.stopOnPanic(applyErr) {
+		t.Fatal("stopOnPanic did not stop on an apply panic")
 	}
 	if phase := replicationRuntime.manager.Snapshot().Runtime.Phase; phase != "failed" {
 		t.Fatalf("runtime phase = %q, want failed", phase)
@@ -472,8 +472,8 @@ func TestApplyEntryPanicDiscardsPublicationAndStopsReplication(t *testing.T) {
 	if failure := lastReplicationFailure(t, store); failure.Retryable || failure.Classification != "apply_panic" {
 		t.Fatalf("recorded failure = %+v", failure)
 	}
-	if replicationRuntime.stopOnApplyPanic(errors.New("connection reset")) {
-		t.Fatal("stopOnApplyPanic stopped on an ordinary error")
+	if replicationRuntime.stopOnPanic(errors.New("connection reset")) {
+		t.Fatal("stopOnPanic stopped on an ordinary error")
 	}
 }
 
@@ -505,6 +505,20 @@ func TestRunRecoversPanicAndStops(t *testing.T) {
 		t.Fatalf("runtime phase = %q, want failed", phase)
 	}
 	if failure := lastReplicationFailure(t, store); failure.Retryable || failure.Classification != "panic" {
+		t.Fatalf("recorded failure = %+v", failure)
+	}
+}
+
+func TestStopOnPanicStopsOnFetchPanic(t *testing.T) {
+	replicationRuntime, _, store := newRecoveryRuntime(t)
+	err := fmt.Errorf("initial sync oplog fetch ended: %w", &oplog.FetchPanicError{Source: "mongo-a:27017", Value: "boom"})
+	if !replicationRuntime.stopOnPanic(err) {
+		t.Fatal("stopOnPanic did not stop on a fetch panic")
+	}
+	if phase := replicationRuntime.manager.Snapshot().Runtime.Phase; phase != "failed" {
+		t.Fatalf("runtime phase = %q, want failed", phase)
+	}
+	if failure := lastReplicationFailure(t, store); failure.Retryable || failure.Classification != "fetch_panic" {
 		t.Fatalf("recorded failure = %+v", failure)
 	}
 }

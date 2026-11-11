@@ -39,7 +39,7 @@ func TestSimpleIDEquality(t *testing.T) {
 		{name: "operator", filter: operatorShaped},
 		{name: "eq with other operator", filter: must.NotFail(types.NewDocument("$eq", int32(5), "$ne", int32(6)))},
 		{name: "eq array", filter: must.NotFail(types.NewDocument("$eq", must.NotFail(types.NewArray(int32(1)))))},
-		{name: "eq null", filter: must.NotFail(types.NewDocument("$eq", types.Null))},
+		{name: "eq null", filter: must.NotFail(types.NewDocument("$eq", types.Null)), want: types.Null, ok: true},
 		{name: "eq regex", filter: must.NotFail(types.NewDocument("$eq", types.Regex{Pattern: "^x"}))},
 		{name: "bare array", filter: must.NotFail(types.NewArray(int32(1)))},
 		{name: "bare null", filter: types.Null},

@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/replication/idlookup"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
@@ -119,21 +120,36 @@ func TestApplierLooksUpIDsAsLiteralValues(t *testing.T) {
 	backend, applier, sourceUUID := newQueryHookApplier(t, func(params *backends.QueryParams) {
 		filters = append(filters, params.Filter)
 	})
-	dbRef := must.NotFail(types.NewDocument("$ref", "people", "$id", int32(1)))
-	inserted := must.NotFail(types.NewDocument("_id", dbRef, "v", "a"))
-	if err := applier.Apply(ctx, makeOplogEntry(t, 10, "i", "orders.items", sourceUUID, inserted, nil)); err != nil {
-		t.Fatal(err)
+	doc := func(pairs ...any) *types.Document { return must.NotFail(types.NewDocument(pairs...)) }
+	ids := []any{
+		types.Null,
+		doc("$ref", "people", "$id", int32(1)),
+		doc("$ref", "x", "$id", doc("$gt", int32(1))),
+		doc("$ref", "x", "$id", doc("a", doc("$b", int32(1)))),
+		doc("$ref", "x", "$id", doc("$gt", int32(2)), "$db", "d"),
+		doc("$ref", "x", "$id", must.NotFail(types.NewArray(doc("$x", int32(1))))),
 	}
-	key := must.NotFail(types.NewDocument("_id", dbRef))
-	update := must.NotFail(types.NewDocument("$v", int32(2), "diff", must.NotFail(types.NewDocument("u", must.NotFail(types.NewDocument("v", "b"))))))
-	if err := applier.Apply(ctx, makeOplogEntry(t, 11, "u", "orders.items", sourceUUID, update, key)); err != nil {
-		t.Fatal(err)
+	items := must.NotFail(must.NotFail(backend.Database("orders")).Collection("items"))
+	increment := uint32(10)
+	for _, id := range ids {
+		key := doc("_id", id)
+		if err := applier.Apply(ctx, makeOplogEntry(t, increment, "i", "orders.items", sourceUUID, doc("_id", id, "v", "a"), nil)); err != nil {
+			t.Fatalf("insert _id %v: %v", id, err)
+		}
+		update := doc("$v", int32(2), "diff", doc("u", doc("v", "b")))
+		if err := applier.Apply(ctx, makeOplogEntry(t, increment+1, "u", "orders.items", sourceUUID, update, key)); err != nil {
+			t.Fatalf("update _id %v: %v", id, err)
+		}
+		stored, found, err := idlookup.FindDocument(ctx, items, id)
+		if err != nil || !found || types.Compare(stored, doc("_id", id, "v", "b")) != types.Equal {
+			t.Fatalf("stored document for _id %v = %v, found %v, err %v", id, stored, found, err)
+		}
+		if err := applier.Apply(ctx, makeOplogEntry(t, increment+2, "d", "orders.items", sourceUUID, key, nil)); err != nil {
+			t.Fatalf("delete _id %v: %v", id, err)
+		}
+		assertCollectionCount(t, ctx, backend, "orders", "items", 3)
+		increment += 3
 	}
-	assertStoredDocument(t, ctx, backend, "orders", "items", must.NotFail(types.NewDocument("_id", dbRef, "v", "b")))
-	if err := applier.Apply(ctx, makeOplogEntry(t, 12, "d", "orders.items", sourceUUID, key, nil)); err != nil {
-		t.Fatal(err)
-	}
-	assertCollectionCount(t, ctx, backend, "orders", "items", 3)
 	if len(filters) == 0 {
 		t.Fatal("no _id lookup reached Query")
 	}
