@@ -467,10 +467,9 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 				closer.Close()
 				return nil, handleMaxTimeMSError(vErr, maxTimeMS, "aggregate")
 			}
-			if len(viewStages)+len(aggregationStages) > aggregations.MaxPipelineLength {
+			if err = viewPipelineLength(len(aggregationStages))(len(rawViewStages)); err != nil {
 				closer.Close()
-				return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrViewPipelineTooLong,
-					"Pipeline length must be no longer than 1000 stages")
+				return nil, err
 			}
 			srcInfo, srcErr := lookupCollectionInfo(ctx, db, baseCollection)
 			if srcErr != nil {

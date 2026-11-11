@@ -22,6 +22,7 @@ import (
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/handler/common"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
@@ -157,6 +158,11 @@ func (h *Handler) MsgCollMod(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 		if !ok {
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrBadValue, "'pipeline' option must be an array", "collMod")
+		}
+		if err := aggregations.CheckPipelineLength(pipeline.Len()); err != nil {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrPipelineTooLong,
+				fmt.Sprintf("Invalid pipeline for view %s.%s :: caused by :: Pipeline length must be no longer than 1000 stages.", dbName, collectionName),
+				"collMod")
 		}
 		params.SetView = true
 		params.SetViewPipeline = true

@@ -112,7 +112,10 @@ func (h *Handler) MsgCount(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMs
 		closer := iterator.NewMultiCloser()
 		defer closer.Close()
 
-		iter, verr := viewSourceIterator(connCtx, db, view.Name, view.ViewOn, view.ViewPipeline, cmp, closer, h.DisablePushdown)
+		// mongod runs the count as the view's stages, its $match, $skip and
+		// $limit, and a $count.
+		iter, verr := viewSourceIterator(connCtx, db, view.Name, view.ViewOn, view.ViewPipeline, cmp, closer, h.DisablePushdown,
+			viewPipelineLength(1+boolInt(params.Filter.Len() > 0)+boolInt(params.Skip > 0)+boolInt(params.Limit != 0)))
 		if verr != nil {
 			return nil, verr
 		}

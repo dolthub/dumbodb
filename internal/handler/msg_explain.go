@@ -421,6 +421,9 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 		if coll, err = db.Collection(baseName); err != nil {
 			return nil, lazyerrors.Error(err)
 		}
+		if err = viewPipelineLength(len(commandStages(params)))(len(rawStages)); err != nil {
+			return nil, err
+		}
 
 		switch {
 		case onlyMatchStages(rawStages) && params.CommandName == "find":
@@ -436,10 +439,6 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 			// command is explained as an aggregate of the view's stages and
 			// its own, as mongod does.
 			combined := append(append([]any{}, rawStages...), commandStages(params)...)
-			if len(combined) > aggregations.MaxPipelineLength {
-				return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrViewPipelineTooLong,
-					"Pipeline length must be no longer than 1000 stages")
-			}
 			params.StagesDocs = mergeLeadingMatches(dropShapingBeforeCount(aggregations.MoveMatchesAhead(combined)))
 			params.Aggregate = true
 			params.CommandName = "aggregate"

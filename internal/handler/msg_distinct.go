@@ -78,7 +78,10 @@ func (h *Handler) MsgDistinct(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 		closer := iterator.NewMultiCloser()
 		defer closer.Close()
 
-		iter, verr := viewSourceIterator(connCtx, db, viewInfo.Name, viewInfo.ViewOn, viewInfo.ViewPipeline, cmp, closer, h.DisablePushdown)
+		// mongod runs the distinct as the view's stages, its $match, and a
+		// $replaceRoot, $unwind and $group.
+		iter, verr := viewSourceIterator(connCtx, db, viewInfo.Name, viewInfo.ViewOn, viewInfo.ViewPipeline, cmp, closer, h.DisablePushdown,
+			viewPipelineLength(3+boolInt(params.Filter.Len() > 0)))
 		if verr != nil {
 			return nil, verr
 		}

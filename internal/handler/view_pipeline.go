@@ -139,7 +139,10 @@ func (f *foreignFetcher) Fetch(ctx context.Context, collName string, filter *typ
 		defer closer.Close()
 
 		cmp := collation.Parse(info.Collation).Comparator()
-		iter, err := viewSourceIterator(ctx, db, info.Name, info.ViewOn, info.ViewPipeline, cmp, closer, false)
+		// mongod runs a join on a view as the view's stages and a $match,
+		// and refuses one too long as it executes.
+		iter, err := viewSourceIterator(ctx, db, info.Name, info.ViewOn, info.ViewPipeline, cmp, closer, false,
+			func(n int) error { return wrapAggregateExecutorError(aggregations.CheckPipelineLength(n + 1)) })
 		if err != nil {
 			return nil, err
 		}
@@ -234,6 +237,37 @@ func lookupCollectionInfo(ctx context.Context, db backends.Database, name string
 		return nil, nil
 	}
 	return &res.Collections[0], nil
+}
+
+// viewPipelineLength returns a check of a resolved view's stages for a
+// command that adds extra stages of its own: mongod refuses a view over the
+// limit with ErrPipelineTooLong, and one the command takes over it with
+// ErrViewPipelineTooLong.
+func viewPipelineLength(extra int) func(viewStages int) error {
+	return func(viewStages int) error {
+		if err := aggregations.CheckPipelineLength(viewStages); err != nil {
+			return err
+		}
+		if viewStages+extra > aggregations.MaxPipelineLength {
+			return handlererrors.NewCommandErrorMsg(handlererrors.ErrViewPipelineTooLong,
+				"Pipeline length must be no longer than 1000 stages")
+		}
+		return nil
+	}
+}
+
+// findStageCount is how many stages mongod runs a find on a view as, after
+// the view's own: a $match, $sort, $skip, $limit and $project as set.
+func findStageCount(params *common.FindParams) int {
+	return boolInt(params.Filter.Len() > 0) + boolInt(params.Sort.Len() > 0) + boolInt(params.Skip > 0) +
+		boolInt(params.Limit != 0) + boolInt(params.Projection.Len() > 0)
+}
+
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // resolveViewChain flattens a view -- whose source may itself be a view -- into
@@ -427,9 +461,12 @@ func pipelineForeignNamespaces(pipeline *types.Array) []string {
 // Callers layer their own filter, sort, projection, skip and limit on top of
 // the returned iterator, matching how MongoDB resolves a read against a view to
 // an aggregation over its source.
-func viewSourceIterator(ctx context.Context, db backends.Database, viewName, viewOn string, viewPipeline *types.Array, cmp *collation.Comparator, closer *iterator.MultiCloser, disablePushdown bool) (types.DocumentsIterator, error) { //nolint:lll // for readability
+func viewSourceIterator(ctx context.Context, db backends.Database, viewName, viewOn string, viewPipeline *types.Array, cmp *collation.Comparator, closer *iterator.MultiCloser, disablePushdown bool, checkLength func(viewStages int) error) (types.DocumentsIterator, error) { //nolint:lll // for readability
 	baseCollection, viewStages, rawStages, err := resolveViewChain(ctx, db, viewName, viewOn, viewPipeline, cmp)
 	if err != nil {
+		return nil, err
+	}
+	if err = checkLength(len(rawStages)); err != nil {
 		return nil, err
 	}
 

@@ -275,8 +275,11 @@ func RegisterUpdatePipelineParser(parse func(pipeline *types.Array) ([]aggregati
 }
 
 // ParseUpdatePipeline returns the stages of a pipeline-style update, or the
-// parse error MongoDB raises for it.
+// parse error MongoDB raises for it, a pipeline over the stage limit included.
 func ParseUpdatePipeline(pipeline *types.Array) ([]aggregations.Stage, error) {
+	if err := aggregations.CheckPipelineLength(pipeline.Len()); err != nil {
+		return nil, err
+	}
 	return parseUpdatePipeline(pipeline)
 }
 
