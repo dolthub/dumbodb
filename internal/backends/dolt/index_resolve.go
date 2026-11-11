@@ -237,20 +237,20 @@ func resolveBranchIndexState(ctx context.Context, c *collection, state *dbState)
 // error counts as non-membership), multikey expansion, and the
 // Lossy/Multikey flag detection. Every build, insert, update, delete,
 // and merge path routes through it.
-func indexEntriesForDoc(ctx context.Context, doc *types.Document, idx backends.IndexInfo) (rows [][]any, multikey, lossy bool, err error) {
+func indexEntriesForDoc(ctx context.Context, doc *types.Document, idx backends.IndexInfo) (rows [][]any, multikey uint64, lossy bool, err error) {
 	if idx.MatchesPartialFilter != nil {
 		match, err := idx.MatchesPartialFilter(doc)
 		if err != nil || !match {
-			return nil, false, false, nil
+			return nil, 0, false, nil
 		}
 	}
 	if sparseExcludes(doc, idx) {
-		return nil, false, false, nil
+		return nil, 0, false, nil
 	}
 	fieldVals := extractIndexFieldValues(doc, idx)
-	for _, v := range fieldVals {
-		if _, isArr := v.(*types.Array); isArr {
-			multikey = true
+	for i, v := range fieldVals {
+		if _, isArr := v.(*types.Array); isArr && i < 64 {
+			multikey |= 1 << i
 		}
 	}
 	rows = expandMultiKeyValues(fieldVals)
@@ -259,9 +259,9 @@ func indexEntriesForDoc(ctx context.Context, doc *types.Document, idx backends.I
 			rows[i] = collateRowValues(rows[i], cmp)
 		}
 	}
-	if multikey {
+	if multikey != 0 {
 		if rows, err = firstOfEqualRows(ctx, rows); err != nil {
-			return nil, false, false, err
+			return nil, 0, false, err
 		}
 	}
 	for _, row := range rows {
@@ -333,7 +333,7 @@ func applyInsertsToIndexes(ctx context.Context, infos []backends.IndexInfo, maps
 			if err != nil {
 				return nil, nil, err
 			}
-			outInfos[i].Multikey = outInfos[i].Multikey || multikey
+			outInfos[i].MarkMultikey(multikey)
 			outInfos[i].Lossy = outInfos[i].Lossy || lossy
 			for j, fv := range rows {
 				// As in firstOfEqualRows.
@@ -413,7 +413,7 @@ func applyUpdatesToIndexes(ctx context.Context, infos []backends.IndexInfo, maps
 			if err != nil {
 				return nil, nil, err
 			}
-			outInfos[i].Multikey = outInfos[i].Multikey || multikey
+			outInfos[i].MarkMultikey(multikey)
 			outInfos[i].Lossy = outInfos[i].Lossy || lossy
 
 			oldKeys, err := entryKeysForRows(ctx, oldRows, idBytes)

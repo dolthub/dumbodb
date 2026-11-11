@@ -612,6 +612,11 @@ type IndexInfo struct {
 	// so count fast paths skip range filters on it. Sticky until
 	// rebuild.
 	Multikey bool
+	// MultikeyFields marks, bit i for Key[i], the fields that held an array.
+	// An index made multikey before these were recorded has
+	// MultikeyFieldsKnown false, and every field is assumed to.
+	MultikeyFields      uint64
+	MultikeyFieldsKnown bool
 
 	// MatchesPartialFilter, when non-nil, reports whether doc satisfies the partial
 	// filter expression. If nil, all documents are considered as matching (no partial
@@ -771,4 +776,29 @@ func ValidMergeMode(name string) bool {
 		return true
 	}
 	return false
+}
+
+// KeyMultikey reports whether Key[pos] may have held an array.
+func (i IndexInfo) KeyMultikey(pos int) bool {
+	if !i.Multikey {
+		return false
+	}
+	if !i.MultikeyFieldsKnown || pos >= 64 {
+		return true
+	}
+	return i.MultikeyFields&(1<<pos) != 0
+}
+
+// MarkMultikey records an entry that expanded the arrays of the fields mask
+// marks. An index that was not multikey has no other array fields, so its
+// fields are known.
+func (i *IndexInfo) MarkMultikey(mask uint64) {
+	if mask == 0 {
+		return
+	}
+	if !i.Multikey {
+		i.MultikeyFieldsKnown = true
+	}
+	i.Multikey = true
+	i.MultikeyFields |= mask
 }

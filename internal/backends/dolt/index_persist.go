@@ -214,6 +214,9 @@ func encodeIndexDefinition(idx backends.IndexInfo) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if idx.Multikey && idx.MultikeyFieldsKnown {
+		doc.Set("multikeyFields", int64(idx.MultikeyFields))
+	}
 	if idx.PartialFilterExpression != nil {
 		doc.Set("partial", idx.PartialFilterExpression)
 	}
@@ -247,6 +250,14 @@ func decodeIndexDefinition(doc *types.Document) (backends.IndexInfo, error) {
 		Hidden:   getBool(doc, "hidden"),
 		Lossy:    getBool(doc, "lossy"),
 		Multikey: getBool(doc, "multikey"),
+	}
+	if getBool(doc, "multikey") {
+		if mask, err := doc.Get("multikeyFields"); err == nil {
+			m, _ := mask.(int64)
+			info.MultikeyFields, info.MultikeyFieldsKnown = uint64(m), true
+		}
+	} else {
+		info.MultikeyFieldsKnown = true
 	}
 	keysVal, err := doc.Get("keys")
 	if err != nil {

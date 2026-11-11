@@ -1006,7 +1006,7 @@ func chooseIndexRange(idxInfos []backends.IndexInfo, filter *types.Document, hin
 		if inner, ok := elemMatchOperators(v); ok {
 			// One element meets every operator, so both sides bound it.
 			v = inner
-		} else if idxInfos[entry.mapIdx].Multikey {
+		} else if idxInfos[entry.mapIdx].KeyMultikey(0) {
 			v = multikeyScanBound(v)
 		}
 		s, e, ok := indexBoundsForFilterValue(v)
@@ -1411,6 +1411,17 @@ func filterHasTwoSidedRange(filter *types.Document) bool {
 	return filter.Len() == 1 && isTwoSidedRange(must.NotFail(filter.Get(filter.Keys()[0])))
 }
 
+// trailingKeyMultikey reports whether a field after idx's first may have
+// held an array.
+func trailingKeyMultikey(idx backends.IndexInfo) bool {
+	for i := 1; i < len(idx.Key); i++ {
+		if idx.KeyMultikey(i) {
+			return true
+		}
+	}
+	return false
+}
+
 // isTwoSidedRange reports whether v bounds a field from below and above.
 func isTwoSidedRange(v any) bool {
 	opDoc, ok := v.(*types.Document)
@@ -1556,7 +1567,7 @@ func nullEqualityIndexable(idx backends.IndexInfo) bool {
 	}
 	field := idx.Key[0].Field
 	if !strings.Contains(field, ".") {
-		return !idx.Multikey
+		return !idx.KeyMultikey(0)
 	}
 	path, err := types.NewPathFromString(field)
 	return err == nil && !hasPositionalSegment(path)
@@ -2480,7 +2491,7 @@ func buildCountOrDistinctPlan(ctx context.Context, params *backends.ExplainParam
 		case indexPicked && hintedOffFilter(params, picked):
 			// A hinted index the filter does not lead fetches every entry.
 			leaf = fetchStage(ixscanStage(picked))
-		case indexPicked && (countFetchesToMatch(params.Filter) || picked.Multikey && filterHasTwoSidedRange(params.Filter)):
+		case indexPicked && (countFetchesToMatch(params.Filter) || picked.KeyMultikey(0) && filterHasTwoSidedRange(params.Filter)):
 			// Its keys cannot decide whether a document matches.
 			leaf = fetchStage(ixscanStage(picked))
 		case indexPicked && filterIsIn(params.Filter):
@@ -3797,7 +3808,7 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 
 	// On a multikey field each side of a range may be met by a different
 	// element, so no index range holds exactly the matches (multikeyScanBound).
-	if chosen.Multikey && isTwoSidedRange(v) {
+	if chosen.KeyMultikey(0) && isTwoSidedRange(v) {
 		return 0, false, nil
 	}
 
@@ -3820,12 +3831,13 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 		startKey, stopKey = compoundLeadingBounds(startKey, stopKey)
 	}
 
-	// A multikey range holds a document once per matching element, so its
-	// documents are counted by id, still without fetching one; a
-	// single-field equality stays exact (one entry per value and document),
-	// but a compound one holds an entry per trailing element.
+	// A range on a multikey field holds a document once per matching
+	// element, and a compound index an entry per trailing element, so their
+	// documents are counted by id, still without fetching one; an equality
+	// on a field alone stays exact (one entry per value and document).
 	_, isOp := v.(*types.Document)
-	return countIndexRange(ctx, idxMap, startKey, stopKey, chosen.Multikey && (isOp || compound), stop)
+	dedupe := (isOp && chosen.KeyMultikey(0)) || (compound && trailingKeyMultikey(chosen))
+	return countIndexRange(ctx, idxMap, startKey, stopKey, dedupe, stop)
 }
 
 // countIndexRange counts the documents in an index range without fetching
@@ -4371,7 +4383,7 @@ func (c *collection) CreateIndexes(ctx context.Context, params *backends.CreateI
 		if buildErr != nil {
 			return nil, fmt.Errorf("building secondary index %q on %q: %w", idx.Name, c.name, buildErr)
 		}
-		idx.Multikey = idx.Multikey || multikey
+		idx.MarkMultikey(multikey)
 		idx.Lossy = idx.Lossy || lossy
 		infoByName[idx.Name] = idx
 		curMaps[idx.Name] = idxMap
@@ -4451,10 +4463,10 @@ func (c *collection) rewriteDTBLAfterIndexChange(ctx context.Context, state *dbS
 // buildSecondaryIndex scans the primary map and builds the index's prolly.Map.
 // The returned flags report whether any scanned document made the index
 // multikey or lossy (see backends.IndexInfo). Caller must hold state.mu (write lock).
-func (c *collection) buildSecondaryIndex(ctx context.Context, state *dbState, idx backends.IndexInfo) (m prolly.Map, multikey, lossy bool, err error) {
+func (c *collection) buildSecondaryIndex(ctx context.Context, state *dbState, idx backends.IndexInfo) (m prolly.Map, multikey uint64, lossy bool, err error) {
 	idxMap, err := idxpkg.NewEmptyMap(ctx, state.ns)
 	if err != nil {
-		return prolly.Map{}, false, false, fmt.Errorf("index: creating empty map: %w", err)
+		return prolly.Map{}, 0, false, fmt.Errorf("index: creating empty map: %w", err)
 	}
 
 	// If the collection does not exist yet (no primary map), the index is
@@ -4463,24 +4475,24 @@ func (c *collection) buildSecondaryIndex(ctx context.Context, state *dbState, id
 	// real failures and propagate.
 	am, err := state.getOrInitBranchAM(ctx, c.db.rootish)
 	if err != nil {
-		return prolly.Map{}, false, false, fmt.Errorf("index: resolving branch AM: %w", err)
+		return prolly.Map{}, 0, false, fmt.Errorf("index: resolving branch AM: %w", err)
 	}
 	rootHash, err := am.Get(ctx, c.name)
 	if err != nil {
-		return prolly.Map{}, false, false, fmt.Errorf("index: looking up collection in AM: %w", err)
+		return prolly.Map{}, 0, false, fmt.Errorf("index: looking up collection in AM: %w", err)
 	}
 	if rootHash.IsEmpty() {
-		return idxMap, false, false, nil
+		return idxMap, 0, false, nil
 	}
 	primaryMap, err := openCollection(ctx, state.cs, state.ns, rootHash)
 	if err != nil {
-		return prolly.Map{}, false, false, fmt.Errorf("index: opening primary map: %w", err)
+		return prolly.Map{}, 0, false, fmt.Errorf("index: opening primary map: %w", err)
 	}
 
 	mut := idxMap.Mutate()
 	iter, err := primaryMap.IterAll(ctx)
 	if err != nil {
-		return prolly.Map{}, false, false, fmt.Errorf("index: iterating primary: %w", err)
+		return prolly.Map{}, 0, false, fmt.Errorf("index: iterating primary: %w", err)
 	}
 
 	// For a unique index, detect pre-existing duplicate values while scanning
@@ -4499,7 +4511,7 @@ func (c *collection) buildSecondaryIndex(ctx context.Context, state *dbState, id
 			if err == io.EOF {
 				break
 			}
-			return prolly.Map{}, false, false, err
+			return prolly.Map{}, 0, false, err
 		}
 		if v == nil {
 			break
@@ -4507,40 +4519,40 @@ func (c *collection) buildSecondaryIndex(ctx context.Context, state *dbState, id
 
 		idBytes, ok := keyDesc.GetBytes(0, k)
 		if !ok {
-			return prolly.Map{}, false, false, fmt.Errorf("index: primary key tuple missing _id bytes")
+			return prolly.Map{}, 0, false, fmt.Errorf("index: primary key tuple missing _id bytes")
 		}
 
 		doc, err := readDocFromValue(ctx, state.ns, v)
 		if err != nil {
-			return prolly.Map{}, false, false, fmt.Errorf("index: reading document for build scan: %w", err)
+			return prolly.Map{}, 0, false, fmt.Errorf("index: reading document for build scan: %w", err)
 		}
 
 		if err := checkGeoKeys(doc, idx); err != nil {
-			return prolly.Map{}, false, false, err
+			return prolly.Map{}, 0, false, err
 		}
 		rows, rowMultikey, rowLossy, err := indexEntriesForDoc(ctx, doc, idx)
 		if err != nil {
-			return prolly.Map{}, false, false, err
+			return prolly.Map{}, 0, false, err
 		}
-		multikey = multikey || rowMultikey
+		multikey |= rowMultikey
 		lossy = lossy || rowLossy
 
 		if seenUnique != nil && !rowLossy {
 			if err := checkUniqueBuildConflict(seenUnique, idx, doc, idBytes, rows); err != nil {
-				return prolly.Map{}, false, false, err
+				return prolly.Map{}, 0, false, err
 			}
 		}
 
 		for _, fv := range rows {
 			if err := idxpkg.InsertEntry(ctx, mut, fv, idBytes); err != nil {
-				return prolly.Map{}, false, false, fmt.Errorf("index: inserting entry: %w", err)
+				return prolly.Map{}, 0, false, fmt.Errorf("index: inserting entry: %w", err)
 			}
 		}
 	}
 
 	built, err := mut.Map(ctx)
 	if err != nil {
-		return prolly.Map{}, false, false, fmt.Errorf("index: flushing map: %w", err)
+		return prolly.Map{}, 0, false, fmt.Errorf("index: flushing map: %w", err)
 	}
 	return built, multikey, lossy, nil
 }

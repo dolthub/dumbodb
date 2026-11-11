@@ -243,7 +243,7 @@ func (s *indexMergeSurvivor) insertDoc(ctx context.Context, doc *types.Document,
 	if err != nil {
 		return err
 	}
-	s.info.Multikey = s.info.Multikey || multikey
+	s.info.MarkMultikey(multikey)
 	s.info.Lossy = s.info.Lossy || lossy
 	for _, row := range rows {
 		if err := idxpkg.InsertEntry(ctx, s.mut, row, idBytes); err != nil {
