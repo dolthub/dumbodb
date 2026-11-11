@@ -435,6 +435,17 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			cInfo = cList.Collections[0]
 		}
 
+		if hint, _ := document.Get("hint"); hint != nil {
+			err = checkHintType(hint)
+			if err == nil && !cInfo.IsView {
+				err = validateHintExists(ctx, c, hint, "aggregate")
+			}
+			if err != nil {
+				closer.Close()
+				return nil, err
+			}
+		}
+
 		// Fast path: drivers (notably the official Go driver) implement
 		// CountDocuments by issuing an aggregate pipeline of the form
 		// [{$match: <filter>}, optional $skip/$limit, {$group: {_id: <c>, n: {$sum: 1}}}].

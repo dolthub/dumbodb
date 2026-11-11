@@ -106,6 +106,15 @@ func (h *Handler) MsgDistinct(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 		return nil, lazyerrors.Error(err)
 	}
 
+	if params.Hint != nil {
+		if err = checkHintType(params.Hint); err == nil {
+			err = validateHintExists(connCtx, c, params.Hint, "distinct")
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	params.Collation = h.effectiveCollation(connCtx, db, params.Collection, params.Collation)
 
 	cmp := collation.Parse(params.Collation).Comparator()
