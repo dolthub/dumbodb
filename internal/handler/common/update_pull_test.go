@@ -23,29 +23,53 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-func TestPullConditionQueriesEmbeddedDocuments(t *testing.T) {
+func TestPullRemovesMatchingElements(t *testing.T) {
 	doc := func(pairs ...any) *types.Document { return must.NotFail(types.NewDocument(pairs...)) }
 	arr := func(values ...any) *types.Array { return must.NotFail(types.NewArray(values...)) }
+	// Embedded documents are stored with sorted keys.
+	stored := func() *types.Array {
+		return arr(doc("a", int32(0)), doc("a", int32(3)), doc("a", int32(1), "b", int32(2)),
+			doc("$id", int32(1), "$ref", "x"), int32(5))
+	}
+	unsortedDoc := doc("b", int32(2), "a", int32(1))
+	dbRef := doc("$ref", "x", "$id", int32(1))
 
 	for _, tc := range []struct {
 		name      string
-		condition *types.Document
-		elem      any
-		match     bool
+		condition any
+		removed   []int
 	}{
-		{"field operator on matching document", doc("a", doc("$gt", int32(1))), doc("a", int32(3)), true},
-		{"field operator on other document", doc("a", doc("$gt", int32(1))), doc("a", int32(0)), false},
-		{"field $not", doc("a", doc("$not", doc("$gt", int32(1)))), doc("b", int32(1)), true},
-		{"literal field matches a wider document", doc("a", int32(1)), doc("a", int32(1), "b", int32(2)), true},
-		{"$nor", doc("$nor", arr(doc("a", int32(1)))), doc("a", int32(0)), true},
-		{"empty matches any document", doc(), doc("a", int32(1)), true},
-		{"query never matches a scalar", doc("a", int32(1)), int32(1), false},
-		{"element operator applies to a scalar", doc("$gt", int32(1)), int32(5), true},
+		{"field operator on a subfield", doc("a", doc("$gt", int32(1))), []int{1}},
+		{"$not on a subfield", doc("a", doc("$not", doc("$gt", int32(1)))), []int{0, 2, 3}},
+		{"literal subfield matches a wider document", doc("a", int32(1)), []int{2}},
+		{"$nor", doc("$nor", arr(doc("a", int32(1)))), []int{0, 1, 3}},
+		{"empty matches every document", doc(), []int{0, 1, 2, 3}},
+		{"element operator", doc("$gt", int32(4)), []int{4}},
+		{"document in any key order", unsortedDoc, []int{2}},
+		{"$eq document in any key order", doc("$eq", unsortedDoc), []int{2}},
+		{"$in document in any key order", doc("$in", arr(unsortedDoc)), []int{2}},
+		{"DBRef", dbRef, []int{3}},
+		{"$eq DBRef", doc("$eq", dbRef), []int{3}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			match, err := pullConditionMatches(tc.elem, tc.condition)
+			target := doc("_id", int32(1), "arr", stored())
+			_, err := processPullArrayUpdateExpression("update", target, "arr", tc.condition)
 			require.NoError(t, err)
-			require.Equal(t, tc.match, match)
+			require.Equal(t, remaining(stored(), tc.removed), must.NotFail(target.Get("arr")))
 		})
 	}
+
+	t.Run("$pullAll in any key order", func(t *testing.T) {
+		target := doc("_id", int32(1), "arr", stored())
+		_, err := processPullAllArrayUpdateExpression("update", target, "arr", arr(unsortedDoc, dbRef))
+		require.NoError(t, err)
+		require.Equal(t, remaining(stored(), []int{2, 3}), must.NotFail(target.Get("arr")))
+	})
+}
+
+func remaining(array *types.Array, removed []int) *types.Array {
+	for i := len(removed) - 1; i >= 0; i-- {
+		array.Remove(removed[i])
+	}
+	return array
 }

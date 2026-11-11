@@ -697,5 +697,11 @@ func extractCommandError(err error) (int32, string) {
 	if errors.As(err, &ce) {
 		return int32(ce.Code()), ce.Err().Error()
 	}
+	var we *handlererrors.WriteErrors
+	if errors.As(err, &we) {
+		if code, msg, ok := we.First(); ok {
+			return int32(code), msg
+		}
+	}
 	return int32(handlererrors.ErrOperationFailed), err.Error()
 }

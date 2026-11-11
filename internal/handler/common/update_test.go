@@ -174,3 +174,23 @@ func TestValidateUpdateOperatorsRejectsPullStartingWithNot(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateUpdateOperatorsRejectsDisallowedPullConditions(t *testing.T) {
+	t.Parallel()
+	doc := func(pairs ...any) *types.Document { return must.NotFail(types.NewDocument(pairs...)) }
+	pull := func(condition any) *types.Document { return doc("$pull", doc("arr", condition)) }
+	or := func(branches ...any) *types.Document { return doc("$or", must.NotFail(types.NewArray(branches...))) }
+
+	for name, update := range map[string]*types.Document{
+		"$expr":            pull(doc("$expr", true)),
+		"$expr inside $or": pull(or(doc("a", int32(1)), doc("$expr", true))),
+		"$text":            pull(doc("$text", doc("$search", "x"))),
+		"$where":           pull(doc("$where", "true")),
+		"unknown operator": pull(doc("$nope", int32(1))),
+		"invalid subfield": pull(doc("a", doc("$in", int32(1)))),
+	} {
+		if err := common.ValidateUpdateOperators("update", update); err == nil {
+			t.Errorf("%s: no error", name)
+		}
+	}
+}

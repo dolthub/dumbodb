@@ -553,7 +553,7 @@ func processPullAllArrayUpdateExpression(command string, doc *types.Document, ke
 	var changed bool
 
 	for j := range pullArray.Len() {
-		pullElem := must.NotFail(pullArray.Get(j))
+		pullElem := sortedKeys(must.NotFail(pullArray.Get(j)))
 
 		// we remove all instances of pullElem in array
 		for i := array.Len() - 1; i >= 0; i-- {
@@ -605,6 +605,8 @@ func processPullArrayUpdateExpression(command string, doc *types.Document, key s
 
 	var changed bool
 
+	pullVal = canonicalPullCondition(pullVal)
+
 	for i := array.Len() - 1; i >= 0; i-- {
 		elem := must.NotFail(array.Get(i))
 
@@ -630,6 +632,21 @@ func processPullArrayUpdateExpression(command string, doc *types.Document, key s
 	}
 
 	return changed, nil
+}
+
+// canonicalPullCondition returns a copy of a $pull condition whose document
+// values have sorted keys, as embedded documents are stored.
+func canonicalPullCondition(condition any) any {
+	doc, ok := condition.(*types.Document)
+	if !ok {
+		return sortedKeys(condition)
+	}
+	doc = doc.DeepCopy()
+	if isFieldOperatorExpression(doc) {
+		return canonicalCondition(doc)
+	}
+	CanonicalizeFilter(doc)
+	return doc
 }
 
 // pullConditionMatches reports whether a $pull document condition matches
