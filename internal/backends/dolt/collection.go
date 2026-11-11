@@ -1420,6 +1420,18 @@ func emptyArrayRanges() [][2][]byte {
 	}
 }
 
+// filterHasTwoSidedRange reports whether filter, one field's condition,
+// bounds it from below and above.
+func filterHasTwoSidedRange(filter *types.Document) bool {
+	return filter.Len() == 1 && isTwoSidedRange(must.NotFail(filter.Get(filter.Keys()[0])))
+}
+
+// isTwoSidedRange reports whether v bounds a field from below and above.
+func isTwoSidedRange(v any) bool {
+	opDoc, ok := v.(*types.Document)
+	return ok && !opDoc.Has("$eq") && (opDoc.Has("$gt") || opDoc.Has("$gte")) && (opDoc.Has("$lt") || opDoc.Has("$lte"))
+}
+
 // multikeyScanBound drops the upper-bound operators from a range that has both
 // sides. On a multikey field each operator may be met by a different element
 // ({$gt: 2, $lt: 3} matches [1, 3]), so the sides cannot be intersected; like
@@ -2460,7 +2472,7 @@ func buildCountOrDistinctPlan(ctx context.Context, params *backends.ExplainParam
 		case indexPicked && hintedOffFilter(params, picked):
 			// A hinted index the filter does not lead fetches every entry.
 			leaf = fetchStage(ixscanStage(picked))
-		case indexPicked && countFetchesToMatch(params.Filter):
+		case indexPicked && (countFetchesToMatch(params.Filter) || picked.Multikey && filterHasTwoSidedRange(params.Filter)):
 			// Its keys cannot decide whether a document matches.
 			leaf = fetchStage(ixscanStage(picked))
 		case indexPicked && filterIsIn(params.Filter):
@@ -3763,6 +3775,12 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 	// each document once.
 	if ranges, ok := indexPointRangesForIn(v); ok {
 		return streamedIndexCount(ctx, newIndexIDStream(ctx, idxMap, ranges, false, true), stop)
+	}
+
+	// On a multikey field each side of a range may be met by a different
+	// element, so no index range holds exactly the matches (multikeyScanBound).
+	if chosen.Multikey && isTwoSidedRange(v) {
+		return 0, false, nil
 	}
 
 	startKey, stopKey, ok := indexBoundsForFilterValue(v)
