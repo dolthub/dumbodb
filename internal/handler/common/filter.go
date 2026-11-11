@@ -634,6 +634,33 @@ func filterFieldExpr(doc *types.Document, filterKey, filterSuffix string, expr *
 	return filterFieldOperators(doc, filterKey, filterSuffix, expr, cmp)
 }
 
+// checkNotOperand returns the error mongod raises while parsing the operand
+// of $not, which must be a regex or a non-empty document of operators.
+func checkNotOperand(operand any) error {
+	switch operand := operand.(type) {
+	case types.Regex:
+		return nil
+	case *types.Document:
+		if operand.Len() == 0 {
+			return handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrBadValue, "$not argument must be a non-empty object", "$not",
+			)
+		}
+		for _, key := range operand.Keys() {
+			if !strings.HasPrefix(key, "$") {
+				return handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrBadValue, fmt.Sprintf("unknown operator: %s", key), "$not",
+				)
+			}
+		}
+		return nil
+	default:
+		return handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrBadValue, "$not argument must be a regex or an object", "$not",
+		)
+	}
+}
+
 // filterFieldOperators is filterFieldExpr for a document that mongod always
 // parses as operators, such as the operand of $not, even when it is a DBRef.
 func filterFieldOperators(doc *types.Document, filterKey, filterSuffix string, expr *types.Document, cmp *collation.Comparator) (bool, error) {
@@ -899,17 +926,11 @@ func filterFieldOperators(doc *types.Document, filterKey, filterSuffix string, e
 
 		case "$not":
 			// {field: {$not: {expr}}}
+			if err := checkNotOperand(exprValue); err != nil {
+				return false, err
+			}
 			switch exprValue := exprValue.(type) {
 			case *types.Document:
-				for _, notKey := range exprValue.Keys() {
-					if !strings.HasPrefix(notKey, "$") {
-						return false, handlererrors.NewCommandErrorMsgWithArgument(
-							handlererrors.ErrBadValue,
-							fmt.Sprintf("unknown operator: %s", notKey),
-							"$not",
-						)
-					}
-				}
 				res, err := filterFieldOperators(doc, filterKey, filterSuffix, exprValue, cmp)
 				if res || err != nil {
 					return false, err
@@ -920,12 +941,6 @@ func filterFieldOperators(doc *types.Document, filterKey, filterSuffix string, e
 				if res || err != nil {
 					return false, err
 				}
-			default:
-				return false, handlererrors.NewCommandErrorMsgWithArgument(
-					handlererrors.ErrBadValue,
-					"$not needs a regex or a document",
-					exprKey,
-				)
 			}
 
 		case "$regex":

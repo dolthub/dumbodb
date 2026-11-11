@@ -82,6 +82,8 @@ func TestFilterParsesNotOperandAsOperators(t *testing.T) {
 			return f
 		}, "unknown operator: $ref"},
 		{"plain document", func() *types.Document { return doc("f", doc("$not", doc("a", dbRef()))) }, "unknown operator: a"},
+		{"empty", func() *types.Document { return doc("f", doc("$not", doc())) }, "$not argument must be a non-empty object"},
+		{"scalar", func() *types.Document { return doc("f", doc("$not", int32(1))) }, "$not argument must be a regex or an object"},
 		{"operator then plain field", func() *types.Document {
 			return doc("f", doc("$not", doc("$gt", int32(1), "a", int32(1))))
 		}, "unknown operator: a"},
