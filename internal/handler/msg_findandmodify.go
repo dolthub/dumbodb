@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/FerretDB/wire"
@@ -94,6 +95,7 @@ func (h *Handler) MsgFindAndModify(connCtx context.Context, msg *wire.OpMsg) (*w
 			if projErr != nil {
 				return nil, projErr
 			}
+			nullRecordIDFields(projection, projected)
 
 			res.value = projected
 		}
@@ -322,4 +324,19 @@ func validationErrToUpdateErr(command string, ve *types.ValidationError) error {
 	}
 
 	return common.NewUpdateError(code, ve.Error(), command)
+}
+
+// nullRecordIDFields sets each top-level field projection gives as
+// {$meta: "recordId"} to null in doc: findAndModify has no RecordId to report,
+// and mongod returns null for it.
+func nullRecordIDFields(projection, doc *types.Document) {
+	for _, k := range projection.Keys() {
+		meta, ok := must.NotFail(projection.Get(k)).(*types.Document)
+		if !ok || meta.Len() != 1 || !meta.Has("$meta") || must.NotFail(meta.Get("$meta")) != "recordId" {
+			continue
+		}
+		if !doc.Has(k) && !strings.Contains(k, ".") {
+			doc.Set(k, types.Null)
+		}
+	}
 }
