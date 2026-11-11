@@ -190,8 +190,9 @@ func (h *Handler) execCountReading(ctx context.Context, c backends.Collection, p
 	// The backend signals success via Filtered=true; otherwise we fall
 	// through to the scan path below.
 	// A hint still allows the index count when it names the index the count
-	// would read; the backend declines any other.
-	if !h.DisablePushdown && cmp == nil && params.Filter.Len() > 0 {
+	// would read; the backend declines any other. Unfiltered, a hint counts
+	// the index's entries.
+	if !h.DisablePushdown && cmp == nil && (params.Filter.Len() > 0 || hinted) {
 		stop := int64(0)
 		if params.Limit > 0 {
 			stop = params.Skip + params.Limit

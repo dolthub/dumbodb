@@ -124,11 +124,11 @@ func (c *collection) query(ctx context.Context, params *backends.QueryParams) (*
 		return nil, nil, err
 	}
 	if sparseHint != nil && !sparseHint.Lossy {
-		docs, err := c.sparseMembers(ctx, state, m, *sparseHint, params.Fields)
+		iter, err := c.sparseMembers(ctx, state, m, *sparseHint, params.Fields)
 		if err != nil {
 			return nil, nil, err
 		}
-		return &backends.QueryResult{Iter: newSliceIter(docs)}, fetchStage(ixscanStage(*sparseHint)), nil
+		return &backends.QueryResult{Iter: iter}, fetchStage(ixscanStage(*sparseHint)), nil
 	}
 	if sparseHint != nil {
 		res, err := c.queryUnhintedSparse(ctx, params)
@@ -396,9 +396,9 @@ func (c *collection) hintedSparseIndex(ctx context.Context, state *dbState, para
 	return nil, nil
 }
 
-// sparseMembers reads the documents a sparse index holds, keeping only fields
-// when it is non-nil.
-func (c *collection) sparseMembers(ctx context.Context, state *dbState, primary prolly.Map, idx backends.IndexInfo, fields []string) ([]*types.Document, error) {
+// sparseMembers reads, in index order, the documents the sparse index idx
+// holds, lazily, so a downstream limit stops the reads.
+func (c *collection) sparseMembers(ctx context.Context, state *dbState, primary prolly.Map, idx backends.IndexInfo, fields []string) (types.DocumentsIterator, error) {
 	state.mu.RLock()
 	infos, maps, err := resolveIndexes(ctx, c, state)
 	state.mu.RUnlock()
@@ -409,20 +409,14 @@ func (c *collection) sparseMembers(ctx context.Context, state *dbState, primary 
 	if i < 0 {
 		return nil, fmt.Errorf("sparse index %q not found", idx.Name)
 	}
-	entries, err := idxpkg.RangeLookup(ctx, maps[i], nil, nil)
-	if err != nil {
-		return nil, err
-	}
-	countKeysExamined(ctx, len(entries))
-	plan := &indexLookupPlan{info: idx, index: idx.Name, keys: len(entries)}
-	seen := make(map[string]struct{}, len(entries))
-	for _, id := range entries {
-		if _, dup := seen[string(id)]; !dup {
-			seen[string(id)] = struct{}{}
-			plan.ids = append(plan.ids, id)
-		}
-	}
-	return plan.fetch(ctx, state, primary, fields)
+	return &indexRangeIter{
+		ctx:     ctx,
+		ns:      state.ns,
+		primary: primary,
+		ids:     newIndexIDStream(ctx, maps[i], [][2][]byte{{nil, nil}}, false, true),
+		fields:  fields,
+		release: pinRoots(state, primary, maps[i]),
+	}, nil
 }
 
 // queryUnhintedSparse runs params with its sparse-index hint removed; the
@@ -983,10 +977,19 @@ func chooseIndexRange(idxInfos []backends.IndexInfo, filter *types.Document, hin
 				break
 			}
 		}
+		if isEmptyArrayEquality(v) && !entry.compound {
+			chosenMapIdx = entry.mapIdx
+			pointRanges = emptyArrayRanges()
+			usable = true
+			break
+		}
 		if queryCmp != nil {
 			v = collateFilterValue(v, queryCmp)
 		}
-		if idxInfos[entry.mapIdx].Multikey {
+		if inner, ok := elemMatchOperators(v); ok {
+			// One element meets every operator, so both sides bound it.
+			v = inner
+		} else if idxInfos[entry.mapIdx].Multikey {
 			v = multikeyScanBound(v)
 		}
 		s, e, ok := indexBoundsForFilterValue(v)
@@ -1361,6 +1364,45 @@ func indexPointRangesForIn(v any) ([][2][]byte, bool) {
 // Returns ok=false for value shapes the index path can't handle (regex,
 // $in, $ne, nested operators, mixed comparisons against arrays, ...); the
 // caller falls back to the full-scan path.
+// elemMatchOperators returns the operators of an $elemMatch that applies
+// them to each element, like {$elemMatch: {$gt: 1}}.
+func elemMatchOperators(v any) (*types.Document, bool) {
+	doc, ok := v.(*types.Document)
+	if !ok || doc.Len() != 1 || doc.Keys()[0] != "$elemMatch" {
+		return nil, false
+	}
+	inner, ok := must.NotFail(doc.Get("$elemMatch")).(*types.Document)
+	if !ok || inner.Len() == 0 {
+		return nil, false
+	}
+	for _, k := range inner.Keys() {
+		if !strings.HasPrefix(k, "$") {
+			return nil, false
+		}
+	}
+	return inner, true
+}
+
+// isEmptyArrayEquality reports whether v, a filter field's condition, is an
+// equality to the empty array.
+func isEmptyArrayEquality(v any) bool {
+	if doc, ok := v.(*types.Document); ok && doc.Len() == 1 && doc.Has("$eq") {
+		v = must.NotFail(doc.Get("$eq"))
+	}
+	arr, ok := v.(*types.Array)
+	return ok && arr.Len() == 0
+}
+
+// emptyArrayRanges are the keys a field equal to the empty array has: undefined
+// for the empty array itself, and the empty array as an element of an array.
+func emptyArrayRanges() [][2][]byte {
+	empty := types.MakeArray(0)
+	return [][2][]byte{
+		{idxpkg.LowerBoundInclusive(types.Undefined), idxpkg.UpperBoundInclusive(types.Undefined)},
+		{idxpkg.LowerBoundInclusive(empty), idxpkg.UpperBoundInclusive(empty)},
+	}
+}
+
 // multikeyScanBound drops the upper-bound operators from a range that has both
 // sides. On a multikey field each operator may be met by a different element
 // ({$gt: 2, $lt: 3} matches [1, 3]), so the sides cannot be intersected; like
@@ -2401,6 +2443,9 @@ func buildCountOrDistinctPlan(ctx context.Context, params *backends.ExplainParam
 		case indexPicked && hintedOffFilter(params, picked):
 			// A hinted index the filter does not lead fetches every entry.
 			leaf = fetchStage(ixscanStage(picked))
+		case indexPicked && countFetchesToMatch(params.Filter):
+			// Its keys cannot decide whether a document matches.
+			leaf = fetchStage(ixscanStage(picked))
 		case indexPicked && filterIsIn(params.Filter):
 			// An $in counts from an IXSCAN of its ranges, without a FETCH.
 			leaf = ixscanStage(picked)
@@ -2435,6 +2480,26 @@ func buildCountOrDistinctPlan(ctx context.Context, params *backends.ExplainParam
 		projection = "PROJECTION_DEFAULT"
 	}
 	return &explainStage{stage: projection, input: leaf}
+}
+
+// countFetchesToMatch reports whether filter, one field's condition, needs
+// each document to decide a match: an $elemMatch, a $size, or an equality to
+// an array.
+func countFetchesToMatch(filter *types.Document) bool {
+	if filter.Len() != 1 {
+		return false
+	}
+	v := must.NotFail(filter.Get(filter.Keys()[0]))
+	if doc, ok := v.(*types.Document); ok && doc.Len() == 1 {
+		switch doc.Keys()[0] {
+		case "$elemMatch", "$size":
+			return true
+		case "$eq":
+			v = must.NotFail(doc.Get("$eq"))
+		}
+	}
+	_, isArray := v.(*types.Array)
+	return isArray
 }
 
 // wrapScanPlan composes the stage tree for a find, aggregate or write around
@@ -3573,6 +3638,14 @@ func (c *collection) Count(ctx context.Context, params *backends.CountParams) (*
 		return &backends.CountResult{Count: 0, Filtered: false}, nil
 	}
 
+	if params != nil && params.Hint != nil {
+		n, used, herr := c.hintedIndexCount(ctx, state, params.Hint, params.Stop)
+		if herr != nil || !used {
+			return &backends.CountResult{}, herr
+		}
+		return &backends.CountResult{Count: n, Filtered: true}, nil
+	}
+
 	n, err := m.Count()
 	if err != nil {
 		return nil, err
@@ -3674,10 +3747,16 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 	// A multikey range holds a document once per matching element, so its
 	// documents are counted by id, still without fetching one; equality
 	// counts stay exact (one entry per value and document).
-	if _, isOp := v.(*types.Document); isOp && chosen.Multikey {
+	_, isOp := v.(*types.Document)
+	return countIndexRange(ctx, idxMap, startKey, stopKey, isOp && chosen.Multikey, stop)
+}
+
+// countIndexRange counts the documents in an index range without fetching
+// one, by id when multikey, and counts the keys read up to stop.
+func countIndexRange(ctx context.Context, idxMap prolly.Map, startKey, stopKey []byte, multikey bool, stop int64) (int64, bool, error) {
+	if multikey {
 		return multikeyRangeCount(ctx, idxMap, [][2][]byte{{startKey, stopKey}}, stop)
 	}
-
 	n, err := idxpkg.RangeCount(ctx, idxMap, startKey, stopKey)
 	if err != nil {
 		return 0, false, err
@@ -3690,6 +3769,32 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 	examined.keys(ctx, int(read))
 	examined.entries(ctx, int(read))
 	return n, true, nil
+}
+
+// hintedIndexCount counts the documents the index hint names holds, from the
+// index alone, as mongod counts an unfiltered count hinted to an index. It
+// declines an index whose entries do not map one to one onto documents.
+func (c *collection) hintedIndexCount(ctx context.Context, state *dbState, hint any, stop int64) (int64, bool, error) {
+	if !backends.HintRequiresExistingIndex(hint) {
+		return 0, false, nil
+	}
+	state.mu.RLock()
+	idxInfos, idxMaps, err := resolveIndexes(ctx, c, state)
+	state.mu.RUnlock()
+	if err != nil {
+		return 0, false, err
+	}
+	name := backends.MatchHintedIndex(hint, idxInfos)
+	for i, idx := range idxInfos {
+		if idx.Name != name {
+			continue
+		}
+		if idx.Lossy || len(idx.Key) == 0 || isGeoKey(idx.Key[0]) || idx.Key[0].Text || idx.Key[0].Hashed {
+			return 0, false, nil
+		}
+		return countIndexRange(ctx, idxMaps[i], nil, nil, idx.Multikey, stop)
+	}
+	return 0, false, nil
 }
 
 // minMaxKeyBounds returns the index range of a lone $gt or $gte MinKey,
