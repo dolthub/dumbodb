@@ -65,13 +65,33 @@ func explainClassicStages(ctx context.Context, coll backends.Collection, qp *bac
 	queryPlanner, _ := must.NotFail(response.Get("queryPlanner")).(*types.Document)
 	out := cursorStage(response, queryPlanner)
 	for i, stage := range rest {
-		entry := stage.DeepCopy()
+		entry := reportedStage(stage)
 		if returned != nil {
 			setStageReturned(entry, returned[i])
 		}
 		out.Append(entry)
 	}
 	response.Set("stages", out)
+}
+
+// reportedStage is stage as mongod's explain shows it: a $unset as the
+// $project that excludes its fields.
+func reportedStage(stage *types.Document) *types.Document {
+	if stage.Command() != "$unset" {
+		return stage.DeepCopy()
+	}
+	excluded := types.MakeDocument(0)
+	switch fields := must.NotFail(stage.Get("$unset")).(type) {
+	case string:
+		excluded.Set(fields, false)
+	case *types.Array:
+		for i := 0; i < fields.Len(); i++ {
+			if f, ok := must.NotFail(fields.Get(i)).(string); ok {
+				excluded.Set(f, false)
+			}
+		}
+	}
+	return must.NotFail(types.NewDocument("$project", excluded))
 }
 
 // desugaredCount is the $group and $project MongoDB runs for a $count of
@@ -97,7 +117,8 @@ func queryAbsorbedStages(docs []*types.Document) int {
 		}
 		phase = p
 	}
-	if i < len(docs) && (docs[i].Command() == "$project" || docs[i].Command() == "$unset") {
+	// A $unset is absorbed only as the last stage.
+	if i < len(docs) && (docs[i].Command() == "$project" || (docs[i].Command() == "$unset" && i == len(docs)-1)) {
 		i++
 	}
 	return i

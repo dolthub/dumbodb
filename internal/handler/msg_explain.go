@@ -636,14 +636,14 @@ func onlyMatchStages(stages []any) bool {
 	return true
 }
 
-// dropShapingBeforeCount removes the $project, $set, $addFields and $unset
-// stages directly before a $count, which reshape each document without
-// changing how many there are, as mongod's optimizer drops them.
+// dropShapingBeforeCount removes a $project directly before a $count, which
+// mongod runs inside the counting plan. A $set, $addFields or $unset there
+// stays a stage of its own, as on mongod.
 func dropShapingBeforeCount(stages []any) []any {
 	out := make([]any, 0, len(stages))
 	for i, stage := range stages {
 		d, _ := stage.(*types.Document)
-		if d != nil && d.Len() == 1 && shapingStage(d.Command()) && countFollows(stages[i+1:]) {
+		if d != nil && d.Len() == 1 && d.Command() == "$project" && i+1 < len(stages) && isCountStage(stages[i+1]) {
 			continue
 		}
 		out = append(out, stage)
@@ -651,29 +651,9 @@ func dropShapingBeforeCount(stages []any) []any {
 	return out
 }
 
-func shapingStage(name string) bool {
-	switch name {
-	case "$project", "$set", "$addFields", "$unset":
-		return true
-	}
-	return false
-}
-
-// countFollows reports whether stages start with shaping stages and then a
-// $count.
-func countFollows(stages []any) bool {
-	for _, stage := range stages {
-		d, _ := stage.(*types.Document)
-		switch {
-		case d == nil || d.Len() != 1:
-			return false
-		case d.Command() == "$count":
-			return true
-		case !shapingStage(d.Command()):
-			return false
-		}
-	}
-	return false
+func isCountStage(stage any) bool {
+	d, _ := stage.(*types.Document)
+	return d != nil && d.Len() == 1 && d.Command() == "$count"
 }
 
 // mergeLeadingMatches joins a pipeline's leading $match stages into one, as
