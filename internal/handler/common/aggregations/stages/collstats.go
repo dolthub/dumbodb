@@ -94,7 +94,7 @@ func (c *collStats) Process(ctx context.Context, iter types.DocumentsIterator, c
 	_, res, err := iter.Next()
 	if errors.Is(err, iterator.ErrIteratorDone) {
 		// For non-shared collections, it must contain a single document.
-		panic("collStatsStage: Process: expected 1 document, got none")
+		return nil, lazyerrors.New("collStatsStage: Process: expected 1 document, got none")
 	}
 
 	if err != nil {
@@ -128,7 +128,7 @@ func (c *collStats) Process(ctx context.Context, iter types.DocumentsIterator, c
 
 	if _, _, err := iter.Next(); err == nil || !errors.Is(err, iterator.ErrIteratorDone) {
 		// For non-shared collections, it contains only a single document.
-		panic("collStatsStage: Process: expected 1 document, got more")
+		return nil, lazyerrors.New("collStatsStage: Process: expected 1 document, got more")
 	}
 
 	iter = iterator.Values(iterator.ForSlice([]*types.Document{res}))
