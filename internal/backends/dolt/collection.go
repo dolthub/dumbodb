@@ -1366,21 +1366,6 @@ func indexPointRangesForIn(v any) ([][2][]byte, bool) {
 	return ranges, true
 }
 
-// indexBoundsForFilterValue translates the value side of a single
-// {field: value} filter clause into a [startKey, stopKey) byte range over the
-// secondary index. The bounds are always sound: any document matching the
-// clause is guaranteed to lie in the returned range, though the range may
-// include false positives (the handler will filter them out).
-//
-// Supported value shapes:
-//   - bare scalar v                          -> [KS(v)+0x04, KS(v)+0x05)
-//   - operator doc using only $eq / $gt /
-//     $gte / $lt / $lte                      -> bounds derived from the
-//     tightest clause on each side.
-//
-// Returns ok=false for value shapes the index path can't handle (regex,
-// $in, $ne, nested operators, mixed comparisons against arrays, ...); the
-// caller falls back to the full-scan path.
 // elemMatchOperators returns the operators of an $elemMatch that applies
 // them to each element, like {$elemMatch: {$gt: 1}}.
 func elemMatchOperators(v any) (*types.Document, bool) {
@@ -1619,6 +1604,21 @@ func existsIndexable(idx backends.IndexInfo) bool {
 	return idx.Sparse && len(idx.Key) == 1 && !strings.Contains(idx.Key[0].Field, ".")
 }
 
+// indexBoundsForFilterValue translates the value side of a single
+// {field: value} filter clause into a [startKey, stopKey) byte range over the
+// secondary index. The bounds are always sound: any document matching the
+// clause is guaranteed to lie in the returned range, though the range may
+// include false positives (the handler will filter them out).
+//
+// Supported value shapes:
+//   - bare scalar v                          -> [KS(v)+0x04, KS(v)+0x05)
+//   - operator doc using only $eq / $gt /
+//     $gte / $lt / $lte                      -> bounds derived from the
+//     tightest clause on each side.
+//
+// Returns ok=false for value shapes the index path can't handle (regex,
+// $in, $ne, nested operators, mixed comparisons against arrays, ...); the
+// caller falls back to the full-scan path.
 func indexBoundsForFilterValue(v any) (startKey, stopKey []byte, ok bool) {
 	opDoc, isOp := v.(*types.Document)
 	if !isOp {

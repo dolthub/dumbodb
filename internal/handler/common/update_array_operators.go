@@ -574,8 +574,6 @@ func processPullAllArrayUpdateExpression(command string, doc *types.Document, ke
 	return changed, nil
 }
 
-// processPullArrayUpdateExpression changes document according to $pull array update operator.
-// If the document was changed it returns true.
 // pullConditionMatches reports whether a $pull condition document removes
 // elem. As on mongod, one led by a value operator such as $gte applies to the
 // element itself; any other is a query each element document must match.
@@ -626,6 +624,8 @@ func isTopLevelQueryOperator(op string) bool {
 	return false
 }
 
+// processPullArrayUpdateExpression changes document according to $pull array update operator.
+// If the document was changed it returns true.
 func processPullArrayUpdateExpression(command string, doc *types.Document, key string, pullVal any) (bool, error) {
 	if cond, ok := pullVal.(*types.Document); ok {
 		if err := checkPullCondition(command, cond, true); err != nil {

@@ -970,7 +970,6 @@ func pushdownSortStageIndex(aggregationStages []any) int {
 	panic("pushdownSortStageIndex: no $sort among the pushdown stages")
 }
 
-// processStagesDocuments retrieves the documents from the database and then processes them through the stages.
 // sortLimitBound returns the top-K bound a $sort at index i may use when a
 // $limit (optionally preceded by a $skip) immediately follows it, else 0. This
 // mirrors MongoDB's sort+limit and sort+skip+limit coalescence.
@@ -1054,6 +1053,7 @@ func stageInt64(d *types.Document, key string, parse func(any) (int64, error)) (
 	return n, true
 }
 
+// processStagesDocuments retrieves the documents from the database and then processes them through the stages.
 func processStagesDocuments(ctx context.Context, closer *iterator.MultiCloser, p *stagesDocumentsParams) (types.DocumentsIterator, error) { //nolint:lll // for readability
 	queryRes, err := stagesSource(ctx, p)
 	if err != nil {
