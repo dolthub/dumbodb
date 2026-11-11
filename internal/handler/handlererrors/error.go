@@ -179,6 +179,9 @@ const (
 	// ErrNotImplemented indicates that a flag or command is not implemented.
 	ErrNotImplemented = ErrorCode(238) // NotImplemented
 
+	// ErrQueryFeatureNotAllowed indicates a query operator used where it is not allowed.
+	ErrQueryFeatureNotAllowed = ErrorCode(224) // QueryFeatureNotAllowed
+
 	ErrTransactionTooOld = ErrorCode(225) // TransactionTooOld
 
 	ErrNoSuchTransaction = ErrorCode(251) // NoSuchTransaction

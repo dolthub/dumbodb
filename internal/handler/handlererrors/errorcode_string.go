@@ -61,6 +61,7 @@ func _() {
 	_ = x[ErrInvalidPipelineOperator-168]
 	_ = x[ErrClientMetadataCannotBeMutated-186]
 	_ = x[ErrNotImplemented-238]
+	_ = x[ErrQueryFeatureNotAllowed-224]
 	_ = x[ErrTransactionTooOld-225]
 	_ = x[ErrNoSuchTransaction-251]
 	_ = x[ErrOperationNotSupportedInTransaction-263]
