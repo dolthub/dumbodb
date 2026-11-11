@@ -440,6 +440,12 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		// the count command). workspace-4jf.
 		if !cInfo.IsView && collCmp == nil {
 			if info, ok := tryCountAggregateShortcut(aggregationStages); ok {
+				if info.filter != nil {
+					if err := common.ValidateFilter(info.filter, nil); err != nil {
+						closer.Close()
+						return nil, err
+					}
+				}
 				countRes, cerr := c.Count(ctx, &backends.CountParams{Filter: info.filter})
 				if cerr != nil {
 					closer.Close()
@@ -470,15 +476,16 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 						nVal = n
 					}
 
+					// $group emits no group when no document reaches it.
+					firstBatch := types.MakeArray(1)
+					if n > 0 {
+						firstBatch.Append(must.NotFail(types.NewDocument("_id", info.idValue, info.outField, nVal)))
+					}
+
 					return documentOpMsg(
 						must.NotFail(types.NewDocument(
 							"cursor", must.NotFail(types.NewDocument(
-								"firstBatch", must.NotFail(types.NewArray(
-									must.NotFail(types.NewDocument(
-										"_id", info.idValue,
-										info.outField, nVal,
-									)),
-								)),
+								"firstBatch", firstBatch,
 								"id", int64(0),
 								"ns", dbName+"."+cName,
 							)),
