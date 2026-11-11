@@ -461,7 +461,10 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 	qp := new(backends.ExplainParams)
 
 	if params.Aggregate {
-		params.StagesDocs = mergeLeadingMatches(dropShapingBeforeCount(aggregations.MoveMatchesAhead(moveMatchesBeforeLookups(moveWindowBeforeLookups(params.StagesDocs)))))
+		// A match may need to pass shaping stages to reach a $lookup it can
+		// pass, then more shaping stages before that.
+		moved := moveMatchesBeforeLookups(aggregations.MoveMatchesAhead(moveWindowBeforeLookups(params.StagesDocs)))
+		params.StagesDocs = mergeLeadingMatches(dropShapingBeforeCount(aggregations.MoveMatchesAhead(moved)))
 		params.Filter, params.Sort = aggregations.GetPushdownQuery(params.StagesDocs)
 		common.CanonicalizeFilter(params.Filter)
 		params.Limit = pushdownLimit(params.StagesDocs)

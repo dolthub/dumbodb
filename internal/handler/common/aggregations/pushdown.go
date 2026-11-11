@@ -130,6 +130,9 @@ type fieldSources func(field string) (string, bool)
 // stageFieldSources returns the field sources of a $project, $set or
 // $addFields stage, or false for any other stage or a shape it cannot follow.
 func stageFieldSources(stage *types.Document) (fieldSources, bool) {
+	if stage.Command() == "$unset" {
+		return unsetFieldSources(must.NotFail(stage.Get("$unset")))
+	}
 	spec, ok := must.NotFail(stage.Get(stage.Command())).(*types.Document)
 	if !ok {
 		return nil, false
@@ -188,16 +191,50 @@ func stageFieldSources(stage *types.Document) (fieldSources, bool) {
 	return nil, false
 }
 
-// plainFieldPath returns the field a "$a" reference names. A dotted
-// reference is not a rename: "$a.0" or "$a.b" over an array computes a value
-// a match on "a.0" or "a.b" does not see, so mongod never moves a match past
-// one.
+// plainFieldPath returns the field a "$a", "$$CURRENT.a" or "$$ROOT.a"
+// reference names. A dotted reference is not a rename: "$a.0" or "$a.b" over
+// an array computes a value a match on "a.0" or "a.b" does not see, so mongod
+// never moves a match past one.
 func plainFieldPath(v any) (string, bool) {
 	s, ok := v.(string)
-	if !ok || !strings.HasPrefix(s, "$") || strings.HasPrefix(s, "$$") || len(s) < 2 || strings.Contains(s, ".") {
+	if !ok {
+		return "", false
+	}
+	for _, prefix := range []string{"$$CURRENT.", "$$ROOT."} {
+		if rest, found := strings.CutPrefix(s, prefix); found {
+			s = "$" + rest
+		}
+	}
+	if !strings.HasPrefix(s, "$") || strings.HasPrefix(s, "$$") || len(s) < 2 || strings.Contains(s, ".") {
 		return "", false
 	}
 	return s[1:], true
+}
+
+// unsetFieldSources returns the field sources of a $unset of spec, a field
+// or array of fields: each top-level field it names is dropped, and the rest
+// pass through.
+func unsetFieldSources(spec any) (fieldSources, bool) {
+	var names []string
+	switch spec := spec.(type) {
+	case string:
+		names = []string{spec}
+	case *types.Array:
+		for i := 0; i < spec.Len(); i++ {
+			s, ok := must.NotFail(spec.Get(i)).(string)
+			if !ok {
+				return nil, false
+			}
+			names = append(names, s)
+		}
+	default:
+		return nil, false
+	}
+	dropped := map[string]bool{}
+	for _, n := range names {
+		dropped[strings.SplitN(n, ".", 2)[0]] = true
+	}
+	return func(field string) (string, bool) { return field, !dropped[field] }, true
 }
 
 // isProjectionFlag reports whether v includes (want true) or excludes a field.
@@ -241,6 +278,19 @@ func rewriteFilterFields(filter *types.Document, sources fieldSources) (*types.D
 				branches.Append(rewritten)
 			}
 			out.Set(k, branches)
+		case k == "$comment":
+			out.Set(k, v)
+		case k == "$expr":
+			rewritten, ok := rewriteExprFields(v, sources)
+			if !ok {
+				return nil, false
+			}
+			out.Set(k, rewritten)
+		case k == "$jsonSchema":
+			if !schemaPassesThrough(v, sources) {
+				return nil, false
+			}
+			out.Set(k, v)
 		case strings.HasPrefix(k, "$"):
 			return nil, false
 		default:
@@ -259,4 +309,107 @@ func rewriteFilterFields(filter *types.Document, sources fieldSources) (*types.D
 		}
 	}
 	return out, true
+}
+
+// rewriteExprFields rewrites the field paths of an aggregation expression to
+// the input paths sources gives, or returns false when it reads a field the
+// stage computes or drops, or a variable other than $$CURRENT and $$ROOT.
+func rewriteExprFields(expr any, sources fieldSources) (any, bool) {
+	switch v := expr.(type) {
+	case string:
+		if !strings.HasPrefix(v, "$") {
+			return v, true
+		}
+		path := v
+		for _, prefix := range []string{"$$CURRENT.", "$$ROOT."} {
+			if rest, found := strings.CutPrefix(path, prefix); found {
+				path = "$" + rest
+			}
+		}
+		if strings.HasPrefix(path, "$$") {
+			return nil, false
+		}
+		top, rest, dotted := strings.Cut(path[1:], ".")
+		src, ok := sources(top)
+		if !ok {
+			return nil, false
+		}
+		if dotted {
+			src += "." + rest
+		}
+		return "$" + src, true
+	case *types.Document:
+		out := types.MakeDocument(v.Len())
+		for _, k := range v.Keys() {
+			field := must.NotFail(v.Get(k))
+			if k == "$literal" {
+				out.Set(k, field)
+				continue
+			}
+			rewritten, ok := rewriteExprFields(field, sources)
+			if !ok {
+				return nil, false
+			}
+			out.Set(k, rewritten)
+		}
+		return out, true
+	case *types.Array:
+		out := types.MakeArray(v.Len())
+		for i := 0; i < v.Len(); i++ {
+			rewritten, ok := rewriteExprFields(must.NotFail(v.Get(i)), sources)
+			if !ok {
+				return nil, false
+			}
+			out.Append(rewritten)
+		}
+		return out, true
+	}
+	return expr, true
+}
+
+// schemaPassesThrough reports whether a $jsonSchema reads only fields a stage
+// passes through unchanged: an object schema of required fields and
+// properties, which says nothing of the fields the stage adds.
+func schemaPassesThrough(schema any, sources fieldSources) bool {
+	doc, ok := schema.(*types.Document)
+	if !ok {
+		return false
+	}
+	var fields []string
+	for _, k := range doc.Keys() {
+		v := must.NotFail(doc.Get(k))
+		switch k {
+		case "bsonType", "type":
+			if v != "object" {
+				return false
+			}
+		case "title", "description":
+		case "required":
+			arr, ok := v.(*types.Array)
+			if !ok {
+				return false
+			}
+			for i := 0; i < arr.Len(); i++ {
+				s, ok := must.NotFail(arr.Get(i)).(string)
+				if !ok {
+					return false
+				}
+				fields = append(fields, s)
+			}
+		case "properties":
+			props, ok := v.(*types.Document)
+			if !ok {
+				return false
+			}
+			fields = append(fields, props.Keys()...)
+		default:
+			return false
+		}
+	}
+	for _, f := range fields {
+		if src, ok := sources(f); !ok || src != f {
+			return false
+		}
+	}
+	return true
 }
