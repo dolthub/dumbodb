@@ -562,11 +562,24 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		}
 		qp.LimitHint = pushdownLimit(aggregationStages)
 
+		var hintOrder *types.Document
 		if hint, _ := document.Get("hint"); hint != nil {
 			qp.Hint = hint
+			if qp.Sort == nil {
+				if hintOrder, err = hintedDescendingOrder(ctx, c, hint); err != nil {
+					closer.Close()
+					return nil, err
+				}
+			}
+			if hintOrder != nil {
+				// The backend reads ascending, so a limit would stop it early.
+				qp.LimitHint = 0
+			}
 		}
 
-		iter, err = processStagesDocuments(ctx, closer, &stagesDocumentsParams{c, qp, stagesDocuments, sortStage})
+		iter, err = processStagesDocuments(ctx, closer, &stagesDocumentsParams{
+			c: c, qp: qp, stages: stagesDocuments, sortStage: sortStage, hintOrder: hintOrder, cmp: collCmp,
+		})
 	} else {
 		statistics := stages.GetStatistics(collStatsDocuments)
 
@@ -980,6 +993,10 @@ type stagesDocumentsParams struct {
 	// sortStage is the $sort stage qp.Sort pushes down; it is skipped when
 	// the backend returns documents already in that order.
 	sortStage aggregations.Stage
+	// hintOrder, set for an unsorted read hinted to an index with a
+	// descending key, is that index's key pattern, the order mongod returns.
+	hintOrder *types.Document
+	cmp       *collation.Comparator
 }
 
 // pushdownSortStageIndex returns the position of the $sort stage
@@ -1088,7 +1105,12 @@ func processStagesDocuments(ctx context.Context, closer *iterator.MultiCloser, p
 
 	// Stages evaluate expressions per document; stop between documents once
 	// maxTimeMS expires or the client goes away.
-	iter := iterator.WithContext(ctx, queryRes.Iter)
+	var iter types.DocumentsIterator = iterator.WithContext(ctx, queryRes.Iter)
+	if p.hintOrder != nil {
+		if iter, err = common.SortIteratorInIndexOrder(iter, closer, p.hintOrder, p.qp.Filter, p.cmp); err != nil {
+			return nil, err
+		}
+	}
 
 	for _, s := range p.stages {
 		if queryRes.Sorted && s == p.sortStage {
