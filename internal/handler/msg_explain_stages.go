@@ -26,6 +26,32 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
+// stageBuilder builds a pipeline stage that explain runs to count what it
+// returns.
+type stageBuilder func(*types.Document) (aggregations.Stage, error)
+
+// buildLocalStage builds a stage that reads no other collection and writes
+// nothing.
+func buildLocalStage(doc *types.Document) (aggregations.Stage, error) {
+	switch doc.Command() {
+	case "$out", "$merge", "$lookup", "$graphLookup", "$unionWith", "$facet":
+		return nil, errors.New("explain does not run " + doc.Command())
+	}
+	return stages.NewStage(doc)
+}
+
+// foreignStageBuilder is buildLocalStage that also builds the stages reading
+// other collections of db.
+func foreignStageBuilder(db backends.Database) stageBuilder {
+	return func(doc *types.Document) (aggregations.Stage, error) {
+		switch doc.Command() {
+		case "$lookup", "$graphLookup", "$unionWith", "$facet":
+			return newForeignCollectionStage(doc, db)
+		}
+		return buildLocalStage(doc)
+	}
+}
+
 // sourceStages make their own documents rather than read the collection's,
 // so the collection's documents cannot be run through them.
 var sourceStages = map[string]struct{}{
@@ -66,7 +92,7 @@ func explainClassicStages(ctx context.Context, coll backends.Collection, qp *bac
 
 	var returned []int32
 	if execStats {
-		returned = stageReturns(ctx, coll, qp, docs, absorbed)
+		returned = stageReturns(ctx, coll, qp, docs, absorbed, buildLocalStage)
 	}
 
 	queryPlanner, _ := must.NotFail(response.Get("queryPlanner")).(*types.Document)
@@ -134,7 +160,7 @@ func queryAbsorbedStages(docs []*types.Document) int {
 // stageReturns runs the pipeline on the documents qp's query reads and
 // returns how many documents each stage from absorbed on returned, or nil
 // when a stage cannot run here.
-func stageReturns(ctx context.Context, coll backends.Collection, qp *backends.ExplainParams, docs []*types.Document, absorbed int) []int32 {
+func stageReturns(ctx context.Context, coll backends.Collection, qp *backends.ExplainParams, docs []*types.Document, absorbed int, build stageBuilder) []int32 {
 	for _, doc := range docs {
 		if _, ok := sourceStages[doc.Command()]; ok {
 			return nil
@@ -142,7 +168,7 @@ func stageReturns(ctx context.Context, coll backends.Collection, qp *backends.Ex
 	}
 	built := make([]aggregations.Stage, len(docs))
 	for i, doc := range docs {
-		stage, err := stages.NewStage(doc)
+		stage, err := build(doc)
 		if err != nil {
 			return nil
 		}

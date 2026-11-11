@@ -462,7 +462,7 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 	qp := new(backends.ExplainParams)
 
 	if params.Aggregate {
-		params.StagesDocs = mergeLeadingMatches(dropShapingBeforeCount(aggregations.MoveMatchesAhead(moveMatchesBeforeLookups(params.StagesDocs))))
+		params.StagesDocs = mergeLeadingMatches(dropShapingBeforeCount(aggregations.MoveMatchesAhead(moveMatchesBeforeLookups(moveWindowBeforeLookups(params.StagesDocs)))))
 		params.Filter, params.Sort = aggregations.GetPushdownQuery(params.StagesDocs)
 		common.CanonicalizeFilter(params.Filter)
 		params.Limit = pushdownLimit(params.StagesDocs)
@@ -608,7 +608,7 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 	}
 
 	if params.Aggregate && !viaView {
-		explainLookups(connCtx, db, params.DB, params.StagesDocs, response, params.Verbosity != "queryPlanner", qp.Collated)
+		explainLookups(connCtx, db, coll, qp, params.DB, params.StagesDocs, response, params.Verbosity != "queryPlanner", qp.Collated)
 		if !qp.CountOnly && !response.Has("stages") {
 			explainClassicStages(connCtx, coll, qp, params.StagesDocs, response, params.Verbosity != "queryPlanner")
 		}

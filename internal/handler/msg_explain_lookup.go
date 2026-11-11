@@ -35,11 +35,12 @@ const hashJoinMaxDocs = 10000
 // query plan. Any other stage moves the explain into a stages array: the query
 // under $cursor, then each remaining stage, a $lookup naming at
 // executionStats verbosity the foreign indexes it reads.
-func explainLookups(ctx context.Context, db backends.Database, dbName string, pipeline []any, response *types.Document, execStats, collated bool) {
+func explainLookups(ctx context.Context, db backends.Database, coll backends.Collection, qp *backends.ExplainParams, dbName string, pipeline []any, response *types.Document, execStats, collated bool) {
 	fetcher := &foreignFetcher{db: db}
 	var rest []*types.Document
 	var eqLookups []*types.Document
 	hasLookup := false
+	absorbed := len(pipeline)
 	for i, s := range pipeline {
 		stage, _ := s.(*types.Document)
 		if stage == nil || stage.Len() == 0 {
@@ -56,7 +57,11 @@ func explainLookups(ctx context.Context, db backends.Database, dbName string, pi
 		if rest == nil {
 			switch name {
 			case "$match", "$sort", "$limit", "$skip":
-				continue
+				// Stages after a join the query plan absorbed run on its
+				// output, as stages of their own.
+				if len(eqLookups) == 0 {
+					continue
+				}
 			case "$lookup":
 				if spec, _ := must.NotFail(stage.Get(name)).(*types.Document); spec != nil && !collated &&
 					!unwindsJoin(spec, next) && runsInQueryPlan(ctx, db, spec) {
@@ -64,6 +69,9 @@ func explainLookups(ctx context.Context, db backends.Database, dbName string, pi
 					continue
 				}
 			}
+		}
+		if rest == nil {
+			absorbed = i
 		}
 		rest = append(rest, stage)
 	}
@@ -85,6 +93,14 @@ func explainLookups(ctx context.Context, db backends.Database, dbName string, pi
 		return
 	}
 
+	var returned []int32
+	if execStats {
+		docs := make([]*types.Document, len(pipeline))
+		for i, s := range pipeline {
+			docs[i] = s.(*types.Document)
+		}
+		returned = stageReturns(ctx, coll, qp, docs, absorbed, foreignStageBuilder(db))
+	}
 	out := cursorStage(response, queryPlanner)
 	for i := 0; i < len(rest); i++ {
 		stage := rest[i]
@@ -94,6 +110,9 @@ func explainLookups(ctx context.Context, db backends.Database, dbName string, pi
 			i+1 < len(rest) && unwindsJoin(spec, rest[i+1]) {
 			spec.Set("unwinding", unwindingSpec(rest[i+1]))
 			i++
+		}
+		if returned != nil {
+			setStageReturned(entry, returned[i])
 		}
 		if spec, _ := must.NotFail(stage.Get(stage.Command())).(*types.Document); execStats && stage.Command() == "$lookup" && spec != nil {
 			used := types.MakeArray(0)
@@ -207,6 +226,62 @@ func unwindingSpec(unwind *types.Document) *types.Document {
 		}
 	}
 	return out
+}
+
+// moveWindowBeforeLookups moves each $sort, $skip and $limit that directly
+// follows a run of $lookups ahead of the run, as mongod's optimizer does: a
+// $lookup keeps every document and its order. A $sort reading a join's output
+// stays after it.
+func moveWindowBeforeLookups(pipeline []any) []any {
+	out := make([]any, 0, len(pipeline))
+	runStart := -1 // where the trailing run of $lookups in out begins
+	var runOutputs []string
+	for _, stage := range pipeline {
+		d, _ := stage.(*types.Document)
+		name := ""
+		if d != nil && d.Len() == 1 {
+			name = d.Command()
+		}
+		switch {
+		case name == "$lookup":
+			spec, _ := must.NotFail(d.Get("$lookup")).(*types.Document)
+			as, ok := specString(spec, "as")
+			if !ok {
+				runStart, runOutputs = -1, nil
+				out = append(out, stage)
+				continue
+			}
+			if runStart < 0 {
+				runStart = len(out)
+			}
+			runOutputs = append(runOutputs, as)
+			out = append(out, stage)
+		case runStart >= 0 && (name == "$skip" || name == "$limit" || name == "$sort" && !sortReadsAny(d, runOutputs)):
+			out = slices.Insert(out, runStart, stage)
+			runStart++
+		default:
+			runStart, runOutputs = -1, nil
+			out = append(out, stage)
+		}
+	}
+	return out
+}
+
+// sortReadsAny reports whether a $sort stage reads one of paths or a field
+// inside one.
+func sortReadsAny(stage *types.Document, paths []string) bool {
+	keys, _ := must.NotFail(stage.Get("$sort")).(*types.Document)
+	if keys == nil {
+		return true
+	}
+	for _, k := range keys.Keys() {
+		for _, p := range paths {
+			if k == p || strings.HasPrefix(k, p+".") || strings.HasPrefix(p, k+".") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // moveMatchesBeforeLookups moves each $match that follows a $lookup ahead of
