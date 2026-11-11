@@ -169,19 +169,20 @@ func isNumber(v any, want int32) bool {
 	return false
 }
 
-// customClusteredIndexName returns the name document's clusteredIndex spec
-// gives its index, or "" for none or the default _id_.
-func customClusteredIndexName(document *types.Document) string {
+// requestedClusteredIndexName returns the name document's clusteredIndex
+// spec gives its index, _id_ by default, or "" for no clusteredIndex.
+func requestedClusteredIndexName(document *types.Document) string {
 	v, _ := document.Get("clusteredIndex")
 	spec, ok := v.(*types.Document)
 	if !ok {
 		return ""
 	}
-	name, _ := spec.Get("name")
-	if s, ok := name.(string); ok && s != backends.DefaultIndexName {
-		return s
+	if name, _ := spec.Get("name"); name != nil {
+		if s, ok := name.(string); ok {
+			return s
+		}
 	}
-	return ""
+	return backends.DefaultIndexName
 }
 
 // clusteredIndexVersion returns spec's v as mongod reads it into an int32,

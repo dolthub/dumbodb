@@ -16,6 +16,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -99,12 +100,19 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 	// If an already-existing collection is created with explicit options, it's an error.
 	var hasExplicitOptions bool
 
+	// mongod reports an existing collection before an invalid clusteredIndex
+	// version, so that error waits for the create to find no collection.
+	var clusteredVersionErr error
 	if err := validateClusteredIndex(document); err != nil {
-		return nil, err
+		var ce *handlererrors.CommandError
+		if !errors.As(err, &ce) || ce.Code() != handlererrors.ErrClusteredIndexVersion {
+			return nil, err
+		}
+		clusteredVersionErr = err
 	}
-	// Every collection is clustered, so only a clusteredIndex name other than
-	// the existing collection's differs from it.
-	params.ClusteredIndexName = customClusteredIndexName(document)
+	// The clusteredIndex a collection was created with, or none, which a
+	// create over it must give again.
+	params.ClusteredIndexName = requestedClusteredIndexName(document)
 
 	if v, _ := document.Get("capped"); v != nil {
 		capped, err := handlerparams.GetBoolOptionalParam("capped", v)
@@ -358,7 +366,14 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		}
 	}
 
-	err = db.CreateCollection(connCtx, &params)
+	if clusteredVersionErr != nil {
+		if info, ierr := lookupCollectionInfo(connCtx, db, collectionName); ierr != nil || info == nil {
+			return nil, clusteredVersionErr
+		}
+		err = backends.NewError(backends.ErrorCodeCollectionAlreadyExists, nil)
+	} else {
+		err = db.CreateCollection(connCtx, &params)
+	}
 
 	switch {
 	case err == nil:
@@ -386,7 +401,8 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 			existingUUID = info.UUID
 			existingClusteredName = info.ClusteredIndexName
 		}
-		clusteredDiffers := !existingIsView && params.ViewOn == "" && params.ClusteredIndexName != existingClusteredName
+		clusteredDiffers := !existingIsView && params.ViewOn == "" &&
+			(params.ClusteredIndexName != existingClusteredName || clusteredVersionErr != nil)
 		if hasExplicitOptions || ci.InTransaction() || existingIsView || clusteredDiffers {
 			if ci.InTransaction() {
 				h.AbortPendingTransaction(connCtx)
@@ -398,10 +414,13 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 			switch {
 			case params.ViewOn != "" && !existingIsView && existingUUID != "":
 				msg = fmt.Sprintf("namespace %s.%s already exists, but with different options: { uuid: UUID(\"%s\") }", dbName, collectionName, existingUUID)
-			case clusteredDiffers && existingUUID != "":
-				msg = fmt.Sprintf("namespace %s.%s already exists, but with different options: { uuid: UUID(\"%s\"), "+
-					"clusteredIndex: { v: 2, key: { _id: 1 }, name: \"%s\", unique: true } }",
-					dbName, collectionName, existingUUID, clusteredIndexName(existingClusteredName))
+			case (clusteredDiffers || hasExplicitOptions) && !existingIsView && existingUUID != "" && !ci.InTransaction():
+				// mongod lists the existing collection's options.
+				existing := fmt.Sprintf("uuid: UUID(\"%s\")", existingUUID)
+				if existingClusteredName != "" {
+					existing += fmt.Sprintf(", clusteredIndex: { v: 2, key: { _id: 1 }, name: \"%s\", unique: true }", existingClusteredName)
+				}
+				msg = fmt.Sprintf("namespace %s.%s already exists, but with different options: { %s }", dbName, collectionName, existing)
 			}
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrNamespaceExists, msg, "create")
 		}
