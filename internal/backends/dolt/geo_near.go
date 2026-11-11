@@ -203,9 +203,7 @@ func (c *collection) GeoNear(ctx context.Context, params *backends.GeoNearParams
 	if err != nil || !exists {
 		return nil, err
 	}
-	state.mu.RLock()
-	idxInfos, idxMaps, err := resolveIndexes(ctx, c, state)
-	state.mu.RUnlock()
+	idxInfos, idxMaps, err := resolveIndexesLocked(ctx, c, state)
 	if err != nil {
 		return nil, err
 	}

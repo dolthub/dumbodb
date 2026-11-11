@@ -1621,39 +1621,42 @@ func dumboDBBranchCreate(ctx context.Context, db *dbState, params *backends.Bran
 // dumboDBBranchList returns every branch in the database with its HEAD commit,
 // sorted by name.
 func dumboDBBranchList(ctx context.Context, db *dbState) (*backends.BranchResult, error) {
-	db.mu.Lock()
-	dsMap, err := db.datasDB.Datasets(ctx)
-	if err != nil {
-		db.mu.Unlock()
-		return nil, fmt.Errorf("DumboDBBranch: listing datasets: %w", err)
-	}
-
-	branches := []backends.BranchInfo{}
-	if iterErr := dsMap.IterAll(ctx, func(id string, headAddr hash.Hash) error {
-		switch {
-		case strings.HasPrefix(id, branchRefPrefix):
-			name := strings.TrimPrefix(id, branchRefPrefix)
-			branches = append(branches, backends.BranchInfo{Name: name, CommitID: headAddr.String()})
-		case strings.HasPrefix(id, remoteRefPrefix):
-			rest := strings.TrimPrefix(id, remoteRefPrefix)
-			remote, ref, ok := strings.Cut(rest, "/")
-			if !ok {
-				return nil
-			}
-			branches = append(branches, backends.BranchInfo{
-				Name:           rest,
-				CommitID:       headAddr.String(),
-				RemoteTracking: true,
-				Remote:         remote,
-				Ref:            ref,
-			})
+	branches, err := func() ([]backends.BranchInfo, error) {
+		db.mu.Lock()
+		defer db.mu.Unlock()
+		dsMap, err := db.datasDB.Datasets(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("DumboDBBranch: listing datasets: %w", err)
 		}
-		return nil
-	}); iterErr != nil {
-		db.mu.Unlock()
-		return nil, fmt.Errorf("DumboDBBranch: iterating datasets: %w", iterErr)
+		branches := []backends.BranchInfo{}
+		if iterErr := dsMap.IterAll(ctx, func(id string, headAddr hash.Hash) error {
+			switch {
+			case strings.HasPrefix(id, branchRefPrefix):
+				name := strings.TrimPrefix(id, branchRefPrefix)
+				branches = append(branches, backends.BranchInfo{Name: name, CommitID: headAddr.String()})
+			case strings.HasPrefix(id, remoteRefPrefix):
+				rest := strings.TrimPrefix(id, remoteRefPrefix)
+				remote, ref, ok := strings.Cut(rest, "/")
+				if !ok {
+					return nil
+				}
+				branches = append(branches, backends.BranchInfo{
+					Name:           rest,
+					CommitID:       headAddr.String(),
+					RemoteTracking: true,
+					Remote:         remote,
+					Ref:            ref,
+				})
+			}
+			return nil
+		}); iterErr != nil {
+			return nil, fmt.Errorf("DumboDBBranch: iterating datasets: %w", iterErr)
+		}
+		return branches, nil
+	}()
+	if err != nil {
+		return nil, err
 	}
-	db.mu.Unlock()
 
 	for index := range branches {
 		if branches[index].RemoteTracking {

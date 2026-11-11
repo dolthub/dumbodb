@@ -184,6 +184,15 @@ func resolveCollSecondaryIndexes(ctx context.Context, c *collection, state *dbSt
 	return secondaryIndexesFromAM(ctx, state.cs, state.ns, collAM, c.name)
 }
 
+// resolveIndexesLocked is resolveIndexes under state's read lock, released
+// even if decoding a stored definition panics, so a recovered panic cannot
+// leave the database locked.
+func resolveIndexesLocked(ctx context.Context, c *collection, state *dbState) ([]backends.IndexInfo, []prolly.Map, error) {
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+	return resolveIndexes(ctx, c, state)
+}
+
 // resolveIndexes returns parallel slices, sorted by index name: the
 // IndexInfo of each secondary index and its prolly.Map.
 func resolveIndexes(ctx context.Context, c *collection, state *dbState) ([]backends.IndexInfo, []prolly.Map, error) {

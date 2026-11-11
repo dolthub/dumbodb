@@ -86,9 +86,7 @@ func (c *collection) trySortWalk(ctx context.Context, state *dbState, primary pr
 	if (params.Collated && params.Collation == nil) || params.OnlyRecordIDs {
 		return nil, false, nil
 	}
-	state.mu.RLock()
-	infos, maps, err := resolveIndexes(ctx, c, state)
-	state.mu.RUnlock()
+	infos, maps, err := resolveIndexesLocked(ctx, c, state)
 	if err != nil {
 		return nil, false, err
 	}

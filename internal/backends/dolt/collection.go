@@ -160,9 +160,7 @@ func (c *collection) query(ctx context.Context, params *backends.QueryParams) (*
 	// memory over the filter's own plan, as mongod does, rather than giving
 	// up the filter's index for a walk that cannot serve the sort.
 	if fieldSort && params.Sort.Len() > 1 && !naturalHint {
-		state.mu.RLock()
-		infos, _, err := resolveIndexes(ctx, c, state)
-		state.mu.RUnlock()
+		infos, _, err := resolveIndexesLocked(ctx, c, state)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -175,10 +173,8 @@ func (c *collection) query(ctx context.Context, params *backends.QueryParams) (*
 
 	if !naturalHint && params != nil && params.Filter != nil && (params.Sort.Len() == 0 || fieldSort) &&
 		(!params.Collated || params.Collation != nil) && !idSortedMinMaxKeyRead(params) {
-		state.mu.RLock()
 		var idxMaps []prolly.Map
-		idxInfos, idxMaps, err = resolveIndexes(ctx, c, state)
-		state.mu.RUnlock()
+		idxInfos, idxMaps, err = resolveIndexesLocked(ctx, c, state)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -303,9 +299,7 @@ func (c *collection) query(ctx context.Context, params *backends.QueryParams) (*
 		}
 		if ok {
 			if idxInfos == nil {
-				state.mu.RLock()
-				idxInfos, _, err = resolveIndexes(ctx, c, state)
-				state.mu.RUnlock()
+				idxInfos, _, err = resolveIndexesLocked(ctx, c, state)
 				if err != nil {
 					iter.Close()
 					return nil, nil, err
@@ -398,9 +392,7 @@ func (c *collection) hintedSparseIndex(ctx context.Context, state *dbState, para
 	if params == nil || params.Hint == nil || params.OnlyRecordIDs || backends.HintIsNatural(params.Hint) {
 		return nil, nil
 	}
-	state.mu.RLock()
-	infos, _, err := resolveIndexes(ctx, c, state)
-	state.mu.RUnlock()
+	infos, _, err := resolveIndexesLocked(ctx, c, state)
 	if err != nil {
 		return nil, err
 	}
@@ -416,9 +408,7 @@ func (c *collection) hintedSparseIndex(ctx context.Context, state *dbState, para
 // sparseMembers reads, in index order, the documents the sparse index idx
 // holds, lazily, so a downstream limit stops the reads.
 func (c *collection) sparseMembers(ctx context.Context, state *dbState, primary prolly.Map, idx backends.IndexInfo, fields []string) (types.DocumentsIterator, error) {
-	state.mu.RLock()
-	infos, maps, err := resolveIndexes(ctx, c, state)
-	state.mu.RUnlock()
+	infos, maps, err := resolveIndexesLocked(ctx, c, state)
 	if err != nil {
 		return nil, err
 	}
@@ -712,9 +702,7 @@ func (c *collection) planIndexLookup(ctx context.Context, state *dbState, primar
 	if filter == nil || filter.Len() == 0 {
 		return nil, nil
 	}
-	state.mu.RLock()
-	idxInfos, idxMaps, err := resolveIndexes(ctx, c, state)
-	state.mu.RUnlock()
+	idxInfos, idxMaps, err := resolveIndexesLocked(ctx, c, state)
 	if err != nil {
 		return nil, err
 	}
@@ -2325,9 +2313,7 @@ func (c *collection) Explain(ctx context.Context, params *backends.ExplainParams
 
 	var idxInfos []backends.IndexInfo
 	if state, err := c.db.backend.getOrOpenDB(ctx, c.db.name, false); err == nil && state != nil {
-		state.mu.RLock()
-		resolvedInfos, _, rerr := resolveIndexes(ctx, c, state)
-		state.mu.RUnlock()
+		resolvedInfos, _, rerr := resolveIndexesLocked(ctx, c, state)
 		if rerr == nil {
 			idxInfos = append(idxInfos, resolvedInfos...)
 		}
@@ -3740,9 +3726,7 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 	queryIdentity := queryColl.Identity()
 	queryCmp := queryColl.Comparator()
 
-	state.mu.RLock()
-	idxInfos, idxMaps, err := resolveIndexes(ctx, c, state)
-	state.mu.RUnlock()
+	idxInfos, idxMaps, err := resolveIndexesLocked(ctx, c, state)
 	if err != nil {
 		return 0, false, err
 	}
@@ -3867,9 +3851,7 @@ func (c *collection) hintedIndexCount(ctx context.Context, state *dbState, hint 
 	if !backends.HintRequiresExistingIndex(hint) {
 		return 0, false, nil
 	}
-	state.mu.RLock()
-	idxInfos, idxMaps, err := resolveIndexes(ctx, c, state)
-	state.mu.RUnlock()
+	idxInfos, idxMaps, err := resolveIndexesLocked(ctx, c, state)
 	if err != nil {
 		return 0, false, err
 	}
@@ -4082,9 +4064,7 @@ func (c *collection) DistinctScan(ctx context.Context, params *backends.Distinct
 		return &backends.DistinctResult{}, nil
 	}
 
-	state.mu.RLock()
-	idxInfos, idxMaps, err := resolveIndexes(ctx, c, state)
-	state.mu.RUnlock()
+	idxInfos, idxMaps, err := resolveIndexesLocked(ctx, c, state)
 	if err != nil {
 		return nil, err
 	}
@@ -4294,9 +4274,11 @@ func (c *collection) ListIndexes(ctx context.Context, params *backends.ListIndex
 	// Only the AM resolution needs state.mu (resolveAM reads state.workingSets).
 	// The downstream chunk-store reads operate on immutable content-addressed
 	// chunks and need no dbState lock.
-	state.mu.RLock()
-	am, err := c.db.resolveAM(ctx, state)
-	state.mu.RUnlock()
+	am, err := func() (prolly.AddressMap, error) {
+		state.mu.RLock()
+		defer state.mu.RUnlock()
+		return c.db.resolveAM(ctx, state)
+	}()
 	if err != nil {
 		return nil, err
 	}
