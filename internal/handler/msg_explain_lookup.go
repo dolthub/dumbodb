@@ -102,6 +102,9 @@ func explainLookups(ctx context.Context, db backends.Database, coll backends.Col
 		returned = stageReturns(ctx, coll, qp, docs, absorbed, foreignStageBuilder(db))
 	}
 	out := cursorStage(response, queryPlanner)
+	if returned != nil {
+		setStageReturned(must.NotFail(out.Get(0)).(*types.Document), returned[0])
+	}
 	for i := 0; i < len(rest); i++ {
 		stage := rest[i]
 		entry := stage.DeepCopy()
@@ -112,7 +115,7 @@ func explainLookups(ctx context.Context, db backends.Database, coll backends.Col
 			i++
 		}
 		if returned != nil {
-			setStageReturned(entry, returned[i])
+			setStageReturned(entry, returned[i+1])
 		}
 		if spec, _ := must.NotFail(stage.Get(stage.Command())).(*types.Document); execStats && stage.Command() == "$lookup" && spec != nil {
 			used := types.MakeArray(0)

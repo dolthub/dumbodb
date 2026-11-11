@@ -97,10 +97,13 @@ func explainClassicStages(ctx context.Context, coll backends.Collection, qp *bac
 
 	queryPlanner, _ := must.NotFail(response.Get("queryPlanner")).(*types.Document)
 	out := cursorStage(response, queryPlanner)
+	if returned != nil {
+		setStageReturned(must.NotFail(out.Get(0)).(*types.Document), returned[0])
+	}
 	for i, stage := range rest {
 		entry := reportedStage(stage)
 		if returned != nil {
-			setStageReturned(entry, returned[i])
+			setStageReturned(entry, returned[i+1])
 		}
 		out.Append(entry)
 	}
@@ -158,8 +161,9 @@ func queryAbsorbedStages(docs []*types.Document) int {
 }
 
 // stageReturns runs the pipeline on the documents qp's query reads and
-// returns how many documents each stage from absorbed on returned, or nil
-// when a stage cannot run here.
+// returns how many documents the stages from absorbed on pulled from the
+// query, then how many each of them returned, or nil when a stage cannot run
+// here.
 func stageReturns(ctx context.Context, coll backends.Collection, qp *backends.ExplainParams, docs []*types.Document, absorbed int, build stageBuilder) []int32 {
 	for _, doc := range docs {
 		if _, ok := sourceStages[doc.Command()]; ok {
@@ -184,8 +188,15 @@ func stageReturns(ctx context.Context, coll backends.Collection, qp *backends.Ex
 	defer closer.Close()
 
 	var iter types.DocumentsIterator = iterator.WithContext(ctx, qres.Iter)
-	counters := make([]*countingIterator, 0, len(docs)-absorbed)
+	counters := make([]*countingIterator, 0, len(docs)-absorbed+1)
 	for i, stage := range built {
+		if i == absorbed {
+			// What the stages pull from the query, which a later $limit
+			// can cut short.
+			counter := &countingIterator{DocumentsIterator: iter}
+			counters = append(counters, counter)
+			iter = counter
+		}
 		if iter, err = stage.Process(ctx, iter, closer); err != nil {
 			return nil
 		}
