@@ -569,10 +569,13 @@ func (l *lookup) runPipeline(ctx context.Context, fetcher CollectionFetcher, fro
 	// do not modify documents) and copy only the survivors.
 	current := fromDocs
 	copied := false
+	// The copies keep their stored documents' RecordIds, which the
+	// sub-pipeline sees until a stage other than $match reshapes them.
 	copyCurrent := func() {
 		copies := make([]*types.Document, len(current))
 		for i, d := range current {
 			copies[i] = d.DeepCopy()
+			copies[i].SetRecordKey(d.RecordKey())
 		}
 		current = copies
 		copied = true
@@ -645,6 +648,11 @@ func (l *lookup) runPipeline(ctx context.Context, fetcher CollectionFetcher, fro
 
 		if err != nil {
 			return nil, lazyerrors.Error(err)
+		}
+		if substituted.Command() != "$match" {
+			for _, d := range current {
+				d.SetRecordKey(nil)
+			}
 		}
 	}
 
