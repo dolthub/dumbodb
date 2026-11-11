@@ -25,10 +25,10 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// SortIteratorInIndexOrder sorts iter's documents in the order a walk
-// of the index with key pattern returns them. The walk reaches a document
-// first at the entry of an array element that filter admits on that field,
-// so such a field sorts by those elements alone.
+// SortIteratorInIndexOrder sorts iter's documents in the order a walk of the
+// index with key pattern returns them. The walk reaches a document first at
+// the entry of an array element inside filter's bounds on that field, so such
+// a field sorts by those elements alone.
 func SortIteratorInIndexOrder(iter types.DocumentsIterator, closer *iterator.MultiCloser, pattern, filter *types.Document, cmp *collation.Comparator) (types.DocumentsIterator, error) { //nolint:lll // for readability
 	docs, err := ConsumeDocuments(iter, "$sort")
 	if err != nil {
@@ -46,7 +46,8 @@ func sortDocumentsInIndexOrder(docs []*types.Document, pattern, filter *types.Do
 	fields := pattern.Keys()
 	paths := make([]types.Path, len(fields))
 	orders := make([]types.SortType, len(fields))
-	conds := make([]any, len(fields))
+	admits := make([]func(any) bool, len(fields))
+	bounded := true
 	for i, field := range fields {
 		path, err := types.NewPathFromString(field)
 		if err != nil {
@@ -56,8 +57,12 @@ func sortDocumentsInIndexOrder(docs []*types.Document, pattern, filter *types.Do
 		if orders[i], err = GetSortType(field, must.NotFail(pattern.Get(field))); err != nil {
 			return err
 		}
-		if cond, err := filter.Get(field); err == nil {
-			conds[i] = cond
+		// mongod bounds a field only below bounded ones; past an unbounded
+		// field it reads every key.
+		if bounded {
+			if admits[i] = elementAdmitter(filter, field, cmp); admits[i] == nil {
+				bounded = false
+			}
 		}
 	}
 
@@ -65,12 +70,7 @@ func sortDocumentsInIndexOrder(docs []*types.Document, pattern, filter *types.Do
 	for d, doc := range docs {
 		row := make([]any, len(fields))
 		for i := range fields {
-			row[i] = commonpath.SortKeyValue(doc, paths[i])
-			if arr, ok := row[i].(*types.Array); ok && conds[i] != nil {
-				if admitted := elementsAdmitted(arr, conds[i], cmp); admitted.Len() > 0 {
-					row[i] = admitted
-				}
-			}
+			row[i] = indexKeyValue(commonpath.SortKeyValue(doc, paths[i]), admits[i])
 		}
 		keys[d] = row
 	}
@@ -104,15 +104,99 @@ func sortDocumentsInIndexOrder(docs []*types.Document, pattern, filter *types.Do
 	return nil
 }
 
-// elementsAdmitted returns the elements of arr that cond, a filter's
-// condition on the field holding arr, matches on their own.
-func elementsAdmitted(arr *types.Array, cond any, cmp *collation.Comparator) *types.Array {
-	condDoc := must.NotFail(types.NewDocument("v", cond))
-	out := types.MakeArray(arr.Len())
+// indexKeyValue is the key an index walk first reaches for a field holding
+// v: the elements of an array admit accepts, or all of them, and undefined
+// for an empty array, as it is indexed.
+func indexKeyValue(v any, admit func(any) bool) any {
+	arr, ok := v.(*types.Array)
+	if !ok {
+		return v
+	}
+	if arr.Len() == 0 {
+		return types.Undefined
+	}
+	if admit == nil {
+		return arr
+	}
+	admitted := types.MakeArray(arr.Len())
 	for i := 0; i < arr.Len(); i++ {
-		elem := must.NotFail(arr.Get(i))
-		if ok, err := FilterDocumentColl(must.NotFail(types.NewDocument("v", elem)), condDoc, cmp); err == nil && ok {
-			out.Append(elem)
+		if elem := must.NotFail(arr.Get(i)); admit(elem) {
+			admitted.Append(elem)
+		}
+	}
+	if admitted.Len() == 0 {
+		return arr
+	}
+	return admitted
+}
+
+// elementAdmitter returns whether filter's bounds on field hold an element
+// value, or nil when filter does not bound field. It reads field's condition
+// at the top level and under $and, and under $or only when every branch
+// bounds field.
+func elementAdmitter(filter *types.Document, field string, cmp *collation.Comparator) func(any) bool {
+	var tests []func(any) bool
+	for _, k := range filter.Keys() {
+		v := must.NotFail(filter.Get(k))
+		switch k {
+		case field:
+			condDoc := must.NotFail(types.NewDocument("v", v))
+			tests = append(tests, func(elem any) bool {
+				ok, err := FilterDocumentColl(must.NotFail(types.NewDocument("v", elem)), condDoc, cmp)
+				return err == nil && ok
+			})
+		case "$and":
+			for _, branch := range filterBranches(v) {
+				if t := elementAdmitter(branch, field, cmp); t != nil {
+					tests = append(tests, t)
+				}
+			}
+		case "$or":
+			branches := filterBranches(v)
+			alternatives := make([]func(any) bool, 0, len(branches))
+			for _, branch := range branches {
+				t := elementAdmitter(branch, field, cmp)
+				if t == nil {
+					alternatives = nil
+					break
+				}
+				alternatives = append(alternatives, t)
+			}
+			if len(alternatives) > 0 {
+				tests = append(tests, func(elem any) bool {
+					for _, t := range alternatives {
+						if t(elem) {
+							return true
+						}
+					}
+					return false
+				})
+			}
+		}
+	}
+	if len(tests) == 0 {
+		return nil
+	}
+	return func(elem any) bool {
+		for _, t := range tests {
+			if !t(elem) {
+				return false
+			}
+		}
+		return true
+	}
+}
+
+// filterBranches returns the documents of an $and or $or operand.
+func filterBranches(v any) []*types.Document {
+	arr, ok := v.(*types.Array)
+	if !ok {
+		return nil
+	}
+	out := make([]*types.Document, 0, arr.Len())
+	for i := 0; i < arr.Len(); i++ {
+		if d, ok := must.NotFail(arr.Get(i)).(*types.Document); ok {
+			out = append(out, d)
 		}
 	}
 	return out
