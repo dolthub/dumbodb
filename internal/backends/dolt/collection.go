@@ -156,6 +156,23 @@ func (c *collection) query(ctx context.Context, params *backends.QueryParams) (*
 	fieldSort := params != nil && sortIsFieldSort(params.Sort)
 	var idxInfos []backends.IndexInfo
 
+	// A sort on several fields that no index's keys yield is sorted in
+	// memory over the filter's own plan, as mongod does, rather than giving
+	// up the filter's index for a walk that cannot serve the sort.
+	if fieldSort && params.Sort.Len() > 1 && !naturalHint {
+		state.mu.RLock()
+		infos, _, err := resolveIndexes(ctx, c, state)
+		state.mu.RUnlock()
+		if err != nil {
+			return nil, nil, err
+		}
+		if !anyIndexYieldsSort(infos, params.Sort) {
+			unsorted := *params
+			unsorted.Sort = nil
+			return c.query(ctx, &unsorted)
+		}
+	}
+
 	if !naturalHint && params != nil && params.Filter != nil && (params.Sort.Len() == 0 || fieldSort) &&
 		(!params.Collated || params.Collation != nil) && !idSortedMinMaxKeyRead(params) {
 		state.mu.RLock()
@@ -2644,6 +2661,19 @@ func sortIsFieldSort(sort *types.Document) bool {
 		return true
 	}
 	return sort.Len() > 1 && backends.PushableSort(sort)
+}
+
+// anyIndexYieldsSort reports whether some index has sort's fields as
+// consecutive keys in a direction it can be walked in.
+func anyIndexYieldsSort(infos []backends.IndexInfo, sort *types.Document) bool {
+	for _, idx := range infos {
+		for pos := 0; pos+sort.Len() <= len(idx.Key); pos++ {
+			if indexKeysMatchSort(idx, pos, sort) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // indexKeysMatchSort reports whether idx's keys from pos on are sort's fields
