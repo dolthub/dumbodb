@@ -71,7 +71,6 @@ Parity is verified against a specific MongoDB release: **MongoDB 8.0.28**. This 
   - `_id` equality, ranges and sorts read the collection directly (`CLUSTERED_IXSCAN` in explain).
   - Secondary index entries carry the encoded `_id`, so large `_id`s (long strings, embedded documents) make secondary indexes larger.
   - `mongodump` of a DumboDB database restored into MongoDB creates clustered collections.
-  - A custom clustered index `name` is recorded and listed, but a hint must still name the index `_id_` or give its key, `{_id: 1}`.
 - Key Size: an encoded key may be at most 4096 bytes: an `_id`, or an index entry (its indexed values plus the `_id`). A longer key is refused with a `KeyTooLong` (17280) error. MongoDB accepts much larger keys (up to 8MB for a clustered `_id`). The limit applies to the encoded size, which can exceed the value's own size:
   - Strings carry a terminator, and each NUL byte inside one takes two bytes, so a 4095-character ASCII `_id` encodes to 4097 bytes.
   - An index with a collation stores each string's collation sort key, which can be longer than the string; at strength 3, 1500 'e-acute' characters (3000 bytes of UTF-8) become a 4540-byte key.
