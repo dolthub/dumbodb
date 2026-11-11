@@ -105,13 +105,24 @@ func TestHeartbeatMeshMarksUnreachableMemberDown(t *testing.T) {
 
 type panickingHeartbeatClient struct {
 	fakeHeartbeatClient
+	panicInRequest bool
 }
 
+// Request panics itself, or returns a nil reply that panics while parsing.
 func (c *panickingHeartbeatClient) Request(context.Context, *wire.OpMsg) (*wire.OpMsg, error) {
-	panic("injected heartbeat panic")
+	if c.panicInRequest {
+		panic("injected heartbeat panic")
+	}
+	return nil, nil
 }
 
 func TestHeartbeatMeshTreatsPanicAsFailedHeartbeat(t *testing.T) {
+	for name, panicInRequest := range map[string]bool{"request": true, "parse": false} {
+		t.Run(name, func(t *testing.T) { testHeartbeatPanicIsFailedHeartbeat(t, panicInRequest) })
+	}
+}
+
+func testHeartbeatPanicIsFailedHeartbeat(t *testing.T, panicInRequest bool) {
 	manager := New(openControlStore(t, t.TempDir()))
 	if err := manager.InstallConfiguration(testReplicaConfiguration(), 8); err != nil {
 		t.Fatal(err)
@@ -135,7 +146,7 @@ func TestHeartbeatMeshTreatsPanicAsFailedHeartbeat(t *testing.T) {
 		return result
 	}
 	mesh.newClient = func(string) heartbeatClient {
-		return &panickingHeartbeatClient{}
+		return &panickingHeartbeatClient{panicInRequest: panicInRequest}
 	}
 	mesh.poll(context.Background())
 	if member := manager.Snapshot().Members[1]; member.Healthy || member.State != StateDown {

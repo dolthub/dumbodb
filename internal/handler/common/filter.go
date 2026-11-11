@@ -629,8 +629,14 @@ func isDBRefLiteral(doc *types.Document) bool {
 // A DBRef is a literal value, as in mongod, not an operator expression.
 func filterFieldExpr(doc *types.Document, filterKey, filterSuffix string, expr *types.Document, cmp *collation.Comparator) (bool, error) {
 	if isDBRefLiteral(expr) {
-		return filterFieldExpr(doc, filterKey, filterSuffix, must.NotFail(types.NewDocument("$eq", expr)), cmp)
+		expr = must.NotFail(types.NewDocument("$eq", expr))
 	}
+	return filterFieldOperators(doc, filterKey, filterSuffix, expr, cmp)
+}
+
+// filterFieldOperators is filterFieldExpr for a document that mongod always
+// parses as operators, such as the operand of $not, even when it is a DBRef.
+func filterFieldOperators(doc *types.Document, filterKey, filterSuffix string, expr *types.Document, cmp *collation.Comparator) (bool, error) {
 	if expr.Len() == 0 {
 		fieldValue, err := doc.Get(filterSuffix)
 		if err != nil {
@@ -895,7 +901,16 @@ func filterFieldExpr(doc *types.Document, filterKey, filterSuffix string, expr *
 			// {field: {$not: {expr}}}
 			switch exprValue := exprValue.(type) {
 			case *types.Document:
-				res, err := filterFieldExpr(doc, filterKey, filterSuffix, exprValue, cmp)
+				for _, notKey := range exprValue.Keys() {
+					if !strings.HasPrefix(notKey, "$") {
+						return false, handlererrors.NewCommandErrorMsgWithArgument(
+							handlererrors.ErrBadValue,
+							fmt.Sprintf("unknown operator: %s", notKey),
+							"$not",
+						)
+					}
+				}
+				res, err := filterFieldOperators(doc, filterKey, filterSuffix, exprValue, cmp)
 				if res || err != nil {
 					return false, err
 				}

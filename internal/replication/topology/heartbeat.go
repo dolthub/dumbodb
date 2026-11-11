@@ -152,10 +152,20 @@ func (m *HeartbeatMesh) pollPeer(parent context.Context, state Snapshot, host st
 	}
 }
 
-// exchangeHeartbeat sends one heartbeat to peer and records its response. A
-// panic, such as one while parsing the peer's response, is returned as an
-// error so it counts as a failed heartbeat instead of exiting the process.
-func (m *HeartbeatMesh) exchangeHeartbeat(ctx context.Context, state Snapshot, host string, peer *heartbeatPeer) (observedAt time.Time, err error) {
+// exchangeHeartbeat sends one heartbeat to peer and records its response.
+func (m *HeartbeatMesh) exchangeHeartbeat(ctx context.Context, state Snapshot, host string, peer *heartbeatPeer) (time.Time, error) {
+	observedAt, heartbeat, err := m.requestHeartbeat(ctx, state, host, peer)
+	if err != nil {
+		return observedAt, err
+	}
+	return observedAt, m.manager.ObserveHeartbeat(host, heartbeat)
+}
+
+// requestHeartbeat returns a panic while sending the request or parsing the
+// peer's reply as an error, so it counts as a failed heartbeat. Recording the
+// reply stays outside: ObserveHeartbeat holds the manager lock, so a panic
+// there must still exit the process.
+func (m *HeartbeatMesh) requestHeartbeat(ctx context.Context, state Snapshot, host string, peer *heartbeatPeer) (observedAt time.Time, heartbeat Heartbeat, err error) {
 	defer func() {
 		if value := recover(); value != nil {
 			m.logger.Debug("replica-set heartbeat panic", "host", host, "panic", value, "stack", string(debug.Stack()))
@@ -168,13 +178,10 @@ func (m *HeartbeatMesh) exchangeHeartbeat(ctx context.Context, state Snapshot, h
 	response, err := peer.client.Request(ctx, heartbeatRequest(state))
 	observedAt = m.now()
 	if err != nil {
-		return observedAt, err
+		return observedAt, Heartbeat{}, err
 	}
-	heartbeat, err := parseHeartbeatResponse(response, state.SetName, peer.memberID, observedAt)
-	if err != nil {
-		return observedAt, err
-	}
-	return observedAt, m.manager.ObserveHeartbeat(host, heartbeat)
+	heartbeat, err = parseHeartbeatResponse(response, state.SetName, peer.memberID, observedAt)
+	return observedAt, heartbeat, err
 }
 
 func heartbeatTargets(state Snapshot) map[string]int {

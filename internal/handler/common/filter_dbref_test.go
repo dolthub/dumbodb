@@ -58,5 +58,38 @@ func TestFilterComparesDBRefLiterally(t *testing.T) {
 	_, err := FilterDocument(stored, doc("_id", doc("$in", arr(doc("$gt", int32(1))))))
 	require.ErrorContains(t, err, "cannot nest $ under $in")
 	_, err = FilterDocument(stored, doc("_id", doc("$ref", "x")))
-	require.ErrorContains(t, err, "unknown operator: $ref")
+	require.ErrorContains(t, err, "unknown operator: $")
+}
+
+func TestFilterParsesNotOperandAsOperators(t *testing.T) {
+	doc := func(pairs ...any) *types.Document { return must.NotFail(types.NewDocument(pairs...)) }
+	dbRef := func() *types.Document { return doc("$ref", "x", "$id", int32(1)) }
+	stored := doc("_id", int32(3), "f", int32(5), "arr", must.NotFail(types.NewArray(int32(5))))
+
+	for _, tc := range []struct {
+		name    string
+		filter  func() *types.Document
+		message string
+	}{
+		{"DBRef on field", func() *types.Document { return doc("f", doc("$not", dbRef())) }, "unknown operator: $ref"},
+		{"DBRef on _id", func() *types.Document { return doc("_id", doc("$not", dbRef())) }, "unknown operator: $ref"},
+		{"DBRef in $elemMatch", func() *types.Document {
+			return doc("arr", doc("$elemMatch", doc("$not", dbRef())))
+		}, "unknown operator: $ref"},
+		{"canonical DBRef", func() *types.Document {
+			f := doc("f", doc("$not", dbRef()))
+			CanonicalizeFilter(f)
+			return f
+		}, "unknown operator: $ref"},
+		{"plain document", func() *types.Document { return doc("f", doc("$not", doc("a", dbRef()))) }, "unknown operator: a"},
+		{"operator then plain field", func() *types.Document {
+			return doc("f", doc("$not", doc("$gt", int32(1), "a", int32(1))))
+		}, "unknown operator: a"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.ErrorContains(t, ValidateFilter(tc.filter(), nil), tc.message)
+			_, err := FilterDocument(stored, tc.filter())
+			require.ErrorContains(t, err, tc.message)
+		})
+	}
 }

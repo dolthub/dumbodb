@@ -56,12 +56,18 @@ func CanonicalizeFilter(filter *types.Document) {
 // canonicalCondition canonicalizes the condition on one field: either a
 // value to equal or a document of query operators.
 func canonicalCondition(value any) any {
+	if doc, ok := value.(*types.Document); ok && isDBRefLiteral(doc) {
+		return must.NotFail(types.NewDocument("$eq", sortedKeys(doc)))
+	}
+	return canonicalOperators(value)
+}
+
+// canonicalOperators is canonicalCondition for a value that mongod parses as
+// operators even when it is a DBRef, such as the operand of $not.
+func canonicalOperators(value any) any {
 	doc, ok := value.(*types.Document)
 	if !ok || !isOperatorDocument(doc) {
 		return sortedKeys(value)
-	}
-	if isDBRefLiteral(doc) {
-		return must.NotFail(types.NewDocument("$eq", sortedKeys(doc)))
 	}
 	for _, op := range doc.Keys() {
 		operand := must.NotFail(doc.Get(op))
@@ -69,7 +75,7 @@ func canonicalCondition(value any) any {
 		case "$eq", "$ne", "$gt", "$gte", "$lt", "$lte", "$in", "$nin", "$all":
 			doc.Set(op, sortedKeys(operand))
 		case "$not":
-			doc.Set(op, canonicalCondition(operand))
+			doc.Set(op, canonicalOperators(operand))
 		case "$elemMatch":
 			if sub, ok := operand.(*types.Document); ok {
 				if isOperatorDocument(sub) {
