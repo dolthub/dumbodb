@@ -29,6 +29,8 @@ import (
 	"github.com/dolthub/dumbodb/internal/clientconn/cursor"
 	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/stages"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
@@ -109,6 +111,7 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 				"Option showRecordId not supported in aggregation.")
 		}
 		isView = true
+		params.ProjectAsStage = true
 		viewName = cInfo.Name
 		viewOn = cInfo.ViewOn
 		viewPipeline = cInfo.ViewPipeline
@@ -476,12 +479,38 @@ func (h *Handler) makeFindIter(iter types.DocumentsIterator, closer *iterator.Mu
 	}
 
 	var err error
-	if iter, err = common.ProjectionIterator(iter, closer, params.Projection, params.Filter); err != nil {
+	if params.ProjectAsStage && onlyMetaProjection(params.Projection) {
+		var project aggregations.Stage
+		if project, err = stages.NewStage(must.NotFail(types.NewDocument("$project", params.Projection))); err == nil {
+			iter, err = project.Process(context.Background(), iter, closer)
+		}
+	} else {
+		iter, err = common.ProjectionIterator(iter, closer, params.Projection, params.Filter)
+	}
+	if err != nil {
 		closer.Close()
 		return nil, lazyerrors.Error(err)
 	}
 
 	return iterator.WithClose(iter, closer.Close), nil
+}
+
+// onlyMetaProjection reports whether projection gives only $meta fields and
+// perhaps an _id flag: a find keeps every other field, but the $project mongod
+// runs a find on a view as includes only these.
+func onlyMetaProjection(projection *types.Document) bool {
+	metas := 0
+	for _, k := range projection.Keys() {
+		v := must.NotFail(projection.Get(k))
+		if d, ok := v.(*types.Document); ok && d.Len() == 1 && d.Has("$meta") {
+			metas++
+			continue
+		}
+		if k != "_id" {
+			return false
+		}
+	}
+	return metas > 0
 }
 
 // buildReturnKeyProjection projects only the hint's index key fields, _id excluded.

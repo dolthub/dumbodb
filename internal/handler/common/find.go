@@ -49,6 +49,9 @@ type FindParams struct {
 	Min          *types.Document `dumbo:"min,opt"`
 	// SortInMemory keeps Sort out of the backend query.
 	SortInMemory bool `dumbo:"-"`
+	// ProjectAsStage applies Projection with $project's rules, as mongod
+	// does for a find on a view.
+	ProjectAsStage bool `dumbo:"-"`
 
 	Hint             any             `dumbo:"hint,opt"`
 	LSID             any             `dumbo:"lsid,ignored"`
