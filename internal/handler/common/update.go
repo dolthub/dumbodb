@@ -1409,6 +1409,32 @@ func ValidateUpdateOperators(command string, update *types.Document) error {
 		return err
 	}
 
+	if err = validatePullConditions(command, pull); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// validatePullConditions rejects a $pull condition that starts with $not.
+// mongod applies a condition whose first key is a field operator to each
+// element, and parses any other document, including one starting with $not,
+// as a query on embedded documents, where $not is not an operator.
+func validatePullConditions(command string, pull *types.Document) error {
+	if pull == nil {
+		return nil
+	}
+	for _, key := range pull.Keys() {
+		condition, ok := must.NotFail(pull.Get(key)).(*types.Document)
+		if !ok || condition.Len() == 0 || condition.Keys()[0] != "$not" {
+			continue
+		}
+		return NewUpdateError(
+			handlererrors.ErrBadValue,
+			"unknown top level operator: $not. If you are trying to negate an entire expression, use $nor.",
+			command,
+		)
+	}
 	return nil
 }
 
