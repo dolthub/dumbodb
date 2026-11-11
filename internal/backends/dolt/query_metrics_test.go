@@ -54,9 +54,15 @@ func TestQueryExecutorCounters(t *testing.T) {
 		// The clustered _id index reads the document itself: no keys.
 		{"_id equality", func(ctx context.Context) { query(ctx, &backends.QueryParams{Filter: eq("_id", int32(3))}) }, 0, 1},
 		{"_id miss", func(ctx context.Context) { query(ctx, &backends.QueryParams{Filter: eq("_id", int32(99))}) }, 0, 0},
-		// A COUNT_SCAN also examines the key past its range, as on mongod.
 		{"index-only count", func(ctx context.Context) {
 			if _, err := c.Count(ctx, &backends.CountParams{Filter: eq("k", int32(10))}); err != nil {
+				t.Fatal(err)
+			}
+		}, 2, 0},
+		// The count command's COUNT_SCAN also examines the key past its
+		// range, as on mongod.
+		{"count command", func(ctx context.Context) {
+			if _, err := c.Count(backends.WithCountScan(ctx), &backends.CountParams{Filter: eq("k", int32(10))}); err != nil {
 				t.Fatal(err)
 			}
 		}, 3, 0},

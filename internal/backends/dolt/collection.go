@@ -3834,7 +3834,7 @@ func countIndexRange(ctx context.Context, idxMap prolly.Map, startKey, stopKey [
 	if err != nil {
 		return 0, false, err
 	}
-	read, keys := n, n+endOfScanKey
+	read, keys := n, n+endOfScanKey(ctx)
 	if stop > 0 && n >= stop {
 		read, keys = stop, stop
 	}
@@ -3960,14 +3960,19 @@ func multikeyRangeCount(ctx context.Context, idxMap prolly.Map, ranges [][2][]by
 			}
 		}
 	}
-	examined.keys(ctx, endOfScanKey)
+	examined.keys(ctx, int(endOfScanKey(ctx)))
 	return int64(len(seen)), true, nil
 }
 
-// endOfScanKey is the key mongod's COUNT_SCAN counts as examined when it
-// reaches the end of its range rather than its limit: the key past the end,
-// or the end of the index.
-const endOfScanKey = 1
+// endOfScanKey is the key mongod's count command counts as examined when its
+// COUNT_SCAN reaches the end of its range rather than its limit: the key past
+// the end, or the end of the index. An aggregate's count does not.
+func endOfScanKey(ctx context.Context) int64 {
+	if backends.IsCountScan(ctx) {
+		return 1
+	}
+	return 0
+}
 
 func (c *collection) Stats(ctx context.Context, params *backends.CollectionStatsParams) (*backends.CollectionStatsResult, error) {
 	m, exists, _, err := c.getMap(ctx)

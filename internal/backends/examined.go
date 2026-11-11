@@ -165,3 +165,17 @@ func WantsRecordKeys(ctx context.Context) bool {
 	want, _ := ctx.Value(recordKeysKey{}).(bool)
 	return want
 }
+
+type countScanKey struct{}
+
+// WithCountScan returns a context for the count command, whose COUNT_SCAN, on
+// mongod, examines the key past the end of its range.
+func WithCountScan(ctx context.Context) context.Context {
+	return context.WithValue(ctx, countScanKey{}, true)
+}
+
+// IsCountScan reports whether ctx is from WithCountScan.
+func IsCountScan(ctx context.Context) bool {
+	is, _ := ctx.Value(countScanKey{}).(bool)
+	return is
+}

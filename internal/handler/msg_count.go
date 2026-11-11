@@ -173,6 +173,7 @@ func (h *Handler) execCount(ctx context.Context, c backends.Collection, params *
 // how many matched before the skip: what explain's FETCH returns. It is zero
 // when the count came from an index.
 func (h *Handler) execCountReading(ctx context.Context, c backends.Collection, params *common.CountParams, cmp *collation.Comparator) (n, read int32, err error) {
+	ctx = backends.WithCountScan(ctx)
 	// A hinted index decides which documents are counted (a sparse one holds
 	// only some), so a hint skips the unfiltered shortcut.
 	hinted := params.Hint != nil && !backends.HintIsNatural(params.Hint)
