@@ -512,10 +512,13 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			}
 		}
 
+		// The stages the pushed filter and limit are drawn from: the user's,
+		// or for a view, the view's then the user's, as they run on the base.
+		pushdownStages := aggregationStages
 		isView := cInfo.IsView
 		if isView {
 			view := cList.Collections[0]
-			baseCollection, viewStages, _, vErr := resolveViewChain(ctx, db, view.Name, view.ViewOn, view.ViewPipeline, collCmp)
+			baseCollection, viewStages, rawViewStages, vErr := resolveViewChain(ctx, db, view.Name, view.ViewOn, view.ViewPipeline, collCmp)
 			if vErr != nil {
 				closer.Close()
 				return nil, handleMaxTimeMSError(vErr, maxTimeMS, "aggregate")
@@ -540,6 +543,11 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 				return nil, lazyerrors.Error(err)
 			}
 			stagesDocuments = append(viewStages, stagesDocuments...)
+			pushdownStages = aggregations.MoveMatchesAhead(append(append([]any{}, rawViewStages...), aggregationStages...))
+			if !h.DisablePushdown {
+				qp.Filter, _ = aggregations.GetPushdownQuery(pushdownStages)
+				common.CanonicalizeFilter(qp.Filter)
+			}
 		}
 
 		switch {
@@ -560,7 +568,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		if qp.Sort != nil && qp.Sort.Keys()[0] != "$natural" {
 			sortStage = stagesDocuments[pushdownSortStageIndex(aggregationStages)]
 		}
-		qp.LimitHint = pushdownLimit(aggregationStages)
+		qp.LimitHint = pushdownLimit(pushdownStages)
 
 		var hintOrder *types.Document
 		if hint, _ := document.Get("hint"); hint != nil {
