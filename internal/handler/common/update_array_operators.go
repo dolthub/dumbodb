@@ -611,11 +611,7 @@ func processPullArrayUpdateExpression(command string, doc *types.Document, key s
 		var match bool
 
 		if pullDoc, ok := pullVal.(*types.Document); ok {
-			// Use filter matching when pullVal is a document (may contain query operators).
-			// Wrap the element in a temp doc so filterDocumentPair can evaluate it.
-			tmpDoc := must.NotFail(types.NewDocument("v", elem))
-
-			match, err = filterDocumentPair(tmpDoc, "v", pullDoc, nil)
+			match, err = pullConditionMatches(elem, pullDoc)
 			if err != nil {
 				return false, lazyerrors.Error(err)
 			}
@@ -634,4 +630,19 @@ func processPullArrayUpdateExpression(command string, doc *types.Document, key s
 	}
 
 	return changed, nil
+}
+
+// pullConditionMatches reports whether a $pull document condition matches
+// elem. As in mongod, a condition whose first key is a field operator, like
+// {$gt: 1}, applies to the element itself; any other document is a query
+// that matches embedded documents only.
+func pullConditionMatches(elem any, condition *types.Document) (bool, error) {
+	if isFieldOperatorExpression(condition) {
+		return filterDocumentPair(must.NotFail(types.NewDocument("v", elem)), "v", condition, nil)
+	}
+	elemDoc, ok := elem.(*types.Document)
+	if !ok {
+		return false, nil
+	}
+	return FilterDocument(elemDoc, condition)
 }
