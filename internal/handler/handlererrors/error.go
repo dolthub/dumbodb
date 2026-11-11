@@ -530,6 +530,10 @@ const (
 	// ErrClusteredIndexVersion indicates a clusteredIndex with v other than 2.
 	ErrClusteredIndexVersion = ErrorCode(5979704) // Location5979704
 
+	// ErrIndexNameMatchesClusteredIndex indicates an index named like the
+	// collection's clustered index.
+	ErrIndexNameMatchesClusteredIndex = ErrorCode(6100906) // Location6100906
+
 	// ErrPipelineTooLong indicates a pipeline of more than 1000 stages.
 	ErrPipelineTooLong = ErrorCode(7749501) // Location7749501
 

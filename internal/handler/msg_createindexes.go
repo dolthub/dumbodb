@@ -139,11 +139,16 @@ func (h *Handler) MsgCreateIndexes(connCtx context.Context, msg *wire.OpMsg) (*w
 	// An index created without an explicit collation inherits the collection's
 	// default collation.
 	var collectionCollation *types.Document
-	if cInfo, cerr := lookupCollectionInfo(connCtx, db, collection); cerr == nil && cInfo != nil && cInfo.Collation != nil {
-		collectionCollation = cInfo.Collation
-		for i := range toCreate {
-			if toCreate[i].Collation == nil {
-				toCreate[i].Collation = cInfo.Collation
+	if cInfo, cerr := lookupCollectionInfo(connCtx, db, collection); cerr == nil && cInfo != nil {
+		if err = checkClusteredIndexName(command, cInfo.ClusteredIndexName, toCreate); err != nil {
+			return nil, err
+		}
+		if cInfo.Collation != nil {
+			collectionCollation = cInfo.Collation
+			for i := range toCreate {
+				if toCreate[i].Collation == nil {
+					toCreate[i].Collation = cInfo.Collation
+				}
 			}
 		}
 	}
@@ -613,6 +618,26 @@ func resolvedCollationString(spec *types.Document) string {
 
 func sameCollation(a, b *types.Document) bool {
 	return collation.Parse(a).Identity() == collation.Parse(b).Identity()
+}
+
+// checkClusteredIndexName returns mongod's error for an index named like the
+// collection's clustered index, other than one on _id, which is that index.
+func checkClusteredIndexName(command, clusteredName string, toCreate []backends.IndexInfo) error {
+	if clusteredName == "" || clusteredName == backends.DefaultIndexName {
+		return nil
+	}
+	for _, idx := range toCreate {
+		key := formatIndexKey(idx.Key)
+		if idx.Name != clusteredName || key == "_id: 1" {
+			continue
+		}
+		spec := fmt.Sprintf("{ key: { %s }, name: %q, v: 2 }", key, idx.Name)
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIndexNameMatchesClusteredIndex, fmt.Sprintf(
+			"Error in specification %s :: caused by :: Cannot create an index where the name matches the clusteredIndex but the key "+
+				"does not - indexSpec: %s, clusteredIndex: { v: 2, key: { _id: 1 }, name: %q, unique: true }",
+			spec, spec, clusteredName), command)
+	}
+	return nil
 }
 
 // validateIndexesForCreation filters duplicates out of toCreate and returns an
