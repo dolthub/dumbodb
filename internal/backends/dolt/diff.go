@@ -305,7 +305,10 @@ func amFromCommitHash(ctx context.Context, state *dbState, hashStr string) (prol
 		return prolly.AddressMap{}, fmt.Errorf("parsing commit %q: %w", hashStr, err)
 	}
 
-	rtvlHash := hash.New(c.RootBytes())
+	rtvlHash, err := storedHash(c.RootBytes(), "root hash")
+	if err != nil {
+		return prolly.AddressMap{}, fmt.Errorf("commit %q: %w", hashStr, err)
+	}
 
 	rtvlChunk, err := state.cs.Get(ctx, rtvlHash)
 	if err != nil {

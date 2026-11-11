@@ -66,3 +66,17 @@ func TestCheckTableLayoutRefusesMalformedSchema(t *testing.T) {
 		require.ErrorIs(t, checkTableLayout(tbl), errUnsupportedLayout, "schema of %d bytes", len(schema))
 	}
 }
+
+// TestStoredHashRefusesWrongLength: a stored hash field of another length is
+// an error, where hash.New panics.
+func TestStoredHashRefusesWrongLength(t *testing.T) {
+	for _, n := range []int{0, 1, hash.ByteLen - 1, hash.ByteLen + 1} {
+		if _, err := storedHash(make([]byte, n), "artifacts hash"); err == nil {
+			t.Errorf("%d bytes: no error", n)
+		}
+	}
+	want := hash.Of([]byte("x"))
+	if got, err := storedHash(want[:], "artifacts hash"); err != nil || got != want {
+		t.Errorf("20 bytes: got %v, %v", got, err)
+	}
+}

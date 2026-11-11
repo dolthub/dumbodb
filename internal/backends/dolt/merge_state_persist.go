@@ -517,7 +517,11 @@ func collectionsWithArtifacts(ctx context.Context, state *dbState, am prolly.Add
 		if err != nil {
 			return fmt.Errorf("parsing DTBL for %q: %w", name, err)
 		}
-		if !hash.New(tbl.ArtifactsBytes()).IsEmpty() {
+		artHash, err := storedHash(tbl.ArtifactsBytes(), "artifacts hash")
+		if err != nil {
+			return fmt.Errorf("DTBL for %q: %w", name, err)
+		}
+		if !artHash.IsEmpty() {
 			names = append(names, name)
 		}
 		return nil

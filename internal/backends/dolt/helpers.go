@@ -100,6 +100,15 @@ func openCollection(ctx context.Context, cs *nbs.GenerationalNBS, ns tree.NodeSt
 // every table this version writes references.
 var collectionSchemaHash = hash.Of(buildCollectionTableSchema())
 
+// storedHash reads field, a hash stored in a chunk. A corrupt or foreign
+// chunk may hold one of another length, on which hash.New panics.
+func storedHash(b []byte, field string) (hash.Hash, error) {
+	if len(b) != hash.ByteLen {
+		return hash.Hash{}, fmt.Errorf("%s of %d bytes, want %d", field, len(b), hash.ByteLen)
+	}
+	return hash.New(b), nil
+}
+
 // checkTableLayout refuses a table whose schema is not this version's: an
 // older version keyed its primary map differently.
 func checkTableLayout(tbl *serial.Table) error {

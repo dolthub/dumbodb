@@ -816,7 +816,9 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 				if fileID == serial.TableFileID {
 					tbl, tblErr := serial.TryGetRootAsTable(chunk.Data(), serial.MessagePrefixSz)
 					if tblErr == nil {
-						newArtHash = hash.New(tbl.ArtifactsBytes())
+						if newArtHash, err = storedHash(tbl.ArtifactsBytes(), "artifacts hash"); err != nil {
+							return nil, fmt.Errorf("DumboDBResolveConflict: DTBL for %q: %w", params.Collection, err)
+						}
 					}
 				}
 			}
@@ -998,7 +1000,10 @@ func openCollectionArtifacts(ctx context.Context, state *dbState, am prolly.Addr
 		return prolly.ArtifactMap{}, fmt.Errorf("parsing DTBL for %q: %w", collName, err)
 	}
 
-	artHash := hash.New(tbl.ArtifactsBytes())
+	artHash, err := storedHash(tbl.ArtifactsBytes(), "artifacts hash")
+	if err != nil {
+		return prolly.ArtifactMap{}, fmt.Errorf("DTBL for %q: %w", collName, err)
+	}
 	if artHash.IsEmpty() {
 		return prolly.NewArtifactMapFromTuples(ctx, state.ns, keyDesc)
 	}
