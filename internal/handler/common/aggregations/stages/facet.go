@@ -228,6 +228,10 @@ func (f *facet) Process(ctx context.Context, iter types.DocumentsIterator, close
 	if err != nil {
 		return nil, lazyerrors.Error(err)
 	}
+	// mongod's sub-pipelines see no RecordId.
+	for _, doc := range inputDocs {
+		doc.SetRecordKey(nil)
+	}
 
 	// Build the output document.
 	outputDoc := new(types.Document)
