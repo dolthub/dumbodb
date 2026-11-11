@@ -2173,7 +2173,10 @@ func boundedKeyFields(idx backends.IndexInfo, filter *types.Document) int {
 	return n
 }
 
-func pickIndexForFilter(filter *types.Document, idxInfos []backends.IndexInfo, queryCollation *types.Document) (backends.IndexInfo, bool) {
+// pickIndexForFilter returns the index a count or distinct explains reading
+// for filter. arrayFilters admits an $elemMatch of operators and an equality
+// to [], which a count reads from the index and fetches.
+func pickIndexForFilter(filter *types.Document, idxInfos []backends.IndexInfo, queryCollation *types.Document, arrayFilters bool) (backends.IndexInfo, bool) {
 	queryIdentity := collation.Parse(queryCollation).Identity()
 	if filter == nil || filter.Len() == 0 {
 		return backends.IndexInfo{}, false
@@ -2191,7 +2194,12 @@ func pickIndexForFilter(filter *types.Document, idxInfos []backends.IndexInfo, q
 			_, inOK := indexPointRangesForIn(v)
 			_, regexOK := regexPrefixRanges(v)
 			nullEq, exists = isNullEquality(v), isExistsTrue(v)
-			if !inOK && !(regexOK && queryIdentity == "") && !nullEq && !exists {
+			arrayFilter := false
+			if inner, ok := elemMatchOperators(v); ok && arrayFilters {
+				_, _, arrayFilter = indexBoundsForFilterValue(inner)
+			}
+			arrayFilter = arrayFilter || (arrayFilters && isEmptyArrayEquality(v))
+			if !inOK && !(regexOK && queryIdentity == "") && !nullEq && !exists && !arrayFilter {
 				continue
 			}
 		}
@@ -2463,7 +2471,7 @@ func buildCountOrDistinctPlan(ctx context.Context, params *backends.ExplainParam
 			}
 		}
 		if !indexPicked {
-			picked, indexPicked = pickIndexForFilter(params.Filter, idxInfos, params.Collation)
+			picked, indexPicked = pickIndexForFilter(params.Filter, idxInfos, params.Collation, params.Command == "count")
 		}
 	}
 	if params.Command == "count" {
@@ -3748,16 +3756,21 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 		if collation.Parse(idx.Collation).Identity() != queryIdentity {
 			continue
 		}
-		if len(idx.Key) == 1 && idx.Key[0].Field == field {
+		if backends.HintRequiresExistingIndex(hint) && backends.MatchHintedIndex(hint, []backends.IndexInfo{idx}) != idx.Name {
+			continue
+		}
+		// A single-field index on field, or else a compound one led by it.
+		if len(idx.Key) > 0 && idx.Key[0].Field == field && !isGeoKey(idx.Key[0]) && !idx.Key[0].Text && !idx.Key[0].Hashed &&
+			(!found || len(idx.Key) < len(chosen.Key)) {
 			idxMap = idxMaps[i]
 			chosen = idx
 			found = true
-			break
 		}
 	}
 	if !found {
 		return 0, false, nil
 	}
+	compound := len(chosen.Key) > 1
 	if backends.HintRequiresExistingIndex(hint) && backends.MatchHintedIndex(hint, []backends.IndexInfo{chosen}) != chosen.Name {
 		return 0, false, nil
 	}
@@ -3774,6 +3787,11 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 	// An $in reads one range per value, as MongoDB's IXSCAN does, counting
 	// each document once.
 	if ranges, ok := indexPointRangesForIn(v); ok {
+		if compound {
+			for i, r := range ranges {
+				ranges[i][0], ranges[i][1] = compoundLeadingBounds(r[0], r[1])
+			}
+		}
 		return streamedIndexCount(ctx, newIndexIDStream(ctx, idxMap, ranges, false, true), stop)
 	}
 
@@ -3784,6 +3802,11 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 	}
 
 	startKey, stopKey, ok := indexBoundsForFilterValue(v)
+	// A dotted path can index several nulls for one document, so only a
+	// top-level field's null is counted from the keys.
+	if !ok && isNullEquality(v) && nullEqualityIndexable(chosen) && !strings.Contains(field, ".") {
+		startKey, stopKey, ok = idxpkg.LowerBoundInclusive(types.Null), idxpkg.UpperBoundInclusive(types.Null), true
+	}
 	if !ok {
 		// mongod counts a MinKey or MaxKey bound from the index, so a sparse
 		// index leaves out the documents without the field, though find
@@ -3793,11 +3816,16 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 		}
 	}
 
+	if compound {
+		startKey, stopKey = compoundLeadingBounds(startKey, stopKey)
+	}
+
 	// A multikey range holds a document once per matching element, so its
-	// documents are counted by id, still without fetching one; equality
-	// counts stay exact (one entry per value and document).
+	// documents are counted by id, still without fetching one; a
+	// single-field equality stays exact (one entry per value and document),
+	// but a compound one holds an entry per trailing element.
 	_, isOp := v.(*types.Document)
-	return countIndexRange(ctx, idxMap, startKey, stopKey, isOp && chosen.Multikey, stop)
+	return countIndexRange(ctx, idxMap, startKey, stopKey, chosen.Multikey && (isOp || compound), stop)
 }
 
 // countIndexRange counts the documents in an index range without fetching
