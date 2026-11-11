@@ -16,27 +16,49 @@ package dolt
 
 import (
 	"context"
-	"fmt"
 
+	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
+	"github.com/dolthub/dolt/go/libraries/doltcore/merge"
 	"github.com/dolthub/dolt/go/store/datas"
 	"github.com/dolthub/dolt/go/store/hash"
 )
 
+// mergeBases returns every merge base of |ours| and |theirs|, newest committer date first, as dolt_merge_bases()
+// lists them.
 func (db *dbState) mergeBases(ctx context.Context, ours, theirs hash.Hash) ([]hash.Hash, error) {
-	oursCommit, err := datas.LoadCommitAddr(ctx, db.vs, ours)
+	oursCommit, err := db.doltCommit(ctx, ours)
 	if err != nil {
 		return nil, err
+	}
+	theirsCommit, err := db.doltCommit(ctx, theirs)
+	if err != nil {
+		return nil, err
+	}
+	return merge.MergeBases(ctx, oursCommit, theirsCommit)
+}
+
+// mergeBase returns the merge base that a merge of |ours| and |theirs| uses, and false when they have none. When
+// they have several, it is the one datas.FindCommonAncestor picks.
+func (db *dbState) mergeBase(ctx context.Context, ours, theirs hash.Hash) (hash.Hash, bool, error) {
+	oursCommit, err := datas.LoadCommitAddr(ctx, db.vs, ours)
+	if err != nil {
+		return hash.Hash{}, false, err
 	}
 	theirsCommit, err := datas.LoadCommitAddr(ctx, db.vs, theirs)
 	if err != nil {
-		return nil, err
+		return hash.Hash{}, false, err
 	}
-	base, ok, err := datas.FindCommonAncestor(ctx, oursCommit, theirsCommit, db.vs, db.vs, db.ns, db.ns)
+	return datas.FindCommonAncestor(ctx, oursCommit, theirsCommit, db.vs, db.vs, db.ns, db.ns)
+}
+
+func (db *dbState) doltCommit(ctx context.Context, h hash.Hash) (*doltdb.Commit, error) {
+	optCmt, err := db.doltDB.ReadCommit(ctx, h)
 	if err != nil {
 		return nil, err
 	}
+	commit, ok := optCmt.ToCommit()
 	if !ok {
-		return nil, fmt.Errorf("no common ancestor")
+		return nil, doltdb.ErrGhostCommitEncountered
 	}
-	return []hash.Hash{base}, nil
+	return commit, nil
 }

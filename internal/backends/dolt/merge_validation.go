@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/dolthub/dolt/go/store/datas"
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/prolly"
 	"github.com/dolthub/dolt/go/store/val"
@@ -166,15 +165,7 @@ func (b *Backend) recheckCrossValidation(ctx context.Context, db *dbState, ms *m
 }
 
 func (b *Backend) mergeBaseAM(ctx context.Context, db *dbState, ms *mergeInProgress) (prolly.AddressMap, error) {
-	intoCommit, err := datas.LoadCommitAddr(ctx, db.vs, ms.intoHash)
-	if err != nil {
-		return prolly.AddressMap{}, fmt.Errorf("mergeBaseAM: loading into commit: %w", err)
-	}
-	fromCommit, err := datas.LoadCommitAddr(ctx, db.vs, ms.fromHash)
-	if err != nil {
-		return prolly.AddressMap{}, fmt.Errorf("mergeBaseAM: loading from commit: %w", err)
-	}
-	baseHash, hasBase, err := datas.FindCommonAncestor(ctx, intoCommit, fromCommit, db.vs, db.vs, db.ns, db.ns)
+	baseHash, hasBase, err := db.mergeBase(ctx, ms.intoHash, ms.fromHash)
 	if err != nil {
 		return prolly.AddressMap{}, fmt.Errorf("mergeBaseAM: finding common ancestor: %w", err)
 	}

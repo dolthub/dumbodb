@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/dolthub/dolt/go/store/datas"
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/prolly"
 )
@@ -95,16 +94,7 @@ func operationBaseHash(ctx context.Context, state *dbState, ms *mergeInProgress)
 	case ms.isRevert:
 		return ms.pickHash, nil
 	default:
-		oursCommit, err := datas.LoadCommitAddr(ctx, state.vs, ms.intoHash)
-		if err != nil {
-			return hash.Hash{}, fmt.Errorf("loading ours commit: %w", err)
-		}
-		theirsCommit, err := datas.LoadCommitAddr(ctx, state.vs, ms.fromHash)
-		if err != nil {
-			return hash.Hash{}, fmt.Errorf("loading theirs commit: %w", err)
-		}
-		baseHash, hasBase, err := datas.FindCommonAncestor(ctx, oursCommit, theirsCommit,
-			state.vs, state.vs, state.ns, state.ns)
+		baseHash, hasBase, err := state.mergeBase(ctx, ms.intoHash, ms.fromHash)
 		if err != nil {
 			return hash.Hash{}, fmt.Errorf("finding common ancestor: %w", err)
 		}

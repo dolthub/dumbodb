@@ -651,18 +651,8 @@ func operationSides(ctx context.Context, state *dbState, ms *mergeInProgress) (i
 	default:
 		oursHash = ms.intoHash
 		theirsHash = ms.fromHash
-		oursCommit, cErr := datas.LoadCommitAddr(ctx, state.vs, oursHash)
-		if cErr != nil {
-			err = fmt.Errorf("loading ours commit: %w", cErr)
-			return
-		}
-		theirsCommit, cErr := datas.LoadCommitAddr(ctx, state.vs, theirsHash)
-		if cErr != nil {
-			err = fmt.Errorf("loading theirs commit: %w", cErr)
-			return
-		}
 		var hasBase bool
-		baseHash, hasBase, err = datas.FindCommonAncestor(ctx, oursCommit, theirsCommit, state.vs, state.vs, state.ns, state.ns)
+		baseHash, hasBase, err = state.mergeBase(ctx, oursHash, theirsHash)
 		if err != nil {
 			err = fmt.Errorf("finding common ancestor: %w", err)
 			return

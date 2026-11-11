@@ -1940,16 +1940,7 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 		return nil, fmt.Errorf("DumboDBMerge: resolving merge source %q: %w", params.From, err)
 	}
 
-	intoCommit, err := datas.LoadCommitAddr(ctx, db.vs, intoHash)
-	if err != nil {
-		return nil, fmt.Errorf("DumboDBMerge: loading into commit: %w", err)
-	}
-	fromCommit, err := datas.LoadCommitAddr(ctx, db.vs, fromHash)
-	if err != nil {
-		return nil, fmt.Errorf("DumboDBMerge: loading from commit: %w", err)
-	}
-
-	baseHash, hasBase, err := datas.FindCommonAncestor(ctx, intoCommit, fromCommit, db.vs, db.vs, db.ns, db.ns)
+	baseHash, hasBase, err := db.mergeBase(ctx, intoHash, fromHash)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBMerge: finding common ancestor: %w", err)
 	}
