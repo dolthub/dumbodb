@@ -524,8 +524,17 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 				}
 			}
 			if hintOrder != nil {
-				// The backend reads ascending, so a limit would stop it early.
+				// The backend reads ascending, so a limit would stop it early,
+				// and the sort reads the index's keys, which the stages'
+				// fields may not include.
 				qp.LimitHint = 0
+				if qp.Fields != nil {
+					for _, k := range hintOrder.Keys() {
+						if !slices.Contains(qp.Fields, k) {
+							qp.Fields = append(qp.Fields, k)
+						}
+					}
+				}
 			}
 		}
 
