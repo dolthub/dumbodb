@@ -17,6 +17,7 @@ package common
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
@@ -575,6 +576,30 @@ func processPullAllArrayUpdateExpression(command string, doc *types.Document, ke
 
 // processPullArrayUpdateExpression changes document according to $pull array update operator.
 // If the document was changed it returns true.
+// pullConditionMatches reports whether a $pull condition document removes
+// elem. As on mongod, one led by a value operator such as $gte applies to the
+// element itself; any other is a query each element document must match.
+func pullConditionMatches(elem any, cond *types.Document) (bool, error) {
+	if first := cond.Keys(); len(first) > 0 && strings.HasPrefix(first[0], "$") && !isTopLevelQueryOperator(first[0]) {
+		return filterDocumentPair(must.NotFail(types.NewDocument("v", elem)), "v", cond, nil)
+	}
+	elemDoc, ok := elem.(*types.Document)
+	if !ok {
+		return false, nil
+	}
+	return FilterDocumentColl(elemDoc, cond, nil)
+}
+
+// isTopLevelQueryOperator reports whether op combines or evaluates whole
+// queries rather than comparing one value.
+func isTopLevelQueryOperator(op string) bool {
+	switch op {
+	case "$and", "$or", "$nor", "$expr", "$where", "$comment", "$text":
+		return true
+	}
+	return false
+}
+
 func processPullArrayUpdateExpression(command string, doc *types.Document, key string, pullVal any) (bool, error) {
 	path, err := types.NewPathFromString(key)
 	if err != nil {
