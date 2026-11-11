@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/FerretDB/wire"
@@ -119,7 +120,12 @@ func (h *Handler) updateDocument(ctx context.Context, params *common.UpdateParam
 		}
 	}
 
-	err = db.CreateCollection(ctx, &backends.CreateCollectionParams{Name: params.Collection})
+	// Only an upsert creates the collection, as on mongod; an update of a
+	// missing collection otherwise matches nothing.
+	err = nil
+	if slices.ContainsFunc(params.Updates, func(u common.Update) bool { return u.Upsert }) {
+		err = db.CreateCollection(ctx, &backends.CreateCollectionParams{Name: params.Collection})
+	}
 
 	switch {
 	case err == nil:
