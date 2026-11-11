@@ -82,15 +82,15 @@ func explainCountingGroup(response *types.Document, rest []any) {
 	if len(rest) == 0 {
 		return
 	}
-	cursor := must.NotFail(types.NewDocument("queryPlanner", queryPlanner))
-	if es, _ := response.Get("executionStats"); es != nil {
-		cursor.Set("executionStats", es)
-		response.Remove("executionStats")
-	}
-	response.Remove("queryPlanner")
-	stages := must.NotFail(types.NewArray(must.NotFail(types.NewDocument("$cursor", cursor))))
+	stages := cursorStage(response, queryPlanner)
+	execStats := must.NotFail(stages.Get(0)).(*types.Document).Has("nReturned")
 	for _, s := range rest {
-		stages.Append(s.(*types.Document).DeepCopy())
+		entry := s.(*types.Document).DeepCopy()
+		if execStats {
+			// Each stage after the count reshapes its one document.
+			setStageReturned(entry, 1)
+		}
+		stages.Append(entry)
 	}
 	response.Set("stages", stages)
 }

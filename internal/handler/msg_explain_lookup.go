@@ -85,13 +85,7 @@ func explainLookups(ctx context.Context, db backends.Database, dbName string, pi
 		return
 	}
 
-	cursor := must.NotFail(types.NewDocument("queryPlanner", queryPlanner))
-	if es, _ := response.Get("executionStats"); es != nil {
-		cursor.Set("executionStats", es)
-		response.Remove("executionStats")
-	}
-	response.Remove("queryPlanner")
-	out := must.NotFail(types.NewArray(must.NotFail(types.NewDocument("$cursor", cursor))))
+	out := cursorStage(response, queryPlanner)
 	for i := 0; i < len(rest); i++ {
 		stage := rest[i]
 		entry := stage.DeepCopy()

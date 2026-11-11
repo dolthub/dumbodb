@@ -423,14 +423,15 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 		}
 
 		switch {
-		case onlyMatchStages(rawStages) && params.CommandName != "aggregate":
+		case onlyMatchStages(rawStages) && params.CommandName == "find":
 			// The command's own filter applies after the view's.
 			viewFilter, _ := aggregations.GetPushdownQuery(rawStages)
 			params.Filter = andFilters(viewFilter, params.Filter)
 			common.CanonicalizeFilter(params.Filter)
 			params.Aggregate = false
 			params.StagesDocs = nil
-		case params.CommandName == "find" || params.CommandName == "count" || params.CommandName == "aggregate":
+		case params.CommandName == "find" || params.CommandName == "count" || params.CommandName == "aggregate" ||
+			params.CommandName == "distinct":
 			// A view that reshapes documents runs before the command, so the
 			// command is explained as an aggregate of the view's stages and
 			// its own, as mongod does.
@@ -465,6 +466,10 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 		params.Filter, params.Sort = aggregations.GetPushdownQuery(params.StagesDocs)
 		common.CanonicalizeFilter(params.Filter)
 		params.Limit = pushdownLimit(params.StagesDocs)
+		if first := stageDocAt(params.StagesDocs, 0); params.Limit == 0 && first != nil && first.Command() == "$limit" {
+			// The query absorbs a leading $limit too.
+			params.Limit, _ = stageInt64(first, "$limit", common.GetLimitStageParam)
+		}
 	}
 
 	if !h.DisablePushdown {
@@ -604,6 +609,9 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 
 	if params.Aggregate && !viaView {
 		explainLookups(connCtx, db, params.DB, params.StagesDocs, response, params.Verbosity != "queryPlanner", qp.Collated)
+		if !qp.CountOnly && !response.Has("stages") {
+			explainClassicStages(connCtx, coll, qp, params.StagesDocs, response, params.Verbosity != "queryPlanner")
+		}
 	}
 
 	if params.Verbosity == "allPlansExecution" {
@@ -690,8 +698,8 @@ func mergeLeadingMatches(stages []any) []any {
 	return append([]any{must.NotFail(types.NewDocument("$match", merged))}, stages[i:]...)
 }
 
-// commandStages are the aggregation stages a find, count or aggregate applies
-// to a view's documents.
+// commandStages are the aggregation stages a find, count, distinct or
+// aggregate applies to a view's documents.
 func commandStages(params *common.ExplainParams) []any {
 	if params.CommandName == "aggregate" {
 		return params.StagesDocs
@@ -709,10 +717,30 @@ func commandStages(params *common.ExplainParams) []any {
 	if params.Limit != 0 {
 		stages = append(stages, must.NotFail(types.NewDocument("$limit", max(params.Limit, -params.Limit))))
 	}
-	if params.CommandName == "count" {
+	switch params.CommandName {
+	case "count":
 		stages = append(stages, must.NotFail(types.NewDocument("$count", "count")))
+	case "distinct":
+		stages = append(stages, distinctStages(params.DistinctKey)...)
 	}
 	return stages
+}
+
+// distinctStages are the stages mongod runs for a distinct on a view: each
+// value at key, arrays unwound, gathered into one set.
+func distinctStages(key string) []any {
+	const field = "_internalUnwoundArray"
+	return []any{
+		must.NotFail(types.NewDocument("$replaceRoot", must.NotFail(types.NewDocument(
+			"newRoot", must.NotFail(types.NewDocument(field, "$"+key)),
+		)))),
+		must.NotFail(types.NewDocument("$unwind", must.NotFail(types.NewDocument(
+			"path", "$"+field, "preserveNullAndEmptyArrays", true,
+		)))),
+		must.NotFail(types.NewDocument("$group", must.NotFail(types.NewDocument(
+			"_id", types.Null, "distinct", must.NotFail(types.NewDocument("$addToSet", "$"+field)),
+		)))),
+	}
 }
 
 // andFilters returns a filter matching both a and b, either of which may be
