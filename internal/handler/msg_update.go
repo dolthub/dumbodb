@@ -232,7 +232,7 @@ statements:
 		if !u.Multi {
 			// The one document updated is the first match in the hinted
 			// index's order.
-			order, err := hintedDescendingOrder(ctx, c, u.Hint)
+			order, err := hintedIndexOrder(ctx, c, u.Hint, u.Filter)
 			if err != nil {
 				return 0, 0, nil, nil, err
 			}

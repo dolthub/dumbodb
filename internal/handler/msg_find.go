@@ -182,7 +182,7 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 			return nil, err
 		}
 		if params.Sort.Len() == 0 {
-			if params.Sort, err = hintedDescendingOrder(connCtx, coll, params.Hint); err != nil {
+			if params.Sort, err = hintedIndexOrder(connCtx, coll, params.Hint, params.Filter); err != nil {
 				return nil, err
 			}
 			// The backend reads the hinted index ascending, equal keys in _id

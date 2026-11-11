@@ -174,7 +174,7 @@ func (h *Handler) execDelete(ctx context.Context, c backends.Collection, p *comm
 	if p.Limited {
 		// The one document deleted is the first match in the hinted index's
 		// order.
-		order, err := hintedDescendingOrder(ctx, c, p.Hint)
+		order, err := hintedIndexOrder(ctx, c, p.Hint, p.Filter)
 		if err != nil {
 			q.Iter.Close()
 			return 0, err

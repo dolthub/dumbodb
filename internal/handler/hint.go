@@ -16,6 +16,7 @@ package handler
 
 import (
 	"context"
+	"strings"
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
@@ -105,12 +106,13 @@ func naturalDirection(v any) (int, bool) {
 	return 0, false
 }
 
-// hintedDescendingOrder returns the key pattern of the index hint names when
-// it has a descending key, else nil. An unsorted hinted read returns index
-// order, but DumboDB stores every key ascending, so such a read sorts by the
-// pattern; the sort is stable over _id order, as mongod's index orders equal
-// keys by RecordId.
-func hintedDescendingOrder(ctx context.Context, coll backends.Collection, hint any) (*types.Document, error) {
+// hintedIndexOrder returns the key pattern of the index hint names when a
+// read hinted to it does not come back in that index's order on its own, else
+// nil: when the index has a descending key, as DumboDB stores every key
+// ascending, or when filter's top level is an operator, which the backend
+// does not answer by walking the hinted index. An unsorted hinted read returns
+// index order, so such a read sorts by the pattern (SortIteratorInIndexOrder).
+func hintedIndexOrder(ctx context.Context, coll backends.Collection, hint any, filter *types.Document) (*types.Document, error) {
 	if !backends.HintRequiresExistingIndex(hint) {
 		return nil, nil
 	}
@@ -135,9 +137,20 @@ func hintedDescendingOrder(ctx context.Context, coll backends.Collection, hint a
 			}
 			order.Set(k.Field, dir)
 		}
-		if descending {
+		if descending || topLevelOperator(filter) {
 			return order, nil
 		}
 	}
 	return nil, nil
+}
+
+// topLevelOperator reports whether filter's top level holds an operator such
+// as $or, $and, $nor or $expr.
+func topLevelOperator(filter *types.Document) bool {
+	for _, k := range filter.Keys() {
+		if strings.HasPrefix(k, "$") && k != "$comment" {
+			return true
+		}
+	}
+	return false
 }
