@@ -44,7 +44,8 @@ func validateHintExists(ctx context.Context, coll backends.Collection, hint any,
 // {$natural: n} with n other than 1 or -1, or in the opposite direction from a
 // $natural sort; or a name or key pattern of no index on the collection. An
 // empty name is no index's. A missing collection has no indexes, which mongod
-// overlooks for a read but not for an upsert, which would create it.
+// overlooks, even for an empty name, for a read but not for an upsert, which
+// would create it.
 func validateHint(ctx context.Context, coll backends.Collection, hint any, command string, sort *types.Document, upsert bool) error {
 	if d, ok := hint.(*types.Document); ok && backends.HintIsNatural(d) {
 		dir, ok := naturalDirection(must.NotFail(d.Get("$natural")))
@@ -62,10 +63,7 @@ func validateHint(ctx context.Context, coll backends.Collection, hint any, comma
 	}
 	notIndexed := handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
 		"hint provided does not correspond to an existing index", command)
-	if hint == "" {
-		return notIndexed
-	}
-	if !backends.HintRequiresExistingIndex(hint) {
+	if hint != "" && !backends.HintRequiresExistingIndex(hint) {
 		return nil
 	}
 
@@ -83,7 +81,7 @@ func validateHint(ctx context.Context, coll backends.Collection, hint any, comma
 		return lazyerrors.Error(err)
 	}
 
-	if backends.MatchHintedIndex(hint, idxRes.Indexes) == "" {
+	if hint == "" || backends.MatchHintedIndex(hint, idxRes.Indexes) == "" {
 		return notIndexed
 	}
 
