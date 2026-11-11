@@ -530,6 +530,9 @@ const (
 	// ErrClusteredIndexVersion indicates a clusteredIndex with v other than 2.
 	ErrClusteredIndexVersion = ErrorCode(5979704) // Location5979704
 
+	// ErrClusteredIndexDrop indicates a dropIndexes of the clustered index.
+	ErrClusteredIndexDrop = ErrorCode(5979800) // Location5979800
+
 	// ErrIndexNameMatchesClusteredIndex indicates an index named like the
 	// collection's clustered index.
 	ErrIndexNameMatchesClusteredIndex = ErrorCode(6100906) // Location6100906

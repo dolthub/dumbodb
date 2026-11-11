@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/FerretDB/wire"
 
@@ -116,7 +117,27 @@ func (h *Handler) MsgDropIndexes(connCtx context.Context, msg *wire.OpMsg) (*wir
 		}
 	}
 
-	toDrop, dropAll, err := processDropIndexOptions(command, dbName+"."+collection, indexValue, beforeDrop.Indexes)
+	existing := beforeDrop.Indexes
+	if clusteredName := recordedClusteredName(connCtx, db, collection); clusteredName != "" {
+		if dropsClusteredIndex(indexValue, clusteredName) {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrClusteredIndexDrop,
+				"It is illegal to drop the clusteredIndex", command)
+		}
+		// The _id index goes by the clustered index's name, so _id_ names
+		// no index.
+		if clusteredName != backends.DefaultIndexName && namesIndex(indexValue, backends.DefaultIndexName) {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIndexNotFound,
+				fmt.Sprintf("index not found with name [%s]", backends.DefaultIndexName), command)
+		}
+		existing = slices.Clone(existing)
+		for i := range existing {
+			if existing[i].Name == backends.DefaultIndexName {
+				existing[i].Name = clusteredName
+			}
+		}
+	}
+
+	toDrop, dropAll, err := processDropIndexOptions(command, dbName+"."+collection, indexValue, existing)
 	if err != nil {
 		return nil, err
 	}
@@ -300,4 +321,42 @@ func processDropIndexOptions(command, ns string, v any, existing []backends.Inde
 		),
 		command,
 	)
+}
+
+// dropsClusteredIndex reports whether a dropIndexes index value names the
+// clustered index, by its name or its key {_id: 1}, alone or in a list.
+func dropsClusteredIndex(v any, clusteredName string) bool {
+	switch v := v.(type) {
+	case string:
+		return v == clusteredName
+	case *types.Document:
+		if v.Len() != 1 || !v.Has("_id") {
+			return false
+		}
+		dir := must.NotFail(v.Get("_id"))
+		return types.Compare(dir, int32(1)) == types.Equal
+	case *types.Array:
+		for i := 0; i < v.Len(); i++ {
+			if dropsClusteredIndex(must.NotFail(v.Get(i)), clusteredName) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// namesIndex reports whether a dropIndexes index value names name, alone or
+// in a list.
+func namesIndex(v any, name string) bool {
+	switch v := v.(type) {
+	case string:
+		return v == name
+	case *types.Array:
+		for i := 0; i < v.Len(); i++ {
+			if s, _ := must.NotFail(v.Get(i)).(string); s == name {
+				return true
+			}
+		}
+	}
+	return false
 }
