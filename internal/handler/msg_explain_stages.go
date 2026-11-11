@@ -26,6 +26,13 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
+// sourceStages make their own documents rather than read the collection's,
+// so the collection's documents cannot be run through them.
+var sourceStages = map[string]struct{}{
+	"$collStats": {}, "$indexStats": {}, "$documents": {}, "$currentOp": {}, "$listSessions": {},
+	"$listLocalSessions": {}, "$planCacheStats": {}, "$changeStream": {}, "$listSearchIndexes": {},
+}
+
 // sbeStages are the stages MongoDB 8.0 runs in SBE when they directly follow
 // those the query absorbs, reporting them inside the query plan rather than
 // as stages.
@@ -128,6 +135,11 @@ func queryAbsorbedStages(docs []*types.Document) int {
 // returns how many documents each stage from absorbed on returned, or nil
 // when a stage cannot run here.
 func stageReturns(ctx context.Context, coll backends.Collection, qp *backends.ExplainParams, docs []*types.Document, absorbed int) []int32 {
+	for _, doc := range docs {
+		if _, ok := sourceStages[doc.Command()]; ok {
+			return nil
+		}
+	}
 	built := make([]aggregations.Stage, len(docs))
 	for i, doc := range docs {
 		stage, err := stages.NewStage(doc)
