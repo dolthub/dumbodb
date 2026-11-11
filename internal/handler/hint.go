@@ -90,23 +90,18 @@ func validateHint(ctx context.Context, coll backends.Collection, hint any, comma
 	return nil
 }
 
-// naturalDirection returns 1 or -1 for a $natural hint or sort value.
+// naturalDirection returns 1 or -1 for a $natural hint or sort value: any
+// number equal to one of them.
 func naturalDirection(v any) (int, bool) {
-	var f float64
-	switch n := v.(type) {
-	case int32:
-		f = float64(n)
-	case int64:
-		f = float64(n)
-	case float64:
-		f = n
+	switch v.(type) {
+	case int32, int64, float64, types.Decimal128:
 	default:
 		return 0, false
 	}
-	switch f {
-	case 1:
+	switch {
+	case types.Compare(v, int32(1)) == types.Equal:
 		return 1, true
-	case -1:
+	case types.Compare(v, int32(-1)) == types.Equal:
 		return -1, true
 	}
 	return 0, false

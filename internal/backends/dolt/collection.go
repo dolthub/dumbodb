@@ -5154,6 +5154,8 @@ func naturalHintDescending(hint any) bool {
 		return v < 0
 	case float64:
 		return v < 0
+	case types.Decimal128:
+		return types.Compare(v, int32(0)) == types.Less
 	}
 	return false
 }
