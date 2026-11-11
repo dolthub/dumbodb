@@ -106,6 +106,8 @@ type CollectionInfo struct {
 	// MergeMode is the collection's declared merge mode (empty when unset,
 	// which resolves to the default).
 	MergeMode string
+	// ClusteredIndexName is as in CreateCollectionParams.
+	ClusteredIndexName string
 	// IsView is true if this entry represents a view.
 	IsView bool
 	// ViewOn is the source collection name for a view.
@@ -174,6 +176,9 @@ type CreateCollectionParams struct {
 	// MergeMode names what makes two branches' changes to one of this
 	// collection's documents a conflict. Empty resolves to the default.
 	MergeMode string
+	// ClusteredIndexName is the name given to the clusteredIndex the
+	// collection was created with; empty for the default, _id_.
+	ClusteredIndexName string
 	// ViewOn is the source collection for a view (empty for regular collections).
 	ViewOn string
 	// ViewPipeline is the aggregation pipeline for a view.

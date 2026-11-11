@@ -70,6 +70,10 @@ func (h *Handler) MsgListIndexes(connCtx context.Context, msg *wire.OpMsg) (*wir
 	}
 	// A time-series collection has no _id index of its own.
 	timeSeries := verr == nil && info != nil && info.IsTimeSeries
+	clusteredName := backends.DefaultIndexName
+	if verr == nil && info != nil {
+		clusteredName = clusteredIndexName(info.ClusteredIndexName)
+	}
 
 	c, err := db.Collection(collection)
 	if err != nil {
@@ -131,6 +135,7 @@ func (h *Handler) MsgListIndexes(connCtx context.Context, msg *wire.OpMsg) (*wir
 
 		// The _id index is the clustered index every collection is stored by.
 		if index.Name == backends.DefaultIndexName {
+			indexDoc.Set("name", clusteredName)
 			indexDoc.Set("unique", true)
 			indexDoc.Set("clustered", true)
 		}

@@ -102,12 +102,9 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 	if err := validateClusteredIndex(document); err != nil {
 		return nil, err
 	}
-	// Every collection is clustered with the default spec, so only a
-	// clusteredIndex with another name differs from an existing collection's.
-	customClusteredName := clusteredIndexHasCustomName(document)
-	if customClusteredName {
-		hasExplicitOptions = true
-	}
+	// Every collection is clustered, so only a clusteredIndex name other than
+	// the existing collection's differs from it.
+	params.ClusteredIndexName = customClusteredIndexName(document)
 
 	if v, _ := document.Get("capped"); v != nil {
 		capped, err := handlerparams.GetBoolOptionalParam("capped", v)
@@ -383,11 +380,14 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		ci := conninfo.Get(connCtx)
 		existingIsView := false
 		existingUUID := ""
+		existingClusteredName := ""
 		if info, verr := lookupCollectionInfo(connCtx, db, collectionName); verr == nil && info != nil {
 			existingIsView = info.IsView
 			existingUUID = info.UUID
+			existingClusteredName = info.ClusteredIndexName
 		}
-		if hasExplicitOptions || ci.InTransaction() || existingIsView {
+		clusteredDiffers := !existingIsView && params.ViewOn == "" && params.ClusteredIndexName != existingClusteredName
+		if hasExplicitOptions || ci.InTransaction() || existingIsView || clusteredDiffers {
 			if ci.InTransaction() {
 				h.AbortPendingTransaction(connCtx)
 			}
@@ -398,9 +398,10 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 			switch {
 			case params.ViewOn != "" && !existingIsView && existingUUID != "":
 				msg = fmt.Sprintf("namespace %s.%s already exists, but with different options: { uuid: UUID(\"%s\") }", dbName, collectionName, existingUUID)
-			case customClusteredName && !existingIsView && existingUUID != "":
+			case clusteredDiffers && existingUUID != "":
 				msg = fmt.Sprintf("namespace %s.%s already exists, but with different options: { uuid: UUID(\"%s\"), "+
-					"clusteredIndex: { v: 2, key: { _id: 1 }, name: \"_id_\", unique: true } }", dbName, collectionName, existingUUID)
+					"clusteredIndex: { v: 2, key: { _id: 1 }, name: \"%s\", unique: true } }",
+					dbName, collectionName, existingUUID, clusteredIndexName(existingClusteredName))
 			}
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrNamespaceExists, msg, "create")
 		}

@@ -29,14 +29,23 @@ import (
 )
 
 // clusteredIndexSpec is the clusteredIndex option listCollections reports for
-// every collection: DumboDB clusters each collection by _id.
-func clusteredIndexSpec() *types.Document {
+// every collection: DumboDB clusters each collection by _id, in an index named
+// name, or _id_ when name is empty.
+func clusteredIndexSpec(name string) *types.Document {
 	return must.NotFail(types.NewDocument(
 		"v", int32(2),
 		"key", must.NotFail(types.NewDocument("_id", int32(1))),
-		"name", "_id_",
+		"name", clusteredIndexName(name),
 		"unique", true,
 	))
+}
+
+// clusteredIndexName is a recorded clustered index name, or the default.
+func clusteredIndexName(recorded string) string {
+	if recorded == "" {
+		return backends.DefaultIndexName
+	}
+	return recorded
 }
 
 // validateClusteredIndex checks a create command's clusteredIndex option as
@@ -160,16 +169,19 @@ func isNumber(v any, want int32) bool {
 	return false
 }
 
-// clusteredIndexHasCustomName reports whether document's clusteredIndex spec
-// names its index something other than the default _id_.
-func clusteredIndexHasCustomName(document *types.Document) bool {
+// customClusteredIndexName returns the name document's clusteredIndex spec
+// gives its index, or "" for none or the default _id_.
+func customClusteredIndexName(document *types.Document) string {
 	v, _ := document.Get("clusteredIndex")
 	spec, ok := v.(*types.Document)
 	if !ok {
-		return false
+		return ""
 	}
 	name, _ := spec.Get("name")
-	return name != nil && name != backends.DefaultIndexName
+	if s, ok := name.(string); ok && s != backends.DefaultIndexName {
+		return s
+	}
+	return ""
 }
 
 // clusteredIndexVersion returns spec's v as mongod reads it into an int32,

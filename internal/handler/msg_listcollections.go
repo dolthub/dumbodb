@@ -125,7 +125,7 @@ func (h *Handler) MsgListCollections(connCtx context.Context, msg *wire.OpMsg) (
 			}
 			options.Set("timeseries", tsOpts)
 		} else {
-			options.Set("clusteredIndex", clusteredIndexSpec())
+			options.Set("clusteredIndex", clusteredIndexSpec(collection.ClusteredIndexName))
 
 			if collection.Capped() {
 				options.Set("capped", true)

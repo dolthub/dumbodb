@@ -53,6 +53,9 @@ type collMeta struct {
 	// resolves to DefaultMergeMode, which keeps catalogs written before the
 	// field existed readable.
 	MergeMode string
+	// ClusteredIndexName is stored only when set, so the catalog entry of a
+	// collection with the default name is unchanged.
+	ClusteredIndexName string
 }
 
 func collMetaToDoc(collName string, m *collMeta) (*types.Document, error) {
@@ -64,7 +67,7 @@ func collMetaToDoc(collName string, m *collMeta) (*types.Document, error) {
 	if m.Collation != nil {
 		collation = m.Collation
 	}
-	return types.NewDocument(
+	doc, err := types.NewDocument(
 		"_id", collName,
 		"uuid", m.UUID,
 		"sourceUUID", m.SourceUUID,
@@ -78,6 +81,10 @@ func collMetaToDoc(collName string, m *collMeta) (*types.Document, error) {
 		"granularity", m.Granularity,
 		"mergeMode", m.MergeMode,
 	)
+	if err == nil && m.ClusteredIndexName != "" {
+		doc.Set("clusteredIndexName", m.ClusteredIndexName)
+	}
+	return doc, err
 }
 
 func docToCollMeta(doc *types.Document) *collMeta {
@@ -111,6 +118,7 @@ func docToCollMeta(doc *types.Document) *collMeta {
 	m.MetaField = getStr("metaField")
 	m.Granularity = getStr("granularity")
 	m.MergeMode = getStr("mergeMode")
+	m.ClusteredIndexName = getStr("clusteredIndexName")
 	return m
 }
 

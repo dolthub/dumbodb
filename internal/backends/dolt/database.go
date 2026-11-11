@@ -222,6 +222,7 @@ func (db *database) ListCollections(ctx context.Context, params *backends.ListCo
 			ci.MetaField = m.MetaField
 			ci.Granularity = m.Granularity
 			ci.MergeMode = m.MergeMode
+			ci.ClusteredIndexName = m.ClusteredIndexName
 		}
 		colls = append(colls, ci)
 		return nil
@@ -303,17 +304,18 @@ func (db *database) CreateCollection(ctx context.Context, params *backends.Creat
 		return err
 	}
 	meta := &collMeta{
-		UUID:             collectionUUID(db.name, params.Name),
-		SourceUUID:       params.SourceUUID,
-		Validator:        params.Validator,
-		Collation:        params.Collation,
-		ValidationLevel:  params.ValidationLevel,
-		ValidationAction: params.ValidationAction,
-		IsTimeSeries:     params.IsTimeSeries,
-		TimeField:        params.TimeField,
-		MetaField:        params.MetaField,
-		Granularity:      params.Granularity,
-		MergeMode:        params.MergeMode,
+		UUID:               collectionUUID(db.name, params.Name),
+		SourceUUID:         params.SourceUUID,
+		Validator:          params.Validator,
+		Collation:          params.Collation,
+		ValidationLevel:    params.ValidationLevel,
+		ValidationAction:   params.ValidationAction,
+		IsTimeSeries:       params.IsTimeSeries,
+		TimeField:          params.TimeField,
+		MetaField:          params.MetaField,
+		Granularity:        params.Granularity,
+		MergeMode:          params.MergeMode,
+		ClusteredIndexName: params.ClusteredIndexName,
 	}
 	createAM, err := state.getOrInitBranchAM(ctx, db.rootish)
 	if err != nil {
