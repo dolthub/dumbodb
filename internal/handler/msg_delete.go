@@ -88,6 +88,10 @@ func (h *Handler) MsgDelete(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 	var deleted int32
 	writeErrors := types.MakeArray(0)
 
+	clusteredName := recordedClusteredName(connCtx, db, params.Collection)
+	for i := range params.Deletes {
+		params.Deletes[i].Hint = clusteredHint(params.Deletes[i].Hint, clusteredName)
+	}
 	// mongod refuses a hint of the wrong type for the whole command.
 	for _, p := range params.Deletes {
 		if err = checkHintType(p.Hint); err != nil {

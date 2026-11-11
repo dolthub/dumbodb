@@ -454,6 +454,7 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 	}
 
 	// A hint naming an index that does not exist is an error, matching MongoDB.
+	params.Hint = clusteredHint(params.Hint, recordedClusteredName(connCtx, db, params.Collection))
 	if err = validateHintExists(connCtx, coll, params.Hint, document.Command()); err != nil {
 		return nil, err
 	}

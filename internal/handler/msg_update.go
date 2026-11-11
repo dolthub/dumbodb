@@ -145,6 +145,10 @@ func (h *Handler) updateDocument(ctx context.Context, params *common.UpdateParam
 		validator, valLevel, valAction = collectionValidator(ctx, db, params.Collection)
 	}
 
+	clusteredName := recordedClusteredName(ctx, db, params.Collection)
+	for i := range params.Updates {
+		params.Updates[i].Hint = clusteredHint(params.Updates[i].Hint, clusteredName)
+	}
 	// mongod refuses a hint of the wrong type for the whole command.
 	for _, u := range params.Updates {
 		if err := checkHintType(u.Hint); err != nil {

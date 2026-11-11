@@ -110,6 +110,7 @@ func (h *Handler) MsgDistinct(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 	}
 
 	if params.Hint != nil {
+		params.Hint = clusteredHint(params.Hint, recordedClusteredName(connCtx, db, params.Collection))
 		if err = checkHintType(params.Hint); err == nil {
 			err = validateHintExists(connCtx, c, params.Hint, "distinct")
 		}

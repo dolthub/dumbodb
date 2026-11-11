@@ -369,6 +369,8 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		}
 
 		if hint, _ := document.Get("hint"); hint != nil {
+			hint = clusteredHint(hint, cInfo.ClusteredIndexName)
+			document.Set("hint", hint)
 			err = checkHintType(hint)
 			if err == nil && !cInfo.IsView {
 				err = validateHintExists(ctx, c, hint, "aggregate")

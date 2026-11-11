@@ -175,6 +175,7 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 
 	// A hint naming an index that does not exist is an error, matching MongoDB.
 	if !isView {
+		params.Hint = clusteredHint(params.Hint, cInfo.ClusteredIndexName)
 		if err = checkHintType(params.Hint); err != nil {
 			return nil, err
 		}

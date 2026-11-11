@@ -154,3 +154,28 @@ func topLevelOperator(filter *types.Document) bool {
 	}
 	return false
 }
+
+// clusteredHint maps a hint naming a collection's custom clustered index,
+// recorded as clusteredName, to the _id index that stores it, and the default
+// name _id_, which then names no index, to a name no index has.
+func clusteredHint(hint any, clusteredName string) any {
+	if clusteredName == "" || clusteredName == backends.DefaultIndexName {
+		return hint
+	}
+	switch hint {
+	case clusteredName:
+		return backends.DefaultIndexName
+	case backends.DefaultIndexName:
+		return "\x00" + backends.DefaultIndexName
+	}
+	return hint
+}
+
+// recordedClusteredName returns the clustered index name the collection was
+// created with, or "".
+func recordedClusteredName(ctx context.Context, db backends.Database, collection string) string {
+	if info, err := lookupCollectionInfo(ctx, db, collection); err == nil && info != nil {
+		return info.ClusteredIndexName
+	}
+	return ""
+}

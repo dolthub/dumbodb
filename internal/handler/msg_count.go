@@ -89,6 +89,9 @@ func (h *Handler) MsgCount(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMs
 
 	isView := len(cList.Collections) > 0 && cList.Collections[0].IsView
 	if params.Hint != nil {
+		if len(cList.Collections) > 0 {
+			params.Hint = clusteredHint(params.Hint, cList.Collections[0].ClusteredIndexName)
+		}
 		if err = checkHintType(params.Hint); err == nil && !isView {
 			err = validateHintExists(connCtx, c, params.Hint, "count")
 		}

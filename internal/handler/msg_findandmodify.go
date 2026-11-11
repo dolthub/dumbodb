@@ -163,6 +163,7 @@ func (h *Handler) findAndModifyDocument(ctx context.Context, params *common.Find
 
 	cmp := collation.Parse(params.Collation).Comparator()
 
+	params.Hint = clusteredHint(params.Hint, recordedClusteredName(ctx, db, params.Collection))
 	if err = checkHintType(params.Hint); err != nil {
 		return nil, err
 	}
