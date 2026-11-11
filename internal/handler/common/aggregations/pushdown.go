@@ -188,10 +188,13 @@ func stageFieldSources(stage *types.Document) (fieldSources, bool) {
 	return nil, false
 }
 
-// plainFieldPath returns the path of a "$a.b" field reference.
+// plainFieldPath returns the field a "$a" reference names. A dotted
+// reference is not a rename: "$a.0" or "$a.b" over an array computes a value
+// a match on "a.0" or "a.b" does not see, so mongod never moves a match past
+// one.
 func plainFieldPath(v any) (string, bool) {
 	s, ok := v.(string)
-	if !ok || !strings.HasPrefix(s, "$") || strings.HasPrefix(s, "$$") || len(s) < 2 {
+	if !ok || !strings.HasPrefix(s, "$") || strings.HasPrefix(s, "$$") || len(s) < 2 || strings.Contains(s, ".") {
 		return "", false
 	}
 	return s[1:], true

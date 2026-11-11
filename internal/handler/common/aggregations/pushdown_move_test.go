@@ -31,7 +31,9 @@ func TestMoveMatchesAhead(t *testing.T) {
 		first *types.Document // the expected first stage; nil when nothing moves
 	}{
 		{"rename", []any{doc("$project", doc("z", "$a")), match(doc("z", int32(3)))}, match(doc("a", int32(3)))},
-		{"rename_dotted", []any{doc("$project", doc("z", "$a.b")), match(doc("z.c", int32(3)))}, match(doc("a.b.c", int32(3)))},
+		{"rename_dotted_source", []any{doc("$project", doc("z", "$a.b")), match(doc("z.c", int32(3)))}, nil},
+		{"rename_array_index_source", []any{doc("$set", doc("z", "$a.0")), match(doc("z", int32(5)))}, nil},
+		{"rename_dotted_match", []any{doc("$project", doc("z", "$a")), match(doc("z.c", int32(3)))}, match(doc("a.c", int32(3)))},
 		{"included", []any{doc("$project", doc("a", int32(1))), match(doc("a", int32(3)))}, match(doc("a", int32(3)))},
 		{"not_included", []any{doc("$project", doc("a", int32(1))), match(doc("b", int32(3)))}, nil},
 		{"excluded", []any{doc("$project", doc("b", int32(0))), match(doc("b", int32(3)))}, nil},
