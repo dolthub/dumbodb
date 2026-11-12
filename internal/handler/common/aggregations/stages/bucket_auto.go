@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	stdsort "sort"
 
 	"github.com/dolthub/dumbodb/internal/handler/common"
@@ -25,6 +26,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators/accumulators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
@@ -48,9 +50,10 @@ import (
 // $bucketAuto automatically determines bucket boundaries to distribute documents evenly
 // across a specified number of buckets.
 type bucketAuto struct {
-	groupBy  any
-	buckets  int32
-	output   []bucketOutput
+	groupBy any
+	buckets int32
+	output  []bucketOutput
+	rounder granularityRounder
 }
 
 func newBucketAuto(stage *types.Document) (aggregations.Stage, error) {
@@ -122,7 +125,18 @@ func newBucketAuto(stage *types.Document) (aggregations.Stage, error) {
 		buckets: numBuckets,
 	}
 
-	// granularity is optional  -- not yet implemented, ignore it.
+	if g, getErr := spec.Get("granularity"); getErr == nil {
+		name, ok := g.(string)
+		if !ok {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketAutoGranularityType,
+				"The $bucketAuto 'granularity' field must be a string, but found type: "+handlerparams.AliasFromType(g),
+				"$bucketAuto (stage)")
+		}
+		if ba.rounder, ok = newGranularityRounder(name); !ok {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketAutoUnknownGranularity,
+				fmt.Sprintf("Unknown rounding granularity '%s'", name), "$bucketAuto (stage)")
+		}
+	}
 
 	// output is optional.
 	if outputVal, getErr := spec.Get("output"); getErr == nil {
@@ -190,52 +204,77 @@ func (ba *bucketAuto) Process(ctx context.Context, iter types.DocumentsIterator,
 		keyed = append(keyed, docWithKey{doc: doc, key: val})
 	}
 
-	// Sort by key ascending for bucketing.
+	if ba.rounder != nil {
+		for _, kd := range keyed {
+			if err = checkGranularityValue(kd.key); err != nil {
+				return nil, err
+			}
+		}
+	}
+
 	stdsort.SliceStable(keyed, func(i, j int) bool {
 		return types.CompareOrder(keyed[i].key, keyed[j].key, types.Ascending) == types.Less
 	})
 
-	numBuckets := int(ba.buckets)
+	// mongod fills each bucket with about n/buckets documents, keeps equal
+	// values together, and with a granularity moves the boundaries to it.
 	total := len(keyed)
-
-	if numBuckets > total {
-		numBuckets = total
+	approx := int(math.Round(float64(total) / float64(ba.buckets)))
+	if approx < 1 {
+		approx = 1
 	}
 
-	// Distribute documents into numBuckets buckets as evenly as possible.
-	// Each bucket i gets docs [start[i], start[i+1]).
-	bucketSize := total / numBuckets
-	remainder := total % numBuckets
-
 	var res []*types.Document
-	pos := 0
-
-	for i := 0; i < numBuckets; i++ {
-		size := bucketSize
-		if i < remainder {
-			size++
+	var prevMax any
+	for i, bucketNum := 0, int32(1); i < total; bucketNum++ {
+		start := i
+		minKey := keyed[i].key
+		if ba.rounder != nil {
+			if minKey, err = ba.rounder.roundDown(minKey); err != nil {
+				return nil, err
+			}
+			if prevMax != nil {
+				minKey = prevMax
+			}
 		}
-
-		bucketDocs := keyed[pos : pos+size]
-		pos += size
-
-		minKey := bucketDocs[0].key
-		var maxKey any
-
-		if i == numBuckets-1 {
-			// Last bucket: max is the last element's key.
-			maxKey = bucketDocs[len(bucketDocs)-1].key
+		i++
+		if bucketNum == ba.buckets {
+			i = total
 		} else {
-			// Max is the first element of the next bucket (not included in this one).
-			maxKey = keyed[pos].key
+			for c := 1; c < approx && i < total; c++ {
+				i++
+			}
 		}
+		maxKey := keyed[i-1].key
+		for i < total && types.CompareForAggregation(keyed[i].key, maxKey) == types.Equal {
+			i++
+		}
+
+		if ba.rounder != nil {
+			boundary, err := ba.rounder.roundUp(maxKey)
+			if err != nil {
+				return nil, err
+			}
+			for i < total && types.CompareForAggregation(boundary, keyed[i].key) == types.Greater {
+				i++
+			}
+			maxKey = boundary
+			if f, _ := numberAsFloat(boundary); f == 0 && i < total {
+				if maxKey, err = ba.rounder.roundDown(keyed[i].key); err != nil {
+					return nil, err
+				}
+			}
+		} else if i < total {
+			maxKey = keyed[i].key
+		}
+		prevMax = maxKey
 
 		id := must.NotFail(types.NewDocument("min", minKey, "max", maxKey))
 		doc := must.NotFail(types.NewDocument("_id", id))
 
-		rawDocs := make([]*types.Document, len(bucketDocs))
-		for j, kd := range bucketDocs {
-			rawDocs[j] = kd.doc
+		rawDocs := make([]*types.Document, 0, i-start)
+		for _, kd := range keyed[start:i] {
+			rawDocs = append(rawDocs, kd.doc)
 		}
 
 		if err := appendBucketOutput(doc, ba.output, rawDocs); err != nil {
@@ -248,6 +287,35 @@ func (ba *bucketAuto) Process(ctx context.Context, iter types.DocumentsIterator,
 	closer.Add(result)
 
 	return result, nil
+}
+
+// checkGranularityValue returns mongod's error for a groupBy value that a
+// granularity cannot round.
+func checkGranularityValue(v any) error {
+	f, ok := numberAsFloat(v)
+	switch {
+	case !ok:
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketAutoGranularityNotNumeric,
+			"$bucketAuto can specify a 'granularity' with numeric boundaries only, but found a value with type: "+
+				handlerparams.AliasFromType(v), "$bucketAuto (stage)")
+	case math.IsNaN(f):
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketAutoGranularityNaN,
+			"$bucketAuto can specify a 'granularity' with numeric boundaries only, but found a NaN", "$bucketAuto (stage)")
+	case f < 0:
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketAutoGranularityNegative,
+			"$bucketAuto can specify a 'granularity' with non-negative numbers only, but found a negative number",
+			"$bucketAuto (stage)")
+	}
+	return nil
+}
+
+// numberAsFloat returns a number as a double.
+func numberAsFloat(v any) (float64, bool) {
+	if d, ok := v.(types.Decimal128); ok {
+		f, err := aggregations.DecimalToAPD(d).Float64()
+		return f, err == nil
+	}
+	return toFloat64(v)
 }
 
 var (

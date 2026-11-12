@@ -642,6 +642,26 @@ const (
 	// ErrBucketMissingBoundaries indicates that $bucket stage specification is missing the required 'boundaries' field.
 	ErrBucketMissingBoundaries = ErrorCode(40198) // Location40198
 
+	// $arrayToObject input errors.
+	ErrArrayToObjectInput           = ErrorCode(40386) // Location40386
+	ErrArrayToObjectObjectsExpected = ErrorCode(40391) // Location40391
+	ErrArrayToObjectObjectSize      = ErrorCode(40392) // Location40392
+	ErrArrayToObjectObjectKeys      = ErrorCode(40393) // Location40393
+	ErrArrayToObjectObjectKeyType   = ErrorCode(40394) // Location40394
+	ErrArrayToObjectPairKeyType     = ErrorCode(40395) // Location40395
+	ErrArrayToObjectArraysExpected  = ErrorCode(40396) // Location40396
+	ErrArrayToObjectPairSize        = ErrorCode(40397) // Location40397
+	ErrArrayToObjectElementType     = ErrorCode(40398) // Location40398
+
+	// $bucket and $sortByCount specification errors.
+	ErrBucketBoundaryTypes   = ErrorCode(40193) // Location40193
+	ErrBucketBoundariesOrder = ErrorCode(40194) // Location40194
+	ErrBucketDefaultInRange  = ErrorCode(40199) // Location40199
+	ErrBucketGroupBy         = ErrorCode(40202) // Location40202
+	ErrSortByCountObject     = ErrorCode(40147) // Location40147
+	ErrSortByCountString     = ErrorCode(40148) // Location40148
+	ErrSortByCountType       = ErrorCode(40149) // Location40149
+
 	// ErrStageGroupUnaryOperator indicates that $sum is a unary operator.
 	ErrStageGroupUnaryOperator = ErrorCode(40237) // Location40237
 
@@ -688,6 +708,13 @@ const (
 
 	// ErrSearchNotAllowedInContext indicates $searchMeta in an update pipeline.
 	ErrSearchNotAllowedInContext = ErrorCode(6600901) // Location6600901
+
+	// $bucketAuto granularity errors.
+	ErrBucketAutoUnknownGranularity    = ErrorCode(40257) // Location40257
+	ErrBucketAutoGranularityNotNumeric = ErrorCode(40258) // Location40258
+	ErrBucketAutoGranularityNaN        = ErrorCode(40259) // Location40259
+	ErrBucketAutoGranularityNegative   = ErrorCode(40260) // Location40260
+	ErrBucketAutoGranularityType       = ErrorCode(40261) // Location40261
 
 	// ErrMergeOnFieldArray indicates a $merge 'on' field holding an array.
 	ErrMergeOnFieldArray = ErrorCode(51185) // Location51185
