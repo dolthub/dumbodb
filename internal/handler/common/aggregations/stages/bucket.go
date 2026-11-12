@@ -18,12 +18,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators/accumulators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
@@ -94,6 +96,12 @@ func newBucket(stage *types.Document) (aggregations.Stage, error) {
 		)
 	}
 
+	if !isGroupExpression(groupByVal) {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketGroupBy,
+			"The $bucket 'groupBy' field must be defined as a $-prefixed path or an expression, but found: "+
+				types.FormatAnyValue(groupByVal)+".", "$bucket (stage)")
+	}
+
 	// boundaries is required.
 	boundariesVal, err := spec.Get("boundaries")
 	if err != nil {
@@ -127,15 +135,19 @@ func newBucket(stage *types.Document) (aggregations.Stage, error) {
 		boundaries[i] = bv
 	}
 
-	// Validate boundaries are sorted ascending and comparable.
 	for i := 1; i < len(boundaries); i++ {
-		cmp := types.CompareOrder(boundaries[i-1], boundaries[i], types.Ascending)
-		if cmp != types.Less {
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrBadValue,
-				"The values of 'boundaries' must be sorted in ascending order",
-				"$bucket (stage)",
-			)
+		prev, cur := boundaries[i-1], boundaries[i]
+		if canonicalType(prev) != canonicalType(cur) {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketBoundaryTypes,
+				fmt.Sprintf("All values in the the 'boundaries' option to $bucket must have the same type. "+
+					"Found conflicting types %s and %s.", handlerparams.AliasFromType(prev), handlerparams.AliasFromType(cur)),
+				"$bucket (stage)")
+		}
+		if types.CompareOrder(prev, cur, types.Ascending) != types.Less {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketBoundariesOrder,
+				fmt.Sprintf("The 'boundaries' option to $bucket must be sorted, but elements %d and %d are not in "+
+					"ascending order (%s is not less than %s).", i-1, i, types.FormatAnyValue(prev), types.FormatAnyValue(cur)),
+				"$bucket (stage)")
 		}
 	}
 
@@ -152,6 +164,14 @@ func newBucket(stage *types.Document) (aggregations.Stage, error) {
 	if defaultVal, getErr := spec.Get("default"); getErr == nil {
 		b.hasDefault = true
 		b.defaultValue = defaultVal
+		lower, upper := boundaries[0], boundaries[len(boundaries)-1]
+		if canonicalType(defaultVal) == canonicalType(lower) &&
+			types.CompareOrder(defaultVal, lower, types.Ascending) != types.Less &&
+			types.CompareOrder(defaultVal, upper, types.Ascending) == types.Less {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketDefaultInRange,
+				"The $bucket 'default' field must be less than the lowest boundary or greater than or equal to "+
+					"the highest boundary.", "$bucket (stage)")
+		}
 	}
 
 	// output is optional.
@@ -315,3 +335,25 @@ func appendBucketOutput(doc *types.Document, output []bucketOutput, groupDocs []
 var (
 	_ aggregations.Stage = (*bucket)(nil)
 )
+
+// isGroupExpression reports whether v is a $-prefixed path or an operator
+// expression, as $bucket's groupBy and $sortByCount require.
+func isGroupExpression(v any) bool {
+	switch v := v.(type) {
+	case string:
+		return strings.HasPrefix(v, "$")
+	case *types.Document:
+		return v.Len() > 0 && strings.HasPrefix(v.Keys()[0], "$")
+	}
+	return false
+}
+
+// canonicalType names v's type, with all numbers one type, as mongod's
+// canonical type order does.
+func canonicalType(v any) string {
+	switch v.(type) {
+	case int32, int64, float64, types.Decimal128:
+		return "number"
+	}
+	return handlerparams.AliasFromType(v)
+}

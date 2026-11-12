@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	stdsort "sort"
+	"strings"
 	"time"
 
 	"github.com/dolthub/dumbodb/internal/handler/common"
@@ -48,13 +49,22 @@ func newSortByCount(stage *types.Document) (aggregations.Stage, error) {
 		return nil, lazyerrors.Error(err)
 	}
 
-	// Validate: null is not allowed.
-	if _, isNull := v.(types.NullType); isNull {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrBadValue,
-			"$sortByCount requires a non-null expression argument",
-			"$sortByCount (stage)",
-		)
+	switch val := v.(type) {
+	case string:
+		if !strings.HasPrefix(val, "$") || val == "$" {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSortByCountString,
+				"the sortByCount field must be defined as a $-prefixed path or an expression inside an object",
+				"$sortByCount (stage)")
+		}
+	case *types.Document:
+		if !isGroupExpression(val) {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSortByCountObject,
+				"the sortByCount field must be defined as a $-prefixed path or an expression inside an object",
+				"$sortByCount (stage)")
+		}
+	default:
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSortByCountType,
+			"the sortByCount field must be specified as a string or as an object", "$sortByCount (stage)")
 	}
 
 	if err := operators.CheckConstantSubexpressions(v); err != nil {
