@@ -786,6 +786,10 @@ const (
 	ErrDensifyDateStepNotWhole             = ErrorCode(6586400) // Location6586400
 	ErrDensifyPartitionIncludesField       = ErrorCode(8993000) // Location8993000
 
+	// $linearFill errors.
+	ErrLinearFillSortBy            = ErrorCode(605001)  // Location605001
+	ErrLinearFillRepeatedSortValue = ErrorCode(6050106) // Location6050106
+
 	// ErrStageIndexedStringVectorDuplicate indicates that input to IndexedStringVector contained duplicate values.
 	ErrStageIndexedStringVectorDuplicate = ErrorCode(7582300) // Location7582300
 
