@@ -592,6 +592,10 @@ const (
 	// exclusion projection.
 	ErrProjectionExpressionInExclusion = ErrorCode(31252) // Location31252
 
+	// ErrProjectionIDExpressionInExclusion indicates a computed _id in an
+	// exclusion projection.
+	ErrProjectionIDExpressionInExclusion = ErrorCode(31310) // Location31310
+
 	// ErrProjectionInEx for $elemMatch indicates that inclusion statement found
 	// while projection document already marked as exclusion.
 	ErrProjectionInEx = ErrorCode(31253) // Location31253
@@ -684,6 +688,9 @@ const (
 
 	// ErrSearchNotAllowedInContext indicates $searchMeta in an update pipeline.
 	ErrSearchNotAllowedInContext = ErrorCode(6600901) // Location6600901
+
+	// ErrMergeOnFieldArray indicates a $merge 'on' field holding an array.
+	ErrMergeOnFieldArray = ErrorCode(51185) // Location51185
 
 	// ErrDropClusteredIndex indicates dropping a clustered collection's _id
 	// index.

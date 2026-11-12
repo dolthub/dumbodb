@@ -432,3 +432,46 @@ func coerceToBool(v any) bool {
 		return convertToBool(v)
 	}
 }
+
+// CheckFieldPaths returns mongod's parse error for the first malformed field
+// path in the expression expr: an empty component, a component that starts
+// with '$', or '$' alone.
+func CheckFieldPaths(expr any) error {
+	switch v := expr.(type) {
+	case string:
+		if !strings.HasPrefix(v, "$") || strings.HasPrefix(v, "$$") {
+			return nil
+		}
+		const advice = "Consider using $getField or $setField for a field path with '.' or '$'. :: caused by :: "
+		if v == "$" {
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrGroupInvalidFieldPath,
+				"'$' by itself is not a valid FieldPath", "$")
+		}
+		for _, part := range strings.Split(v[1:], ".") {
+			switch {
+			case part == "":
+				return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrPathContainsEmptyElement,
+					advice+"FieldPath field names may not be empty strings.", v)
+			case strings.HasPrefix(part, "$"):
+				return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFieldPathInvalidName,
+					advice+"FieldPath field names may not start with '$', given '"+part+"'.", v)
+			}
+		}
+	case *types.Array:
+		for i := range v.Len() {
+			if err := CheckFieldPaths(must.NotFail(v.Get(i))); err != nil {
+				return err
+			}
+		}
+	case *types.Document:
+		if v.Command() == "$literal" {
+			return nil
+		}
+		for _, k := range v.Keys() {
+			if err := CheckFieldPaths(must.NotFail(v.Get(k))); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}

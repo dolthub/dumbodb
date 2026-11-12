@@ -210,6 +210,9 @@ func ValidateAddFieldsExpressions(stage string, spec *types.Document) error {
 }
 
 func validateSpecValue(stage string, v any) error {
+	if err := operators.CheckFieldPaths(v); err != nil {
+		return stageExpressionError(err, stage)
+	}
 	switch v := v.(type) {
 	case *types.Array:
 		for i := range v.Len() {
