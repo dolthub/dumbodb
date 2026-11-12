@@ -954,73 +954,62 @@ func getFieldValue(doc *types.Document, field string) any {
 	return v
 }
 
-// lookupValuesMatch reports whether localVal and foreignVal match under MongoDB
-// $lookup equality semantics: arrays on either side are treated as a set of
-// candidate values, and a match exists if any candidate from one side equals
-// any candidate from the other.
+// lookupValuesMatch reports whether foreignVal matches localVal the way mongod
+// matches {foreignField: {$in: <candidates>}}, where the candidates are the
+// elements of an array localVal, or localVal itself otherwise. A missing value
+// or an empty array is a null candidate. An inner array is a single candidate.
 func lookupValuesMatch(localVal, foreignVal any) bool {
 	localArr, localIsArr := localVal.(*types.Array)
-	foreignArr, foreignIsArr := foreignVal.(*types.Array)
-
-	switch {
-	case localIsArr && foreignIsArr:
-		arrIter := localArr.Iterator()
-		defer arrIter.Close()
-
-		for {
-			_, elem, err := arrIter.Next()
-			if errors.Is(err, iterator.ErrIteratorDone) {
-				return false
-			}
-
-			if err != nil {
-				return false
-			}
-
-			if arrayContainsValue(foreignArr, elem) {
-				return true
-			}
+	if !localIsArr || localArr.Len() == 0 {
+		if localIsArr {
+			localVal = nil
 		}
-	case localIsArr:
-		return arrayContainsValue(localArr, foreignVal)
-	case foreignIsArr:
-		return arrayContainsValue(foreignArr, localVal)
-	default:
-		return valuesEqual(localVal, foreignVal)
+		return foreignMatchesCandidate(foreignVal, localVal)
 	}
+
+	for i := 0; i < localArr.Len(); i++ {
+		if foreignMatchesCandidate(foreignVal, must.NotFail(localArr.Get(i))) {
+			return true
+		}
+	}
+	return false
+}
+
+// foreignMatchesCandidate reports whether foreignVal matches the query
+// equality {foreignField: candidate}: it equals candidate, or it is an array
+// with a top-level element that does. A null candidate matches a null or
+// missing foreignVal.
+func foreignMatchesCandidate(foreignVal, candidate any) bool {
+	if valuesEqual(foreignVal, candidate) {
+		return true
+	}
+	foreignArr, ok := foreignVal.(*types.Array)
+	return ok && arrayContainsValue(foreignArr, candidate)
 }
 
 // arrayContainsValue reports whether the array contains a value equal to target.
 func arrayContainsValue(arr *types.Array, target any) bool {
-	arrIter := arr.Iterator()
-	defer arrIter.Close()
-
-	for {
-		_, elem, err := arrIter.Next()
-		if errors.Is(err, iterator.ErrIteratorDone) {
-			break
-		}
-
-		if err != nil {
-			break
-		}
-
-		if valuesEqual(elem, target) {
+	for i := 0; i < arr.Len(); i++ {
+		if valuesEqual(must.NotFail(arr.Get(i)), target) {
 			return true
 		}
 	}
-
 	return false
 }
 
-// valuesEqual compares two values for equality in the context of $lookup matching.
-func valuesEqual(a, b any) bool {
-	if a == nil && b == nil {
+func isNullOrMissing(v any) bool {
+	if v == nil {
 		return true
 	}
+	_, ok := v.(types.NullType)
+	return ok
+}
 
-	if a == nil || b == nil {
-		return false
+// valuesEqual compares two values for equality in the context of $lookup matching.
+// A missing value (nil) equals null. An array equals only an equal array.
+func valuesEqual(a, b any) bool {
+	if isNullOrMissing(a) || isNullOrMissing(b) {
+		return isNullOrMissing(a) && isNullOrMissing(b)
 	}
 
 	// Use types.Compare if available, otherwise use reflect-based comparison.
@@ -1061,7 +1050,7 @@ func valuesEqual(a, b any) bool {
 		return ok && av == bv
 	}
 
-	return types.Compare(a, b) == types.Equal
+	return types.CompareForAggregation(a, b) == types.Equal
 }
 
 // equalityFetchFilter returns {foreignField: {$in: [...]}} over the scalar
