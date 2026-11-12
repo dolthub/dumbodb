@@ -186,7 +186,7 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 			return nil, err
 		}
 		if params.Sort.Len() == 0 {
-			if params.Sort, err = hintedIndexOrder(connCtx, coll, params.Hint, params.Filter); err != nil {
+			if params.Sort, params.IndexOrderFilter, err = hintedIndexOrder(connCtx, coll, params.Hint, params.Filter); err != nil {
 				return nil, err
 			}
 			// The backend reads the hinted index ascending, equal keys in _id
@@ -448,7 +448,7 @@ func (h *Handler) makeFindIter(iter types.DocumentsIterator, closer *iterator.Mu
 			iter, sortErr = common.GeoDistanceSortIterator(iter, closer, geoSort)
 		}
 	} else if !sorted && params.SortInMemory {
-		iter, sortErr = common.SortIteratorInIndexOrder(iter, closer, params.Sort, filterDoc, cmp)
+		iter, sortErr = common.SortIteratorInIndexOrder(iter, closer, params.Sort, params.IndexOrderFilter, cmp)
 	} else if !sorted {
 		iter, sortErr = common.SortIteratorWithCollation(iter, closer, params.Sort, cmp)
 	}

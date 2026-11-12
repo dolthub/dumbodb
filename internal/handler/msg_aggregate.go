@@ -488,8 +488,8 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 				closer.Close()
 				return nil, handleMaxTimeMSError(vErr, maxTimeMS, "aggregate")
 			}
-			if err = viewPipelineLength(aggregations.ExpandedLength(aggregationStages)+
-				aggregations.ExpandedLength(rawViewStages)-len(rawViewStages))(len(rawViewStages)); err != nil {
+			if err = viewPipelineLength(aggregations.ExpandedLength(aggregationStages) +
+				aggregations.ExpandedLength(rawViewStages) - len(rawViewStages))(len(rawViewStages)); err != nil {
 				closer.Close()
 				return nil, err
 			}
@@ -535,11 +535,11 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		}
 		qp.LimitHint = pushdownLimit(pushdownStages)
 
-		var hintOrder *types.Document
+		var hintOrder, hintSortFilter *types.Document
 		if hint, _ := document.Get("hint"); hint != nil {
 			qp.Hint = hint
 			if qp.Sort == nil {
-				if hintOrder, err = hintedIndexOrder(ctx, c, hint, qp.Filter); err != nil {
+				if hintOrder, hintSortFilter, err = hintedIndexOrder(ctx, c, hint, qp.Filter); err != nil {
 					closer.Close()
 					return nil, err
 				}
@@ -564,7 +564,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			ctx = backends.WithSBEScan(ctx)
 		}
 		iter, err = processStagesDocuments(ctx, closer, &stagesDocumentsParams{
-			c: c, qp: qp, stages: stagesDocuments, sortStage: sortStage, hintOrder: hintOrder, cmp: collCmp,
+			c: c, qp: qp, stages: stagesDocuments, sortStage: sortStage, hintOrder: hintOrder, hintSortFilter: hintSortFilter, cmp: collCmp,
 		})
 	} else {
 		statistics := stages.GetStatistics(collStatsDocuments)
@@ -982,7 +982,9 @@ type stagesDocumentsParams struct {
 	// hintOrder, set for an unsorted read hinted to an index with a
 	// descending key, is that index's key pattern, the order mongod returns.
 	hintOrder *types.Document
-	cmp       *collation.Comparator
+	// hintSortFilter is the filter hintOrder sorts by (hintedIndexOrder).
+	hintSortFilter *types.Document
+	cmp            *collation.Comparator
 }
 
 // pushdownSortStageIndex returns the position of the $sort stage
@@ -1104,7 +1106,7 @@ func processStagesDocuments(ctx context.Context, closer *iterator.MultiCloser, p
 	// maxTimeMS expires or the client goes away.
 	var iter types.DocumentsIterator = iterator.WithContext(ctx, queryRes.Iter)
 	if p.hintOrder != nil {
-		if iter, err = common.SortIteratorInIndexOrder(iter, closer, p.hintOrder, p.qp.Filter, p.cmp); err != nil {
+		if iter, err = common.SortIteratorInIndexOrder(iter, closer, p.hintOrder, p.hintSortFilter, p.cmp); err != nil {
 			return nil, err
 		}
 	}

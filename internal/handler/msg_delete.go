@@ -178,7 +178,7 @@ func (h *Handler) execDelete(ctx context.Context, c backends.Collection, p *comm
 	if p.Limited {
 		// The one document deleted is the first match in the hinted index's
 		// order.
-		order, err := hintedIndexOrder(ctx, c, p.Hint, p.Filter)
+		order, sortFilter, err := hintedIndexOrder(ctx, c, p.Hint, p.Filter)
 		if err != nil {
 			q.Iter.Close()
 			return 0, err
@@ -186,7 +186,7 @@ func (h *Handler) execDelete(ctx context.Context, c backends.Collection, p *comm
 		if order != nil {
 			closer := iterator.NewMultiCloser(q.Iter)
 			defer closer.Close()
-			if q.Iter, err = common.SortIteratorInIndexOrder(q.Iter, closer, order, p.Filter, cmp); err != nil {
+			if q.Iter, err = common.SortIteratorInIndexOrder(q.Iter, closer, order, sortFilter, cmp); err != nil {
 				return 0, err
 			}
 		}

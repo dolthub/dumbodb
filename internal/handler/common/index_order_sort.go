@@ -43,6 +43,12 @@ func SortIteratorInIndexOrder(iter types.DocumentsIterator, closer *iterator.Mul
 	return res, nil
 }
 
+// AsOneIndexScan returns filter marked so that SortIteratorInIndexOrder sorts
+// it as one scan of the whole index, not one scan per $or branch.
+func AsOneIndexScan(filter *types.Document) *types.Document {
+	return must.NotFail(types.NewDocument("$and", must.NotFail(types.NewArray(filter))))
+}
+
 func sortDocumentsInIndexOrder(docs []*types.Document, pattern, filter *types.Document, cmp *collation.Comparator) error {
 	if branches := orBranchesInPlanOrder(filter, pattern.Keys()[0]); branches != nil {
 		return sortByOrBranches(docs, pattern, branches, cmp)

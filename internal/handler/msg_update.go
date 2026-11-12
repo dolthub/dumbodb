@@ -251,12 +251,12 @@ statements:
 		if !u.Multi {
 			// The one document updated is the first match in the hinted
 			// index's order.
-			order, err := hintedIndexOrder(ctx, c, u.Hint, u.Filter)
+			order, sortFilter, err := hintedIndexOrder(ctx, c, u.Hint, u.Filter)
 			if err != nil {
 				return 0, 0, nil, nil, err
 			}
 			if order != nil {
-				if iter, err = common.SortIteratorInIndexOrder(iter, closer, order, u.Filter, cmp); err != nil {
+				if iter, err = common.SortIteratorInIndexOrder(iter, closer, order, sortFilter, cmp); err != nil {
 					return 0, 0, nil, nil, err
 				}
 			}

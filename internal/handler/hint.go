@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
@@ -173,14 +174,15 @@ func naturalDirection(v any) (int, bool) {
 // does not answer by walking the hinted index, or when filter tests a key
 // field with $type or $regex, which the backend does not bound, so it
 // reaches an array by its least element rather than its first one in bounds. An unsorted hinted read returns
-// index order, so such a read sorts by the pattern (SortIteratorInIndexOrder).
-func hintedIndexOrder(ctx context.Context, coll backends.Collection, hint any, filter *types.Document) (*types.Document, error) {
+// index order, so such a read sorts by the pattern (SortIteratorInIndexOrder)
+// and sortFilter, which is filter, or marks it read in one scan of the index.
+func hintedIndexOrder(ctx context.Context, coll backends.Collection, hint any, filter *types.Document) (order, sortFilter *types.Document, err error) {
 	if !backends.HintRequiresExistingIndex(hint) {
-		return nil, nil
+		return nil, nil, nil
 	}
 	idxRes, err := coll.ListIndexes(ctx, nil)
 	if err != nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	name := backends.MatchHintedIndex(hint, idxRes.Indexes)
 	for _, idx := range idxRes.Indexes {
@@ -191,7 +193,7 @@ func hintedIndexOrder(ctx context.Context, coll backends.Collection, hint any, f
 		order := types.MakeDocument(len(idx.Key))
 		for _, k := range idx.Key {
 			if k.Text || k.Geo2D || k.Geo2DSphere || k.Hashed {
-				return nil, nil
+				return nil, nil, nil
 			}
 			dir := int32(1)
 			if k.Descending {
@@ -201,10 +203,38 @@ func hintedIndexOrder(ctx context.Context, coll backends.Collection, hint any, f
 			unbounded = unbounded || typeOrRegexCondition(filter, k.Field)
 		}
 		if descending || unbounded || topLevelOperator(filter) {
-			return order, nil
+			if (idx.Sparse || idx.PartialFilterExpression != nil) && orBranchMatchesMissing(filter) {
+				return order, common.AsOneIndexScan(filter), nil
+			}
+			return order, filter, nil
 		}
 	}
-	return nil, nil
+	return nil, nil, nil
+}
+
+// orBranchMatchesMissing reports whether filter is a lone $or with a branch
+// that matches a document without its fields, such as a negation or a null
+// test: a sparse or partial index cannot bound that branch, so mongod reads
+// the hinted index whole in one scan.
+func orBranchMatchesMissing(filter *types.Document) bool {
+	if filter.Len() != 1 || filter.Keys()[0] != "$or" {
+		return false
+	}
+	branches, _ := must.NotFail(filter.Get("$or")).(*types.Array)
+	if branches == nil {
+		return false
+	}
+	empty := types.MakeDocument(0)
+	for i := 0; i < branches.Len(); i++ {
+		b, ok := must.NotFail(branches.Get(i)).(*types.Document)
+		if !ok {
+			continue
+		}
+		if matched, err := common.FilterDocument(empty, b); err == nil && matched {
+			return true
+		}
+	}
+	return false
 }
 
 // typeOrRegexCondition reports whether filter tests field with $type or

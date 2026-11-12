@@ -49,6 +49,8 @@ type FindParams struct {
 	Min          *types.Document `dumbo:"min,opt"`
 	// SortInMemory keeps Sort out of the backend query.
 	SortInMemory bool `dumbo:"-"`
+	// IndexOrderFilter is the filter an in-memory index-order sort reads.
+	IndexOrderFilter *types.Document `dumbo:"-"`
 	// ProjectAsStage applies Projection with $project's rules, as mongod
 	// does for a find on a view.
 	ProjectAsStage bool `dumbo:"-"`

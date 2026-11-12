@@ -192,11 +192,12 @@ func (h *Handler) findAndModifyDocument(ctx context.Context, params *common.Find
 	} else {
 		// The first match is in the hinted index's order.
 		var order *types.Document
-		if order, err = hintedIndexOrder(ctx, c, params.Hint, params.Query); err != nil {
+		var sortFilter *types.Document
+		if order, sortFilter, err = hintedIndexOrder(ctx, c, params.Hint, params.Query); err != nil {
 			return nil, err
 		}
 		if order != nil {
-			iter, err = common.SortIteratorInIndexOrder(iter, closer, order, params.Query, cmp)
+			iter, err = common.SortIteratorInIndexOrder(iter, closer, order, sortFilter, cmp)
 		}
 	}
 	if err != nil {

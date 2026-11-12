@@ -447,8 +447,8 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 			return nil, lazyerrors.Error(err)
 		}
 		// A count's $count runs as a $group and a $project.
-		if err = viewPipelineLength(aggregations.ExpandedLength(commandStages(params))+
-			aggregations.ExpandedLength(rawStages)-len(rawStages))(len(rawStages)); err != nil {
+		if err = viewPipelineLength(aggregations.ExpandedLength(commandStages(params)) +
+			aggregations.ExpandedLength(rawStages) - len(rawStages))(len(rawStages)); err != nil {
 			return nil, err
 		}
 
