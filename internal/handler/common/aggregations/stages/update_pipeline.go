@@ -50,7 +50,7 @@ func newUpdatePipeline(pipeline *types.Array) ([]aggregations.Stage, error) {
 		newStage := NewStage
 		if stage.Len() == 1 {
 			name := stage.Command()
-			_, known := Stages[name]
+			known := IsKnownStage(name)
 			allowed, isAllowed := updatePipelineStages[name]
 			if known && !isAllowed {
 				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidOptions,
