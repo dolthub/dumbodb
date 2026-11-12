@@ -96,6 +96,10 @@ const (
 
 	ErrDollarPrefixedFieldName = ErrorCode(52) // DollarPrefixedFieldName
 
+	// ErrNotSingleValueField indicates a path an upsert cannot seed from its
+	// query.
+	ErrNotSingleValueField = ErrorCode(54) // NotSingleValueField
+
 	// ErrInvalidID indicates that _id field is invalid.
 	ErrInvalidID = ErrorCode(53) // InvalidIdField
 

@@ -238,6 +238,14 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 
 // processFilterEqualityCondition copies the fields with equality condition from filter to doc.
 func processFilterEqualityCondition(doc, filter *types.Document) error {
+	var seeded []string
+	return seedFromFilter(doc, filter, &seeded)
+}
+
+// seedFromFilter sets doc's fields from filter's equalities. seeded holds the
+// paths set so far; mongod refuses a path that two equalities set, or that
+// lies within another set one.
+func seedFromFilter(doc, filter *types.Document, seeded *[]string) error {
 	iter := filter.Iterator()
 	defer iter.Close()
 
@@ -251,7 +259,20 @@ func processFilterEqualityCondition(doc, filter *types.Document) error {
 			return lazyerrors.Error(err)
 		}
 
-		if key[0] == '$' { // logical operators like $and, $or, $not
+		if key[0] == '$' {
+			// The clauses of $and, and the clause of a one-clause $or, are
+			// equalities of the query itself; other operators seed nothing.
+			clauses, ok := val.(*types.Array)
+			if !ok || (key != "$and" && !(key == "$or" && clauses.Len() == 1)) {
+				continue
+			}
+			for i := range clauses.Len() {
+				if clause, ok := must.NotFail(clauses.Get(i)).(*types.Document); ok {
+					if err = seedFromFilter(doc, clause, seeded); err != nil {
+						return err
+					}
+				}
+			}
 			continue
 		}
 
@@ -279,6 +300,18 @@ func processFilterEqualityCondition(doc, filter *types.Document) error {
 				val = valDoc
 			}
 		}
+
+		for _, other := range *seeded {
+			switch {
+			case other == key:
+				return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrNotSingleValueField,
+					fmt.Sprintf("cannot infer query fields to set, path '%s' is matched twice", key), "update")
+			case strings.HasPrefix(key, other+"."), strings.HasPrefix(other, key+"."):
+				return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrNotSingleValueField,
+					fmt.Sprintf("cannot infer query fields to set, both paths '%s' and '%s' are matched", other, key), "update")
+			}
+		}
+		*seeded = append(*seeded, key)
 
 		path, err := types.NewPathFromString(key)
 		if err != nil {
