@@ -17,6 +17,7 @@ package handler
 import (
 	"context"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 
@@ -183,7 +184,7 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 			params.MetaField = metaField
 		}
 
-		if granularityVal, _ := tsDoc.Get("granularity"); granularityVal != nil {
+		if granularityVal, _ := tsDoc.Get("granularity"); granularityVal != nil && granularityVal != types.Null {
 			granularity, ok := granularityVal.(string)
 			if !ok {
 				return nil, handlererrors.NewCommandErrorMsgWithArgument(
@@ -202,6 +203,9 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 					"create",
 				)
 			}
+		}
+		if params.BucketSpanSeconds, err = parseTimeSeriesBucketSpan(tsDoc, params.Granularity); err != nil {
+			return nil, err
 		}
 	}
 
@@ -598,3 +602,72 @@ func invalidDatabaseNameMsg(dbName, collectionName string) string {
 
 	return fmt.Sprintf("Invalid namespace specified '%s.%s'", dbName, collectionName)
 }
+
+// parseTimeSeriesBucketSpan validates bucketMaxSpanSeconds and
+// bucketRoundingSeconds as mongod does, returning their value when they set
+// the bucket span instead of granularity.
+func parseTimeSeriesBucketSpan(tsDoc *types.Document, granularity string) (int32, error) {
+	parse := func(field string) (int32, bool, error) {
+		v, _ := tsDoc.Get(field)
+		if v == nil || v == types.Null {
+			return 0, false, nil
+		}
+		var f float64
+		switch n := v.(type) {
+		case int32:
+			f = float64(n)
+		case int64:
+			f = float64(n)
+		case float64:
+			f = n
+		case types.Decimal128:
+			f, _ = aggregations.DecimalToAPD(n).Float64()
+		default:
+			return 0, false, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrTypeMismatch,
+				fmt.Sprintf("BSON field 'create.timeseries.%s' is the wrong type '%s', expected types '[double, long, decimal, int']",
+					field, handlerparams.AliasFromType(v)), "create")
+		}
+		f = math.Trunc(f)
+		switch {
+		case f < 1 || math.IsNaN(f):
+			return 0, false, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
+				fmt.Sprintf("BSON field '%s' value must be >= 1, actual value '%s'", field, types.FormatAnyValue(v)), "create")
+		case f > timeSeriesMaxBucketSpan:
+			return 0, false, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
+				fmt.Sprintf("BSON field '%s' value must be <= %d, actual value '%s'", field, timeSeriesMaxBucketSpan,
+					types.FormatAnyValue(v)), "create")
+		}
+		return int32(f), true, nil
+	}
+	maxSpan, hasMax, err := parse("bucketMaxSpanSeconds")
+	if err != nil {
+		return 0, err
+	}
+	rounding, hasRounding, err := parse("bucketRoundingSeconds")
+	if err != nil {
+		return 0, err
+	}
+	invalid := func(msg string) error {
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidOptions, msg, "create")
+	}
+	if granularity != "" {
+		if hasRounding {
+			return 0, invalid("Time-series 'bucketRoundingSeconds' cannot be set alongside the granularity parameter")
+		}
+		if def := timeSeriesBucketMaxSpanSeconds[granularity]; hasMax && maxSpan != def {
+			return 0, invalid(fmt.Sprintf("Time-series 'bucketMaxSpanSeconds' cannot be set to a value other than "+
+				"the default of %d for the provided granularity", def))
+		}
+		return 0, nil
+	}
+	if !hasMax && !hasRounding {
+		return 0, nil
+	}
+	if !hasMax || !hasRounding || maxSpan != rounding {
+		return 0, invalid("Time-series 'bucketRoundingSeconds' must be equal to 'bucketMaxSpanSeconds'")
+	}
+	return maxSpan, nil
+}
+
+// timeSeriesMaxBucketSpan is the largest bucket span mongod accepts, a year.
+const timeSeriesMaxBucketSpan = 31536000
