@@ -199,7 +199,8 @@ func boundedByFewerKeys(docs []*types.Document, filter *types.Document, field st
 		return filter
 	}
 	lower, upper := firstOf(ops, "$gt", "$gte"), firstOf(ops, "$lt", "$lte")
-	if lower == "" || upper == "" {
+	// A $type naming arrays scans every key, whichever bound is kept.
+	if lower == "" || upper == "" || conditionAdmitter(ops, cmp) == nil {
 		return filter
 	}
 	without := func(op string) *types.Document {
@@ -373,32 +374,49 @@ var rangeOperatorOrder = []string{"$eq", "$lte", "$lt", "$gt", "$gte"}
 // bounds a multikey field.
 func conditionAdmitter(v any, cmp *collation.Comparator) func(any) bool {
 	cond := v
+	// Bounds that span every type, as from $ne, $nin and $exists, hold a
+	// nested array's key too.
+	spanAll := false
 	if ops, ok := v.(*types.Document); ok && ops.Len() > 0 && strings.HasPrefix(ops.Keys()[0], "$") {
+		typeArray := false
 		if t, err := ops.Get("$type"); err == nil && typeIncludesArray(t) {
+			typeArray = true
+		}
+		bounding := false
+		for _, op := range ops.Keys() {
+			switch op {
+			case "$ne", "$nin", "$exists", "$not":
+			case "$type":
+				bounding = bounding || !typeArray
+			default:
+				bounding = true
+			}
+		}
+		if typeArray && !bounding {
 			return nil
 		}
+		spanAll = !bounding
 		reduced := types.MakeDocument(ops.Len())
-		bounded := false
 		for _, op := range rangeOperatorOrder {
 			if ov, err := ops.Get(op); err == nil {
 				reduced.Set(op, ov)
-				bounded = true
 				break
 			}
 		}
 		for _, op := range ops.Keys() {
-			if !slices.Contains(rangeOperatorOrder, op) {
+			if !slices.Contains(rangeOperatorOrder, op) && !(op == "$type" && typeArray) {
 				reduced.Set(op, must.NotFail(ops.Get(op)))
 			}
 		}
-		if bounded {
-			cond = reduced
-		}
+		cond = reduced
 	}
 	condDoc := must.NotFail(types.NewDocument("v", cond))
 	equal, isEquality := equalityOperand(v)
 	return func(elem any) bool {
 		if nested, ok := elem.(*types.Array); ok {
+			if spanAll {
+				return true
+			}
 			return isEquality && types.Compare(nested, equal) == types.Equal
 		}
 		ok, err := FilterDocumentColl(must.NotFail(types.NewDocument("v", elem)), condDoc, cmp)
