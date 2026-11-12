@@ -122,7 +122,10 @@ type CollectionInfo struct {
 	MetaField string
 	// Granularity is the granularity for a time series collection (seconds, minutes, hours).
 	Granularity string
-	_           struct{} // prevent unkeyed literals
+	// BucketSpanSeconds is a time series collection's bucketMaxSpanSeconds and
+	// bucketRoundingSeconds when set instead of a granularity, else 0.
+	BucketSpanSeconds int32
+	_                 struct{} // prevent unkeyed literals
 }
 
 func (ci *CollectionInfo) Capped() bool {
@@ -191,7 +194,10 @@ type CreateCollectionParams struct {
 	MetaField string
 	// Granularity is the granularity for a time series collection.
 	Granularity string
-	_           struct{} // prevent unkeyed literals
+	// BucketSpanSeconds is a time series collection's bucketMaxSpanSeconds and
+	// bucketRoundingSeconds when set instead of a granularity, else 0.
+	BucketSpanSeconds int32
+	_                 struct{} // prevent unkeyed literals
 }
 
 func (ccp *CreateCollectionParams) Capped() bool {

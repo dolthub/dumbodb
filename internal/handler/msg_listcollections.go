@@ -232,6 +232,11 @@ func timeSeriesOptions(collection *backends.CollectionInfo) *types.Document {
 	if collection.MetaField != "" {
 		opts.Set("metaField", collection.MetaField)
 	}
+	if collection.BucketSpanSeconds != 0 {
+		opts.Set("bucketRoundingSeconds", collection.BucketSpanSeconds)
+		opts.Set("bucketMaxSpanSeconds", collection.BucketSpanSeconds)
+		return opts
+	}
 	granularity := collection.Granularity
 	if granularity == "" {
 		granularity = "seconds"

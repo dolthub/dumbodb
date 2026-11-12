@@ -221,6 +221,7 @@ func (db *database) ListCollections(ctx context.Context, params *backends.ListCo
 			ci.TimeField = m.TimeField
 			ci.MetaField = m.MetaField
 			ci.Granularity = m.Granularity
+			ci.BucketSpanSeconds = m.BucketSpanSeconds
 			ci.MergeMode = m.MergeMode
 			ci.ClusteredIndexName = m.ClusteredIndexName
 		}
@@ -314,6 +315,7 @@ func (db *database) CreateCollection(ctx context.Context, params *backends.Creat
 		TimeField:          params.TimeField,
 		MetaField:          params.MetaField,
 		Granularity:        params.Granularity,
+		BucketSpanSeconds:  params.BucketSpanSeconds,
 		MergeMode:          params.MergeMode,
 		ClusteredIndexName: params.ClusteredIndexName,
 	}
