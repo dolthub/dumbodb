@@ -150,6 +150,7 @@ func newFacet(stage *types.Document) (aggregations.Stage, error) {
 // Process() methods (not from newXxx constructors) to avoid initialization cycles.
 func parsePipelineArray(arr *types.Array, fetcher CollectionFetcher) ([]aggregations.Stage, error) {
 	var stageList []aggregations.Stage
+	var specs []*types.Document
 	subStages := must.NotFail(iterator.ConsumeValues(arr.Iterator()))
 
 	for i := 0; i < arr.Len(); i++ {
@@ -170,7 +171,9 @@ func parsePipelineArray(arr *types.Array, fetcher CollectionFetcher) ([]aggregat
 		}
 
 		stageList = append(stageList, s)
+		specs = append(specs, stageDoc)
 	}
+	MarkLookupsUnwound(stageList, specs)
 
 	return stageList, nil
 }

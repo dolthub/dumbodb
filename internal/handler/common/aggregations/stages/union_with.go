@@ -16,9 +16,9 @@ package stages
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
-	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
@@ -99,7 +99,6 @@ func NewUnionWithStage(stage *types.Document, fetcher CollectionFetcher) (aggreg
 		}
 	}
 
-	sub.unlimitedMatches = true
 	sub.sbePrefix = SBEPrefixLen(sbeSpecs(sub.pipeline))
 
 	return &unionWith{sub: sub, fetcher: fetcher}, nil
@@ -113,31 +112,48 @@ func unionWithWrongType(field string, v any, want string) error {
 
 // Process implements aggregations.Stage.
 func (u *unionWith) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
-	out, err := common.ConsumeDocuments(iter, "$unionWith")
-	if err != nil {
-		return nil, lazyerrors.Error(err)
-	}
-
 	fetcher := withFetchCache(u.fetcher)
 	ctx = WithJoinStages(ctx, JoinStages{})
 	var fromDocs []*types.Document
 	if u.sub.from != "" {
+		var err error
 		if fromDocs, err = fetcher.Fetch(ctx, u.sub.from, nil); err != nil {
 			return nil, lazyerrors.Error(err)
 		}
 	}
-	unioned, err := u.sub.runPipeline(ctx, fetcher, fromDocs, types.MakeDocument(0), nil)
+	unioned, subCloser, err := u.sub.pipelineIter(ctx, fetcher, fromDocs, types.MakeDocument(0), nil)
 	if err != nil {
 		return nil, err
 	}
-	// Fetched documents may be shared; later stages may modify these.
-	for _, d := range unioned {
-		out = append(out, d.DeepCopy())
-	}
+	res := &concatIterator{iters: []types.DocumentsIterator{iter, unioned}, closer: subCloser}
+	closer.Add(res)
+	return res, nil
+}
 
-	result := iterator.Values(iterator.ForSlice(out))
-	closer.Add(result)
-	return result, nil
+// concatIterator yields the documents of each iterator in turn.
+type concatIterator struct {
+	iters  []types.DocumentsIterator
+	closer *iterator.MultiCloser
+}
+
+func (it *concatIterator) Next() (struct{}, *types.Document, error) {
+	for len(it.iters) > 0 {
+		_, doc, err := it.iters[0].Next()
+		if errors.Is(err, iterator.ErrIteratorDone) {
+			it.iters = it.iters[1:]
+			continue
+		}
+		return struct{}{}, doc, err
+	}
+	return struct{}{}, nil, iterator.ErrIteratorDone
+}
+
+func (it *concatIterator) Close() {
+	for _, iter := range it.iters {
+		iter.Close()
+	}
+	it.iters = nil
+	it.closer.Close()
 }
 
 var _ aggregations.Stage = (*unionWith)(nil)

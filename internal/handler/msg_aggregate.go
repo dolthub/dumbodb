@@ -523,6 +523,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 				specs = append(specs, d)
 			}
 			stagesSpecs = append(specs, stagesSpecs...)
+			stages.MarkLookupsUnwound(stagesDocuments, stagesSpecs)
 		}
 
 		stages.WrapSBEStages(stagesDocuments, stages.SBEPrefixLen(stagesSpecs))

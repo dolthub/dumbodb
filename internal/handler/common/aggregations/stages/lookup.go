@@ -153,16 +153,15 @@ func (c *cachingFetcher) IndexedField(ctx context.Context, collectionName, field
 //	{ $lookup: { from: <coll>, let: { <var>: <expr>, ... }, pipeline: [...], as: <array field> } }
 type lookup struct {
 	from         string
-	localField   string         // simple form
-	foreignField string         // simple form
+	localField   string          // simple form
+	foreignField string          // simple form
 	letVars      *types.Document // pipeline form: variable bindings
-	pipeline     *types.Array   // pipeline form (may be nil)
+	pipeline     *types.Array    // pipeline form (may be nil)
 	as           string
 	fetcher      CollectionFetcher
-	// unlimitedMatches lifts the size limit on one document's matches: for
-	// $unionWith, and when an $unwind of as directly follows (see
-	// MarkLookupsUnwound).
-	unlimitedMatches bool
+	// unwind is the following $unwind of as, which this stage performs by
+	// emitting one document per match (see MarkLookupsUnwound).
+	unwind *unwind
 	// sbePrefix is how many leading sub-pipeline stages report errors as
 	// mongod's SBE engine does; see SBEPrefixLen.
 	sbePrefix int
@@ -524,32 +523,141 @@ type lookupIterator struct {
 	perDocField      string
 	validatedMatches map[int]bool
 	next             int
+	pending          *unwoundMatches
 }
 
 func (it *lookupIterator) Next() (struct{}, *types.Document, error) {
 	var unused struct{}
-	if it.next >= len(it.docs) {
-		return unused, nil, iterator.ErrIteratorDone
-	}
-	doc := it.docs[it.next]
-	it.docs[it.next] = nil
-	it.next++
+	for {
+		if it.pending != nil {
+			doc, err := it.nextUnwound()
+			if doc != nil || err != nil {
+				return unused, doc, err
+			}
+			continue
+		}
 
-	matched, err := it.matches(doc)
+		if it.next >= len(it.docs) {
+			return unused, nil, iterator.ErrIteratorDone
+		}
+		doc := it.docs[it.next]
+		it.docs[it.next] = nil
+		it.next++
+
+		if it.l.unwind != nil {
+			if err := it.startUnwound(doc); err != nil {
+				return unused, nil, err
+			}
+			continue
+		}
+
+		matched, err := it.matches(doc)
+		if err != nil {
+			return unused, nil, err
+		}
+
+		newDoc := doc.DeepCopy()
+		arr := types.MakeArray(len(matched))
+		for _, m := range matched {
+			arr.Append(m)
+		}
+		setNestedField(newDoc, it.l.as, arr)
+		return unused, newDoc, nil
+	}
+}
+
+// setNestedField sets the dotted path field of doc to v, replacing any
+// non-document value on the way, as mongod's $lookup does for its as field.
+func setNestedField(doc *types.Document, field string, v any) {
+	parts := strings.Split(field, ".")
+	for _, part := range parts[:len(parts)-1] {
+		cur, err := doc.Get(part)
+		next, ok := cur.(*types.Document)
+		if err != nil || !ok {
+			next = types.MakeDocument(1)
+			doc.Set(part, next)
+		}
+		doc = next
+	}
+	doc.Set(parts[len(parts)-1], v)
+}
+
+// startUnwound begins emitting doc's matches one at a time, as mongod does
+// for a $lookup that absorbs an $unwind of its as field.
+func (it *lookupIterator) startUnwound(doc *types.Document) error {
+	l := it.l
+	if l.pipeline == nil {
+		matched := l.equalityMatches(doc, it.eqIdx)
+		it.pending = &unwoundMatches{doc: doc, iter: iterator.Values(iterator.ForSlice(matched)), copyMatches: true}
+		return nil
+	}
+	candidates, err := it.candidates(doc)
 	if err != nil {
-		return unused, nil, err
+		return err
 	}
+	matches, closer, err := l.pipelineIter(it.ctx, it.fetcher, candidates, doc, it.validatedMatches)
+	if err != nil {
+		return err
+	}
+	it.pending = &unwoundMatches{doc: doc, iter: matches, closer: closer}
+	return nil
+}
 
-	newDoc := doc.DeepCopy()
-	arr := types.MakeArray(len(matched))
-	for _, m := range matched {
-		arr.Append(m)
+// nextUnwound returns the next document for the pending input document, or
+// nil when it has no more.
+func (it *lookupIterator) nextUnwound() (*types.Document, error) {
+	p, u := it.pending, it.l.unwind
+	_, m, err := p.iter.Next()
+	if errors.Is(err, iterator.ErrIteratorDone) {
+		p.close()
+		it.pending = nil
+		if p.n > 0 {
+			return nil, nil
+		}
+		// No matches: the $unwind sees an empty array.
+		if !u.preserveNullAndEmptyArrays {
+			return nil, nil
+		}
+		out := p.doc.DeepCopy()
+		setNestedField(out, it.l.as, types.MakeArray(0))
+		return u.preserved(out, true), nil
 	}
-	newDoc.Set(it.l.as, arr)
-	return unused, newDoc, nil
+	if err != nil {
+		p.close()
+		it.pending = nil
+		return nil, err
+	}
+	if p.copyMatches {
+		m = m.DeepCopy()
+	}
+	out := p.doc.DeepCopy()
+	setNestedField(out, it.l.as, m)
+	u.setIndex(out, int64(p.n))
+	p.n++
+	return out, nil
+}
+
+// unwoundMatches is an input document whose matches are being emitted.
+type unwoundMatches struct {
+	doc         *types.Document
+	iter        types.DocumentsIterator
+	closer      *iterator.MultiCloser
+	copyMatches bool
+	n           int
+}
+
+func (p *unwoundMatches) close() {
+	p.iter.Close()
+	if p.closer != nil {
+		p.closer.Close()
+	}
 }
 
 func (it *lookupIterator) Close() {
+	if it.pending != nil {
+		it.pending.close()
+		it.pending = nil
+	}
 	it.docs = nil
 }
 
@@ -557,16 +665,13 @@ func (it *lookupIterator) Close() {
 func (it *lookupIterator) matches(doc *types.Document) ([]*types.Document, error) {
 	l := it.l
 	if l.pipeline == nil {
-		// MongoDB equality semantics: a foreign doc matches if any element of
-		// localField (treated as a singleton when scalar) equals any element of
-		// foreignField (treated as a singleton when scalar). Unless an $unwind
-		// is absorbed, mongod refuses a match that would take the matches past
+		// mongod refuses a match that would take the matches past
 		// lookupMaxMatchBytes.
 		matched := l.equalityMatches(doc, it.eqIdx)
 		total := 0
 		for i, m := range matched {
 			size := m.BSONSize() + lookupArrayElementOverhead
-			if !l.unlimitedMatches && total+size > lookupMaxMatchBytes {
+			if total+size > lookupMaxMatchBytes {
 				return nil, handlererrors.NewCommandErrorMsgWithArgument(
 					handlererrors.ErrExceededMemoryLimit,
 					fmt.Sprintf("Used too much memory for a single array. Memory limit: %d bytes. "+
@@ -581,33 +686,83 @@ func (it *lookupIterator) matches(doc *types.Document) ([]*types.Document, error
 		return matched, nil
 	}
 
-	candidates := it.fromDocs
-	if it.perDocField != "" {
-		var err error
-		if candidates, err = l.perDocCandidates(it.ctx, it.fetcher, doc, it.perDocField); err != nil {
-			return nil, lazyerrors.Error(err)
-		}
+	candidates, err := it.candidates(doc)
+	if err != nil {
+		return nil, err
 	}
-	if it.eqIdx != nil {
-		candidates = l.equalityMatches(doc, it.eqIdx)
-	}
-
 	return l.runPipeline(it.ctx, it.fetcher, candidates, doc, it.validatedMatches)
 }
 
-// MarkLookupsUnwound sets each $lookup in pipeline that an $unwind of its "as"
-// field directly follows to skip the size limit on one document's matches, as
-// mongod absorbs that $unwind and streams the matches.
+// candidates returns the foreign documents a pipeline-form $lookup runs its
+// sub-pipeline on for doc.
+func (it *lookupIterator) candidates(doc *types.Document) ([]*types.Document, error) {
+	l := it.l
+	if it.eqIdx != nil {
+		return l.equalityMatches(doc, it.eqIdx), nil
+	}
+	if it.perDocField != "" {
+		candidates, err := l.perDocCandidates(it.ctx, it.fetcher, doc, it.perDocField)
+		if err != nil {
+			return nil, lazyerrors.Error(err)
+		}
+		return candidates, nil
+	}
+	return it.fromDocs, nil
+}
+
+// MarkLookupsUnwound has each $lookup in pipeline perform a following $unwind
+// of its as field, as mongod absorbs that $unwind and streams the matches. A
+// $match in between that does not read as does not prevent it, as mongod moves
+// such a $match ahead of the $lookup.
 func MarkLookupsUnwound(pipeline []aggregations.Stage, specs []*types.Document) {
-	for i := 0; i+1 < len(pipeline) && i+1 < len(specs); i++ {
+	for i := 0; i < len(pipeline) && i < len(specs); i++ {
 		l, ok := pipeline[i].(*lookup)
-		if !ok {
+		if !ok || l.unwind != nil {
 			continue
 		}
-		if unwindPath(specs[i+1]) == "$"+l.as {
-			l.unlimitedMatches = true
+		for j := i + 1; j < len(pipeline) && j < len(specs); j++ {
+			if specs[j].Command() == "$match" && !matchReadsField(specs[j], l.as) {
+				continue
+			}
+			if u, ok := pipeline[j].(*unwind); ok && unwindPath(specs[j]) == "$"+l.as {
+				l.unwind = u
+				u.absorbed = true
+			}
+			break
 		}
 	}
+}
+
+// matchReadsField reports whether a $match stage may read field. It answers
+// true for any filter it cannot analyze.
+func matchReadsField(spec *types.Document, field string) bool {
+	filter, ok := must.NotFail(spec.Get("$match")).(*types.Document)
+	return !ok || filterReadsField(filter, field)
+}
+
+func filterReadsField(filter *types.Document, field string) bool {
+	for _, key := range filter.Keys() {
+		switch key {
+		case "$and", "$or", "$nor":
+			arr, ok := must.NotFail(filter.Get(key)).(*types.Array)
+			if !ok {
+				return true
+			}
+			for i := range arr.Len() {
+				sub, ok := must.NotFail(arr.Get(i)).(*types.Document)
+				if !ok || filterReadsField(sub, field) {
+					return true
+				}
+			}
+		case "$comment":
+		default:
+			if strings.HasPrefix(key, "$") || key == field ||
+				strings.HasPrefix(key, field+".") || strings.HasPrefix(field, key+".") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // unwindPath returns the field path of an $unwind stage spec, or "".
@@ -627,9 +782,6 @@ func unwindPath(spec *types.Document) string {
 	return ""
 }
 
-// runPipeline runs the $lookup pipeline form against a set of documents.
-// It evaluates let variables from localDoc, substitutes them into the pipeline spec,
-// and executes each stage in sequence. Nested $lookup stages are supported.
 // letBindings evaluates the let variables against localDoc.
 func (l *lookup) letBindings(localDoc *types.Document) (map[string]any, error) {
 	vars := map[string]any{}
@@ -670,55 +822,59 @@ func (l *lookup) perDocCandidates(ctx context.Context, fetcher CollectionFetcher
 	return fetcher.Fetch(ctx, l.from, must.NotFail(types.NewDocument(field, value)))
 }
 
-// runPipeline runs the sub-pipeline for localDoc. validatedMatches, when not
-// nil, records the $match stages already validated for an earlier document;
-// let values cannot change a stage's shape, so those are not validated again.
+// runPipeline runs the sub-pipeline for localDoc and returns its output.
 func (l *lookup) runPipeline(ctx context.Context, fetcher CollectionFetcher, fromDocs []*types.Document, localDoc *types.Document, validatedMatches map[int]bool) ([]*types.Document, error) {
-	vars, err := l.letBindings(localDoc)
+	iter, closer, err := l.pipelineIter(ctx, fetcher, fromDocs, localDoc, validatedMatches)
 	if err != nil {
 		return nil, err
 	}
+	defer closer.Close()
+	return l.collectMatches(iter)
+}
+
+// pipelineIter starts the sub-pipeline for localDoc. Its stages are chained,
+// so the sub-pipeline streams as it does in mongod. validatedMatches, when not
+// nil, records the $match stages already validated for an earlier document;
+// let values cannot change a stage's shape, so those are not validated again.
+// The caller closes the returned closer.
+func (l *lookup) pipelineIter(ctx context.Context, fetcher CollectionFetcher, fromDocs []*types.Document, localDoc *types.Document, validatedMatches map[int]bool) (types.DocumentsIterator, *iterator.MultiCloser, error) { //nolint:lll // for readability
+	vars, err := l.letBindings(localDoc)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	// fromDocs may be shared: run leading $match stages on them directly (they
-	// do not modify documents) and copy only the survivors. Stages are
-	// chained, so the sub-pipeline streams as it does in mongod.
+	// do not modify documents) and copy only the survivors.
 	var current types.DocumentsIterator = iterator.Values(iterator.ForSlice(fromDocs))
 	copied := false
 
 	closer := iterator.NewMultiCloser()
-	defer closer.Close()
 	closer.Add(current)
+	fail := func(err error) (types.DocumentsIterator, *iterator.MultiCloser, error) {
+		closer.Close()
+		return nil, nil, err
+	}
 
 	subStages := must.NotFail(iterator.ConsumeValues(l.pipeline.Iterator()))
-	pipeIter := l.pipeline.Iterator()
-	defer pipeIter.Close()
-
-	for stageIndex := 0; ; stageIndex++ {
-		_, stageVal, err := pipeIter.Next()
-		if errors.Is(err, iterator.ErrIteratorDone) {
-			break
-		}
-
-		if err != nil {
-			return nil, lazyerrors.Error(err)
-		}
-
+	built := make([]aggregations.Stage, len(subStages))
+	specs := make([]*types.Document, len(subStages))
+	for stageIndex, stageVal := range subStages {
 		stageDoc, ok := stageVal.(*types.Document)
 		if !ok {
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			return fail(handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrTypeMismatch,
 				"Each element of the '$lookup' pipeline must be an object",
 				"$lookup (stage)",
-			)
+			))
 		}
 
-		// Substitute let variables into the stage spec.
 		substituted := substituteVarsInStage(stageDoc, vars)
+		specs[stageIndex] = substituted
 
 		if stageIndex == 0 && l.from == "" {
 			docs, err := evalDocuments(substituted)
 			if err != nil {
-				return nil, err
+				return fail(err)
 			}
 			current = iterator.Values(iterator.ForSlice(docs))
 			closer.Add(current)
@@ -727,32 +883,35 @@ func (l *lookup) runPipeline(ctx context.Context, fetcher CollectionFetcher, fro
 		}
 
 		storedInput := SeesStoredDocuments(subStages, stageIndex)
-		var stage aggregations.Stage
 		if validatedMatches[stageIndex] {
-			stage = newValidatedMatchStage(substituted, storedInput)
-		} else {
-			if stage, err = newSubPipelineStage(substituted, fetcher, storedInput); err != nil {
-				return nil, err
-			}
-			if validatedMatches != nil && substituted.Command() == "$match" {
-				validatedMatches[stageIndex] = true
-			}
+			built[stageIndex] = newValidatedMatchStage(substituted, storedInput)
+			continue
 		}
+		if built[stageIndex], err = newSubPipelineStage(substituted, fetcher, storedInput); err != nil {
+			return fail(err)
+		}
+		if validatedMatches != nil && substituted.Command() == "$match" {
+			validatedMatches[stageIndex] = true
+		}
+	}
+	MarkLookupsUnwound(built, specs)
 
+	for stageIndex, stage := range built {
+		if stage == nil {
+			continue
+		}
 		if stageIndex < l.sbePrefix {
 			stage = &sbeStage{inner: stage}
 		}
-
-		if !copied && substituted.Command() != "$match" {
+		if !copied && specs[stageIndex].Command() != "$match" {
 			current = newDeepCopyIterator(current)
 			closer.Add(current)
 			copied = true
 		}
-
 		if current, err = stage.Process(ctx, current, closer); err != nil {
-			return nil, err
+			return fail(err)
 		}
-		if substituted.Command() != "$match" {
+		if specs[stageIndex].Command() != "$match" {
 			// The copies keep their stored documents' RecordIds, which the
 			// sub-pipeline sees until a stage other than $match reshapes them.
 			current = newMapIterator(current, closer, func(d *types.Document) (*types.Document, error) {
@@ -766,12 +925,11 @@ func (l *lookup) runPipeline(ctx context.Context, fetcher CollectionFetcher, fro
 		current = newDeepCopyIterator(current)
 		closer.Add(current)
 	}
-	return l.collectMatches(current)
+	return current, closer, nil
 }
 
-// collectMatches drains a sub-pipeline's output. Unless an $unwind is
-// absorbed, mongod refuses a further match once the matches so far total more
-// than lookupMaxMatchBytes.
+// collectMatches drains a sub-pipeline's output. mongod refuses a further
+// match once the matches so far total more than lookupMaxMatchBytes.
 func (l *lookup) collectMatches(iter types.DocumentsIterator) ([]*types.Document, error) {
 	var matched []*types.Document
 	total := 0
@@ -783,17 +941,15 @@ func (l *lookup) collectMatches(iter types.DocumentsIterator) ([]*types.Document
 		if err != nil {
 			return nil, err
 		}
-		if !l.unlimitedMatches {
-			if total > lookupMaxMatchBytes {
-				return nil, handlererrors.NewCommandErrorMsgWithArgument(
-					handlererrors.ErrLookupMatchesTooLarge,
-					fmt.Sprintf("Total size of documents in %s matching pipeline's $lookup stage exceeds %d bytes",
-						l.from, lookupMaxMatchBytes),
-					"$lookup",
-				)
-			}
-			total += doc.BSONSize()
+		if total > lookupMaxMatchBytes {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrLookupMatchesTooLarge,
+				fmt.Sprintf("Total size of documents in %s matching pipeline's $lookup stage exceeds %d bytes",
+					l.from, lookupMaxMatchBytes),
+				"$lookup",
+			)
 		}
+		total += doc.BSONSize()
 		matched = append(matched, doc)
 	}
 }
