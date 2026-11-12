@@ -1561,6 +1561,9 @@ func validateOperatorKeys(command string, docs ...*types.Document) error {
 
 	for _, doc := range docs {
 		for _, key := range doc.Keys() {
+			if key == "" {
+				return NewUpdateError(handlererrors.ErrEmptyName, "An empty update path is not valid.", command)
+			}
 			nextPath, err := types.NewPathFromString(key)
 			if err != nil {
 				return NewUpdateError(

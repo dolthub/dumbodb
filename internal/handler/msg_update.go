@@ -183,6 +183,17 @@ statements:
 
 		cmp := collation.Parse(u.Collation).Comparator()
 
+		if u.InvalidUpdate != nil {
+			ce := statementWriteError(params.DB, params.Collection, u.InvalidUpdate)
+			if ce == nil {
+				return 0, 0, nil, nil, u.InvalidUpdate
+			}
+			if statementFailed(i, ce) {
+				break statements
+			}
+			continue
+		}
+
 		common.CanonicalizeFilter(u.Filter)
 		err = common.ValidateFilter(u.Filter, cmp)
 		if err == nil && u.IsPipeline {

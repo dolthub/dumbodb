@@ -65,6 +65,9 @@ type Update struct {
 	PipelineStages     []aggregations.Stage `dumbo:"-"`
 	HasUpdateOperators bool                 `dumbo:"-"`
 	IsPipeline         bool                 `dumbo:"-"`
+	// InvalidUpdate is the statement's update operator error, which mongod
+	// reports at the statement rather than failing the batch.
+	InvalidUpdate error `dumbo:"-"`
 
 	// Validator is nil when no active validator applies (absent, or
 	// validationLevel "off"). ValidationLevel is "strict" or "moderate";
@@ -131,9 +134,7 @@ func GetUpdateParams(document *types.Document, l *slog.Logger) (*UpdateParams, e
 				if hasUpdateOperators {
 					update.HasUpdateOperators = true
 
-					if err := ValidateUpdateOperators(document.Command(), u); err != nil {
-						return nil, err
-					}
+					update.InvalidUpdate = ValidateUpdateOperators(document.Command(), u)
 				} else if update.Multi {
 					return nil, NewUpdateError(
 						handlererrors.ErrFailedToParse,
