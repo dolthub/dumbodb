@@ -330,7 +330,7 @@ func (u *unwind) preserved(doc *types.Document, removeField bool) *types.Documen
 
 func (u *unwind) setIndex(doc *types.Document, idx any) {
 	if u.includeArrayIndex != "" {
-		doc.Set(u.includeArrayIndex, idx)
+		setNestedField(doc, u.includeArrayIndex, idx)
 	}
 }
 
