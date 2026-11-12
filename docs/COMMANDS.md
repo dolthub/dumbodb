@@ -1491,9 +1491,11 @@ conflicts.
 | `"custom"` | Use the document provided in `value` | Use the document provided in `value` (rejected if it collides with a different document on a unique index) |
 
 If a validator is active on the collection after the merge (with
-`validationAction` other than `"warn"`), the resolved document must satisfy it:
-resolving to a side whose value violates the validator is **rejected** -- supply
-a conforming `"custom"` document instead.
+`validationAction` other than `"warn"`), a `"theirs"` or `"custom"` document must
+satisfy it: resolving to one that violates the validator is **rejected** --
+supply a conforming `"custom"` document instead. `"ours"` keeps the document the
+branch already has, so it is not validated: a document that already fails the
+validator, such as one that predates it, stays as it is.
 
 **`view`** -- both branches changed the same view definition:
 

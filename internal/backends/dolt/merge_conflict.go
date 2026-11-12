@@ -599,21 +599,13 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 		}
 		chosenVal, deleteDoc = v, del
 	} else {
-		resDoc, rerr := resolutionResultDoc(ctx, db, target, params)
-		if rerr != nil {
-			return nil, rerr
-		}
-		if resDoc != nil {
-			if verr := b.rejectIfViolates(ctx, db, ms, params.Collection, resDoc); verr != nil {
-				return nil, verr
-			}
-		}
-
 		// Keeping ours leaves the documents and indexes as the partial merge
 		// already staged them, so only the artifact has to go. It still has to
 		// go through the tree: the artifact is the sole record that this
 		// document was ever in conflict, and leaving it behind would resurrect
-		// the conflict on the next open.
+		// the conflict on the next open. Ours writes nothing, so it is not
+		// validated: a document that already fails the validator stays, as it
+		// would without the merge.
 		if params.Resolution == "ours" {
 			clearedAM, rmErr := removeConflictArtifact(ctx, db, ms.resolvedAM, params.Collection, target.rawKey, ms.theirHash())
 			if rmErr != nil {
@@ -625,6 +617,16 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 				return nil, err
 			}
 			return &backends.ResolveConflictResult{}, nil
+		}
+
+		resDoc, rerr := resolutionResultDoc(ctx, db, target, params)
+		if rerr != nil {
+			return nil, rerr
+		}
+		if resDoc != nil {
+			if verr := b.rejectIfViolates(ctx, db, ms, params.Collection, resDoc); verr != nil {
+				return nil, verr
+			}
 		}
 
 		switch params.Resolution {
