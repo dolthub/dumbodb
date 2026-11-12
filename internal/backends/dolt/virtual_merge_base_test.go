@@ -16,6 +16,7 @@ package dolt
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -47,26 +48,40 @@ func itemValues(t *testing.T, b *Backend, branch string) map[int32]any {
 
 // schemaBranchHistory builds the history from https://github.com/dolthub/dolt/issues/12050 on collection items in
 // |mode|. A schema branch changes only metadata and is merged into main and into feature, so main and feature have
-// two merge bases, the fork point c2 and the schema tip s2:
+// two merge bases, the fork point and the schema tip s2:
 //
-//	c1 -- c2 -- c3 -- m    main
-//	 |     \-- f1 -- f    feature
-//	 \-- s1 -- s2          schema
+//	c1 -- c2 [-- c2-3 -- c2-4] -- c3 -- m    main
+//	 |                 \-- f1 -- f          feature
+//	 \-- s1 -- s2                           schema
 //	m = merge(c3, s2), f = merge(f1, s2)
 //
-// c2 seeds documents 1 and 2. c3 edits document 1 and deletes document 2. f1 adds document 50. s1 and s2 add
-// indexes. s2 is taller than c2, so a single merge base would be the schema tip, which has no documents.
-func schemaBranchHistory(t *testing.T, b *Backend, mode string) {
+// c2 seeds documents 1 and 2, and |extraSeeds| more commits seed documents 3 and 4, so the fork point is c2, c2-3 or
+// c2-4. c3 edits document 1 and deletes document 2. f1 adds document 50. s1 and s2 add indexes, after f1, or before
+// c2 when |schemaFirst|. A single merge base could be the schema tip, which has no documents.
+func schemaBranchHistory(t *testing.T, b *Backend, mode string, extraSeeds int, schemaFirst bool) {
 	t.Helper()
 	ctx := context.Background()
+	schemaCommits := func() {
+		createIndex(t, ctx, collAt(t, b, "testdb", "schema", "items"), "by_v", "v")
+		commitBranch(t, b, "testdb", "schema", "s1")
+		createIndex(t, ctx, collAt(t, b, "testdb", "schema", "items"), "by_w", "w")
+		commitBranch(t, b, "testdb", "schema", "s2")
+	}
 	createItems(t, b, mode)
 	commitDB(t, b, "testdb", "c1")
 	branchFrom(t, b, "testdb", "main", "schema")
+	if schemaFirst {
+		schemaCommits()
+	}
 
 	insertDoc(t, b, "testdb", "items", mustDoc(t, "_id", int32(1), "v", "seed"))
 	insertDoc(t, b, "testdb", "items", mustDoc(t, "_id", int32(2), "v", "seed"))
 	commitDB(t, b, "testdb", "c2")
-	branchFrom(t, b, "testdb", "main", "c2")
+	for i := int32(3); i < 3+int32(extraSeeds); i++ {
+		insertDoc(t, b, "testdb", "items", mustDoc(t, "_id", i, "v", "seed"))
+		commitDB(t, b, "testdb", fmt.Sprintf("c2-%d", i))
+	}
+	branchFrom(t, b, "testdb", "main", "fork")
 	branchFrom(t, b, "testdb", "main", "feature")
 
 	editDocOnBranch(t, b, "main", 1, "edited on main")
@@ -76,35 +91,48 @@ func schemaBranchHistory(t *testing.T, b *Backend, mode string) {
 	insertDoc(t, b, "testdb@feature", "items", mustDoc(t, "_id", int32(50), "v", "feature"))
 	commitBranch(t, b, "testdb", "feature", "f1")
 
-	createIndex(t, ctx, collAt(t, b, "testdb", "schema", "items"), "by_v", "v")
-	commitBranch(t, b, "testdb", "schema", "s1")
-	createIndex(t, ctx, collAt(t, b, "testdb", "schema", "items"), "by_w", "w")
-	commitBranch(t, b, "testdb", "schema", "s2")
-
+	if !schemaFirst {
+		schemaCommits()
+	}
 	mergeBranches(t, b, "testdb", "main", "schema")
 	mergeBranches(t, b, "testdb", "feature", "schema")
-	requireMergeBases(t, b, "main", "feature", "schema", "c2")
+	if schemaFirst {
+		requireMergeBases(t, b, "main", "feature", "fork", "schema")
+	} else {
+		requireMergeBases(t, b, "main", "feature", "schema", "fork")
+	}
 }
 
 // A1: main edited document 1 and deleted document 2 since the fork point, and feature added document 50, so the
 // merge is clean in every mode. With the schema tip as its only merge base, document 1 would look added on both
-// sides, differently, and document 2 added on feature.
+// sides, differently, and document 2 added on feature. A2 (Dolt 3a-3c) gives the same result with a fork point as
+// tall as the schema tip, taller, and taller and newer.
 func TestVirtualMergeBase_SchemaBranch(t *testing.T) {
-	want := map[int32]any{1: "edited on main", 50: "feature"}
-	for _, mode := range mergeModes {
-		t.Run(mode+"/merge main into feature", func(t *testing.T) {
-			useTestCommitClock(t)
-			b := newTestBackend(t)
-			schemaBranchHistory(t, b, mode)
-			mergeBranches(t, b, "testdb", "feature", "main")
-			require.Equal(t, want, itemValues(t, b, "feature"))
-		})
-		t.Run(mode+"/merge feature into main", func(t *testing.T) {
-			useTestCommitClock(t)
-			b := newTestBackend(t)
-			schemaBranchHistory(t, b, mode)
-			mergeBranches(t, b, "testdb", "main", "feature")
-			require.Equal(t, want, itemValues(t, b, "main"))
-		})
+	histories := []struct {
+		name        string
+		extraSeeds  int
+		schemaFirst bool
+	}{
+		{"A1 schema tip taller and newer", 0, false},
+		{"A2 fork point as tall", 1, false},
+		{"A2 fork point taller", 2, false},
+		{"A2 fork point taller and newer", 2, true},
+	}
+	for _, h := range histories {
+		want := map[int32]any{1: "edited on main", 50: "feature"}
+		for i := int32(3); i < 3+int32(h.extraSeeds); i++ {
+			want[i] = "seed"
+		}
+		for _, mode := range mergeModes {
+			for _, direction := range []struct{ into, from string }{{"feature", "main"}, {"main", "feature"}} {
+				t.Run(h.name+"/"+mode+"/merge "+direction.from+" into "+direction.into, func(t *testing.T) {
+					useTestCommitClock(t)
+					b := newTestBackend(t)
+					schemaBranchHistory(t, b, mode, h.extraSeeds, h.schemaFirst)
+					mergeBranches(t, b, "testdb", direction.into, direction.from)
+					require.Equal(t, want, itemValues(t, b, direction.into))
+				})
+			}
+		}
 	}
 }
