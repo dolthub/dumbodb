@@ -790,6 +790,13 @@ const (
 	ErrLinearFillSortBy            = ErrorCode(605001)  // Location605001
 	ErrLinearFillRepeatedSortValue = ErrorCode(6050106) // Location6050106
 
+	// $fill errors.
+	ErrFillOutputSpec     = ErrorCode(6050200) // Location6050200
+	ErrFillMethodAndValue = ErrorCode(6050201) // Location6050201
+	ErrFillMethod         = ErrorCode(6050202) // Location6050202
+	ErrFillEmptyOutput    = ErrorCode(6050203) // Location6050203
+	ErrFillBothPartitions = ErrorCode(6050204) // Location6050204
+
 	// ErrStageIndexedStringVectorDuplicate indicates that input to IndexedStringVector contained duplicate values.
 	ErrStageIndexedStringVectorDuplicate = ErrorCode(7582300) // Location7582300
 
