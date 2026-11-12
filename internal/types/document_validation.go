@@ -74,6 +74,9 @@ func (d *Document) validateData(isTopLevel bool) error {
 		if !utf8.ValidString(key) {
 			return newValidationError(ErrValidation, fmt.Errorf("invalid key: %q (not a valid UTF-8 string)", key))
 		}
+		if strings.IndexByte(key, 0) >= 0 {
+			return newValidationError(ErrValidation, fmt.Errorf("invalid key: %q (embedded null byte)", key))
+		}
 
 		if _, ok := duplicateChecker[key]; ok {
 			if key == "_id" {

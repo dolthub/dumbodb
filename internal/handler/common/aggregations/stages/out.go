@@ -17,12 +17,14 @@ package stages
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // OutWriter is a callback that replaces all documents in the named collection
@@ -165,7 +167,37 @@ func (it *storedIDIterator) Next() (struct{}, *types.Document, error) {
 			return struct{}{}, nil, it.err
 		}
 	}
+	if it.err = storedKeysError(doc); it.err != nil {
+		return struct{}{}, nil, it.err
+	}
 	return struct{}{}, doc, nil
+}
+
+// storedKeysError refuses a document with a field name BSON cannot encode,
+// which would corrupt the collection it is written to.
+func storedKeysError(doc *types.Document) error {
+	if !hasNulKey(doc) {
+		return nil
+	}
+	return handlererrors.NewCommandErrorMsg(handlererrors.ErrBadValue, "Key field cannot contain an embedded null byte")
+}
+
+func hasNulKey(v any) bool {
+	switch v := v.(type) {
+	case *types.Document:
+		for _, k := range v.Keys() {
+			if strings.IndexByte(k, 0) >= 0 || hasNulKey(must.NotFail(v.Get(k))) {
+				return true
+			}
+		}
+	case *types.Array:
+		for i := range v.Len() {
+			if hasNulKey(must.NotFail(v.Get(i))) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (it *storedIDIterator) Close() {

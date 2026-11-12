@@ -409,6 +409,9 @@ var (
 // checkWrittenDocument returns mongod's error for a document $merge cannot
 // write: an array 'on' field, or an _id that cannot be stored.
 func (s *merge) checkWrittenDocument(doc *types.Document) error {
+	if err := storedKeysError(doc); err != nil {
+		return err
+	}
 	on := s.on
 	if len(on) == 0 {
 		on = []string{"_id"}

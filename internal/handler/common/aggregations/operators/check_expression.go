@@ -65,6 +65,14 @@ func checkExpression(expr any, scope map[string]bool) error {
 			return checkIterating(v, scope)
 		case "$reduce":
 			return checkReduce(v, scope)
+		case "$setField", "$unsetField":
+			if spec := operatorSpec(v); spec != nil {
+				field, _ := spec.Get("field")
+				if name, ok := field.(string); ok && strings.IndexByte(name, 0) >= 0 {
+					return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSetFieldNulByte,
+						"$setField: 'field' cannot contain an embedded null byte", v.Command())
+				}
+			}
 		}
 		for _, k := range v.Keys() {
 			if err := checkExpression(must.NotFail(v.Get(k)), scope); err != nil {
