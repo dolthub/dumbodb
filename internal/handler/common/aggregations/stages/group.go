@@ -204,40 +204,51 @@ func (g *group) Process(ctx context.Context, iter types.DocumentsIterator, close
 		}
 	}
 
-	var res []*types.Document
+	res := &groupResultsIterator{g: g, gm: gm}
+	closer.Add(res)
 
-	for i := range gm.docs {
-		grp := &gm.docs[i]
+	return res, nil
+}
 
-		doc := must.NotFail(types.NewDocument("_id", grp.groupID))
+// groupResultsIterator computes each group's accumulator results as the group
+// is emitted, so results are not all held at once.
+type groupResultsIterator struct {
+	g    *group
+	gm   *groupMap
+	next int
+}
 
-		for j, acc := range grp.accs {
-			out, err := acc.Result()
-			if err != nil {
-				return nil, processGroupStageError(err)
-			}
+func (it *groupResultsIterator) Next() (struct{}, *types.Document, error) {
+	var unused struct{}
+	if it.gm == nil || it.next >= len(it.gm.docs) {
+		return unused, nil, iterator.ErrIteratorDone
+	}
+	grp := &it.gm.docs[it.next]
+	it.next++
 
-			field := g.groupBy[j].outputField
-
-			if doc.Has(field) {
-				// document has duplicate key
-				return nil, handlererrors.NewCommandErrorMsgWithArgument(
-					handlererrors.ErrStageIndexedStringVectorDuplicate,
-					fmt.Sprintf("duplicate field: %s", field),
-					"$group (stage)",
-				)
-			}
-
-			doc.Set(field, out)
+	doc := must.NotFail(types.NewDocument("_id", grp.groupID))
+	for j, acc := range grp.accs {
+		out, err := acc.Result()
+		if err != nil {
+			return unused, nil, processGroupStageError(err)
 		}
 
-		res = append(res, doc)
+		field := it.g.groupBy[j].outputField
+		if doc.Has(field) {
+			return unused, nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrStageIndexedStringVectorDuplicate,
+				fmt.Sprintf("duplicate field: %s", field),
+				"$group (stage)",
+			)
+		}
+		doc.Set(field, out)
 	}
+	*grp = groupedDocuments{}
+	return unused, doc, nil
+}
 
-	resIter := iterator.Values(iterator.ForSlice(res))
-	closer.Add(resIter)
-
-	return resIter, nil
+func (it *groupResultsIterator) Close() {
+	it.gm = nil
 }
 
 // evalGroupKey computes the _id group key for one document. It mirrors the type

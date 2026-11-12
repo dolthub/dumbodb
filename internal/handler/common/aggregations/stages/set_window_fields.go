@@ -496,29 +496,83 @@ func (s *setWindowFields) Process(ctx context.Context, iter types.DocumentsItera
 		return nil, err
 	}
 
-	var result []*types.Document
-
-	for _, partition := range partitions {
-		// Sort within partition.
-		if s.sortBy != nil && s.sortBy.Len() > 0 {
-			if err = common.SortDocuments(partition, s.sortBy); err != nil {
-				return nil, lazyerrors.Error(err)
-			}
-		}
-
-		// For each document in the partition, compute all output fields.
-		processed, err := s.applyWindowFunctions(partition)
-		if err != nil {
-			return nil, err
-		}
-
-		result = append(result, processed...)
-	}
-
-	res := iterator.Values(iterator.ForSlice(result))
+	res := &windowPartitionsIterator{s: s, partitions: partitions}
 	closer.Add(res)
 
 	return res, nil
+}
+
+// windowPartitionsIterator computes one partition's window outputs at a time,
+// and array-valued outputs only as each document is emitted, as mongod does.
+type windowPartitionsIterator struct {
+	s          *setWindowFields
+	partitions [][]*types.Document
+	partition  []*types.Document
+	processed  []*types.Document
+	next       int
+}
+
+func (it *windowPartitionsIterator) Next() (struct{}, *types.Document, error) {
+	var unused struct{}
+	for it.next >= len(it.processed) {
+		if len(it.partitions) == 0 {
+			return unused, nil, iterator.ErrIteratorDone
+		}
+		partition := it.partitions[0]
+		it.partitions[0] = nil
+		it.partitions = it.partitions[1:]
+
+		if it.s.sortBy != nil && it.s.sortBy.Len() > 0 {
+			if err := common.SortDocuments(partition, it.s.sortBy); err != nil {
+				return unused, nil, lazyerrors.Error(err)
+			}
+		}
+		processed, err := it.s.applyWindowFunctions(partition)
+		if err != nil {
+			return unused, nil, err
+		}
+		it.partition, it.processed, it.next = partition, processed, 0
+	}
+
+	i := it.next
+	doc := it.processed[i]
+	it.processed[i] = nil
+	it.next++
+	for _, wof := range it.s.outputs {
+		if !deferredWindowOutput(wof.operator) {
+			continue
+		}
+		val, err := it.s.windowValueAt(it.partition, wof, i)
+		if err != nil {
+			return unused, nil, err
+		}
+		doc.Set(wof.outputField, val)
+	}
+	return unused, doc, nil
+}
+
+func (it *windowPartitionsIterator) Close() {
+	it.partitions, it.partition, it.processed = nil, nil, nil
+}
+
+// deferredWindowOutput reports whether operator's results are computed as each
+// document is emitted, because they are arrays that may be large.
+func deferredWindowOutput(operator string) bool {
+	switch operator {
+	case "$push", "$addToSet", "$firstN", "$lastN", "$minN", "$maxN", "$topN", "$bottomN", "$percentile":
+		return true
+	}
+	return false
+}
+
+// windowValueAt computes a deferred window output for the document at index i
+// of the partition.
+func (s *setWindowFields) windowValueAt(partition []*types.Document, wof windowOutputField, i int) (any, error) {
+	window := s.windowDocs(wof.frame, i, partition)
+	if acc, ok := wof.opSpec.(accumulators.Accumulator); ok {
+		return accumulators.Accumulate(acc, iterator.Values(iterator.ForSlice(window)))
+	}
+	return applyAccumulator(wof.operator, wof.expression, window)
 }
 
 // partitionDocuments groups documents by the partitionBy expression.
@@ -607,6 +661,12 @@ func (s *setWindowFields) applyWindowFunctions(partition []*types.Document) ([]*
 	}
 
 	for _, wof := range s.outputs {
+		if deferredWindowOutput(wof.operator) {
+			for _, doc := range result {
+				doc.Set(wof.outputField, types.Null)
+			}
+			continue
+		}
 		vals, err := s.computeWindowValues(partition, wof)
 		if err != nil {
 			return nil, err
