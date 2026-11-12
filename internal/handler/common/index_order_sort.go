@@ -248,7 +248,8 @@ func firstOf(ops *types.Document, names ...string) string {
 // in the order mongod's OR stage runs them on an index led by field, or nil
 // when mongod reads the index in one scan: when a branch does not bound field,
 // so the whole index is scanned, or when each branch is one comparison of
-// field, whose bounds merge.
+// field, whose bounds merge. Such single comparisons beside other branches
+// merge into one scan that runs last.
 func orBranchesInPlanOrder(filter *types.Document, field string) []*types.Document {
 	if filter.Len() != 1 || filter.Keys()[0] != "$or" {
 		return nil
@@ -257,26 +258,41 @@ func orBranchesInPlanOrder(filter *types.Document, field string) []*types.Docume
 	if len(branches) < 2 {
 		return nil
 	}
-	merged := true
+	var ordered []*types.Document
+	leaves := types.MakeArray(0)
 	for _, b := range branches {
 		if !b.Has(field) {
 			return nil
 		}
-		ops, isOps := must.NotFail(b.Get(field)).(*types.Document)
-		leaf := !isOps || ops.Len() == 1 || !strings.HasPrefix(ops.Keys()[0], "$")
-		merged = merged && b.Len() == 1 && leaf
+		if b.Len() == 1 && isSingleComparison(must.NotFail(b.Get(field))) {
+			leaves.Append(b)
+		} else {
+			ordered = append(ordered, b)
+		}
 	}
-	if merged {
+	if len(ordered) == 0 {
 		return nil
 	}
-	ordered := slices.Clone(branches)
 	slices.SortStableFunc(ordered, func(a, b *types.Document) int {
 		if c := branchRank(a) - branchRank(b); c != 0 {
 			return c
 		}
 		return strings.Compare(strings.Join(a.Keys(), "."), strings.Join(b.Keys(), "."))
 	})
+	if leaves.Len() > 0 {
+		ordered = append(ordered, must.NotFail(types.NewDocument("$or", leaves)))
+	}
 	return ordered
+}
+
+// isSingleComparison returns whether field condition v is one predicate; a
+// $regex with its $options is one.
+func isSingleComparison(v any) bool {
+	ops, isOps := v.(*types.Document)
+	if !isOps || ops.Len() <= 1 || !strings.HasPrefix(ops.Keys()[0], "$") {
+		return true
+	}
+	return ops.Len() == 2 && ops.Has("$regex") && ops.Has("$options")
 }
 
 // branchRank is an $or branch's place in mongod's canonical order of match
