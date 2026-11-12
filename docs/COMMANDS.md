@@ -1493,9 +1493,11 @@ conflicts.
 If a validator is active on the collection after the merge (with
 `validationAction` other than `"warn"`), a `"theirs"` or `"custom"` document must
 satisfy it: resolving to one that violates the validator is **rejected** --
-supply a conforming `"custom"` document instead. `"ours"` keeps the document the
-branch already has, so it is not validated: a document that already fails the
-validator, such as one that predates it, stays as it is.
+supply a conforming `"custom"` document instead. `"ours"` is validated too,
+unless the merge leaves the collection with the validator the branch already
+had: then it keeps a document the branch already holds under that validator,
+and a document that already fails it, such as one that predates it, stays as it
+is.
 
 **`view`** -- both branches changed the same view definition:
 

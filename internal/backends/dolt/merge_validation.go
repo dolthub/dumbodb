@@ -225,6 +225,24 @@ func (b *Backend) mergedCollValidator(ctx context.Context, db *dbState, ms *merg
 	return readCollMetaFromCatalog(ctx, db, catMap, coll)
 }
 
+// oursKeepsItsValidator reports whether |coll|'s validation after the merge is the one ours had before it.
+func (b *Backend) oursKeepsItsValidator(ctx context.Context, db *dbState, ms *mergeInProgress, coll string) (bool, error) {
+	merged, err := b.mergedCollValidator(ctx, db, ms, coll)
+	if err != nil {
+		return false, err
+	}
+	catMap, err := catalogMapFromAM(ctx, db, ms.premergeAM)
+	if err != nil {
+		return false, err
+	}
+	ours, err := readCollMetaFromCatalog(ctx, db, catMap, coll)
+	if err != nil || merged == nil || ours == nil {
+		return false, err
+	}
+	return documentsEqual(merged.Validator, ours.Validator) && merged.ValidationLevel == ours.ValidationLevel &&
+		merged.ValidationAction == ours.ValidationAction, nil
+}
+
 // resolveValidationChoice computes the chosen value for a typ:"validation"
 // conflict: "custom" (re-validated here) or "drop". ours and theirs are rejected.
 func (b *Backend) resolveValidationChoice(ctx context.Context, db *dbState, ms *mergeInProgress, target *conflictEntry, params *backends.ResolveConflictParams) (chosenVal val.Tuple, deleteDoc bool, err error) {
