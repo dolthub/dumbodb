@@ -84,6 +84,11 @@ func collMetaToDoc(collName string, m *collMeta) (*types.Document, error) {
 	if err == nil && m.ClusteredIndexName != "" {
 		doc.Set("clusteredIndexName", m.ClusteredIndexName)
 	}
+	// The catalog entry is stored with sorted keys; mongod keeps and compares
+	// a validator in the order it was given, so its bytes are kept as well.
+	if err == nil && m.Validator != nil {
+		doc.Set("validatorBSON", types.Binary{Subtype: types.BinaryGeneric, B: m.Validator.AppendBSON(nil)})
+	}
 	return doc, err
 }
 
@@ -102,6 +107,13 @@ func docToCollMeta(doc *types.Document) *collMeta {
 	if v, err := doc.Get("validator"); err == nil {
 		if vd, ok := v.(*types.Document); ok {
 			m.Validator = vd
+		}
+	}
+	if v, err := doc.Get("validatorBSON"); err == nil {
+		if b, ok := v.(types.Binary); ok {
+			if vd, derr := decodeDocument(b.B); derr == nil {
+				m.Validator = vd
+			}
 		}
 	}
 	if v, err := doc.Get("collation"); err == nil {
