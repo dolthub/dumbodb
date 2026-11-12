@@ -24,6 +24,7 @@ import (
 
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
@@ -120,6 +121,23 @@ func (r *preferredNumberRounder) roundDown(v any) (any, error) {
 	return r.round(v, false), nil
 }
 
+// checkFiniteForRounding is mongod's check that the powers-of-two rounder
+// rounds only finite numbers.
+func checkFiniteForRounding(v any) error {
+	infinite := false
+	switch n := v.(type) {
+	case float64:
+		infinite = math.IsInf(n, 0)
+	case types.Decimal128:
+		infinite = aggregations.DecimalToAPD(n).Form == apd.Infinite
+	}
+	if infinite {
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrGranularityNotFinite,
+			"A granularity rounder can only round finite numbers", "$bucketAuto (stage)")
+	}
+	return nil
+}
+
 // round follows mongod's GranularityRounderPreferredNumbers: it scales the
 // series by powers of ten until it spans v, in v's arithmetic (decimal for a
 // Decimal128, double otherwise), and takes the neighbouring scaled value.
@@ -165,7 +183,7 @@ func (r *preferredNumberRounder) round(v any, up bool) any {
 }
 
 func (r *preferredNumberRounder) roundDecimal(v any, number *apd.Decimal, up bool) any {
-	if number.IsZero() || number.Form == apd.Infinite {
+	if f := decimalAsFloat(number); f == 0 || math.IsInf(f, 0) {
 		return v
 	}
 	series := make([]*apd.Decimal, len(r.series))
@@ -237,10 +255,16 @@ func (powersOfTwoRounder) roundDown(v any) (any, error) {
 }
 
 func powersOfTwo(v any, up bool) (any, error) {
+	if err := checkFiniteForRounding(v); err != nil {
+		return nil, err
+	}
 	var exp any
 	switch n := v.(type) {
 	case int32, int64:
-		i, _ := toInt64(n)
+		i, _ := n.(int64)
+		if i32, ok := n.(int32); ok {
+			i = int64(i32)
+		}
 		x := uint64(i)
 		if x == 0 {
 			return v, nil
@@ -260,8 +284,12 @@ func powersOfTwo(v any, up bool) (any, error) {
 		}
 		exp = int32(powersOfTwoExponent(n, up))
 	case types.Decimal128:
-		f, err := aggregations.DecimalToAPD(n).Float64()
-		if err != nil || f == 0 {
+		f := decimalAsFloat(aggregations.DecimalToAPD(n))
+		if math.IsInf(f, 0) {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrGranularityNotFinite,
+				"A granularity rounder can only round finite numbers", "$bucketAuto (stage)")
+		}
+		if f == 0 {
 			return v, nil
 		}
 		exp = aggregations.APDToDecimal128(apd.New(int64(powersOfTwoExponent(f, up)), 0))
@@ -277,14 +305,4 @@ func powersOfTwoExponent(f float64, up bool) int {
 		return int(math.Floor(math.Log2(f))) + 1
 	}
 	return int(math.Ceil(math.Log2(f))) - 1
-}
-
-func toInt64(v any) (int64, bool) {
-	switch n := v.(type) {
-	case int32:
-		return int64(n), true
-	case int64:
-		return n, true
-	}
-	return 0, false
 }

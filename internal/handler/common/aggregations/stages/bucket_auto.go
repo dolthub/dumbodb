@@ -20,7 +20,9 @@ import (
 	"fmt"
 	"math"
 	stdsort "sort"
+	"strconv"
 
+	"github.com/cockroachdb/apd/v3"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
@@ -316,13 +318,21 @@ func checkGranularityValue(v any) error {
 	return nil
 }
 
-// numberAsFloat returns a number as a double.
+// numberAsFloat returns a number as a double. A Decimal128 outside the
+// double range becomes an infinity or zero, as in mongod.
 func numberAsFloat(v any) (float64, bool) {
 	if d, ok := v.(types.Decimal128); ok {
-		f, err := aggregations.DecimalToAPD(d).Float64()
-		return f, err == nil
+		return decimalAsFloat(aggregations.DecimalToAPD(d)), true
 	}
 	return toFloat64(v)
+}
+
+func decimalAsFloat(d *apd.Decimal) float64 {
+	f, err := strconv.ParseFloat(d.String(), 64)
+	if err != nil && !errors.Is(err, strconv.ErrRange) {
+		return math.NaN()
+	}
+	return f
 }
 
 var (
