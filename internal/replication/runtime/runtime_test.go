@@ -463,11 +463,20 @@ func TestApplyEntryPanicDiscardsPublicationAndStopsReplication(t *testing.T) {
 	if count := recoveryCount(t, ctx, collection); count != 1 {
 		t.Fatalf("document count after panic = %d, want 1", count)
 	}
+	if err := store.SetInitialSyncPhase(control.InitialSyncComplete); err != nil {
+		t.Fatal(err)
+	}
+	if err := replicationRuntime.manager.MarkSteady(); err != nil {
+		t.Fatal(err)
+	}
 	if !replicationRuntime.stopOnPanic(applyErr) {
 		t.Fatal("stopOnPanic did not stop on an apply panic")
 	}
 	if phase := replicationRuntime.manager.Snapshot().Runtime.Phase; phase != "failed" {
 		t.Fatalf("runtime phase = %q, want failed", phase)
+	}
+	if state := replicationRuntime.manager.Snapshot().State; state == topology.StateSecondary {
+		t.Fatal("a member stopped by a panic still reports SECONDARY")
 	}
 	if failure := lastReplicationFailure(t, store); failure.Retryable || failure.Classification != "apply_panic" {
 		t.Fatalf("recorded failure = %+v", failure)
@@ -491,6 +500,12 @@ func TestRunRecoversPanicAndStops(t *testing.T) {
 	}
 	replicationRuntime.backend = &panicOnResetBackend{versionedBackend: replicationRuntime.backend}
 
+	if err := store.SetInitialSyncPhase(control.InitialSyncComplete); err != nil {
+		t.Fatal(err)
+	}
+	if err := replicationRuntime.manager.MarkSteady(); err != nil {
+		t.Fatal(err)
+	}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -504,6 +519,9 @@ func TestRunRecoversPanicAndStops(t *testing.T) {
 	if phase := replicationRuntime.manager.Snapshot().Runtime.Phase; phase != "failed" {
 		t.Fatalf("runtime phase = %q, want failed", phase)
 	}
+	if state := replicationRuntime.manager.Snapshot().State; state == topology.StateSecondary {
+		t.Fatal("a member stopped by a panic still reports SECONDARY")
+	}
 	if failure := lastReplicationFailure(t, store); failure.Retryable || failure.Classification != "panic" {
 		t.Fatalf("recorded failure = %+v", failure)
 	}
@@ -512,11 +530,20 @@ func TestRunRecoversPanicAndStops(t *testing.T) {
 func TestStopOnPanicStopsOnFetchPanic(t *testing.T) {
 	replicationRuntime, _, store := newRecoveryRuntime(t)
 	err := fmt.Errorf("initial sync oplog fetch ended: %w", &oplog.FetchPanicError{Source: "mongo-a:27017", Value: "boom"})
+	if err := store.SetInitialSyncPhase(control.InitialSyncComplete); err != nil {
+		t.Fatal(err)
+	}
+	if err := replicationRuntime.manager.MarkSteady(); err != nil {
+		t.Fatal(err)
+	}
 	if !replicationRuntime.stopOnPanic(err) {
 		t.Fatal("stopOnPanic did not stop on a fetch panic")
 	}
 	if phase := replicationRuntime.manager.Snapshot().Runtime.Phase; phase != "failed" {
 		t.Fatalf("runtime phase = %q, want failed", phase)
+	}
+	if state := replicationRuntime.manager.Snapshot().State; state == topology.StateSecondary {
+		t.Fatal("a member stopped by a panic still reports SECONDARY")
 	}
 	if failure := lastReplicationFailure(t, store); failure.Retryable || failure.Classification != "fetch_panic" {
 		t.Fatalf("recorded failure = %+v", failure)

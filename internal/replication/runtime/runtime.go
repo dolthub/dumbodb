@@ -539,6 +539,11 @@ func (r *Runtime) stopOnPanic(err error) bool {
 
 func (r *Runtime) stopReplication(stage, classification, message, logMessage string, logArgs ...any) {
 	r.manager.SetRuntimePhase("failed")
+	// A member that applies nothing more must not report itself as a
+	// current SECONDARY, which hello's secondary reads.
+	if err := r.manager.MarkContinuityLost(false); err != nil {
+		r.logger.Error("marking replication continuity lost", "err", err)
+	}
 	failure := control.ReplicationFailure{
 		Stage: stage, Classification: classification, Message: message, Retryable: false,
 	}
