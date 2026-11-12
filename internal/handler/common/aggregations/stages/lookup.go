@@ -70,6 +70,12 @@ type CollectionFetcher interface {
 	IndexedField(ctx context.Context, collectionName, field string) bool
 }
 
+// StatsFetcher is implemented by fetchers that can run a sub-pipeline that
+// starts with $collStats on collectionName.
+type StatsFetcher interface {
+	CollStats(ctx context.Context, collectionName string, pipeline []aggregations.Stage, closer *iterator.MultiCloser) (types.DocumentsIterator, error) //nolint:lll // for readability
+}
+
 // FetcherFunc adapts a function to a CollectionFetcher that has no indexes.
 type FetcherFunc func(ctx context.Context, collectionName string, filter *types.Document) ([]*types.Document, error)
 
@@ -87,6 +93,16 @@ type cachingFetcher struct {
 	all       map[string][]*types.Document
 	indexed   map[string]bool
 	eqIndexes map[string]*equalityIndex
+}
+
+// CollStats implements StatsFetcher when the wrapped fetcher does.
+func (c *cachingFetcher) CollStats(ctx context.Context, collectionName string, pipeline []aggregations.Stage, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
+	sf, ok := c.CollectionFetcher.(StatsFetcher)
+	if !ok {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrNotImplemented,
+			"$collStats is not supported here", "$collStats (stage)")
+	}
+	return sf.CollStats(ctx, collectionName, pipeline, closer)
 }
 
 func withFetchCache(f CollectionFetcher) *cachingFetcher {
@@ -264,6 +280,9 @@ func NewLookupStage(stage *types.Document, fetcher CollectionFetcher) (aggregati
 		}
 
 		if err := CheckParseFailingStages(pipelineArr); err != nil {
+			return nil, err
+		}
+		if err := checkFirstOnlyStages(pipelineArr); err != nil {
 			return nil, err
 		}
 		l.pipeline = pipelineArr
@@ -1011,6 +1030,18 @@ func (l *lookup) pipelineIter(ctx context.Context, fetcher CollectionFetcher, fr
 		}
 	}
 	MarkLookupsUnwound(built, specs)
+	if len(specs) > 0 && specs[0].Command() == "$collStats" && l.from != "" {
+		sf, ok := fetcher.(StatsFetcher)
+		if !ok {
+			return fail(handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrNotImplemented,
+				"$collStats is not supported here", "$collStats (stage)"))
+		}
+		stats, err := sf.CollStats(ctx, l.from, built, closer)
+		if err != nil {
+			return fail(err)
+		}
+		return stats, closer, nil
+	}
 	if l.sbeSubPipeline {
 		MarkSBELookups(built, specs)
 	}
@@ -1523,4 +1554,16 @@ func evalDocuments(stage *types.Document) ([]*types.Document, error) {
 		docs[i] = d
 	}
 	return docs, nil
+}
+
+// checkFirstOnlyStages returns mongod's error for a $collStats that is not
+// the first stage of a sub-pipeline.
+func checkFirstOnlyStages(pipeline *types.Array) error {
+	for i := 1; i < pipeline.Len(); i++ {
+		if d, ok := must.NotFail(pipeline.Get(i)).(*types.Document); ok && d.Len() == 1 && d.Command() == "$collStats" {
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCollStatsIsNotFirstStage,
+				"$collStats is only valid as the first stage in a pipeline", "$collStats (stage)")
+		}
+	}
+	return nil
 }
