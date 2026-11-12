@@ -375,7 +375,17 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			hint = clusteredHint(hint, cInfo.ClusteredIndexName)
 			document.Set("hint", hint)
 			err = checkHintType(hint)
-			if err == nil && !cInfo.IsView {
+			// Led by $match, mongod plans the read as a query, which refuses a
+			// compound $natural hint and overlooks a bad $natural value.
+			ledByMatch := false
+			if pipeline.Len() > 0 {
+				first, _ := must.NotFail(pipeline.Get(0)).(*types.Document)
+				ledByMatch = first != nil && first.Command() == "$match"
+			}
+			if err == nil && ledByMatch {
+				err = checkCompoundNaturalHint(hint, "aggregate")
+			}
+			if err == nil && !cInfo.IsView && !(ledByMatch && backends.HintIsNatural(hint)) {
 				err = validateHintExists(ctx, c, hint, "aggregate")
 			}
 			if err != nil {

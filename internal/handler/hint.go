@@ -48,6 +48,10 @@ func validateHintExists(ctx context.Context, coll backends.Collection, hint any,
 // overlooks, even for an empty name, for a read but not for an upsert, which
 // would create it.
 func validateHint(ctx context.Context, coll backends.Collection, hint any, command string, sort *types.Document, upsert bool) error {
+	if d, ok := hint.(*types.Document); ok && d.Len() > 1 && d.Has("$natural") {
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
+			"$natural hint cannot be set to a value other than -1 or 1.", command)
+	}
 	if d, ok := hint.(*types.Document); ok && backends.HintIsNatural(d) {
 		dir, ok := naturalDirection(must.NotFail(d.Get("$natural")))
 		if !ok {
@@ -87,6 +91,25 @@ func validateHint(ctx context.Context, coll backends.Collection, hint any, comma
 	}
 
 	return nil
+}
+
+// checkCompoundNaturalHint returns the error mongod gives a hint pairing
+// $natural with index keys where it plans the read as a query: an aggregate
+// led by $match, or a distinct.
+func checkCompoundNaturalHint(hint any, command string) error {
+	d, ok := hint.(*types.Document)
+	if !ok || d.Len() < 2 || !d.Has("$natural") {
+		return nil
+	}
+	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
+		"Cannot include '$natural' in compound hint: "+formatDupKey(d), command)
+}
+
+// collectionMissing reports whether coll does not exist.
+func collectionMissing(ctx context.Context, coll backends.Collection) bool {
+	_, err := coll.ListIndexes(ctx, nil)
+	return backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist) ||
+		backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseDoesNotExist)
 }
 
 // naturalDirection returns 1 or -1 for a $natural hint or sort value: any

@@ -112,6 +112,10 @@ func (h *Handler) MsgDistinct(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 	if params.Hint != nil {
 		params.Hint = clusteredHint(params.Hint, recordedClusteredName(connCtx, db, params.Collection))
 		if err = checkHintType(params.Hint); err == nil {
+			err = checkCompoundNaturalHint(params.Hint, "distinct")
+		}
+		// mongod overlooks a bad $natural value on a missing collection.
+		if err == nil && !(backends.HintIsNatural(params.Hint) && collectionMissing(connCtx, c)) {
 			err = validateHintExists(connCtx, c, params.Hint, "distinct")
 		}
 		if err != nil {
