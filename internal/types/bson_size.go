@@ -68,3 +68,8 @@ func bsonValueSize(v any) int {
 		panic(fmt.Sprintf("invalid BSON value type %T", v))
 	}
 }
+
+// BSONValueSize returns the length of v's BSON encoding as a field value.
+func BSONValueSize(v any) int {
+	return bsonValueSize(v)
+}

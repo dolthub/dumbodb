@@ -1187,12 +1187,17 @@ func applyAccumulator(op string, expression any, window []*types.Document) (any,
 		return values[len(values)-1], nil
 	case "$push":
 		arr := types.MakeArray(len(values))
+		size := 0
 		for _, v := range values {
+			if size += types.BSONValueSize(v); size > windowAccumulatorMemoryLimit {
+				return nil, windowMemoryError(op)
+			}
 			arr.Append(v)
 		}
 		return arr, nil
 	case "$addToSet":
 		arr := types.MakeArray(0)
+		size := 0
 		for _, v := range values {
 			found := false
 			for i := range arr.Len() {
@@ -1203,6 +1208,9 @@ func applyAccumulator(op string, expression any, window []*types.Document) (any,
 				}
 			}
 			if !found {
+				if size += types.BSONValueSize(v); size > windowAccumulatorMemoryLimit {
+					return nil, windowMemoryError(op)
+				}
 				arr.Append(v)
 			}
 		}
@@ -1805,3 +1813,13 @@ func computeLocf(expr any, partition []*types.Document) ([]any, error) {
 var (
 	_ aggregations.Stage = (*setWindowFields)(nil)
 )
+
+// windowAccumulatorMemoryLimit is mongod's limit on the values a window
+// function keeps.
+const windowAccumulatorMemoryLimit = 100 * 1024 * 1024
+
+func windowMemoryError(op string) error {
+	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrExceededMemoryLimit,
+		fmt.Sprintf("%s used too much memory and cannot spill to disk. Memory limit: %d bytes", op, windowAccumulatorMemoryLimit),
+		"$setWindowFields (stage)")
+}

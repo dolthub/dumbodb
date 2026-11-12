@@ -41,18 +41,23 @@ func newRankedSet(n int64, compare func(a, b any) int, largest bool) *rankedSet 
 	return &rankedSet{n: n, compare: compare, largest: largest}
 }
 
-func (s *rankedSet) add(key, value any) {
+// add offers value under key, charging the kept value to mem and releasing
+// the one it evicts.
+func (s *rankedSet) add(key, value any, mem *keptMemory, op string) error {
 	e := rankedEntry{key: key, value: value, seq: s.seq}
 	s.seq++
 	if int64(len(s.entries)) < s.n {
 		heap.Push(s, e)
-		return
+		return mem.keep(value, op)
 	}
 	c := s.compare(key, s.entries[0].key)
 	if (s.largest && c > 0) || (!s.largest && c < 0) {
+		mem.release(s.entries[0].value)
 		s.entries[0] = e
 		heap.Fix(s, 0)
+		return mem.keep(value, op)
 	}
+	return nil
 }
 
 // sorted returns the kept values in ascending key order, ties in arrival

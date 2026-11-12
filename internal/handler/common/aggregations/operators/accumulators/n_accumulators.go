@@ -211,6 +211,7 @@ type nState struct {
 	ranked *rankedSet
 	n      int64
 	ready  bool
+	mem    keptMemory
 }
 
 func (s *nState) Accumulate(doc *types.Document) error {
@@ -237,7 +238,7 @@ func (s *nState) Accumulate(doc *types.Document) error {
 	}
 	if s.ranked != nil {
 		if !missing && !isNull(v) {
-			s.ranked.add(v, v)
+			return s.ranked.add(v, v, &s.mem, s.spec.name)
 		}
 		return nil
 	}
@@ -246,9 +247,10 @@ func (s *nState) Accumulate(doc *types.Document) error {
 	}
 	s.values = append(s.values, v)
 	if s.spec.name == "$lastN" && int64(len(s.values)) > s.n {
+		s.mem.release(s.values[0])
 		s.values = s.values[1:]
 	}
-	return nil
+	return s.mem.keep(v, s.spec.name)
 }
 
 func (s *nState) Result() (any, error) {

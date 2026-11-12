@@ -163,6 +163,7 @@ func (a *topBottomAccumulator) compareKeys(x, y any) int {
 type topBottomState struct {
 	spec   *topBottomAccumulator
 	ranked *rankedSet
+	mem    keptMemory
 }
 
 func (s *topBottomState) Accumulate(doc *types.Document) error {
@@ -189,8 +190,7 @@ func (s *topBottomState) Accumulate(doc *types.Document) error {
 	for i, p := range s.spec.paths {
 		keys[i] = commonpath.SortKeyValue(doc, p)
 	}
-	s.ranked.add(keys, out)
-	return nil
+	return s.ranked.add(keys, out, &s.mem, s.spec.name)
 }
 
 func (s *topBottomState) Result() (any, error) {
