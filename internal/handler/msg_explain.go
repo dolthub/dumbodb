@@ -444,7 +444,7 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 		if coll, err = db.Collection(baseName); err != nil {
 			return nil, lazyerrors.Error(err)
 		}
-		if err = viewPipelineLength(len(commandStages(params)))(len(rawStages)); err != nil {
+		if err = viewPipelineLength(len(commandStages(params))+boolInt(params.CommandName == "count"))(len(rawStages)); err != nil {
 			return nil, err
 		}
 
