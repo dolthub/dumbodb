@@ -15,6 +15,7 @@
 package common
 
 import (
+	stageProjection "github.com/dolthub/dumbodb/internal/handler/common/aggregations/stages/projection"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
@@ -27,7 +28,7 @@ import (
 //
 // Close method closes the underlying iterator.
 func ProjectionIterator(iter types.DocumentsIterator, closer *iterator.MultiCloser, projection, filter *types.Document) (types.DocumentsIterator, error) { //nolint:lll // for readability
-	projectionValidated, inclusion, err := ValidateProjection(projection)
+	projectionValidated, inclusion, err := stageProjection.ValidateFindProjection(projection)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
 	}
