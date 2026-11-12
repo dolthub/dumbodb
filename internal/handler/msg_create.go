@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/FerretDB/wire"
+	"github.com/cockroachdb/apd/v3"
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
@@ -621,7 +622,15 @@ func parseTimeSeriesBucketSpan(tsDoc *types.Document, granularity string) (int32
 		case float64:
 			f = n
 		case types.Decimal128:
-			f, _ = aggregations.DecimalToAPD(n).Float64()
+			// mongod converts a decimal to an integer rounding half to even.
+			d := aggregations.DecimalToAPD(n)
+			rounded := new(apd.Decimal)
+			ctx := apd.BaseContext.WithPrecision(40)
+			ctx.Rounding = apd.RoundHalfEven
+			if _, err := ctx.Quantize(rounded, d, 0); err == nil {
+				d = rounded
+			}
+			f, _ = d.Float64()
 		default:
 			return 0, false, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrTypeMismatch,
 				fmt.Sprintf("BSON field 'create.timeseries.%s' is the wrong type '%s', expected types '[double, long, decimal, int']",
