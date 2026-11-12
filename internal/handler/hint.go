@@ -205,6 +205,8 @@ func hintedIndexOrder(ctx context.Context, coll backends.Collection, hint any, f
 			order.Set(k.Field, dir)
 			unbounded = unbounded || typeOrRegexCondition(filter, k.Field)
 		}
+		// The backend scans a sparse or partial index unbounded.
+		unbounded = unbounded || idx.Sparse || idx.PartialFilterExpression != nil
 		if descending || unbounded || topLevelOperator(filter) {
 			if (idx.Sparse || idx.PartialFilterExpression != nil) && orBranchMatchesMissing(filter) {
 				return order, common.AsOneIndexScan(filter), nil
