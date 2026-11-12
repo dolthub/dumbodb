@@ -475,6 +475,22 @@ const (
 	ErrSBEInput7158300           = ErrorCode(7158300) // Location7158300
 	ErrSBEInput7158301           = ErrorCode(7158301) // Location7158301
 	ErrSBEInput7158302           = ErrorCode(7158302) // Location7158302
+	ErrSBEInput7157905           = ErrorCode(7157905) // Location7157905
+	ErrSBEInput7157906           = ErrorCode(7157906) // Location7157906
+	ErrSBEInput7157907           = ErrorCode(7157907) // Location7157907
+	ErrSBEInput7157913           = ErrorCode(7157913) // Location7157913
+	ErrSBEInput7157922           = ErrorCode(7157922) // Location7157922
+	ErrSBEInput7157924           = ErrorCode(7157924) // Location7157924
+	ErrSBEInput7157936           = ErrorCode(7157936) // Location7157936
+	ErrSBEInput4997903           = ErrorCode(4997903) // Location4997903
+	ErrSBEInput4997908           = ErrorCode(4997908) // Location4997908
+	ErrSBEInput7158003           = ErrorCode(7158003) // Location7158003
+	ErrSBEInput7158009           = ErrorCode(7158009) // Location7158009
+	ErrSBEInput7157711           = ErrorCode(7157711) // Location7157711
+	ErrSBEInput7157713           = ErrorCode(7157713) // Location7157713
+	ErrSBEInput7157717           = ErrorCode(7157717) // Location7157717
+	ErrSBEInput5126601           = ErrorCode(5126601) // Location5126601
+	ErrSBEInput5153205           = ErrorCode(5153205) // Location5153205
 	ErrReplaceReplacementType    = ErrorCode(51744)   // Location51744
 	ErrReplaceFindType           = ErrorCode(51745)   // Location51745
 	ErrReplaceInputType          = ErrorCode(51746)   // Location51746
@@ -707,6 +723,15 @@ const (
 
 	// ErrNAccumulatorRootState indicates SBE reading $$ROOT as the n of an N accumulator.
 	ErrNAccumulatorRootState = ErrorCode(7548600) // Location7548600
+
+	// ErrSplitInputNotString indicates a $split input that is not a string.
+	ErrSplitInputNotString = ErrorCode(40085) // Location40085
+
+	// ErrSplitDelimiterNotString indicates a $split delimiter that is not a string.
+	ErrSplitDelimiterNotString = ErrorCode(40086) // Location40086
+
+	// ErrSplitEmptyDelimiter indicates an empty $split delimiter.
+	ErrSplitEmptyDelimiter = ErrorCode(40087) // Location40087
 
 	// $arrayToObject input errors.
 	ErrArrayToObjectInput           = ErrorCode(40386) // Location40386

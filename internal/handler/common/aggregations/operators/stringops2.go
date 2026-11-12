@@ -351,8 +351,9 @@ func (op *splitOp) Process(doc *types.Document) (any, error) {
 
 	s, ok := sv.(string)
 	if !ok {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$split",
-			fmt.Sprintf("$split requires a string, got %T", sv))
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSplitInputNotString,
+			"$split requires an expression that evaluates to a string as a first argument, found: "+handlerparams.AliasFromType(sv),
+			"$split")
 	}
 
 	dv, err := evalArgValue(op.delimiterArg, doc)
@@ -366,8 +367,13 @@ func (op *splitOp) Process(doc *types.Document) (any, error) {
 
 	delimiter, ok := dv.(string)
 	if !ok {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$split",
-			fmt.Sprintf("$split delimiter must be a string, got %T", dv))
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSplitDelimiterNotString,
+			"$split requires an expression that evaluates to a string as a second argument, found: "+handlerparams.AliasFromType(dv),
+			"$split")
+	}
+	if delimiter == "" {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSplitEmptyDelimiter,
+			"$split requires a non-empty separator", "$split")
 	}
 
 	parts := strings.Split(s, delimiter)
