@@ -685,6 +685,10 @@ const (
 	// ErrSearchNotAllowedInContext indicates $searchMeta in an update pipeline.
 	ErrSearchNotAllowedInContext = ErrorCode(6600901) // Location6600901
 
+	// ErrDropClusteredIndex indicates dropping a clustered collection's _id
+	// index.
+	ErrDropClusteredIndex = ErrorCode(5979800) // Location5979800
+
 	// ErrOpQueryInvalidField indicates that the field is not allowed for op query.
 	ErrOpQueryInvalidField = ErrorCode(40621) // Location40621
 

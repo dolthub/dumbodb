@@ -118,6 +118,11 @@ func (h *Handler) MsgDropIndexes(connCtx context.Context, msg *wire.OpMsg) (*wir
 	}
 
 	existing := beforeDrop.Indexes
+	visible := clientVisibleIndexes(connCtx, db, collection, existing)
+	timeSeries := len(visible) != len(existing)
+	if timeSeries {
+		existing = visible
+	}
 	if clusteredName := recordedClusteredName(connCtx, db, collection); clusteredName != "" {
 		if dropsClusteredIndex(indexValue, clusteredName) {
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrClusteredIndexDrop,
@@ -137,7 +142,7 @@ func (h *Handler) MsgDropIndexes(connCtx context.Context, msg *wire.OpMsg) (*wir
 		}
 	}
 
-	toDrop, dropAll, err := processDropIndexOptions(command, dbName+"."+collection, indexValue, existing)
+	toDrop, dropAll, err := processDropIndexOptions(command, dbName+"."+collection, indexValue, existing, timeSeries)
 	if err != nil {
 		return nil, err
 	}
@@ -182,8 +187,9 @@ func storedKeyPattern(key []backends.IndexKeyPair) []backends.IndexKeyPair {
 }
 
 // processDropIndexOptions parses and validates index doc and returns the list of indexes to delete
-// and true if a flag to drop all indexes except _id_ was set.
-func processDropIndexOptions(command, ns string, v any, existing []backends.IndexInfo) ([]string, bool, error) { //nolint:lll // for readability
+// and true if a flag to drop all indexes except _id_ was set. A time-series
+// collection has no _id index; existing omits DumboDB's own.
+func processDropIndexOptions(command, ns string, v any, existing []backends.IndexInfo, timeSeries bool) ([]string, bool, error) { //nolint:lll // for readability
 	switch v := v.(type) {
 	case *types.Document:
 		// Index specification (key) is provided to drop a specific index.
@@ -194,7 +200,7 @@ func processDropIndexOptions(command, ns string, v any, existing []backends.Inde
 			return nil, false, lazyerrors.Error(err)
 		}
 
-		if len(spec) == 1 && spec[0].Field == "_id" && !spec[0].Descending {
+		if len(spec) == 1 && spec[0].Field == "_id" && !spec[0].Descending && !timeSeries {
 			return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrInvalidOptions, "cannot drop _id index", command,
 			)
@@ -213,6 +219,9 @@ func processDropIndexOptions(command, ns string, v any, existing []backends.Inde
 		}
 
 		msg := fmt.Sprintf("can't find index with key: { %v }", formatIndexKey(spec))
+		if timeSeries && len(spec) == 1 && spec[0].Field == "_id" {
+			msg = "can't find index with key: { control.min._id: 1, control.max._id: 1 }"
+		}
 
 		return nil, false, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIndexNotFound, msg, command)
 
@@ -255,6 +264,11 @@ func processDropIndexOptions(command, ns string, v any, existing []backends.Inde
 			}
 
 			if index == backends.DefaultIndexName {
+				if timeSeries {
+					return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
+						handlererrors.ErrDropClusteredIndex, "It is illegal to drop the clusteredIndex", command,
+					)
+				}
 				return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
 					handlererrors.ErrInvalidOptions, "cannot drop _id index", command,
 				)
@@ -303,6 +317,11 @@ func processDropIndexOptions(command, ns string, v any, existing []backends.Inde
 		}
 
 		if v == backends.DefaultIndexName {
+			if timeSeries {
+				return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrDropClusteredIndex, "It is illegal to drop the clusteredIndex", command,
+				)
+			}
 			return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrInvalidOptions, "cannot drop _id index", command,
 			)

@@ -52,3 +52,12 @@ func createTimeSeriesMetaTimeIndex(ctx context.Context, db backends.Database, pa
 	}}})
 	return err
 }
+
+func hasIndexNamed(indexes []backends.IndexInfo, name string) bool {
+	for _, idx := range indexes {
+		if idx.Name == name {
+			return true
+		}
+	}
+	return false
+}

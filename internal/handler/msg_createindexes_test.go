@@ -46,7 +46,7 @@ func TestValidateIndexesForCreationSkipsExisting(t *testing.T) {
 		{"none exist", []backends.IndexInfo{idx("a", "a"), idx("b", "b")}, []string{"a", "b"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := validateIndexesForCreation("createIndexes", existing, tc.toCreate)
+			got, err := validateIndexesForCreation("createIndexes", existing, tc.toCreate, false)
 			if err != nil {
 				t.Fatalf("validateIndexesForCreation: %v", err)
 			}
@@ -135,7 +135,7 @@ func TestValidateManyLargeSpecsIsLinear(t *testing.T) {
 	}
 	start := time.Now()
 	for range 50 {
-		if _, err := validateIndexesForCreation("createIndexes", nil, toCreate); err != nil {
+		if _, err := validateIndexesForCreation("createIndexes", nil, toCreate, false); err != nil {
 			t.Fatal(err)
 		}
 	}

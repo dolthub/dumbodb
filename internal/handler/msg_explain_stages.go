@@ -366,7 +366,9 @@ func (h *Handler) statsStageReturns(ctx context.Context, db backends.Database, d
 		var err error
 		switch doc.Command() {
 		case "$indexStats":
-			built[i], err = stages.NewIndexStatsStage(doc, ctx, coll, h.TCPHost)
+			built[i], err = stages.NewIndexStatsStage(doc, ctx, coll, h.TCPHost, func(indexes []backends.IndexInfo) []backends.IndexInfo {
+				return clientVisibleIndexes(ctx, db, cName, indexes)
+			})
 		default:
 			built[i], err = foreignStageBuilder(db)(doc)
 		}
