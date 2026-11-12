@@ -136,6 +136,7 @@ func validateShape(projection *types.Document, ctx context) (*types.Document, bo
 		return nil, false, err
 	}
 	projection = FlattenProjection(projection)
+	var deferred error
 
 	if projection.Len() == 0 && ctx == stageContext {
 		return nil, false, ctx.error(handlererrors.ErrEmptyProject, "projection specification must have at least one field")
@@ -172,7 +173,16 @@ func validateShape(projection *types.Document, ctx context) (*types.Document, bo
 		switch value := value.(type) {
 		case *types.Document:
 			var neutral bool
-			if inclusionField, neutral, err = validateDocumentValue(key, value, inclusion, ctx); err != nil {
+			inclusionField, neutral, err = validateDocumentValue(key, value, inclusion, ctx)
+			var cmdErr *handlererrors.CommandError
+			if errors.As(err, &cmdErr) && cmdErr.Code() == handlererrors.ErrConversionFailure {
+				// Evaluating a constant fails only after the shape checks.
+				if deferred == nil {
+					deferred = err
+				}
+				inclusionField, neutral, err = true, false, nil
+			}
+			if err != nil {
 				return nil, false, err
 			}
 			validated.Set(key, value)
@@ -199,6 +209,9 @@ func validateShape(projection *types.Document, ctx context) (*types.Document, bo
 		}
 
 		if projection.Len() == 1 && key == "_id" {
+			if deferred != nil {
+				return nil, false, deferred
+			}
 			return validated, inclusionField, nil
 		}
 
@@ -207,12 +220,12 @@ func validateShape(projection *types.Document, ctx context) (*types.Document, bo
 				"positional projection cannot be used with exclusion")
 		}
 
-		// A computed _id makes the projection an inclusion; an _id flag does
-		// not decide the mode.
-		if key == "_id" && computed && inclusion != nil && !*inclusion {
+		// A computed value makes the projection an inclusion; an _id flag
+		// does not decide the mode.
+		if computed && inclusion != nil && !*inclusion {
 			return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrProjectionIDExpressionInExclusion,
-				ctx.prefix()+fmt.Sprintf("Cannot use an expression _id: %s in an exclusion projection", types.FormatAnyValue(value)),
+				ctx.prefix()+fmt.Sprintf("Cannot use an expression %s: %s in an exclusion projection", key, types.FormatAnyValue(value)),
 				"projection",
 			)
 		}
@@ -243,6 +256,10 @@ func validateShape(projection *types.Document, ctx context) (*types.Document, bo
 				"projection",
 			)
 		}
+	}
+
+	if deferred != nil {
+		return nil, false, deferred
 	}
 
 	if inclusion == nil {
