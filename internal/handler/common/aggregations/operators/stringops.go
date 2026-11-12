@@ -18,6 +18,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
@@ -49,11 +51,8 @@ func (c *concatOp) Process(doc *types.Document) (any, error) {
 
 		s, ok := v.(string)
 		if !ok {
-			return nil, newOperatorError(
-				ErrArgsInvalidLen,
-				"$concat",
-				fmt.Sprintf("$concat only supports strings, not %T", v),
-			)
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrConcatNotString,
+				"$concat only supports strings, not "+handlerparams.AliasFromType(v), "$concat")
 		}
 
 		buf.WriteString(s)

@@ -913,6 +913,21 @@ const (
 	// ErrSetFieldNulByte indicates a $setField field name with a null byte.
 	ErrSetFieldNulByte = ErrorCode(9534700) // Location9534700
 
+	// ErrConcatNotString indicates a classic $concat argument that is not a string.
+	ErrConcatNotString = ErrorCode(16702) // Location16702
+
+	// ErrStrLenBytesNotString indicates a classic $strLenBytes argument that is not a string.
+	ErrStrLenBytesNotString = ErrorCode(34473) // Location34473
+
+	// ErrTrimInputNotString indicates a classic $trim input that is not a string.
+	ErrTrimInputNotString = ErrorCode(50699) // Location50699
+
+	// ErrTrimCharsNotString indicates a classic $trim chars value that is not a string.
+	ErrTrimCharsNotString = ErrorCode(50700) // Location50700
+
+	// ErrSBEInput5156303 is SBE's error for $trim chars that are not a string.
+	ErrSBEInput5156303 = ErrorCode(5156303) // Location5156303
+
 	// ErrStageIndexedStringVectorDuplicate indicates that input to IndexedStringVector contained duplicate values.
 	ErrStageIndexedStringVectorDuplicate = ErrorCode(7582300) // Location7582300
 

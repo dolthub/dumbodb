@@ -41,14 +41,10 @@ func (op *strLenBytesOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	if isNullish(v) {
-		return types.Null, nil
-	}
-
 	s, ok := v.(string)
 	if !ok {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$strLenBytes",
-			fmt.Sprintf("$strLenBytes requires a string, got %T", v))
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrStrLenBytesNotString,
+			"$strLenBytes requires a string argument, found: "+handlerparams.AliasFromType(v), "$strLenBytes")
 	}
 
 	return int32(len(s)), nil
@@ -223,9 +219,9 @@ var _ Operator = (*substrCPOp)(nil)
 
 // trimOp represents { $trim: { input: <expr>, chars: <chars-expr> } }.
 type trimOp struct {
-	inputArg any
-	charsArg any
-	trimLeft bool
+	inputArg  any
+	charsArg  any
+	trimLeft  bool
 	trimRight bool
 }
 
@@ -283,8 +279,8 @@ func (op *trimOp) Process(doc *types.Document) (any, error) {
 
 	s, ok := sv.(string)
 	if !ok {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$trim",
-			fmt.Sprintf("$trim requires a string, got %T", sv))
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrTrimInputNotString,
+			fmt.Sprintf("%s requires its input to be a string, got %s (of type %s) instead.", op.name(), types.FormatAnyValue(sv), handlerparams.AliasFromType(sv)), op.name())
 	}
 
 	cutset := " \t\n\r" // default whitespace
@@ -295,11 +291,16 @@ func (op *trimOp) Process(doc *types.Document) (any, error) {
 			return nil, err
 		}
 
-		if !isNullish(cv) {
-			if cs, ok := cv.(string); ok {
-				cutset = cs
-			}
+		if isNullish(cv) {
+			return types.Null, nil
 		}
+		cs, ok := cv.(string)
+		if !ok {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrTrimCharsNotString,
+				fmt.Sprintf("%s requires 'chars' to be a string, got %s (of type %s) instead.",
+					op.name(), types.FormatAnyValue(cv), handlerparams.AliasFromType(cv)), op.name())
+		}
+		cutset = cs
 	}
 
 	if op.trimLeft && op.trimRight {
@@ -309,6 +310,16 @@ func (op *trimOp) Process(doc *types.Document) (any, error) {
 	}
 
 	return strings.TrimRight(s, cutset), nil
+}
+
+func (op *trimOp) name() string {
+	switch {
+	case op.trimLeft && op.trimRight:
+		return "$trim"
+	case op.trimLeft:
+		return "$ltrim"
+	}
+	return "$rtrim"
 }
 
 var _ Operator = (*trimOp)(nil)
