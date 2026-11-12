@@ -751,6 +751,25 @@ const (
 	// ErrNOperatorInputNotArray indicates that the input of an N operator is not an array.
 	ErrNOperatorInputNotArray = ErrorCode(5788200) // Location5788200
 
+	// $group accumulator specification errors.
+	ErrNAccumulatorSpecNotObject     = ErrorCode(5787801) // Location5787801
+	ErrNAccumulatorUnknownArgument   = ErrorCode(5787901) // Location5787901
+	ErrNAccumulatorMissingN          = ErrorCode(5787906) // Location5787906
+	ErrNAccumulatorMissingInput      = ErrorCode(5787907) // Location5787907
+	ErrNAccumulatorNInvalid          = ErrorCode(7548606) // Location7548606
+	ErrNAccumulatorNInvalidAtRuntime = ErrorCode(7548607) // Location7548607
+	ErrTopSpecNotObject              = ErrorCode(5788001) // Location5788001
+	ErrTopUnknownArgument            = ErrorCode(5788002) // Location5788002
+	ErrTopMissingN                   = ErrorCode(5788003) // Location5788003
+	ErrTopMissingOutput              = ErrorCode(5788004) // Location5788004
+	ErrTopMissingSortBy              = ErrorCode(5788005) // Location5788005
+	ErrPercentileSpecNotObject       = ErrorCode(7429703) // Location7429703
+	ErrMedianSpecNotObject           = ErrorCode(7436100) // Location7436100
+	ErrPercentileNotConstant         = ErrorCode(7750300) // Location7750300
+	ErrPercentileNotArray            = ErrorCode(7750301) // Location7750301
+	ErrPercentileNotNumber           = ErrorCode(7750302) // Location7750302
+	ErrPercentileOutOfRange          = ErrorCode(7750303) // Location7750303
+
 	// ErrStageIndexedStringVectorDuplicate indicates that input to IndexedStringVector contained duplicate values.
 	ErrStageIndexedStringVectorDuplicate = ErrorCode(7582300) // Location7582300
 

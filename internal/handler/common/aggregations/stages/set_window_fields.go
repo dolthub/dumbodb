@@ -25,6 +25,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators/accumulators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
@@ -294,6 +295,12 @@ func parseWindowOutputField(field string, spec *types.Document) (windowOutputFie
 				return wof, parseErr
 			}
 			wof.opSpec = spec
+		case "$firstN", "$lastN", "$minN", "$maxN", "$topN", "$bottomN", "$median", "$percentile":
+			acc, accErr := accumulators.NewAccumulator("$setWindowFields", field, must.NotFail(types.NewDocument(k, v)))
+			if accErr != nil {
+				return wof, accErr
+			}
+			wof.opSpec = acc
 		case "$top", "$bottom":
 			topDoc, ok := v.(*types.Document)
 			if !ok {
@@ -657,6 +664,17 @@ func (s *setWindowFields) computeWindowValues(partition []*types.Document, wof w
 		for i := range partition {
 			window := s.windowDocs(wof.frame, i, partition)
 			vals[i] = windowCount(len(window))
+		}
+
+	case "$firstN", "$lastN", "$minN", "$maxN", "$topN", "$bottomN", "$median", "$percentile":
+		acc := wof.opSpec.(accumulators.Accumulator)
+		for i := range partition {
+			window := s.windowDocs(wof.frame, i, partition)
+			val, err := accumulators.Accumulate(acc, iterator.Values(iterator.ForSlice(window)))
+			if err != nil {
+				return nil, err
+			}
+			vals[i] = val
 		}
 
 	case "$covariancePop", "$covarianceSamp":

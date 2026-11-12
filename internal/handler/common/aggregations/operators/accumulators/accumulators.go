@@ -154,16 +154,6 @@ func NewAccumulator(stage, key string, value any) (Accumulator, error) {
 // unimplementedAccumulators are MongoDB 8.0 $group accumulators DumboDB lacks.
 var unimplementedAccumulators = map[string]bool{
 	"$accumulator": true,
-	"$bottom":      true,
-	"$bottomN":     true,
-	"$firstN":      true,
-	"$lastN":       true,
-	"$maxN":        true,
-	"$median":      true,
-	"$minN":        true,
-	"$percentile":  true,
-	"$top":         true,
-	"$topN":        true,
 }
 
 // unknownAccumulatorError is the error for an operator Accumulators lacks:
@@ -206,15 +196,25 @@ var Accumulators = map[string]newAccumulatorFunc{
 	// sorted alphabetically
 	"$addToSet":     newAddToSet,
 	"$avg":          newAvg,
+	"$bottom":       newTopBottomFunc("$bottom"),
+	"$bottomN":      newTopBottomFunc("$bottomN"),
 	"$count":        newCount,
 	"$first":        newFirst,
+	"$firstN":       newNAccumulatorFunc("$firstN"),
 	"$last":         newLast,
+	"$lastN":        newNAccumulatorFunc("$lastN"),
 	"$max":          newMax,
+	"$maxN":         newNAccumulatorFunc("$maxN"),
+	"$median":       newPercentileFunc("$median", true),
 	"$mergeObjects": newMergeObjectsAccumulator,
 	"$min":          newMin,
+	"$minN":         newNAccumulatorFunc("$minN"),
+	"$percentile":   newPercentileFunc("$percentile", false),
 	"$push":         newPush,
 	"$stdDevPop":    newStdDevPop,
 	"$stdDevSamp":   newStdDevSamp,
 	"$sum":          newSum,
+	"$top":          newTopBottomFunc("$top"),
+	"$topN":         newTopBottomFunc("$topN"),
 	// please keep sorted alphabetically
 }

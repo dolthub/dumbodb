@@ -113,8 +113,12 @@ func isMissingVariable(doc *types.Document, name string) bool {
 	return doc != nil && doc.Has(missingVariablePrefix+name)
 }
 
-// isConstantExpression reports whether expr reads no field and no variable,
+// IsConstantExpression reports whether expr reads no field and no variable,
 // so that mongod folds it to a constant while parsing.
+func IsConstantExpression(expr any) bool {
+	return isConstantExpression(expr)
+}
+
 func isConstantExpression(expr any) bool {
 	switch v := expr.(type) {
 	case string:
