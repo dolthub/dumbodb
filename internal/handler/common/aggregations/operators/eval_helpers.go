@@ -433,13 +433,45 @@ func coerceToBool(v any) bool {
 	}
 }
 
+// systemVariables are the variables defined everywhere.
+var systemVariables = map[string]bool{
+	"ROOT": true, "CURRENT": true, "REMOVE": true, "NOW": true, "CLUSTER_TIME": true,
+	"DESCEND": true, "PRUNE": true, "KEEP": true, "SEARCH_META": true, "USER_ROLES": true,
+}
+
+// checkVariableReference returns mongod's parse error for a "$$name" value
+// outside any operator, where only system variables are defined.
+func checkVariableReference(v string) error {
+	name, _, _ := strings.Cut(v[2:], ".")
+	switch {
+	case name == "":
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFailedToParse,
+			"empty variable names are not allowed", v)
+	case !systemVariables[name]:
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrGroupUndefinedVariable,
+			"Use of undefined variable: "+name, v)
+	}
+	return nil
+}
+
 // CheckFieldPaths returns mongod's parse error for the first malformed field
 // path in the expression expr: an empty component, a component that starts
-// with '$', or '$' alone.
+// with '$', or '$' alone. Outside operators, which bind and check their own
+// variables, it also rejects a reference to an undefined variable.
 func CheckFieldPaths(expr any) error {
+	return checkFieldPaths(expr, false)
+}
+
+func checkFieldPaths(expr any, inOperator bool) error {
 	switch v := expr.(type) {
 	case string:
-		if !strings.HasPrefix(v, "$") || strings.HasPrefix(v, "$$") {
+		if strings.HasPrefix(v, "$$") {
+			if inOperator {
+				return nil
+			}
+			return checkVariableReference(v)
+		}
+		if !strings.HasPrefix(v, "$") {
 			return nil
 		}
 		const advice = "Consider using $getField or $setField for a field path with '.' or '$'. :: caused by :: "
@@ -459,7 +491,7 @@ func CheckFieldPaths(expr any) error {
 		}
 	case *types.Array:
 		for i := range v.Len() {
-			if err := CheckFieldPaths(must.NotFail(v.Get(i))); err != nil {
+			if err := checkFieldPaths(must.NotFail(v.Get(i)), inOperator); err != nil {
 				return err
 			}
 		}
@@ -467,8 +499,9 @@ func CheckFieldPaths(expr any) error {
 		if v.Command() == "$literal" {
 			return nil
 		}
+		op := inOperator || IsOperator(v)
 		for _, k := range v.Keys() {
-			if err := CheckFieldPaths(must.NotFail(v.Get(k))); err != nil {
+			if err := checkFieldPaths(must.NotFail(v.Get(k)), op); err != nil {
 				return err
 			}
 		}
