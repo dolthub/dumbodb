@@ -419,6 +419,9 @@ func processIndex(command string, indexDoc *types.Document, ignoreUnknownIndexOp
 			// ignore deprecated options
 
 		case "sparse":
+			if err := idIndexOptionError(command, index, indexDoc, "sparse"); err != nil {
+				return nil, err
+			}
 			v := must.NotFail(indexDoc.Get("sparse"))
 			if sparse, ok := v.(bool); ok && sparse {
 				index.Sparse = true
@@ -429,6 +432,9 @@ func processIndex(command string, indexDoc *types.Document, ignoreUnknownIndexOp
 			// Index options  -- accepted but not stored in the backend for now.
 
 		case "partialFilterExpression":
+			if err := idIndexOptionError(command, index, indexDoc, "partialFilterExpression"); err != nil {
+				return nil, err
+			}
 			// Store the partial filter expression so that unique enforcement can
 			// exclude documents that don't satisfy the filter.
 			if pfe, ok := must.NotFail(indexDoc.Get("partialFilterExpression")).(*types.Document); ok {
@@ -620,6 +626,42 @@ func sameCollation(a, b *types.Document) bool {
 	return collation.Parse(a).Identity() == collation.Parse(b).Identity()
 }
 
+// idIndexOptionError returns mongod's error for option, which an _id index
+// spec may not hold, in indexDoc when index is on _id alone.
+func idIndexOptionError(command string, index backends.IndexInfo, indexDoc *types.Document, option string) error {
+	if len(index.Key) != 1 || index.Key[0].Field != "_id" {
+		return nil
+	}
+	spec := strings.TrimSuffix(types.FormatAnyValue(indexDoc), " }") + ", v: 2 }"
+	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidIndexSpecificationOption,
+		fmt.Sprintf("The field '%s' is not valid for an _id index specification. Specification: %s", option, spec), command)
+}
+
+// indexSpecString is idx's spec as mongod prints it in an error: its key,
+// name and options, then v and a collation.
+func indexSpecString(idx backends.IndexInfo) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "{ key: { %s }, name: %q", formatIndexKey(idx.Key), idx.Name)
+	if idx.Unique {
+		b.WriteString(", unique: true")
+	}
+	if idx.Sparse {
+		b.WriteString(", sparse: true")
+	}
+	if idx.PartialFilterExpression != nil {
+		b.WriteString(", partialFilterExpression: " + types.FormatAnyValue(idx.PartialFilterExpression))
+	}
+	if idx.Hidden {
+		b.WriteString(", hidden: true")
+	}
+	b.WriteString(", v: 2")
+	if idx.Collation != nil {
+		b.WriteString(", collation: " + resolvedCollationString(idx.Collation))
+	}
+	b.WriteString(" }")
+	return b.String()
+}
+
 // checkClusteredIndexName returns mongod's error for an index named like the
 // collection's clustered index, other than one on _id, which is that index.
 func checkClusteredIndexName(command, clusteredName string, toCreate []backends.IndexInfo) error {
@@ -631,7 +673,7 @@ func checkClusteredIndexName(command, clusteredName string, toCreate []backends.
 		if idx.Name != clusteredName || key == "_id: 1" {
 			continue
 		}
-		spec := fmt.Sprintf("{ key: { %s }, name: %q, v: 2 }", key, idx.Name)
+		spec := indexSpecString(idx)
 		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIndexNameMatchesClusteredIndex, fmt.Sprintf(
 			"Error in specification %s :: caused by :: Cannot create an index where the name matches the clusteredIndex but the key "+
 				"does not - indexSpec: %s, clusteredIndex: { v: 2, key: { _id: 1 }, name: %q, unique: true }",
