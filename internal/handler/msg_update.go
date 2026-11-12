@@ -79,14 +79,14 @@ func (h *Handler) MsgUpdate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		"n", matched,
 	))
 
-	if upserted.Len() != 0 {
-		res.Set("upserted", upserted)
-	}
-
-	res.Set("nModified", modified)
+	// mongod's reply order.
 	if writeErrors.Len() > 0 {
 		res.Set("writeErrors", writeErrors)
 	}
+	if upserted.Len() != 0 {
+		res.Set("upserted", upserted)
+	}
+	res.Set("nModified", modified)
 	res.Set("ok", float64(1))
 
 	return documentOpMsg(

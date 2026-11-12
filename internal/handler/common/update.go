@@ -76,12 +76,34 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 			params.FieldMutations = pendingMutations
 		}
 		if _, err := c.UpdateAll(ctx, params); err != nil {
-			return lazyerrors.Error(err)
+			if len(pending) == 1 {
+				return lazyerrors.Error(err)
+			}
+			// A document that fails the write, as on a duplicate key, keeps
+			// the ones before it written, as mongod writes one at a time.
+			for i, doc := range pending {
+				one := &backends.UpdateAllParams{Docs: []*types.Document{doc}}
+				if params.FieldMutations != nil {
+					one.FieldMutations = pendingMutations[i : i+1]
+				}
+				if _, err := c.UpdateAll(ctx, one); err != nil {
+					return lazyerrors.Error(err)
+				}
+			}
 		}
 		result.Modified.Count += int32(len(pending))
 		pending = nil
 		pendingMutations = nil
 		return nil
+	}
+
+	// failAfterWrites writes the documents already updated, which a
+	// statement failing partway keeps on mongod, and returns err.
+	failAfterWrites := func(err error) (*UpdateResult, error) {
+		if ferr := flushPending(); ferr != nil {
+			return nil, ferr
+		}
+		return nil, err
 	}
 
 	for {
@@ -100,7 +122,7 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 
 			if !upsert {
 				if err := flushPending(); err != nil {
-					return nil, err
+					return failAfterWrites(err)
 				}
 				return result, nil
 			}
@@ -108,7 +130,7 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 
 		if upsert {
 			if err = processFilterEqualityCondition(doc, param.Filter); err != nil {
-				return nil, lazyerrors.Error(err)
+				return failAfterWrites(lazyerrors.Error(err))
 			}
 		} else {
 			result.Matched.Count++
@@ -143,7 +165,7 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 		}
 
 		if err != nil {
-			return nil, lazyerrors.Error(err)
+			return failAfterWrites(lazyerrors.Error(err))
 		}
 
 		if !doc.Has("_id") {
@@ -151,12 +173,12 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 		}
 
 		if err = doc.ValidateData(); err != nil {
-			return nil, lazyerrors.Error(err)
+			return failAfterWrites(lazyerrors.Error(err))
 		}
 
 		if upsert || param.IsPipeline || !param.HasUpdateOperators {
 			if err = types.ValidateReplacementID(must.NotFail(doc.Get("_id"))); err != nil {
-				return nil, lazyerrors.Error(err)
+				return failAfterWrites(lazyerrors.Error(err))
 			}
 		}
 
@@ -165,23 +187,23 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 			if !upsert && param.ValidationLevel == "moderate" {
 				preOK, verr := FilterDocument(preImage, param.Validator)
 				if verr != nil {
-					return nil, lazyerrors.Error(verr)
+					return failAfterWrites(lazyerrors.Error(verr))
 				}
 				mustValidate = preOK
 			}
 			if mustValidate {
 				ok, verr := FilterDocument(doc, param.Validator)
 				if verr != nil {
-					return nil, lazyerrors.Error(verr)
+					return failAfterWrites(lazyerrors.Error(verr))
 				}
 				if !ok {
 					if param.ValidationAction == "warn" {
 						result.WarnAllowed++
 					} else {
 						if err := flushPending(); err != nil {
-							return nil, err
+							return failAfterWrites(err)
 						}
-						return nil, NewUpdateError(handlererrors.ErrDocumentValidationFailure, "Document failed validation", cmd)
+						return failAfterWrites(NewUpdateError(handlererrors.ErrDocumentValidationFailure, "Document failed validation", cmd))
 					}
 				}
 			}
@@ -192,11 +214,11 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 			// but any pending updates must land first so their modified
 			// count is reflected before the caller sees the upsert result.
 			if err := flushPending(); err != nil {
-				return nil, err
+				return failAfterWrites(err)
 			}
 			_, err = c.InsertAll(ctx, &backends.InsertAllParams{Docs: []*types.Document{doc}})
 			if err != nil {
-				return nil, lazyerrors.Error(err)
+				return failAfterWrites(lazyerrors.Error(err))
 			}
 			result.Upserted.Doc = doc
 
