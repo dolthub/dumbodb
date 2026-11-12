@@ -110,6 +110,11 @@ func NewGroupStage(stage *types.Document, cmp *collation.Comparator) (aggregatio
 			if err = validateGroupKey(v); err != nil {
 				return nil, err
 			}
+			if s, ok := v.(string); ok && strings.HasPrefix(s, "$$") {
+				if err = operators.CheckFieldPaths(s); err != nil {
+					return nil, err
+				}
+			}
 			if err = operators.CheckConstantSubexpressions(v); err != nil {
 				return nil, err
 			}
