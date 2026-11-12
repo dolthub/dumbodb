@@ -116,8 +116,13 @@ func validateViewPipeline(dbName, viewName string, pipeline *types.Array) error 
 
 type foreignViewDepthKey struct{}
 
-// aggregateDBNameKey holds the database an aggregate command runs on.
-type aggregateDBNameKey struct{}
+// dbNameKey holds the database a command runs on, which a sub-pipeline's
+// $collStats reports.
+type dbNameKey struct{}
+
+func withDBName(ctx context.Context, dbName string) context.Context {
+	return context.WithValue(ctx, dbNameKey{}, dbName)
+}
 
 // ViewPipeline implements stages.ViewResolver: the stages of a view and of
 // the views it reads from.
@@ -143,9 +148,10 @@ func (f *foreignFetcher) CollStats(ctx context.Context, collName string, pipelin
 	if err != nil {
 		return nil, lazyerrors.Error(err)
 	}
-	dbName, _ := ctx.Value(aggregateDBNameKey{}).(string)
+	dbName, _ := ctx.Value(dbNameKey{}).(string)
 	return processStagesStats(ctx, closer, &stagesStatsParams{
 		c: c, db: f.db, dbName: dbName, cName: collName, statistics: stages.GetStatistics(pipeline), stages: pipeline,
+		subPipeline: true,
 	})
 }
 
