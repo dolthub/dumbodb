@@ -29,7 +29,7 @@ import (
 //	 |\-- p2
 //	 \-- p3
 //
-// c1 seeds documents with a and b "seed". m1 start and m2 start add documents 10 and 20.
+// m1 start and m2 start add documents 10 and 20, with u 10 and 20.
 
 func abItem(id int32, a, b string) func(t *testing.T) *types.Document {
 	return func(t *testing.T) *types.Document { return mustDoc(t, "_id", id, "a", a, "b", b) }
@@ -37,15 +37,22 @@ func abItem(id int32, a, b string) func(t *testing.T) *types.Document {
 
 func setAB(id int32, a, b string) edit { return setTo(abItem(id, a, b)) }
 
-// threeBasesHistory builds the history above with documents 1 to |seeded| in c1. Each of m1 and m2 merges p1, p2 and
+// abItems creates items in c1 with documents 1 to |n|.
+func abItems(n int32) func(t *testing.T, b *Backend, mode string) {
+	return func(t *testing.T, b *Backend, mode string) {
+		createItems(t, b, mode)
+		for id := int32(1); id <= n; id++ {
+			insertDoc(t, b, "testdb", "items", abItem(id, "seed", "seed")(t))
+		}
+	}
+}
+
+// threeBasesHistory builds the history above, with |setup| building c1. Each of m1 and m2 merges p1, p2 and
 // p3 in its order, resolving conflicts with ours and then |resolve|[name of the merged branch], and finally applies
 // |m1| or |m2|.
-func threeBasesHistory(t *testing.T, b *Backend, mode string, seeded int32, p1, p2, p3 edit, m1Resolve, m2Resolve map[string]edit, m1, m2 edit) {
+func threeBasesHistory(t *testing.T, b *Backend, mode string, setup func(t *testing.T, b *Backend, mode string), p1, p2, p3 edit, m1Resolve, m2Resolve map[string]edit, m1, m2 edit) {
 	t.Helper()
-	createItems(t, b, mode)
-	for id := int32(1); id <= seeded; id++ {
-		insertDoc(t, b, "testdb", "items", abItem(id, "seed", "seed")(t))
-	}
+	setup(t, b, mode)
 	commitDB(t, b, "testdb", "c1")
 	for _, branch := range []string{"p1", "p2", "p3", "m1", "m2"} {
 		branchFrom(t, b, "testdb", "main", branch)
@@ -55,9 +62,9 @@ func threeBasesHistory(t *testing.T, b *Backend, mode string, seeded int32, p1, 
 		e(t, b, branch)
 		commitBranch(t, b, "testdb", branch, branch)
 	}
-	insertDoc(t, b, "testdb@m1", "items", abItem(10, "m1", "seed")(t))
+	insertDoc(t, b, "testdb@m1", "items", uDoc(t, 10, 10))
 	commitBranch(t, b, "testdb", "m1", "m1 start")
-	insertDoc(t, b, "testdb@m2", "items", abItem(20, "m2", "seed")(t))
+	insertDoc(t, b, "testdb@m2", "items", uDoc(t, 20, 20))
 	commitBranch(t, b, "testdb", "m2", "m2 start")
 	for _, p := range []string{"p1", "p2", "p3"} {
 		mergeResolving(t, b, "m1", p, m1Resolve[p])
@@ -77,7 +84,7 @@ func threeBasesHistory(t *testing.T, b *Backend, mode string, seeded int32, p1, 
 func threeBasesOneConflict(t *testing.T, b *Backend, mode string) {
 	t.Helper()
 	resolved := setAB(1, "resolved", "seed")
-	threeBasesHistory(t, b, mode, 4,
+	threeBasesHistory(t, b, mode, abItems(4),
 		editAll(setAB(1, "p1", "seed"), setAB(2, "p1", "seed")),
 		editAll(setAB(1, "p2", "seed"), setAB(3, "p2", "seed")),
 		setAB(4, "seed", "p3"),
@@ -92,7 +99,7 @@ func threeBasesOneConflict(t *testing.T, b *Backend, mode string) {
 func threeBasesFoldedConflicts(m1Doc1, m2Doc1 func(t *testing.T) *types.Document) func(t *testing.T, b *Backend, mode string) {
 	return func(t *testing.T, b *Backend, mode string) {
 		t.Helper()
-		threeBasesHistory(t, b, mode, 3,
+		threeBasesHistory(t, b, mode, abItems(3),
 			editAll(setAB(1, "p1", "seed"), deleteItem(2)),
 			editAll(setAB(1, "p2", "p2"), setAB(3, "seed", "p2")),
 			editAll(setAB(1, "seed", "p3"), setAB(2, "p3", "seed")),
@@ -159,8 +166,8 @@ func TestVirtualMergeBase_ThreeMergeBasesKeepOneSidedChanges(t *testing.T) {
 					2:  abItem(2, "p1", "m1")(t),
 					3:  abItem(3, "p2", "m2")(t),
 					4:  abItem(4, "seed", "p3")(t),
-					10: abItem(10, "m1", "seed")(t),
-					20: abItem(20, "m2", "seed")(t),
+					10: uDoc(t, 10, 10),
+					20: uDoc(t, 20, 20),
 				})
 			})
 		}

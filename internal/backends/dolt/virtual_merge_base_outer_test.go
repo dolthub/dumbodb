@@ -35,8 +35,9 @@ func editAll(edits ...edit) edit {
 	}
 }
 
-// mergeResolving merges |from| into |into|, resolving every conflict with ours, including those a deferred collection
-// raises once its metadata conflict is resolved, then applies |resolve| and commits it.
+// mergeResolving merges |from| into |into|, resolving every conflict with ours, or a validation conflict by dropping
+// the document, including those a deferred collection raises once its metadata conflict is resolved, then applies
+// |resolve| and commits it.
 func mergeResolving(t *testing.T, b *Backend, into, from string, resolve edit) {
 	t.Helper()
 	ctx := context.Background()
@@ -72,21 +73,31 @@ func resolveAllWithOurs(t *testing.T, b *Backend, branch string) {
 	}
 	for _, cc := range res.Collections {
 		for _, c := range cc.Conflicts {
-			require.NoError(t, resolveConflict(t, b, "testdb", branch, cc.Collection, c.ConflictID, "ours", nil))
+			resolution := "ours"
+			if c.Type == "validation" {
+				resolution = "drop"
+			}
+			require.NoError(t, resolveConflict(t, b, "testdb", branch, cc.Collection, c.ConflictID, resolution, nil))
 		}
 	}
 }
 
 // outerResult is the outcome of merging two branches with two merge bases: a conflict on the document, or a clean
-// merge leaving |doc|, nil when the document is absent.
+// merge leaving |doc|, nil when the document is absent. With |elsewhere|, the merge may conflict on other documents,
+// but not on this one, which it leaves at |doc|.
 type outerResult struct {
-	conflict bool
-	doc      *types.Document
+	conflict  bool
+	elsewhere bool
+	doc       *types.Document
 }
 
 func conflicts() outerResult { return outerResult{conflict: true} }
 
 func merges(doc *types.Document) outerResult { return outerResult{doc: doc} }
+
+func mergesDespiteOthers(doc *types.Document) outerResult {
+	return outerResult{doc: doc, elsewhere: true}
+}
 
 // outerScenario is a criss-cross whose merge bases, x1 and y1, edit c0 with |x1| and |y1|:
 //
@@ -95,10 +106,11 @@ func merges(doc *types.Document) outerResult { return outerResult{doc: doc} }
 //	x2 = merge(x1, y1), y2 = merge(y1, x1)
 //
 // x2 and y2 resolve their merges with ours and then apply |x2| and |y2|; x3 and y3, when set, edit further. c0 has
-// documents 1 and 2 of seedItem in items. want is the outcome for document |id| of merging y into x, or x into y,
-// by merge mode; both directions give the same document.
+// documents 1 and 2 of seedItem in items, unless |setup| builds c0 instead. want is the outcome for document |id| of
+// merging y into x, or x into y, by merge mode; both directions give the same document.
 type outerScenario struct {
 	name   string
+	setup  func(t *testing.T, b *Backend, mode string)
 	id     int32
 	x1, y1 edit
 	x2, y2 edit
@@ -224,9 +236,13 @@ func outerScenarios() []outerScenario {
 
 func buildOuterScenario(t *testing.T, b *Backend, mode string, s outerScenario) {
 	t.Helper()
-	createItems(t, b, mode)
-	insertDoc(t, b, "testdb", "items", seedItem(t, 1))
-	insertDoc(t, b, "testdb", "items", seedItem(t, 2))
+	if s.setup != nil {
+		s.setup(t, b, mode)
+	} else {
+		createItems(t, b, mode)
+		insertDoc(t, b, "testdb", "items", seedItem(t, 1))
+		insertDoc(t, b, "testdb", "items", seedItem(t, 2))
+	}
 	commitDB(t, b, "testdb", "c0")
 	branchFrom(t, b, "testdb", "main", "x")
 	branchFrom(t, b, "testdb", "main", "y")
@@ -253,38 +269,67 @@ func buildOuterScenario(t *testing.T, b *Backend, mode string, s outerScenario) 
 func requireOuterResult(t *testing.T, b *Backend, into, from string, id int32, want outerResult) {
 	t.Helper()
 	ctx := context.Background()
+	requireValidMergeBase(t, b, into, from)
 	_, err := b.DumboDBMerge(ctx, &backends.MergeParams{
 		DBName: "testdb", Into: into, From: from, Message: "merge " + from, Author: "testuser <test@example.com>",
 	})
-	if want.conflict {
-		require.Error(t, err, "merging %s into %s must conflict", from, into)
-		res, cerr := b.DumboDBConflicts(ctx, &backends.ConflictsParams{DBName: "testdb", Branch: into})
-		require.NoError(t, cerr)
-		// A conflict with no document on any side, as when both tips deleted a document the merge bases added
-		// differently, counts as one on |id|.
-		var ids []any
-		for _, cc := range res.Collections {
-			for _, c := range cc.Conflicts {
-				found := false
-				for _, doc := range []*types.Document{c.Ours, c.Theirs, c.Base} {
-					if doc != nil {
-						v, _ := doc.Get("_id")
-						ids = append(ids, v)
-						found = true
-						break
-					}
-				}
-				if !found {
-					ids = append(ids, id)
-				}
+	if want.elsewhere && err != nil {
+		ids := conflictIDs(t, b, into, id)
+		require.NotContains(t, ids, id, "merging %s into %s must not conflict on document %d", from, into, id)
+		var got *types.Document
+		for _, doc := range drainQuery(t, ctx, collAt(t, b, "testdb", into, "items"), &backends.QueryParams{}) {
+			if v, _ := doc.Get("_id"); v == id {
+				got = doc
 			}
 		}
-		require.Contains(t, ids, id, "merging %s into %s must conflict on document %d", from, into, id)
+		requireSameDoc(t, want.doc, got, "document %d after merging %s into %s", id, from, into)
+		return
+	}
+	if want.conflict {
+		require.Error(t, err, "merging %s into %s must conflict", from, into)
+		require.Contains(t, conflictIDs(t, b, into, id), id, "merging %s into %s must conflict on document %d", from, into, id)
 		return
 	}
 	require.NoError(t, err, "merging %s into %s must be clean", from, into)
 	docs := virtualBaseItems(t, b, branchHash(t, b, into))
 	requireSameDoc(t, want.doc, docs[id], "document %d after merging %s into %s", id, from, into)
+}
+
+// requireValidMergeBase checks that the merge base of |into| and |from| passes rule 4's index checks.
+func requireValidMergeBase(t *testing.T, b *Backend, into, from string) {
+	t.Helper()
+	db, err := b.getOrOpenDB(context.Background(), "testdb", false)
+	require.NoError(t, err)
+	base, ok, err := db.mergeBase(context.Background(), branchHash(t, b, into), branchHash(t, b, from))
+	require.NoError(t, err)
+	require.True(t, ok)
+	requireIndexesMatchItems(t, b, base)
+}
+
+// conflictIDs returns the _id of each document conflict on |branch|. A conflict with no document on any side, as
+// when both tips deleted a document the merge bases added differently, counts as one on |id|.
+func conflictIDs(t *testing.T, b *Backend, branch string, id int32) []any {
+	t.Helper()
+	res, err := b.DumboDBConflicts(context.Background(), &backends.ConflictsParams{DBName: "testdb", Branch: branch})
+	require.NoError(t, err)
+	var ids []any
+	for _, cc := range res.Collections {
+		for _, c := range cc.Conflicts {
+			found := false
+			for _, doc := range []*types.Document{c.Ours, c.Theirs, c.Base} {
+				if doc != nil {
+					v, _ := doc.Get("_id")
+					ids = append(ids, v)
+					found = true
+					break
+				}
+			}
+			if !found {
+				ids = append(ids, id)
+			}
+		}
+	}
+	return ids
 }
 
 func TestVirtualMergeBase_OuterMergeHonorsFlags(t *testing.T) {

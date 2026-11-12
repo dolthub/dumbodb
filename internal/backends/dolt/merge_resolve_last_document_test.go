@@ -92,8 +92,9 @@ func requireEmptyItemsWithMetadata(t *testing.T, b *Backend) {
 	require.Empty(t, drainQuery(t, ctx, collAt(t, b, "testdb", "main", "items"), &backends.QueryParams{}))
 }
 
-
 // xyDoc returns document 1 of items with c "seed" and |fields|.
 func xyDoc(fields ...any) func(t *testing.T) *types.Document {
-	return func(t *testing.T) *types.Document { return mustDoc(t, append([]any{"_id", int32(1), "c", "seed"}, fields...)...) }
+	return func(t *testing.T) *types.Document {
+		return mustDoc(t, append([]any{"_id", int32(1), "c", "seed"}, fields...)...)
+	}
 }
