@@ -196,15 +196,19 @@ statements:
 
 		common.CanonicalizeFilter(u.Filter)
 		err = common.ValidateFilter(u.Filter, cmp)
+		pipelineMalformed := false
 		if err == nil && u.IsPipeline {
 			u.PipelineStages, err = common.ParseUpdatePipeline(u.Pipeline)
+			var ce *handlererrors.CommandError
+			pipelineMalformed = errors.As(err, &ce) && (ce.Code() == handlererrors.ErrStageInvalid ||
+				ce.Code() == handlererrors.ErrStageUnrecognized || ce.Code() == handlererrors.ErrTypeMismatch)
 		}
 		if err != nil {
 			// MongoDB reports an update's invalid filter or pipeline as a write
-			// error, except a malformed or unknown pipeline stage.
+			// error, except a pipeline element that is not one stage document
+			// or names an unknown stage, which fails the batch.
 			var ce *handlererrors.CommandError
-			if errors.As(err, &ce) && ce.Code() != handlererrors.ErrStageInvalid &&
-				ce.Code() != handlererrors.ErrStageUnrecognized {
+			if errors.As(err, &ce) && !pipelineMalformed {
 				if statementFailed(i, ce) {
 					break statements
 				}

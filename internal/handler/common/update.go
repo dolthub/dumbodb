@@ -440,6 +440,10 @@ func evaluateReplaceDocTemplate(templateDoc *types.Document, doc *types.Document
 // original _id.
 // Returns true if the document is changed. Returns error when _id is attempted to be changed.
 func processReplacementDoc(command string, doc, update *types.Document) (bool, error) {
+	if err := replacementDollarField(command, update); err != nil {
+		return false, err
+	}
+
 	if types.Compare(doc, update) == types.Equal {
 		return false, nil
 	}
@@ -1524,9 +1528,14 @@ func checkPullQueryFeatures(query *types.Document) error {
 // Returns false when no update operators are found. Returns an error when the document contains
 // unsupported operators or when there is a mix of operators and non-$-prefixed fields.
 func HasSupportedUpdateModifiers(command string, update *types.Document) (bool, error) {
-	var updateOps int
+	keys := update.Keys()
+	// A first field without $ makes a replacement, whose $-prefixed fields
+	// fail only when it is applied (replacementDollarField).
+	if len(keys) == 0 || !strings.HasPrefix(keys[0], "$") {
+		return false, nil
+	}
 
-	for _, operator := range update.Keys() {
+	for _, operator := range keys {
 		switch operator {
 		case // field update operators:
 			"$currentDate",
@@ -1537,33 +1546,41 @@ func HasSupportedUpdateModifiers(command string, update *types.Document) (bool, 
 
 			// array update operators:
 			"$pop", "$push", "$addToSet", "$pullAll", "$pull":
-			updateOps++
 		default:
-			if strings.HasPrefix(operator, "$") {
-				return false, NewUpdateError(
-					handlererrors.ErrFailedToParse,
-					fmt.Sprintf(
-						"Unknown modifier: %s. Expected a valid update modifier or pipeline-style "+
-							"update specified as an array", operator,
-					),
-					command,
-				)
-			}
-
-			// In case the operator doesn't start with $, treat the update as a replacement document
+			return false, NewUpdateError(
+				handlererrors.ErrFailedToParse,
+				fmt.Sprintf(
+					"Unknown modifier: %s. Expected a valid update modifier or pipeline-style "+
+						"update specified as an array", operator,
+				),
+				command,
+			)
 		}
 	}
 
-	if updateOps > 0 && updateOps != update.Len() {
-		// update contains a mix of non-$-prefixed fields (replacement document) and operators
-		return false, NewUpdateError(
-			handlererrors.ErrDollarPrefixedFieldName,
-			"The dollar ($) prefixed field is not allowed in the context of an update's replacement document.",
-			command,
-		)
-	}
+	return true, nil
+}
 
-	return (updateOps > 0), nil
+// replacementDollarField returns mongod's error for a replacement document
+// holding a top-level $-prefixed field, raised when it is applied.
+func replacementDollarField(command string, update *types.Document) error {
+	for _, key := range update.Keys() {
+		if !strings.HasPrefix(key, "$") {
+			continue
+		}
+		msg := fmt.Sprintf(
+			"The dollar ($) prefixed field '%s' in '%s' is not allowed in the context of an update's replacement document. "+
+				"Consider using an aggregation pipeline with $replaceWith.", key, key,
+		)
+		switch strings.ToLower(command) {
+		case "findandmodify":
+			msg = "Plan executor error during findAndModify :: caused by :: " + msg
+		case "bulkwrite":
+			msg = "Plan executor error during update :: caused by :: " + msg
+		}
+		return NewUpdateError(handlererrors.ErrDollarPrefixedFieldName, msg, command)
+	}
+	return nil
 }
 
 // NewUpdateError returns CommandError for findAndModify command, WriteError for other commands.

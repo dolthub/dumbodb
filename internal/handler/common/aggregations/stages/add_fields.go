@@ -16,12 +16,12 @@ package stages
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
@@ -49,7 +49,7 @@ func newAddFieldsStage(stage *types.Document, fold bool) (aggregations.Stage, er
 	if !ok {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrSetBadExpression,
-			fmt.Sprintf("$addFields specification stage must be an object, got %T", fields),
+			"$addFields specification stage must be an object, got "+handlerparams.AliasFromType(fields),
 			"$addFields (stage)",
 		)
 	}
