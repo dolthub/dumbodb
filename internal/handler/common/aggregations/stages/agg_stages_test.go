@@ -486,3 +486,39 @@ func TestAggStage_limit_LimitZeroError(t *testing.T) {
 		t.Errorf("error message: got %q, want %q", got, want)
 	}
 }
+
+// TestGeoNearSkipsNonFiniteDistance: $geoNear leaves out a document whose
+// distance overflows, rather than returning it first with a null distance.
+func TestGeoNearSkipsNonFiniteDistance(t *testing.T) {
+	t.Parallel()
+
+	line := must.NotFail(types.NewDocument("type", "LineString", "coordinates", must.NotFail(types.NewArray(
+		must.NotFail(types.NewArray(-1e308, 0.0)), must.NotFail(types.NewArray(1e308, 0.0)),
+	))))
+	docs := []*types.Document{
+		must.NotFail(types.NewDocument("_id", int32(1), "loc", line)),
+		must.NotFail(types.NewDocument("_id", int32(2), "loc", must.NotFail(types.NewArray(0.0, 1.5)))),
+	}
+	for _, spherical := range []bool{false, true} {
+		near := any(must.NotFail(types.NewArray(0.0, 1.0)))
+		if spherical {
+			near = must.NotFail(types.NewDocument("type", "Point", "coordinates", must.NotFail(types.NewArray(0.0, 1.0))))
+		}
+		stage, err := stages.NewStage(must.NotFail(types.NewDocument("$geoNear", must.NotFail(types.NewDocument(
+			"near", near, "distanceField", "d", "spherical", spherical, "key", "loc",
+		)))))
+		if err != nil {
+			t.Fatalf("NewStage($geoNear): %v", err)
+		}
+		closer := iterator.NewMultiCloser()
+		out, err := stage.Process(context.Background(), iterator.Values(iterator.ForSlice(docs)), closer)
+		if err != nil {
+			t.Fatalf("$geoNear Process: %v", err)
+		}
+		results := collectResults(t, out, closer)
+		closer.Close()
+		if len(results) != 1 || must.NotFail(results[0].Get("_id")) != int32(2) {
+			t.Errorf("spherical=%t: $geoNear returned %v, want only _id 2", spherical, results)
+		}
+	}
+}

@@ -29,7 +29,17 @@ import (
 // document), or a GeoJSON geometry. Spherical distances are in metres on
 // MongoDB's Earth radius, measured as S2 does; a point inside a polygon is at
 // distance 0.
+//
+// A distance that overflows to infinity or NaN, as from coordinates near the
+// float64 limit, is reported as MaxFloat64: no location.
 func GeoDistance(v any, x, y float64, spherical bool) float64 {
+	if d := geoDistance(v, x, y, spherical); !math.IsNaN(d) && !math.IsInf(d, 0) {
+		return d
+	}
+	return math.MaxFloat64
+}
+
+func geoDistance(v any, x, y float64, spherical bool) float64 {
 	if px, py, ok := geo.Point(v); ok {
 		return pointDistance(x, y, px, py, spherical)
 	}
