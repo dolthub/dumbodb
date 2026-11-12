@@ -56,6 +56,12 @@ func newUpdatePipeline(pipeline *types.Array) ([]aggregations.Stage, error) {
 			known := IsKnownStage(name)
 			allowed, isAllowed := updatePipelineStages[name]
 			if known && !isAllowed {
+				// mongod parses the stage before it refuses it here.
+				if _, alwaysFails := parseFailingStages[name]; !alwaysFails && FailsParsing(stage) {
+					if _, err := stageConstructors[name](stage); err != nil {
+						return nil, err
+					}
+				}
 				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidOptions,
 					name+" is not allowed to be used within an update", "update")
 			}
