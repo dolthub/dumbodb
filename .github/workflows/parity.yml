@@ -51,26 +51,18 @@ jobs:
           sudo apt-get install -y mongodb-org-server=8.0.28
           mongod --version
 
-      # Checks the KeyString encoder byte for byte against a clustered mongod's
-      # RecordIds. The test skips without MONGOD_BIN, so the step requires a
-      # PASS line rather than trusting the exit code alone.
-      - name: KeyString oracle
+      # Tests that need a live mongod build only with -tags mongod and fail
+      # when MONGOD_BIN is missing: the KeyString oracle against a clustered
+      # mongod's RecordIds, and the live replication heartbeat, oplog fetch,
+      # runtime and replica-set tests.
+      - name: Tests against mongod
         env:
           MONGOD_BIN: /usr/bin/mongod
-        run: |
-          set -o pipefail
-          go test ./internal/index/ -run '^TestKeyStringMatchesMongod$' -count=1 -v | tee /tmp/keystring-oracle.log
-          grep -q -- '--- PASS: TestKeyStringMatchesMongod' /tmp/keystring-oracle.log
-
-      # Runs the replication runtime against a live mongod primary. The tests
-      # skip without MONGOD_BIN, so the step requires their PASS lines.
-      - name: Live replication runtime
-        env:
-          MONGOD_BIN: /usr/bin/mongod
-        run: |
-          set -o pipefail
-          go test ./internal/replication/runtime/ -run '^TestLive' -count=1 -v | tee /tmp/live-runtime.log
-          grep -q -- '--- PASS: TestLiveRuntimeInitialSyncSteadyApplyAndRestart' /tmp/live-runtime.log
+        run: >-
+          go test -tags mongod -count=1 -timeout 20m
+          ./internal/index/ ./internal/replication/topology/ ./internal/replication/oplog/
+          ./internal/replication/runtime/ ./tests/
+          -run 'TestKeyStringMatchesMongod|TestLive'
 
       # --fork returns only once mongod is accepting connections, and fails the
       # step if it cannot start. The port check below is a second, explicit
