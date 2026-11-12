@@ -103,6 +103,7 @@ func NewUnionWithStage(stage *types.Document, fetcher CollectionFetcher) (aggreg
 	}
 
 	sub.sbePrefix = SBEPrefixLen(sbeSpecs(sub.pipeline))
+	sub.sbeSubPipeline = true
 
 	return &unionWith{sub: sub, fetcher: fetcher}, nil
 }

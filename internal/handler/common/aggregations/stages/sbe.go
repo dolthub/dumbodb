@@ -35,50 +35,57 @@ import (
 // runs in SBE: through its last $group, $bucket or $sortByCount when every
 // stage before it can be pushed down with it, else 0.
 func SBEPrefixLen(specs []*types.Document) int {
+	end, _ := sbePrefix(specs)
+	return end
+}
+
+// sbePrefix returns SBEPrefixLen and the number of leading stages mongod could
+// push down into SBE at all, which bounds the $lookup stages it runs there.
+func sbePrefix(specs []*types.Document) (int, int) {
 	var sawSort, sawProject, sawLimit, sawLookup, sawGroup bool
 	end := 0
 	for i, spec := range specs {
 		if spec == nil {
-			return end
+			return end, i
 		}
 		pushed := sawLookup || sawGroup
 		switch spec.Command() {
 		case "$match":
 			if sawLimit || sawGroup {
-				return end
+				return end, i
 			}
 		case "$sort":
 			if sawProject || sawLimit || pushed {
-				return end
+				return end, i
 			}
 			sawSort = true
 		case "$limit", "$skip":
 			if pushed {
-				return end
+				return end, i
 			}
 			sawLimit = true
 		case "$project":
 			if sawProject || pushed || !sbeProjectPushable(spec, sawSort) {
-				return end
+				return end, i
 			}
 			sawProject = true
 		case "$group":
 			sawGroup = true
 			end = i + 1
 		case "$bucket", "$sortByCount":
-			return i + 1
+			return i + 1, i + 1
 		case "$lookup":
 			if v, _ := spec.Get("$lookup"); v != nil {
 				if d, ok := v.(*types.Document); !ok || d.Has("pipeline") {
-					return end
+					return end, i
 				}
 			}
 			sawLookup = true
 		default:
-			return end
+			return end, i
 		}
 	}
-	return end
+	return end, len(specs)
 }
 
 // sbeSpecs returns the stage documents of pipeline, nil for a non-document.
@@ -135,6 +142,17 @@ func isProjectionTruthy(v any) bool {
 		return types.Compare(v, int32(0)) != types.Equal
 	}
 	return false
+}
+
+// MarkSBELookups has each equality $lookup that mongod runs in SBE apply
+// SBE's limit on one document's matches.
+func MarkSBELookups(pipeline []aggregations.Stage, specs []*types.Document) {
+	_, pushable := sbePrefix(specs)
+	for i := 0; i < pushable && i < len(pipeline); i++ {
+		if l, ok := pipeline[i].(*lookup); ok {
+			l.sbe = true
+		}
+	}
 }
 
 // WrapSBEStages makes the first n stages report expression errors as mongod's
