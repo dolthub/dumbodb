@@ -243,14 +243,14 @@ func (op *nOp) Process(doc *types.Document) (any, error) {
 	return out, nil
 }
 
-// integralN reads the 'n' of an N operator, which must be a positive integral
-// number.
 // IntegralN validates the 'n' of an N operator or accumulator as mongod's
 // classic engine does.
 func IntegralN(v any, name string) (int64, error) {
 	return integralN(v, name)
 }
 
+// integralN reads the 'n' of an N operator, which must be a positive integral
+// number.
 func integralN(v any, name string) (int64, error) {
 	var n int64
 	switch x := v.(type) {
@@ -342,6 +342,11 @@ func (op *percentileOp) Process(doc *types.Document) (any, error) {
 		out.Append(Percentile(nums, p))
 	}
 	return out, nil
+}
+
+// NumericValue returns a number as a double.
+func NumericValue(v any) (float64, bool) {
+	return numericValue(v)
 }
 
 func numericValue(v any) (float64, bool) {

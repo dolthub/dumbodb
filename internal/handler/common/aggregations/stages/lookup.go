@@ -1611,27 +1611,6 @@ func getFieldValue(doc *types.Document, field string) any {
 	return v
 }
 
-// lookupValuesMatch reports whether foreignVal matches localVal the way mongod
-// matches {foreignField: {$in: <candidates>}}, where the candidates are the
-// elements of an array localVal, or localVal itself otherwise. A missing value
-// or an empty array is a null candidate. An inner array is a single candidate.
-func lookupValuesMatch(localVal, foreignVal any) bool {
-	localArr, localIsArr := localVal.(*types.Array)
-	if !localIsArr || localArr.Len() == 0 {
-		if localIsArr {
-			localVal = nil
-		}
-		return foreignMatchesCandidate(foreignVal, localVal)
-	}
-
-	for i := 0; i < localArr.Len(); i++ {
-		if foreignMatchesCandidate(foreignVal, must.NotFail(localArr.Get(i))) {
-			return true
-		}
-	}
-	return false
-}
-
 // foreignMatchesCandidate reports whether foreignVal matches the query
 // equality {foreignField: candidate}: it equals candidate, or it is an array
 // with a top-level element that does. A null candidate matches a null or

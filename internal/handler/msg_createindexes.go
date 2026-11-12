@@ -239,7 +239,7 @@ func (h *Handler) MsgCreateIndexes(connCtx context.Context, msg *wire.OpMsg) (*w
 			return nil, err
 		}
 	}
-	timeSeries := len(visibleBefore) != len(beforeCreate.Indexes)
+	timeSeries := isTimeSeriesCollection(connCtx, db, collection)
 	if toCreate, err = validateIndexesForCreation(command, visibleBefore, toCreate, timeSeries); err != nil {
 		return nil, err
 	}

@@ -16,11 +16,9 @@ package accumulators
 
 import (
 	"fmt"
-	"math"
 	"slices"
 	"strings"
 
-	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -103,7 +101,7 @@ func (a *nArg) resolve() (int64, error) {
 		}
 		return operators.IntegralN(v, "n")
 	}
-	if n, ok := positiveInt64(v); ok && !missing {
+	if n, err := operators.IntegralN(v, "n"); err == nil && !missing {
 		return n, nil
 	}
 	switch a.kind {
@@ -119,30 +117,6 @@ func (a *nArg) resolve() (int64, error) {
 	return 0, handlererrors.NewCommandErrorMsgWithArgument(
 		handlererrors.ErrNAccumulatorNInvalid, "parameter 'n' must be coercible to a positive 64-bit integer", "n",
 	)
-}
-
-func positiveInt64(v any) (int64, bool) {
-	var n int64
-	switch x := v.(type) {
-	case int32:
-		n = int64(x)
-	case int64:
-		n = x
-	case float64:
-		if x != math.Trunc(x) || x >= math.MaxInt64 || x < math.MinInt64 {
-			return 0, false
-		}
-		n = int64(x)
-	case types.Decimal128:
-		i, ok := aggregations.Decimal128ToInt64(x)
-		if !ok {
-			return 0, false
-		}
-		n = i
-	default:
-		return 0, false
-	}
-	return n, n > 0
 }
 
 func specNotObjectError(code handlererrors.ErrorCode, op string, v any) error {

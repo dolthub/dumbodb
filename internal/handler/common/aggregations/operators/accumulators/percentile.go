@@ -18,7 +18,6 @@ import (
 	"math"
 	"slices"
 
-	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -49,21 +48,6 @@ func newPercentileFunc(name string, median bool) newAccumulatorFunc {
 	}
 }
 
-func numberAsFloat(v any) (float64, bool) {
-	switch n := v.(type) {
-	case int32:
-		return float64(n), true
-	case int64:
-		return float64(n), true
-	case float64:
-		return n, true
-	case types.Decimal128:
-		f, err := aggregations.DecimalToAPD(n).Float64()
-		return f, err == nil
-	}
-	return 0, false
-}
-
 func (a *percentileAccumulator) New() Accumulation {
 	return &percentileState{spec: a}
 }
@@ -78,7 +62,7 @@ func (s *percentileState) Accumulate(doc *types.Document) error {
 	if err != nil || missing {
 		return err
 	}
-	if f, ok := numberAsFloat(v); ok && !math.IsNaN(f) {
+	if f, ok := operators.NumericValue(v); ok && !math.IsNaN(f) {
 		s.nums = append(s.nums, f)
 	}
 	return nil
