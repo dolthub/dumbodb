@@ -16,6 +16,7 @@ package common
 
 import (
 	"slices"
+	"strings"
 
 	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/commonpath"
@@ -43,6 +44,9 @@ func SortIteratorInIndexOrder(iter types.DocumentsIterator, closer *iterator.Mul
 }
 
 func sortDocumentsInIndexOrder(docs []*types.Document, pattern, filter *types.Document, cmp *collation.Comparator) error {
+	if branches := orBranchesInPlanOrder(filter); branches != nil {
+		return sortByOrBranches(docs, pattern, branches, cmp)
+	}
 	fields := pattern.Keys()
 	paths := make([]types.Path, len(fields))
 	orders := make([]types.SortType, len(fields))
@@ -60,7 +64,7 @@ func sortDocumentsInIndexOrder(docs []*types.Document, pattern, filter *types.Do
 		// mongod bounds a field only below bounded ones; past an unbounded
 		// field it reads every key.
 		if bounded {
-			if admits[i] = elementAdmitter(filter, field, cmp); admits[i] == nil {
+			if admits[i] = elementAdmitter(boundedByFewerKeys(docs, filter, field, path, cmp), field, cmp); admits[i] == nil {
 				bounded = false
 			}
 		}
@@ -140,11 +144,9 @@ func elementAdmitter(filter *types.Document, field string, cmp *collation.Compar
 		v := must.NotFail(filter.Get(k))
 		switch k {
 		case field:
-			condDoc := must.NotFail(types.NewDocument("v", v))
-			tests = append(tests, func(elem any) bool {
-				ok, err := FilterDocumentColl(must.NotFail(types.NewDocument("v", elem)), condDoc, cmp)
-				return err == nil && ok
-			})
+			if t := conditionAdmitter(v, cmp); t != nil {
+				tests = append(tests, t)
+			}
 		case "$and":
 			for _, branch := range filterBranches(v) {
 				if t := elementAdmitter(branch, field, cmp); t != nil {
@@ -185,6 +187,255 @@ func elementAdmitter(filter *types.Document, field string, cmp *collation.Compar
 		}
 		return true
 	}
+}
+
+// boundedByFewerKeys returns filter with field's lower or upper comparison
+// dropped when it has both: a multikey walk takes one bound, and mongod's plan
+// trial keeps the one whose range holds fewer keys, the upper on a tie.
+func boundedByFewerKeys(docs []*types.Document, filter *types.Document, field string, path types.Path, cmp *collation.Comparator) *types.Document {
+	v, err := filter.Get(field)
+	ops, ok := v.(*types.Document)
+	if err != nil || !ok {
+		return filter
+	}
+	lower, upper := firstOf(ops, "$gt", "$gte"), firstOf(ops, "$lt", "$lte")
+	if lower == "" || upper == "" {
+		return filter
+	}
+	without := func(op string) *types.Document {
+		cond := ops.DeepCopy()
+		cond.Remove(op)
+		f := filter.DeepCopy()
+		f.Set(field, cond)
+		return f
+	}
+	keysIn := func(f *types.Document) int {
+		admit := conditionAdmitter(must.NotFail(f.Get(field)), cmp)
+		n := 0
+		for _, doc := range docs {
+			v := commonpath.SortKeyValue(doc, path)
+			if arr, isArr := v.(*types.Array); isArr {
+				for j := 0; j < arr.Len(); j++ {
+					if admit(must.NotFail(arr.Get(j))) {
+						n++
+					}
+				}
+			} else if admit(v) {
+				n++
+			}
+		}
+		return n
+	}
+	upperOnly, lowerOnly := without(lower), without(upper)
+	if keysIn(lowerOnly) < keysIn(upperOnly) {
+		return lowerOnly
+	}
+	return upperOnly
+}
+
+// firstOf returns the first of names that ops holds, or "".
+func firstOf(ops *types.Document, names ...string) string {
+	for _, n := range names {
+		if ops.Has(n) {
+			return n
+		}
+	}
+	return ""
+}
+
+// orBranchesInPlanOrder returns the branches of a filter that is a lone $or,
+// in the order mongod's OR stage runs them, or nil when mongod reads it as
+// one scan: an $or of equalities on one field, which it rewrites to $in.
+func orBranchesInPlanOrder(filter *types.Document) []*types.Document {
+	if filter.Len() != 1 || filter.Keys()[0] != "$or" {
+		return nil
+	}
+	branches := filterBranches(must.NotFail(filter.Get("$or")))
+	if len(branches) < 2 {
+		return nil
+	}
+	field, collapsible := "", true
+	for _, b := range branches {
+		if b.Len() != 1 || strings.HasPrefix(b.Keys()[0], "$") || field != "" && b.Keys()[0] != field {
+			collapsible = false
+			break
+		}
+		field = b.Keys()[0]
+		if _, isEq := equalityOperand(must.NotFail(b.Get(field))); !isEq {
+			collapsible = false
+			break
+		}
+	}
+	if collapsible {
+		return nil
+	}
+	ordered := slices.Clone(branches)
+	slices.SortStableFunc(ordered, func(a, b *types.Document) int {
+		if c := branchRank(a) - branchRank(b); c != 0 {
+			return c
+		}
+		return strings.Compare(strings.Join(a.Keys(), "."), strings.Join(b.Keys(), "."))
+	})
+	return ordered
+}
+
+// branchRank is an $or branch's place in mongod's canonical order of match
+// expressions: conjunctions first, then each predicate by its kind.
+func branchRank(b *types.Document) int {
+	if b.Len() != 1 {
+		return 0
+	}
+	key := b.Keys()[0]
+	switch key {
+	case "$and":
+		return 0
+	case "$or":
+		return 1
+	case "$nor":
+		return 30
+	}
+	ops, ok := must.NotFail(b.Get(key)).(*types.Document)
+	if !ok || ops.Len() == 0 || !strings.HasPrefix(ops.Keys()[0], "$") {
+		return 5
+	}
+	if ops.Len() > 1 {
+		return 0
+	}
+	switch ops.Keys()[0] {
+	case "$elemMatch":
+		return 2
+	case "$size":
+		return 4
+	case "$eq":
+		return 5
+	case "$lte":
+		return 6
+	case "$lt":
+		return 7
+	case "$gt":
+		return 8
+	case "$gte":
+		return 9
+	case "$regex":
+		return 10
+	case "$mod":
+		return 11
+	case "$exists":
+		return 12
+	case "$in":
+		return 13
+	case "$not":
+		return 25
+	case "$type":
+		return 31
+	}
+	return 20
+}
+
+// sortByOrBranches orders docs as mongod's OR stage returns them: the
+// documents of each branch in turn, each in the index order its own bounds
+// give, a document only at the first branch it matches.
+func sortByOrBranches(docs []*types.Document, pattern *types.Document, branches []*types.Document, cmp *collation.Comparator) error {
+	groups := make([][]*types.Document, len(branches)+1)
+	for _, doc := range docs {
+		g := len(branches)
+		for i, b := range branches {
+			if ok, err := FilterDocumentColl(doc, b, cmp); err == nil && ok {
+				g = i
+				break
+			}
+		}
+		groups[g] = append(groups[g], doc)
+	}
+	out := docs[:0:0]
+	for i, group := range groups {
+		branch := types.MakeDocument(0)
+		if i < len(branches) {
+			branch = branches[i]
+		}
+		if err := sortDocumentsInIndexOrder(group, pattern, branch, cmp); err != nil {
+			return err
+		}
+		out = append(out, group...)
+	}
+	copy(docs, out)
+	return nil
+}
+
+// rangeOperatorOrder is the order mongod's canonical form sorts comparison
+// operators in; on a multikey field it bounds the walk by the first alone.
+var rangeOperatorOrder = []string{"$eq", "$lte", "$lt", "$gt", "$gte"}
+
+// conditionAdmitter returns whether field condition v's bounds hold an array
+// element, or nil when they do not bound the field: a $type that includes
+// arrays scans every key. A nested array is its own key, so only an equal
+// array admits it. Of several comparisons only the first in canonical order
+// bounds a multikey field.
+func conditionAdmitter(v any, cmp *collation.Comparator) func(any) bool {
+	cond := v
+	if ops, ok := v.(*types.Document); ok && ops.Len() > 0 && strings.HasPrefix(ops.Keys()[0], "$") {
+		if t, err := ops.Get("$type"); err == nil && typeIncludesArray(t) {
+			return nil
+		}
+		reduced := types.MakeDocument(ops.Len())
+		bounded := false
+		for _, op := range rangeOperatorOrder {
+			if ov, err := ops.Get(op); err == nil {
+				reduced.Set(op, ov)
+				bounded = true
+				break
+			}
+		}
+		for _, op := range ops.Keys() {
+			if !slices.Contains(rangeOperatorOrder, op) {
+				reduced.Set(op, must.NotFail(ops.Get(op)))
+			}
+		}
+		if bounded {
+			cond = reduced
+		}
+	}
+	condDoc := must.NotFail(types.NewDocument("v", cond))
+	equal, isEquality := equalityOperand(v)
+	return func(elem any) bool {
+		if nested, ok := elem.(*types.Array); ok {
+			return isEquality && types.Compare(nested, equal) == types.Equal
+		}
+		ok, err := FilterDocumentColl(must.NotFail(types.NewDocument("v", elem)), condDoc, cmp)
+		return err == nil && ok
+	}
+}
+
+// typeIncludesArray reports whether a $type operand names the array type.
+func typeIncludesArray(t any) bool {
+	switch t := t.(type) {
+	case string:
+		return t == "array"
+	case int32, int64, float64:
+		return types.Compare(t, int32(4)) == types.Equal
+	case *types.Array:
+		for i := 0; i < t.Len(); i++ {
+			if typeIncludesArray(must.NotFail(t.Get(i))) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// equalityOperand returns the value a bare or $eq condition matches.
+func equalityOperand(v any) (any, bool) {
+	ops, ok := v.(*types.Document)
+	if !ok {
+		return v, true
+	}
+	if ops.Len() == 1 && ops.Keys()[0] == "$eq" {
+		return must.NotFail(ops.Get("$eq")), true
+	}
+	if ops.Len() > 0 && strings.HasPrefix(ops.Keys()[0], "$") {
+		return nil, false
+	}
+	return v, true
 }
 
 // filterBranches returns the documents of an $and or $or operand.

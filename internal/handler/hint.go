@@ -171,7 +171,8 @@ func hintedIndexOrder(ctx context.Context, coll backends.Collection, hint any, f
 }
 
 // typeOrRegexCondition reports whether filter tests field with $type or
-// $regex, or matches it against a regular expression.
+// $regex, matches it against a regular expression, or compares it more than
+// once: bounds a multikey walk takes from one comparison alone.
 func typeOrRegexCondition(filter *types.Document, field string) bool {
 	v, err := filter.Get(field)
 	if err != nil {
@@ -181,7 +182,13 @@ func typeOrRegexCondition(filter *types.Document, field string) bool {
 	case types.Regex:
 		return true
 	case *types.Document:
-		return v.Has("$type") || v.Has("$regex")
+		ranges := 0
+		for _, op := range []string{"$eq", "$lt", "$lte", "$gt", "$gte"} {
+			if v.Has(op) {
+				ranges++
+			}
+		}
+		return v.Has("$type") || v.Has("$regex") || ranges > 1
 	}
 	return false
 }
