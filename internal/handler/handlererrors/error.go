@@ -898,6 +898,9 @@ const (
 	// ErrBuiltinVariableUnavailable indicates a system variable a standalone server does not define.
 	ErrBuiltinVariableUnavailable = ErrorCode(51144) // Location51144
 
+	// ErrGranularityNotFinite indicates a $bucketAuto granularity rounder given an infinity.
+	ErrGranularityNotFinite = ErrorCode(11785400) // Location11785400
+
 	// ErrStageIndexedStringVectorDuplicate indicates that input to IndexedStringVector contained duplicate values.
 	ErrStageIndexedStringVectorDuplicate = ErrorCode(7582300) // Location7582300
 
