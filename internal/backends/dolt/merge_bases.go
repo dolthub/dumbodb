@@ -85,71 +85,84 @@ func (db *dbState) virtualMergeBase(ctx context.Context, bases []hash.Hash) (has
 	if err != nil {
 		return hash.Hash{}, nil, err
 	}
+	flags := make(virtualBaseFlags)
 	for i := len(bases) - 2; i >= 0; i-- {
 		next, err := db.doltCommit(ctx, bases[i])
 		if err != nil {
 			return hash.Hash{}, nil, err
 		}
-		if merged, err = db.mergeIntoVirtualBase(ctx, merged, next); err != nil {
+		var foldFlags virtualBaseFlags
+		if merged, foldFlags, err = db.mergeIntoVirtualBase(ctx, merged, next); err != nil {
 			return hash.Hash{}, nil, err
+		}
+		for collection, docs := range foldFlags {
+			if flags[collection] == nil {
+				flags[collection] = make(map[string]docFlag)
+			}
+			for key, flag := range docs {
+				flags[collection][key] = flag
+			}
 		}
 	}
 	h, err := merged.HashOf()
-	return h, nil, err
+	return h, flags, err
 }
 
-// mergeIntoVirtualBase merges |x| and |y| against their own merge base into a dangling commit. Its metadata is fixed
-// and dated with the later of their committer dates, so that the same merge bases always give the same commit.
-func (db *dbState) mergeIntoVirtualBase(ctx context.Context, x, y *doltdb.Commit) (*doltdb.Commit, error) {
+// mergeIntoVirtualBase merges |x| and |y| against their own merge base into a dangling commit, and returns it with the
+// documents it flags. Its metadata is fixed and dated with the later of their committer dates, so that the same merge
+// bases always give the same commit.
+func (db *dbState) mergeIntoVirtualBase(ctx context.Context, x, y *doltdb.Commit) (*doltdb.Commit, virtualBaseFlags, error) {
 	xHash, err := x.HashOf()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	yHash, err := y.HashOf()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	baseHash, ok, err := db.mergeBase(ctx, xHash, yHash)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if !ok {
-		return nil, fmt.Errorf("merge bases %s and %s have no common ancestor", xHash, yHash)
+		return nil, nil, fmt.Errorf("merge bases %s and %s have no common ancestor", xHash, yHash)
 	}
 	xAM, err := amFromCommitHash(ctx, db, xHash.String())
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	yAM, err := amFromCommitHash(ctx, db, yHash.String())
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	baseAM, err := amFromCommitHash(ctx, db, baseHash.String())
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	mergedAM, conflicts, viewConflicts, metaConflicts, deferred, err := mergeAddressMapsWithConflicts(ctx, db, xAM, yAM, baseAM,
-		yHash, baseHash, "merge base "+xHash.String(), "merge base "+yHash.String())
+	fold := newVirtualFold()
+	mergedAM, conflicts, viewConflicts, metaConflicts, deferred, err := mergeAddressMaps(ctx, db, xAM, yAM, baseAM,
+		yHash, baseHash, "merge base "+xHash.String(), "merge base "+yHash.String(), fold)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(conflicts) > 0 || len(viewConflicts) > 0 || len(metaConflicts) > 0 || len(deferred) > 0 {
-		return nil, fmt.Errorf("merge bases %s and %s conflict", xHash, yHash)
+		return nil, nil, fmt.Errorf("merge bases %s and %s conflict", xHash, yHash)
 	}
 	root, err := rootValueFromAM(ctx, db, mergedAM)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	date, err := laterCommitterDate(ctx, x, y)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	ident := datas.CommitIdent{Name: virtualMergeBaseName, Email: virtualMergeBaseEmail, Date: datas.CommitDateAt(date)}
 	meta, err := datas.NewCommitMetaWithAuthorCommitter(ident, ident, virtualMergeBaseDescription)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return doltdb.NewDanglingCommit(ctx, root, []*doltdb.Commit{x, y}, meta)
+	commit, err := doltdb.NewDanglingCommit(ctx, root, []*doltdb.Commit{x, y}, meta)
+	return commit, fold.flags, err
 }
 
 func laterCommitterDate(ctx context.Context, x, y *doltdb.Commit) (time.Time, error) {

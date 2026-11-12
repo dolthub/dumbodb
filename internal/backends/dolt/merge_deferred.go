@@ -151,7 +151,7 @@ func mergeDeferredCollections(ctx context.Context, state *dbState, ms *mergeInPr
 			continue
 		}
 		mergedH, conflicts, mergeErr := mergeCollectionDTBL(ctx, state, name, intoH, fromH, baseH,
-			ms.theirHash(), baseHash, oursDesc, theirsDesc, mergeModeOrDefault(resolvedMeta.MergeMode))
+			ms.theirHash(), baseHash, oursDesc, theirsDesc, mergeModeOrDefault(resolvedMeta.MergeMode), nil)
 		if mergeErr != nil {
 			return false, mergeErr
 		}

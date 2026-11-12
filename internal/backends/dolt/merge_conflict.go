@@ -1134,6 +1134,7 @@ func captureConflictsForCollection(
 	applier *indexMergeApplier,
 	oursDesc, theirsDesc string,
 	mode MergeMode,
+	fold *virtualFold,
 ) (mergedMap prolly.Map, entries []*conflictEntry, err error) {
 	ns := baseMap.NodeStore()
 
@@ -1419,6 +1420,12 @@ func captureConflictsForCollection(
 
 		// Divergent edits: real conflicts. Keep "ours" (left) value in the merged map.
 		case tree.DiffOpDivergentModifyConflict, tree.DiffOpDivergentDeleteConflict:
+			if fold != nil && collection != reservedCatalogName {
+				if err := foldConflict(ctx, fold, collection, diff, mode, ns, mut, docOf, applyIndexEdit, indexing); err != nil {
+					return prolly.Map{}, nil, err
+				}
+				continue
+			}
 			// Clone everything retained beyond this iteration: the
 			// differ reuses its tuple buffers between Next calls.
 			rawKey := append(val.Tuple(nil), diff.Key...)
@@ -1556,6 +1563,12 @@ func captureConflictsForCollection(
 // Returns the partial merged AM (with "ours" values for conflicting documents) and a
 // per-collection map of captured conflict entries. The conflicts map is non-nil but may be empty.
 func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, fromAM, baseAM prolly.AddressMap, theirHash, baseHash hash.Hash, oursDesc, theirsDesc string) (prolly.AddressMap, map[string][]*conflictEntry, map[string]*viewConflictEntry, map[string]*metaConflictEntry, map[string]struct{}, error) {
+	return mergeAddressMaps(ctx, state, intoAM, fromAM, baseAM, theirHash, baseHash, oursDesc, theirsDesc, nil)
+}
+
+// mergeAddressMaps is mergeAddressMapsWithConflicts, folding merge bases into a virtual merge base when |fold| is
+// non-nil.
+func mergeAddressMaps(ctx context.Context, state *dbState, intoAM, fromAM, baseAM prolly.AddressMap, theirHash, baseHash hash.Hash, oursDesc, theirsDesc string, fold *virtualFold) (prolly.AddressMap, map[string][]*conflictEntry, map[string]*viewConflictEntry, map[string]*metaConflictEntry, map[string]struct{}, error) {
 	viewConflicts := map[string]*viewConflictEntry{}
 	metaConflicts := map[string]*metaConflictEntry{}
 	deferredCollections := map[string]struct{}{}
@@ -1665,7 +1678,7 @@ func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, 
 			return prolly.AddressMap{}, nil, nil, nil, nil, modeErr
 		}
 		mergedH, collConflicts, err := mergeCollectionDTBL(ctx, state, name, intoH, fromH, baseH,
-			theirHash, baseHash, oursDesc, theirsDesc, mode)
+			theirHash, baseHash, oursDesc, theirsDesc, mode, fold)
 		if err != nil {
 			return prolly.AddressMap{}, nil, nil, nil, nil, err
 		}
@@ -1711,6 +1724,7 @@ func mergeCollectionDTBL(
 	theirHash, baseHash hash.Hash,
 	oursDesc, theirsDesc string,
 	mode MergeMode,
+	fold *virtualFold,
 ) (hash.Hash, []*conflictEntry, error) {
 	intoMap, err := openCollection(ctx, state.cs, state.ns, intoH)
 	if err != nil {
@@ -1769,7 +1783,7 @@ func mergeCollectionDTBL(
 	}
 	applier := &indexMergeApplier{state: state, survivors: survivors}
 	mergedMap, conflicts, err := captureConflictsForCollection(ctx, name, intoMap, fromMap, baseMap,
-		theirHash, applier, oursDesc, theirsDesc, mode)
+		theirHash, applier, oursDesc, theirsDesc, mode, fold)
 	if err != nil {
 		return hash.Hash{}, nil, fmt.Errorf("merging collection %q: %w", name, err)
 	}
