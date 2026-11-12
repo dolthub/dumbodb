@@ -138,6 +138,9 @@ func preflightIndex(database, collection string, document *types.Document) (back
 	if !ok || keyDocument.Len() == 0 {
 		return backends.IndexInfo{}, invalidOption(database, collection, name, "key", "non-empty key document is required")
 	}
+	if keyDocument.Len() > backends.MaxIndexKeyFields {
+		return backends.IndexInfo{}, invalidOption(database, collection, name, "key", "an index key pattern holds at most 32 fields")
+	}
 	index := backends.IndexInfo{Name: name}
 	keyIter := keyDocument.Iterator()
 	defer keyIter.Close()

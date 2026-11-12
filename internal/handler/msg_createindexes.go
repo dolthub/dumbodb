@@ -490,6 +490,9 @@ func processIndex(command string, indexDoc *types.Document, ignoreUnknownIndexOp
 }
 
 func processIndexKey(command string, keyDoc *types.Document) ([]backends.IndexKeyPair, error) {
+	if keyDoc.Len() > backends.MaxIndexKeyFields {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrTooManyCompoundKeys, "too many compound keys", command)
+	}
 	res := make([]backends.IndexKeyPair, 0, keyDoc.Len())
 
 	keyIter := keyDoc.Iterator()

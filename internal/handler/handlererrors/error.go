@@ -503,6 +503,9 @@ const (
 	// ErrConvertSubtypeColumn indicates a conversion to BinData subtype Column.
 	ErrConvertSubtypeColumn = ErrorCode(12910300) // Location12910300
 
+	// ErrTooManyCompoundKeys indicates an index key pattern of more than 32 fields.
+	ErrTooManyCompoundKeys = ErrorCode(13103) // Location13103
+
 	// ErrRangeWindowDescendingSort indicates range-based window bounds over a
 	// descending sortBy.
 	ErrRangeWindowDescendingSort = ErrorCode(8947401) // Location8947401

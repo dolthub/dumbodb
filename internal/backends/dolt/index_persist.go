@@ -252,8 +252,10 @@ func decodeIndexDefinition(doc *types.Document) (backends.IndexInfo, error) {
 		Multikey: getBool(doc, "multikey"),
 	}
 	if getBool(doc, "multikey") {
-		if mask, err := doc.Get("multikeyFields"); err == nil {
-			m, _ := mask.(int64)
+		// A mask of another type is unknown, so every field reads as
+		// multikey and its documents are deduplicated.
+		mask, _ := doc.Get("multikeyFields")
+		if m, ok := mask.(int64); ok {
 			info.MultikeyFields, info.MultikeyFieldsKnown = uint64(m), true
 		}
 	} else {

@@ -585,6 +585,9 @@ type ListIndexesResult struct {
 	Indexes []IndexInfo
 }
 
+// MaxIndexKeyFields is the most fields an index key pattern may hold.
+const MaxIndexKeyFields = 32
+
 type IndexInfo struct {
 	Name                    string
 	Key                     []IndexKeyPair

@@ -327,3 +327,23 @@ func TestSecondaryIndexSurvivesDoltCommit(t *testing.T) {
 		t.Errorf("expected 2 hits via persisted index after commit+reopen, got %d", got)
 	}
 }
+
+// TestDecodeMalformedMultikeyMaskIsUnknown: a stored multikeyFields of another
+// type leaves every field multikey, so reads still deduplicate documents.
+func TestDecodeMalformedMultikeyMaskIsUnknown(t *testing.T) {
+	keys := must.NotFail(types.NewArray(
+		must.NotFail(types.NewDocument("field", "a", "desc", false, "text", false, "geo2d", false, "geo2dsphere", false, "hashed", false)),
+		must.NotFail(types.NewDocument("field", "b", "desc", false, "text", false, "geo2d", false, "geo2dsphere", false, "hashed", false)),
+	))
+	for _, mask := range []any{int32(1), "1", 1.0} {
+		doc := must.NotFail(types.NewDocument("name", "a_b", "multikey", true, "multikeyFields", mask, "keys", keys))
+		info, err := decodeIndexDefinition(doc)
+		if err != nil {
+			t.Fatalf("mask %T: %v", mask, err)
+		}
+		if info.MultikeyFieldsKnown || !info.KeyMultikey(0) || !info.KeyMultikey(1) {
+			t.Errorf("mask %T: known=%t, multikey a=%t b=%t, want unknown and both multikey",
+				mask, info.MultikeyFieldsKnown, info.KeyMultikey(0), info.KeyMultikey(1))
+		}
+	}
+}
