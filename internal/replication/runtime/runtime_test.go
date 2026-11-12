@@ -522,3 +522,98 @@ func TestStopOnPanicStopsOnFetchPanic(t *testing.T) {
 		t.Fatalf("recorded failure = %+v", failure)
 	}
 }
+
+func TestRetryDelayBacksOff(t *testing.T) {
+	want := []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second, 32 * time.Second, time.Minute, time.Minute}
+	for n, w := range want {
+		if got := retryDelay(n); got != w {
+			t.Errorf("retryDelay(%d) = %v, want %v", n, got, w)
+		}
+	}
+	if got := retryDelay(1000); got != time.Minute {
+		t.Errorf("retryDelay(1000) = %v, want %v", got, time.Minute)
+	}
+}
+
+// TestFetcherLossWinsOverResume: when the fetcher reports a continuity loss
+// while the entry that would resume the member applies, the member stays
+// RECOVERING and steady replication returns the loss.
+func TestFetcherLossWinsOverResume(t *testing.T) {
+	ctx := context.Background()
+	replicationRuntime, _, store := newRecoveryRuntime(t)
+	if err := store.SetInitialSyncPhase(control.InitialSyncComplete); err != nil {
+		t.Fatal(err)
+	}
+	replicationRuntime.markInterrupted()
+	entry, err := oplog.ParseEntry(must.NotFail(types.NewDocument(
+		"ts", types.Timestamp(uint64(100)<<32|1),
+		"t", int64(2),
+		"op", "n",
+		"ns", "",
+		"o", must.NotFail(types.NewDocument("msg", "periodic noop")),
+	)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fetcherReturned := make(chan struct{})
+	replicationRuntime.fetchForTest = func(_ context.Context, buffer *oplog.Buffer) error {
+		if err := replicationRuntime.manager.AdvanceFetched(entry.OpTime, entry.OpTime); err != nil {
+			return err
+		}
+		if err := buffer.TryAppend(entry); err != nil {
+			return err
+		}
+		// Report the loss once the entry is taken to apply.
+		for buffer.Stats().Entries > 0 {
+			time.Sleep(time.Millisecond)
+		}
+		defer close(fetcherReturned)
+		return oplog.ErrContinuityLost
+	}
+	replicationRuntime.beforeApplyForTest = func(oplog.Entry) {
+		<-fetcherReturned
+		// Let the fetcher's goroutine deliver its result.
+		time.Sleep(50 * time.Millisecond)
+	}
+	if err := replicationRuntime.runSteady(ctx); !errors.Is(err, oplog.ErrContinuityLost) {
+		t.Fatalf("runSteady = %v, want the continuity loss", err)
+	}
+	if state := replicationRuntime.manager.Snapshot().State; state != topology.StateRecovering {
+		t.Fatalf("member state = %v, want RECOVERING", state)
+	}
+}
+
+// TestFetcherLossMarkedBeforeResumeKeepsRecovering: a continuity loss the
+// fetcher marks before it returns keeps the member RECOVERING through the
+// resume that races it.
+func TestFetcherLossMarkedBeforeResumeKeepsRecovering(t *testing.T) {
+	replicationRuntime, _, store := newRecoveryRuntime(t)
+	if err := store.SetInitialSyncPhase(control.InitialSyncComplete); err != nil {
+		t.Fatal(err)
+	}
+	replicationRuntime.markInterrupted()
+	if err := replicationRuntime.manager.MarkContinuityLost(false); err != nil {
+		t.Fatal(err)
+	}
+	replicationRuntime.resumeAfterInterruption()
+	if state := replicationRuntime.manager.Snapshot().State; state != topology.StateRecovering {
+		t.Fatalf("member state = %v, want RECOVERING", state)
+	}
+}
+
+// TestInterruptionResumesWhenAnEntryApplies: a steady failure that broke no
+// continuity leaves the member RECOVERING until an entry applies again.
+func TestInterruptionResumesWhenAnEntryApplies(t *testing.T) {
+	replicationRuntime, _, store := newRecoveryRuntime(t)
+	if err := store.SetInitialSyncPhase(control.InitialSyncComplete); err != nil {
+		t.Fatal(err)
+	}
+	replicationRuntime.markInterrupted()
+	if state := replicationRuntime.manager.Snapshot().State; state != topology.StateRecovering {
+		t.Fatalf("member state = %v, want RECOVERING", state)
+	}
+	replicationRuntime.resumeAfterInterruption()
+	if state := replicationRuntime.manager.Snapshot().State; state != topology.StateSecondary {
+		t.Fatalf("member state after resuming = %v, want SECONDARY", state)
+	}
+}
