@@ -926,8 +926,16 @@ func chooseIndexRange(idxInfos []backends.IndexInfo, filter *types.Document, hin
 		if idx.Lossy || len(idx.Key) == 0 || idx.Key[0].Field == "" || isGeoKey(idx.Key[0]) {
 			continue
 		}
+		// An index of another collation serves bounds that hold no string,
+		// as mongod's does; hinted, it is scanned whole for any others.
 		if collation.Parse(idx.Collation).Identity() != queryIdentity {
-			continue
+			v, err := filter.Get(idx.Key[0].Field)
+			if err != nil || !backends.CollationFree(v) {
+				if hintedName != "" {
+					return indexRangeChoice{mapIdx: i}, true
+				}
+				continue
+			}
 		}
 		partial := idx.PartialFilterExpression != nil
 		if partial && !filterImpliesPartial(filter, idx.PartialFilterExpression, collation.Parse(idx.Collation).IsSimple()) {
@@ -3796,7 +3804,7 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 		if idx.PartialFilterExpression != nil && !filterImpliesPartial(filter, idx.PartialFilterExpression, collation.Parse(idx.Collation).IsSimple()) {
 			continue
 		}
-		if collation.Parse(idx.Collation).Identity() != queryIdentity {
+		if collation.Parse(idx.Collation).Identity() != queryIdentity && !backends.CollationFree(must.NotFail(filter.Get(field))) {
 			continue
 		}
 		if backends.HintRequiresExistingIndex(hint) && backends.MatchHintedIndex(hint, []backends.IndexInfo{idx}) != idx.Name {
@@ -3888,7 +3896,7 @@ func (c *collection) tryExactIndexedCount(ctx context.Context, state *dbState, f
 	found := -1
 	var start, end []byte
 	for i, idx := range idxInfos {
-		if idx.Lossy || collation.Parse(idx.Collation).Identity() != queryColl.Identity() ||
+		if idx.Lossy || collation.Parse(idx.Collation).Identity() != queryColl.Identity() && !allCollationFree(filter) ||
 			idx.PartialFilterExpression != nil && !filterImpliesPartial(filter, idx.PartialFilterExpression, collation.Parse(idx.Collation).IsSimple()) ||
 			backends.HintRequiresExistingIndex(hint) && backends.MatchHintedIndex(hint, []backends.IndexInfo{idx}) != idx.Name {
 			continue
@@ -3902,6 +3910,17 @@ func (c *collection) tryExactIndexedCount(ctx context.Context, state *dbState, f
 		return 0, false, nil
 	}
 	return countIndexRange(ctx, idxMaps[found], start, end, idxInfos[found].Multikey, stop)
+}
+
+// allCollationFree reports whether every field condition of filter compares
+// no string.
+func allCollationFree(filter *types.Document) bool {
+	for _, k := range filter.Keys() {
+		if !backends.CollationFree(must.NotFail(filter.Get(k))) {
+			return false
+		}
+	}
+	return true
 }
 
 // exactCompoundCountBounds returns the range of a compound index holding

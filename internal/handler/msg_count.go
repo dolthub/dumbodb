@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/FerretDB/wire"
 
@@ -207,7 +208,7 @@ func (h *Handler) execCountReading(ctx context.Context, c backends.Collection, p
 	// A hint still allows the index count when it names the index the count
 	// would read; the backend declines any other. Unfiltered, a hint counts
 	// the index's entries.
-	if !h.DisablePushdown && cmp == nil && (params.Filter.Len() > 0 || hinted) {
+	if !h.DisablePushdown && (cmp == nil || filterCollationFree(params.Filter)) && (params.Filter.Len() > 0 || hinted) {
 		stop := int64(0)
 		if params.Limit > 0 {
 			stop = params.Skip + params.Limit
@@ -270,6 +271,20 @@ func (h *Handler) execCountReading(ctx context.Context, c backends.Collection, p
 	count, _ := res.Get("count")
 	n, _ = count.(int32)
 	return n, matched.n, nil
+}
+
+// filterCollationFree reports whether filter compares no string, so an index
+// of any collation counts it as the query's collation would.
+func filterCollationFree(filter *types.Document) bool {
+	if filter.Len() == 0 {
+		return false
+	}
+	for _, k := range filter.Keys() {
+		if strings.HasPrefix(k, "$") || !backends.CollationFree(must.NotFail(filter.Get(k))) {
+			return false
+		}
+	}
+	return true
 }
 
 // countingIterator counts the documents it yields.

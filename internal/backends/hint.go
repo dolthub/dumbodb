@@ -14,7 +14,12 @@
 
 package backends
 
-import "github.com/dolthub/dumbodb/internal/types"
+import (
+	"strings"
+
+	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/must"
+)
 
 // HintIsNatural reports whether hint is the {"$natural": <int>} pattern.
 // MongoDB treats this as "scan storage in natural order; do not pick an index."
@@ -101,4 +106,36 @@ func hintDirectionDescending(v any) (descending, ok bool) {
 		return n < 0, n == 1 || n == -1
 	}
 	return false, false
+}
+
+// CollationFree reports whether a filter condition compares no string, so
+// its index bounds are the same under every collation.
+func CollationFree(v any) bool {
+	switch v := v.(type) {
+	case string, types.Regex:
+		return false
+	case *types.Array:
+		for i := 0; i < v.Len(); i++ {
+			if !CollationFree(must.NotFail(v.Get(i))) {
+				return false
+			}
+		}
+		return true
+	case *types.Document:
+		if v.Len() == 0 || !strings.HasPrefix(v.Keys()[0], "$") {
+			return false
+		}
+		for _, op := range v.Keys() {
+			switch op {
+			case "$eq", "$gt", "$gte", "$lt", "$lte", "$in":
+				if !CollationFree(must.NotFail(v.Get(op))) {
+					return false
+				}
+			default:
+				return false
+			}
+		}
+		return true
+	}
+	return true
 }
