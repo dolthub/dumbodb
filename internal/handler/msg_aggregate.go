@@ -184,6 +184,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 	}
 	stagesDocuments := make([]aggregations.Stage, 0, len(aggregationStages))
 	collStatsDocuments := make([]aggregations.Stage, 0, len(aggregationStages))
+	stagesSpecs := make([]*types.Document, 0, len(aggregationStages))
 
 	for i, v := range aggregationStages {
 		var d *types.Document
@@ -264,9 +265,12 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			collStatsDocuments = append(collStatsDocuments, s)
 		default:
 			stagesDocuments = append(stagesDocuments, s)
+			stagesSpecs = append(stagesSpecs, d)
 			collStatsDocuments = append(collStatsDocuments, s) // It's possible to apply any stage after $collStats stage
 		}
 	}
+
+	stages.MarkLookupsUnwound(stagesDocuments, stagesSpecs)
 
 	if err = common.ValidatePipelineMetadata(aggregationStages); err != nil {
 		return nil, err

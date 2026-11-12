@@ -99,6 +99,8 @@ func NewUnionWithStage(stage *types.Document, fetcher CollectionFetcher) (aggreg
 		}
 	}
 
+	sub.unlimitedMatches = true
+
 	return &unionWith{sub: sub, fetcher: fetcher}, nil
 }
 
