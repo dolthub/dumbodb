@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/FerretDB/wire"
@@ -191,7 +192,27 @@ func (h *Handler) MsgCreateIndexes(connCtx context.Context, msg *wire.OpMsg) (*w
 	}
 
 	requested := len(toCreate)
+	// A request that cannot fit, whatever already exists, is refused before
+	// its specs are compared pairwise.
+	if len(toCreate) > maxIndexes {
+		existingNames := make(map[string]struct{}, len(beforeCreate.Indexes))
+		for _, idx := range beforeCreate.Indexes {
+			existingNames[idx.Name] = struct{}{}
+		}
+		fresh := make([]backends.IndexInfo, 0, len(toCreate))
+		for _, idx := range toCreate {
+			if _, ok := existingNames[idx.Name]; !ok {
+				fresh = append(fresh, idx)
+			}
+		}
+		if err = checkIndexCount(command, dbName, collection, numIndexesBefore, fresh); err != nil {
+			return nil, err
+		}
+	}
 	if toCreate, err = validateIndexesForCreation(command, beforeCreate.Indexes, toCreate); err != nil {
+		return nil, err
+	}
+	if err = checkIndexCount(command, dbName, collection, numIndexesBefore, toCreate); err != nil {
 		return nil, err
 	}
 
@@ -631,30 +652,50 @@ func sameCollation(a, b *types.Document) bool {
 // key differ when their unique, sparse, partialFilterExpression or collation
 // do; other options, such as hidden, do not make them different indexes.
 func indexConflict(command string, idx, other backends.IndexInfo, sameRequest bool) (bool, error) {
+	if idx.Name != other.Name && !slices.EqualFunc(idx.Key, other.Key, func(a, b backends.IndexKeyPair) bool { return a == b }) {
+		return false, nil
+	}
 	sameKey := formatIndexKey(idx.Key) == formatIndexKey(other.Key)
 	equivalent := sameKey && idx.Unique == other.Unique && idx.Sparse == other.Sparse &&
 		sameBSON(idx.PartialFilterExpression, other.PartialFilterExpression) && sameCollation(idx.Collation, other.Collation)
 	sameOptions := equivalent && idx.Hidden == other.Hidden
-	specs := fmt.Sprintf("Requested index: %s, existing index: %s", conflictSpec(idx), conflictSpec(other))
+	specs := func() string {
+		return fmt.Sprintf("Requested index: %s, existing index: %s", conflictSpec(idx), conflictSpec(other))
+	}
 	switch {
 	case idx.Name == other.Name && sameOptions:
 		return true, nil
 	case idx.Name == other.Name && equivalent:
 		return false, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIndexOptionsConflict,
-			"An equivalent index already exists with the same name but different options. "+specs, command)
+			"An equivalent index already exists with the same name but different options. "+specs(), command)
 	case idx.Name == other.Name:
 		return false, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIndexKeySpecsConflict,
 			"An existing index has the same name as the requested index."+
 				" When index names are not specified, they are auto generated and can cause conflicts."+
-				" Please refer to our documentation. "+specs, command)
+				" Please refer to our documentation. "+specs(), command)
 	case sameOptions || equivalent && sameRequest:
 		return false, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIndexOptionsConflict,
 			"Index already exists with a different name: "+other.Name, command)
 	case equivalent:
 		return false, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIndexOptionsConflict,
-			"An equivalent index already exists with a different name and options. "+specs, command)
+			"An equivalent index already exists with a different name and options. "+specs(), command)
 	}
 	return false, nil
+}
+
+// maxIndexes is the most indexes a collection may hold, its _id index
+// included, as on mongod.
+const maxIndexes = 64
+
+// checkIndexCount returns mongod's error when creating toCreate beside
+// existing indexes would pass maxIndexes, naming the first index past it.
+func checkIndexCount(command, dbName, collection string, existing int, toCreate []backends.IndexInfo) error {
+	if existing+len(toCreate) <= maxIndexes {
+		return nil
+	}
+	first := toCreate[max(maxIndexes-existing, 0)]
+	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCannotCreateIndex,
+		fmt.Sprintf("add index fails, too many indexes for %s.%s key:{ %s }", dbName, collection, formatIndexKey(first.Key)), command)
 }
 
 // conflictSpec is idx's spec as mongod prints it in an index conflict.

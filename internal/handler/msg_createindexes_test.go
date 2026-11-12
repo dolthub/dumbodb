@@ -16,8 +16,10 @@ package handler
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
@@ -121,4 +123,23 @@ func TestProcessIndexIgnoreUnknownIndexOptions(t *testing.T) {
 			t.Fatalf("unexpected index: %+v", idx)
 		}
 	})
+}
+
+// TestValidateManyLargeSpecsIsLinear: comparing the specs of one request does
+// not format them unless two conflict.
+func TestValidateManyLargeSpecsIsLinear(t *testing.T) {
+	pfe := must.NotFail(types.NewDocument("p", strings.Repeat("x", 3000)))
+	toCreate := make([]backends.IndexInfo, 60)
+	for i := range toCreate {
+		toCreate[i] = backends.IndexInfo{Name: fmt.Sprintf("i%d", i), Key: []backends.IndexKeyPair{{Field: fmt.Sprintf("f%d", i)}}, PartialFilterExpression: pfe}
+	}
+	start := time.Now()
+	for range 50 {
+		if _, err := validateIndexesForCreation("createIndexes", nil, toCreate); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if took := time.Since(start); took > 2*time.Second {
+		t.Fatalf("50 validations of 60 large specs took %v", took)
+	}
 }
