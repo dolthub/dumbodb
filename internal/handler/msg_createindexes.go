@@ -795,11 +795,6 @@ func validateIndexesForCreation(command string, existing, toCreate []backends.In
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCannotCreateIndex, msg, command)
 		}
 
-		// mongod checks the name before the key's field count.
-		if len(newIdx.Key) > backends.MaxIndexKeyFields {
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrTooManyCompoundKeys, "too many compound keys", command)
-		}
-
 		if newIdx.Name == backends.DefaultIndexName && newKey != "_id: 1" {
 			msg := fmt.Sprintf(
 				"The index name '_id_' is reserved for the _id index, which must have key pattern {_id: 1},"+
@@ -813,6 +808,11 @@ func validateIndexesForCreation(command string, existing, toCreate []backends.In
 		if newIdx.Name == backends.ReservedMetadataIndexName {
 			msg := fmt.Sprintf("The index name %q is reserved by DumboDB", backends.ReservedMetadataIndexName)
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue, msg, command)
+		}
+
+		// mongod checks the name before the key's field count.
+		if len(newIdx.Key) > backends.MaxIndexKeyFields {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrTooManyCompoundKeys, "too many compound keys", command)
 		}
 
 		// Compare against earlier entries in the same request.
