@@ -281,3 +281,9 @@ func getComparisonElementFromArray(arr *Array, order SortType) any {
 
 	panic("unsupported sort type")
 }
+
+// SameTypeClass reports whether a and b fall in one class of BSON's
+// comparison order, as all numbers do.
+func SameTypeClass(a, b any) bool {
+	return detectDataType(a) == detectDataType(b)
+}

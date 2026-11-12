@@ -114,6 +114,9 @@ func (c *collection) query(ctx context.Context, params *backends.QueryParams) (*
 			Iter: newEmptyIter(),
 		}, collscanStage(), nil
 	}
+	if params != nil && filterNeverMatches(params.Filter) {
+		return &backends.QueryResult{Iter: newEmptyIter()}, &explainStage{stage: "EOF"}, nil
+	}
 
 	// A {$natural: ...} hint forces a collection scan: skip both the secondary
 	// index lookup and the _id point lookup below.
@@ -974,7 +977,13 @@ func chooseIndexRange(idxInfos []backends.IndexInfo, filter *types.Document, hin
 		if !ok {
 			continue
 		}
-		v, err := filter.Get(k)
+		// An equality beside other comparisons reads only its value, or
+		// nothing, on a field that holds no array.
+		rf, empty := reducedForIndex(filter, idxInfos[entry.mapIdx])
+		if empty {
+			return indexRangeChoice{mapIdx: entry.mapIdx, pointRanges: [][2][]byte{}}, true
+		}
+		v, err := rf.Get(k)
 		if err != nil {
 			continue
 		}
@@ -1033,7 +1042,7 @@ func chooseIndexRange(idxInfos []backends.IndexInfo, filter *types.Document, hin
 			continue
 		}
 		if entry.compound {
-			if cs, ce, cok := compoundIndexBounds(idxInfos[entry.mapIdx], filter, queryCmp); cok {
+			if cs, ce, cok := compoundIndexBounds(idxInfos[entry.mapIdx], rf, queryCmp); cok {
 				s, e = cs, ce
 			} else {
 				s, e = compoundLeadingBounds(s, e)
@@ -2511,12 +2520,25 @@ func buildCountOrDistinctPlan(ctx context.Context, params *backends.ExplainParam
 			}
 		}
 		if !indexPicked {
-			picked, indexPicked = pickIndexForFilter(params.Filter, idxInfos, params.Collation, params.Command == "count")
+			picked, indexPicked = pickIndexForFilter(equalitiesAlone(params.Filter), idxInfos, params.Collation, params.Command == "count")
 		}
 	}
 	if params.Command == "count" {
+		if filterNeverMatches(params.Filter) {
+			return &explainStage{stage: "COUNT", input: &explainStage{stage: "EOF"}}
+		}
 		leaf := collscanStage()
+		reduced, empty := params.Filter, false
+		if indexPicked {
+			reduced, empty = reducedForIndex(params.Filter, picked)
+		}
 		switch {
+		case indexPicked && empty:
+			// The intersected bounds hold no key.
+			leaf = ixscanStage(picked)
+		case indexPicked && reduced != params.Filter && !hintedOffFilter(&backends.ExplainParams{Hint: params.Hint, Filter: reduced, Collation: params.Collation}, picked) &&
+			!countFetchesToMatch(reduced) && !filterIsIn(reduced):
+			leaf = &explainStage{stage: "COUNT_SCAN", indexName: picked.Name, keyPattern: keyPatternOf(picked)}
 		case indexPicked && hintedOffFilter(params, picked):
 			// A hinted index the filter does not lead fetches every entry.
 			leaf = fetchStage(ixscanStage(picked))
@@ -2526,6 +2548,9 @@ func buildCountOrDistinctPlan(ctx context.Context, params *backends.ExplainParam
 		case indexPicked && filterIsIn(params.Filter):
 			// An $in counts from an IXSCAN of its ranges, without a FETCH.
 			leaf = ixscanStage(picked)
+		case indexPicked && !countBoundsExact(reduced) && !sparseExistsCount(picked, reduced):
+			// Its bounds hold more keys than matches, so each is fetched.
+			leaf = fetchStage(ixscanStage(picked))
 		case indexPicked:
 			leaf = &explainStage{stage: "COUNT_SCAN", indexName: picked.Name, keyPattern: keyPatternOf(picked)}
 		default:
@@ -3740,6 +3765,9 @@ func (c *collection) Count(ctx context.Context, params *backends.CountParams) (*
 		return &backends.CountResult{Count: 0}, nil
 	}
 
+	if params != nil && filterNeverMatches(params.Filter) {
+		return &backends.CountResult{Count: 0, Filtered: true}, nil
+	}
 	if params != nil && params.Filter != nil && params.Filter.Len() > 0 {
 		n, used, ferr := c.tryIndexedCount(ctx, state, params.Filter, params.Collation, params.Stop, params.Hint)
 		if ferr != nil {
@@ -3837,6 +3865,14 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 	if sparseExistsCount(chosen, filter) {
 		return countIndexRange(ctx, idxMap, nil, nil, chosen.KeyMultikey(0), stop)
 	}
+	if !chosen.KeyMultikey(0) {
+		if reduced, empty, ok := equalityIntersection(v0(filter, field)); ok {
+			if empty {
+				return 0, true, nil
+			}
+			filter = must.NotFail(types.NewDocument(field, reduced))
+		}
+	}
 	compound := len(chosen.Key) > 1
 	if backends.HintRequiresExistingIndex(hint) && backends.MatchHintedIndex(hint, []backends.IndexInfo{chosen}) != chosen.Name {
 		return 0, false, nil
@@ -3914,7 +3950,14 @@ func (c *collection) tryExactIndexedCount(ctx context.Context, state *dbState, f
 			backends.HintRequiresExistingIndex(hint) && backends.MatchHintedIndex(hint, []backends.IndexInfo{idx}) != idx.Name {
 			continue
 		}
-		s, e, ok := exactCompoundCountBounds(idx, filter, queryColl.Comparator())
+		rf, empty := reducedForIndex(filter, idx)
+		if empty {
+			if _, _, ok := exactCompoundCountBounds(idx, rf, queryColl.Comparator()); ok || indexBindsFilter(idx, filter) {
+				return 0, true, nil
+			}
+			continue
+		}
+		s, e, ok := exactCompoundCountBounds(idx, rf, queryColl.Comparator())
 		if ok && (found < 0 || len(idx.Key) < len(idxInfos[found].Key)) {
 			found, start, end = i, s, e
 		}
@@ -3998,6 +4041,37 @@ func boundsExactForCount(v any) bool {
 		switch op {
 		case "$gt", "$gte", "$lt", "$lte":
 		default:
+			return false
+		}
+	}
+	return true
+}
+
+// countBoundsExact reports whether every field condition of filter has
+// bounds exact for a count (boundsExactForCount).
+func countBoundsExact(filter *types.Document) bool {
+	for _, k := range filter.Keys() {
+		if !strings.HasPrefix(k, "$") && !boundsExactForCount(must.NotFail(filter.Get(k))) {
+			return false
+		}
+	}
+	return true
+}
+
+// v0 returns filter's condition on field.
+func v0(filter *types.Document, field string) any {
+	v, _ := filter.Get(field)
+	return v
+}
+
+// indexBindsFilter reports whether idx's leading keys are exactly filter's
+// fields, so its scan alone answers the filter.
+func indexBindsFilter(idx backends.IndexInfo, filter *types.Document) bool {
+	if len(idx.Key) < filter.Len() {
+		return false
+	}
+	for _, kp := range idx.Key[:filter.Len()] {
+		if !filter.Has(kp.Field) {
 			return false
 		}
 	}
