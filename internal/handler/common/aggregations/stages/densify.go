@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -227,7 +228,11 @@ func (d *densify) parseExplicitBounds(b *types.Array) error {
 		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDensifyDateBoundsWithoutUnit,
 			"A bounding array of dates must specify a unit", "$densify (stage)")
 	}
-	if !lowerDate && (fmt.Sprintf("%T", lower) != fmt.Sprintf("%T", d.step) || fmt.Sprintf("%T", upper) != fmt.Sprintf("%T", d.step)) {
+	if !lowerDate && d.unit != "" {
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDensifyNumericBoundsWithUnit,
+			"Numeric bounds may not have unit parameter", "$densify (stage)")
+	}
+	if !lowerDate && (!sameNumberType(lower, d.step) || !sameNumberType(upper, d.step)) {
 		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDensifyBoundsStepType,
 			"Upper bound, lower bound, and step must all have the same type", "$densify (stage)")
 	}
@@ -275,6 +280,24 @@ func isDensifyNumber(v any) bool {
 	return false
 }
 
+func sameNumberType(a, b any) bool {
+	switch a.(type) {
+	case int32:
+		_, ok := b.(int32)
+		return ok
+	case int64:
+		_, ok := b.(int64)
+		return ok
+	case float64:
+		_, ok := b.(float64)
+		return ok
+	case types.Decimal128:
+		_, ok := b.(types.Decimal128)
+		return ok
+	}
+	return false
+}
+
 // wholeStep returns step as an int64 when it is a whole number.
 func wholeStep(step any) (int64, bool) {
 	switch s := step.(type) {
@@ -299,48 +322,89 @@ func (d *densify) Process(_ context.Context, iter types.DocumentsIterator, close
 		return nil, err
 	}
 
-	sortDoc := types.MakeDocument(len(d.partitions) + 1)
-	for _, p := range d.partitions {
-		sortDoc.Set(p.String(), int32(1))
-	}
-	sortDoc.Set(d.field.String(), int32(1))
-	if err = common.SortDocuments(docs, sortDoc); err != nil {
+	partitions, err := d.partitionDocuments(docs)
+	if err != nil {
 		return nil, err
 	}
 
 	var globalMin, globalMax any
-	for _, doc := range docs {
-		v, ok, err := d.fieldValue(doc)
-		if err != nil {
-			return nil, err
+	if d.bounds == densifyBoundsFull {
+		for _, part := range partitions {
+			for _, doc := range part {
+				v, ok, err := d.fieldValue(doc)
+				if err != nil {
+					return nil, err
+				}
+				if !ok {
+					continue
+				}
+				if globalMin == nil || types.CompareOrder(v, globalMin, types.Ascending) == types.Less {
+					globalMin = v
+				}
+				if globalMax == nil || types.CompareOrder(v, globalMax, types.Ascending) == types.Greater {
+					globalMax = v
+				}
+			}
 		}
-		if !ok {
-			continue
-		}
-		if globalMin == nil || types.CompareOrder(v, globalMin, types.Ascending) == types.Less {
-			globalMin = v
-		}
-		if globalMax == nil || types.CompareOrder(v, globalMax, types.Ascending) == types.Greater {
-			globalMax = v
-		}
+	}
+	if len(partitions) == 0 && len(d.partitions) == 0 {
+		// Explicit bounds are filled even without input documents.
+		partitions = [][]*types.Document{nil}
 	}
 
 	gen := &densifyGenerator{d: d}
 	var out []*types.Document
-	for start := 0; start < len(docs); {
-		end := start + 1
-		for end < len(docs) && d.samePartition(docs[start], docs[end]) {
-			end++
-		}
-		if out, err = gen.densifyPartition(out, docs[start:end], globalMin, globalMax); err != nil {
+	for _, part := range partitions {
+		if out, err = gen.densifyPartition(out, part, globalMin, globalMax); err != nil {
 			return nil, err
 		}
-		start = end
 	}
 
 	res := iterator.Values(iterator.ForSlice(out))
 	closer.Add(res)
 	return res, nil
+}
+
+// partitionDocuments groups docs by the values of the partition fields, in
+// which a missing value differs from null and an array is compared whole, and
+// sorts each partition by the densified field.
+func (d *densify) partitionDocuments(docs []*types.Document) ([][]*types.Document, error) {
+	type entry struct {
+		key *types.Document
+		doc *types.Document
+	}
+	entries := make([]entry, len(docs))
+	for i, doc := range docs {
+		key := types.MakeDocument(len(d.partitions))
+		for j, p := range d.partitions {
+			if v, err := doc.GetByPath(p); err == nil {
+				key.Set(fmt.Sprintf("p%d", j), v)
+			}
+		}
+		entries[i] = entry{key: key, doc: doc}
+	}
+	slices.SortStableFunc(entries, func(a, b entry) int {
+		return int(types.CompareForAggregation(a.key, b.key))
+	})
+
+	sortByField := must.NotFail(types.NewDocument(d.field.String(), int32(1)))
+	var partitions [][]*types.Document
+	for start := 0; start < len(entries); {
+		end := start + 1
+		for end < len(entries) && types.CompareForAggregation(entries[start].key, entries[end].key) == types.Equal {
+			end++
+		}
+		part := make([]*types.Document, 0, end-start)
+		for _, e := range entries[start:end] {
+			part = append(part, e.doc)
+		}
+		if err := common.SortDocuments(part, sortByField); err != nil {
+			return nil, err
+		}
+		partitions = append(partitions, part)
+		start = end
+	}
+	return partitions, nil
 }
 
 // fieldValue returns doc's densify value, reporting false for a missing or
@@ -368,20 +432,6 @@ func (d *densify) fieldValue(doc *types.Document) (any, bool, error) {
 	return v, true, nil
 }
 
-func (d *densify) samePartition(a, b *types.Document) bool {
-	for _, p := range d.partitions {
-		av, aErr := a.GetByPath(p)
-		bv, bErr := b.GetByPath(p)
-		if (aErr == nil) != (bErr == nil) {
-			return false
-		}
-		if aErr == nil && types.CompareForAggregation(av, bv) != types.Equal {
-			return false
-		}
-	}
-	return true
-}
-
 type densifyGenerator struct {
 	d         *densify
 	generated int
@@ -396,17 +446,19 @@ func (g *densifyGenerator) densifyPartition(out, docs []*types.Document, globalM
 	switch d.bounds {
 	case densifyBoundsFull:
 		cur, last = globalMin, globalMax
-	case densifyBoundsPartition:
-		for _, doc := range docs {
-			if v, ok, _ := d.fieldValue(doc); ok {
-				if cur == nil {
-					cur = v
-				}
-				last = v
-			}
-		}
 	case densifyBoundsExplicit:
 		cur, last, inclusive = d.lower, d.upper, false
+	}
+	if len(d.partitions) > 0 && !g.hasValue(docs) {
+		// mongod fills only partitions that hold a value of the field.
+		cur = nil
+	}
+	if d.bounds == densifyBoundsPartition {
+		cur, last = nil, nil
+	}
+	var tmpl *types.Document
+	if len(docs) > 0 {
+		tmpl = docs[0]
 	}
 
 	emitUntil := func(v any, orEqual bool) error {
@@ -418,7 +470,7 @@ func (g *densifyGenerator) densifyPartition(out, docs []*types.Document, globalM
 			if d.bounds == densifyBoundsExplicit && types.CompareOrder(cur, last, types.Ascending) != types.Less {
 				return nil
 			}
-			if err := g.emit(&out, docs[0], cur); err != nil {
+			if err := g.emit(&out, tmpl, cur); err != nil {
 				return err
 			}
 			var err error
@@ -429,13 +481,24 @@ func (g *densifyGenerator) densifyPartition(out, docs []*types.Document, globalM
 		return nil
 	}
 
+	first := true
 	for _, doc := range docs {
 		v, ok, err := d.fieldValue(doc)
 		if err != nil {
 			return nil, err
 		}
+		if ok && d.bounds == densifyBoundsPartition {
+			if cur == nil {
+				cur = v
+			}
+			last = v
+		}
 		if ok && cur != nil {
-			if err = emitUntil(v, false); err != nil {
+			// Under full bounds mongod also generates a partition's first value
+			// when it lies on a step above the minimum.
+			orEqual := d.bounds == densifyBoundsFull && first && types.CompareOrder(v, globalMin, types.Ascending) == types.Greater
+			first = false
+			if err = emitUntil(v, orEqual); err != nil {
 				return nil, err
 			}
 			if types.CompareOrder(cur, v, types.Ascending) == types.Equal {
@@ -454,9 +517,24 @@ func (g *densifyGenerator) densifyPartition(out, docs []*types.Document, globalM
 	return out, nil
 }
 
-// emit appends a generated document with value v and the partition fields of
-// tmpl.
+func (g *densifyGenerator) hasValue(docs []*types.Document) bool {
+	for _, doc := range docs {
+		if v, err := doc.GetByPath(g.d.field); err == nil && v != types.Null {
+			return true
+		}
+	}
+	return false
+}
+
+// emit appends a generated document with value v and copies of the partition
+// fields of tmpl, which may be nil.
 func (g *densifyGenerator) emit(out *[]*types.Document, tmpl *types.Document, v any) error {
+	for _, p := range g.d.partitions {
+		if pathsOverlap(p, g.d.field) {
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDensifyGeneratorIncludesField,
+				"DocGenerator cannot include field that is being densified", "$densify (stage)")
+		}
+	}
 	g.generated++
 	if g.generated > densifyMaxGeneratedDocs {
 		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDensifyTooManyDocs,
@@ -466,13 +544,30 @@ func (g *densifyGenerator) emit(out *[]*types.Document, tmpl *types.Document, v 
 	}
 	doc := types.MakeDocument(len(g.d.partitions) + 1)
 	for _, p := range g.d.partitions {
-		if v, err := tmpl.GetByPath(p); err == nil {
-			must.NoError(doc.SetByPath(p, v))
+		if tmpl == nil {
+			break
+		}
+		if pv, err := tmpl.GetByPath(p); err == nil {
+			// A partition path below another partition's scalar is skipped.
+			_ = doc.SetByPath(p, deepCopyValue(pv))
 		}
 	}
-	must.NoError(doc.SetByPath(g.d.field, v))
+	if err := doc.SetByPath(g.d.field, v); err != nil {
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDensifyGeneratorIncludesField,
+			"DocGenerator cannot include field that is being densified", "$densify (stage)")
+	}
 	*out = append(*out, doc)
 	return nil
+}
+
+func deepCopyValue(v any) any {
+	return must.NotFail(must.NotFail(types.NewDocument("v", v)).DeepCopy().Get("v"))
+}
+
+// pathsOverlap reports whether one of a and b is a prefix of the other.
+func pathsOverlap(a, b types.Path) bool {
+	as, bs := a.String(), b.String()
+	return as == bs || strings.HasPrefix(as, bs+".") || strings.HasPrefix(bs, as+".")
 }
 
 func (g *densifyGenerator) advance(cur any) (any, error) {

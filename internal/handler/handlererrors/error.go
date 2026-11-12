@@ -774,11 +774,13 @@ const (
 
 	// $densify errors.
 	ErrDensifyFieldType                    = ErrorCode(5733201) // Location5733201
+	ErrDensifyGeneratorIncludesField       = ErrorCode(5733306) // Location5733306
 	ErrDensifyStepNotPositive              = ErrorCode(5733401) // Location5733401
 	ErrDensifyBoundsOrder                  = ErrorCode(5733402) // Location5733402
 	ErrDensifyBoundsLength                 = ErrorCode(5733403) // Location5733403
 	ErrDensifyBoundsInvalid                = ErrorCode(5733404) // Location5733404
 	ErrDensifyPartitionBoundsWithoutFields = ErrorCode(5733408) // Location5733408
+	ErrDensifyNumericBoundsWithUnit        = ErrorCode(5733409) // Location5733409
 	ErrDensifyDateBoundsWithoutUnit        = ErrorCode(5733410) // Location5733410
 	ErrDensifyBoundsStepType               = ErrorCode(5876900) // Location5876900
 	ErrDensifyTooManyDocs                  = ErrorCode(5897900) // Location5897900
