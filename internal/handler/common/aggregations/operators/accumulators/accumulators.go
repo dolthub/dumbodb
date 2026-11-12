@@ -163,7 +163,16 @@ func NewAccumulator(stage, key string, value any) (Accumulator, error) {
 		return nil, err
 	}
 
-	return newAccumulator(args...)
+	acc, err := newAccumulator(args...)
+	if err != nil {
+		return nil, err
+	}
+	// mongod's $group and $bucket stop evaluating $firstN's input once it
+	// holds n values; other stages evaluate it for every document.
+	if n, ok := acc.(*nAccumulator); ok {
+		n.stopWhenFull = stage == "$group" || stage == "$bucket"
+	}
+	return acc, nil
 }
 
 // unimplementedAccumulators are MongoDB 8.0 $group accumulators DumboDB lacks.
