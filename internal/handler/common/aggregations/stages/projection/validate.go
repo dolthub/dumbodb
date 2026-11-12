@@ -185,7 +185,7 @@ func validateShape(projection *types.Document, ctx context) (*types.Document, bo
 			inclusionField = true
 			validated.Set(key, value)
 
-		case float64, int32, int64:
+		case float64, int32, int64, types.Decimal128:
 			// projection treats 0 as false and any other value as true
 			inclusionField = types.Compare(value, int32(0)) != types.Equal
 			validated.Set(key, inclusionField)
