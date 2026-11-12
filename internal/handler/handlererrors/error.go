@@ -438,6 +438,40 @@ const (
 	ErrGroupInclusionStyle       = ErrorCode(17390)   // Location17390
 	ErrAddTwoDates               = ErrorCode(16612)   // Location16612
 	ErrSBEAddTwoDates            = ErrorCode(7157722) // Location7157722
+
+	// Classic engine expression errors.
+	ErrBucketNoBranch            = ErrorCode(40066) // Location40066
+	ErrSwitchNoMatch             = ErrorCode(40069) // Location40069
+	ErrMergeObjectsExprNotObject = ErrorCode(40400) // Location40400
+
+	// Input errors that mongod's SBE engine reports under its own codes.
+	ErrSBEBucketNoBranch         = ErrorCode(7158303) // Location7158303
+	ErrSBEInput4997901           = ErrorCode(4997901) // Location4997901
+	ErrSBEInput5073401           = ErrorCode(5073401) // Location5073401
+	ErrSBEInput5153200           = ErrorCode(5153200) // Location5153200
+	ErrSBEInput5153215           = ErrorCode(5153215) // Location5153215
+	ErrSBEInput5155800           = ErrorCode(5155800) // Location5155800
+	ErrSBEInput5156302           = ErrorCode(5156302) // Location5156302
+	ErrSBEInput5157904           = ErrorCode(5157904) // Location5157904
+	ErrSBEInput7157712           = ErrorCode(7157712) // Location7157712
+	ErrSBEInput7157715           = ErrorCode(7157715) // Location7157715
+	ErrSBEInput7157900           = ErrorCode(7157900) // Location7157900
+	ErrSBEInput7157901           = ErrorCode(7157901) // Location7157901
+	ErrSBEInput7157904           = ErrorCode(7157904) // Location7157904
+	ErrSBEInput7157915           = ErrorCode(7157915) // Location7157915
+	ErrSBEInput7157917           = ErrorCode(7157917) // Location7157917
+	ErrSBEInput7157921           = ErrorCode(7157921) // Location7157921
+	ErrSBEInput7157932           = ErrorCode(7157932) // Location7157932
+	ErrSBEInput7158000           = ErrorCode(7158000) // Location7158000
+	ErrSBEInput7158001           = ErrorCode(7158001) // Location7158001
+	ErrSBEInput7158002           = ErrorCode(7158002) // Location7158002
+	ErrSBEInput7158007           = ErrorCode(7158007) // Location7158007
+	ErrSBEInput7158100           = ErrorCode(7158100) // Location7158100
+	ErrSBEInput7158200           = ErrorCode(7158200) // Location7158200
+	ErrSBEInput7158201           = ErrorCode(7158201) // Location7158201
+	ErrSBEInput7158300           = ErrorCode(7158300) // Location7158300
+	ErrSBEInput7158301           = ErrorCode(7158301) // Location7158301
+	ErrSBEInput7158302           = ErrorCode(7158302) // Location7158302
 	ErrReplaceReplacementType    = ErrorCode(51744)   // Location51744
 	ErrReplaceFindType           = ErrorCode(51745)   // Location51745
 	ErrReplaceInputType          = ErrorCode(51746)   // Location51746

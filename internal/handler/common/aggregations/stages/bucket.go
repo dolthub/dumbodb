@@ -234,11 +234,8 @@ func (b *bucket) Process(ctx context.Context, iter types.DocumentsIterator, clos
 			// out of range  -- goes to default
 			if !b.hasDefault {
 				return nil, handlererrors.NewCommandErrorMsgWithArgument(
-					handlererrors.ErrBadValue,
-					fmt.Sprintf(
-						"$bucket could not find a matching branch for value %s, and no default was set",
-						types.FormatAnyValue(val),
-					),
+					handlererrors.ErrBucketNoBranch,
+					"$switch could not find a matching branch for an input, and no default was specified.",
 					"$bucket (stage)",
 				)
 			}
