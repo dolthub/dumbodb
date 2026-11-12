@@ -283,16 +283,64 @@ func requireOuterResult(t *testing.T, b *Backend, into, from string, id int32, w
 			}
 		}
 		requireSameDoc(t, want.doc, got, "document %d after merging %s into %s", id, from, into)
+		requireResolvesWithOurs(t, b, into, id, want.doc)
 		return
 	}
 	if want.conflict {
 		require.Error(t, err, "merging %s into %s must conflict", from, into)
 		require.Contains(t, conflictIDs(t, b, into, id), id, "merging %s into %s must conflict on document %d", from, into, id)
+		requireResolvesWithOurs(t, b, into, id, oursResolution(t, b, into, id))
 		return
 	}
 	require.NoError(t, err, "merging %s into %s must be clean", from, into)
 	docs := virtualBaseItems(t, b, branchHash(t, b, into))
 	requireSameDoc(t, want.doc, docs[id], "document %d after merging %s into %s", id, from, into)
+}
+
+// oursResolution is document |id| once its conflict on |branch| is resolved with ours, or by dropping it when it
+// fails the validator: ours's document, nil when ours has none.
+func oursResolution(t *testing.T, b *Backend, branch string, id int32) *types.Document {
+	t.Helper()
+	res, err := b.DumboDBConflicts(context.Background(), &backends.ConflictsParams{DBName: "testdb", Branch: branch})
+	require.NoError(t, err)
+	for _, cc := range res.Collections {
+		for _, c := range cc.Conflicts {
+			for _, doc := range []*types.Document{c.Ours, c.Theirs, c.Base} {
+				if v, _ := getOrNil(doc, "_id"); v == id {
+					if c.Type == "validation" {
+						return nil
+					}
+					return c.Ours
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// requireResolvesWithOurs resolves every conflict of the paused merge into |branch| with ours, including those a
+// deferred collection raises later, continues it to a merge commit, and checks that document |id| is |want| in it.
+func requireResolvesWithOurs(t *testing.T, b *Backend, branch string, id int32, want *types.Document) {
+	t.Helper()
+	finishWithOurs(t, b, branch)
+	docs := virtualBaseItems(t, b, branchHash(t, b, branch))
+	requireSameDoc(t, want, docs[id], "document %d after resolving the merge into %s with ours", id, branch)
+}
+
+// finishWithOurs resolves every conflict of the paused merge into |branch| with ours, including those a deferred
+// collection raises later, and continues it to a merge commit.
+func finishWithOurs(t *testing.T, b *Backend, branch string) {
+	t.Helper()
+	for round := 0; ; round++ {
+		require.Less(t, round, 5, "the merge into %s does not finish", branch)
+		resolveAllWithOurs(t, b, branch)
+		_, err := b.DumboDBMerge(context.Background(), &backends.MergeParams{
+			DBName: "testdb", Into: branch, Continue: true, Message: "merge continued", Author: "testuser <test@example.com>",
+		})
+		if err == nil {
+			return
+		}
+	}
 }
 
 // requireValidMergeBase checks that the merge base of |into| and |from| passes rule 4's index checks.

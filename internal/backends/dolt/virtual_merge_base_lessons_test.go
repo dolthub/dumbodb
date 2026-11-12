@@ -142,6 +142,7 @@ func TestVirtualMergeBase_ConflictSidesFollowTheDirection(t *testing.T) {
 					requireSameDoc(t, itemA(tips[d.into])(t), c.Ours, "ours")
 					requireSameDoc(t, itemA(tips[d.from])(t), c.Theirs, "theirs")
 					requireSameDoc(t, itemA("seed")(t), c.Base, "base")
+					requireResolvesWithOurs(t, b, d.into, 1, itemA(tips[d.into])(t))
 				})
 			}
 		}
@@ -183,6 +184,8 @@ func TestVirtualMergeBase_DeferredCollectionUsesTheVirtualMergeBase(t *testing.T
 			requireSameDoc(t, itemA("seed")(t), c.Base, "base")
 			requireSameDoc(t, itemA("x wins")(t), c.Ours, "ours")
 			requireSameDoc(t, itemA("y wins")(t), c.Theirs, "theirs")
+			requireResolvesWithOurs(t, b, "x", 1, itemA("x wins")(t))
+			require.Equal(t, string(others[0]), virtualCatalog(t, b, branchHash(t, b, "x"), "items").MergeMode)
 		})
 	}
 }
@@ -298,8 +301,9 @@ func TestVirtualMergeBase_ChangeTheTipsShare(t *testing.T) {
 }
 
 // K3c: the schema branch adds a unique index on u, which c2's documents 1 and 2 violate; main and feature give
-// document 2 u = 6 and add the index too. The fold evicts one of the colliding documents and flags it, so the
-// touched modes conflict on it, and the divergent modes merge.
+// document 2 u = 6 and add the index too. The fold keeps document 2 and leaves document 1 absent and flagged, so the
+// touched modes conflict on document 1 (D2), and on document 2, which both tips changed the same way, as they would
+// with one merge base. The divergent modes merge.
 func TestVirtualMergeBase_UniqueIndexTheTipsShare(t *testing.T) {
 	h := structuralHistory{
 		schemas: []edit{createUniqueIndex},
@@ -316,14 +320,16 @@ func TestVirtualMergeBase_UniqueIndexTheTipsShare(t *testing.T) {
 				_, err := b.DumboDBMerge(context.Background(), &backends.MergeParams{
 					DBName: "testdb", Into: d.into, From: d.from, Message: "merge", Author: "testuser <test@example.com>",
 				})
+				want := map[int32]*types.Document{1: uDoc(t, 1, 5), 2: uDoc(t, 2, 6), 30: uDoc(t, 30, 30), 40: uDoc(t, 40, 40)}
 				if mode == string(MergeModeDocumentTouched) || mode == string(MergeModeFieldTouched) {
-					require.Error(t, err, "the touched modes must conflict on the evicted document")
-					return
+					require.Error(t, err, "the touched modes must conflict")
+					require.ElementsMatch(t, []any{int32(1), int32(2)}, conflictIDs(t, b, d.into, 0))
+					finishWithOurs(t, b, d.into)
+				} else {
+					require.NoError(t, err)
 				}
-				require.NoError(t, err)
-				requireItems(t, b, d.into, map[int32]*types.Document{
-					1: uDoc(t, 1, 5), 2: uDoc(t, 2, 6), 30: uDoc(t, 30, 30), 40: uDoc(t, 40, 40),
-				})
+				requireItems(t, b, d.into, want)
+				requireIndexesMatchItems(t, b, branchHash(t, b, d.into))
 			})
 		}
 	}
@@ -350,6 +356,11 @@ func bothCreateItems(mode string) outerScenario {
 	}
 }
 
+// doc3V is document 3 with the v that items' validator requires.
+func doc3V(a string) func(t *testing.T) *types.Document {
+	return func(t *testing.T) *types.Document { return mustDoc(t, "_id", int32(3), "v", int32(1), "a", a) }
+}
+
 func doc100(t *testing.T) *types.Document { return mustDoc(t, "_id", int32(100), "v", int32(1)) }
 
 func TestVirtualMergeBase_MergeBasesCreateTheCollection(t *testing.T) {
@@ -373,8 +384,8 @@ func TestVirtualMergeBase_MergeBasesCreateTheCollection(t *testing.T) {
 			func(t *testing.T) map[string]outerResult { return touchedConflict(nil) }},
 		// K4c
 		{"tips add document 3 differently", 3, func(s *outerScenario) {
-			s.x2 = addItem(doc3("x"))
-			s.y2 = editAll(s.y2, addItem(doc3("y")))
+			s.x2 = addItem(doc3V("x"))
+			s.y2 = editAll(s.y2, addItem(doc3V("y")))
 		}, func(t *testing.T) map[string]outerResult {
 			return outcomes(conflicts(), conflicts(), conflicts(), conflicts())
 		}},
@@ -390,12 +401,28 @@ func TestVirtualMergeBase_MergeBasesCreateTheCollection(t *testing.T) {
 					}
 					buildOuterScenario(t, b, mode, s)
 					requireOuterResult(t, b, d.into, d.from, sc.id, sc.want(t)[mode])
-					if sc.id == 3 {
-						require.Nil(t, conflictOnDoc(t, b, d.into, 3).Base, "document 3 has no base")
-					}
 				})
 			}
 		}
+	}
+}
+
+// K4c: document 3, which neither merge base has, conflicts with no base document.
+func TestVirtualMergeBase_MergeBasesCreateTheCollectionTipsAddADocument(t *testing.T) {
+	for _, mode := range mergeModes {
+		t.Run(mode, func(t *testing.T) {
+			b := newTestBackend(t)
+			s := bothCreateItems(mode)
+			s.x2 = addItem(doc3V("x"))
+			s.y2 = editAll(s.y2, addItem(doc3V("y")))
+			buildOuterScenario(t, b, mode, s)
+			require.NotNil(t, mergeTips(t, b, "x", "y"), "the merge must conflict")
+			c := conflictOnDoc(t, b, "x", 3)
+			require.Nil(t, c.Base, "document 3 has no base")
+			requireSameDoc(t, doc3V("x")(t), c.Ours, "ours")
+			requireSameDoc(t, doc3V("y")(t), c.Theirs, "theirs")
+			requireResolvesWithOurs(t, b, "x", 3, doc3V("x")(t))
+		})
 	}
 }
 
@@ -408,9 +435,13 @@ func TestVirtualMergeBase_MergeBasesCreateTheCollectionThenItChanges(t *testing.
 				s := bothCreateItems(mode)
 				s.y3 = setValidator(requireField("w"))
 				buildOuterScenario(t, b, mode, s)
+				ours := virtualCatalog(t, b, branchHash(t, b, d.into), "items").Validator
 				res := mergeTips(t, b, d.into, d.from)
 				require.NotNil(t, res, "the merge must conflict")
 				require.Len(t, res.Metadata, 1, "the validators must conflict")
+				finishWithOurs(t, b, d.into)
+				meta := virtualCatalog(t, b, branchHash(t, b, d.into), "items")
+				require.True(t, documentsEqual(ours, meta.Validator), "want ours %v, got %v", ours, meta.Validator)
 			})
 		}
 	}

@@ -81,6 +81,10 @@ func TestMergeValidatorsOnlyWhenIdentical(t *testing.T) {
 				res := mergeDefinitionBranches(t, b, mode, false, tt.main, tt.feat)
 				if tt.conflict {
 					require.NotNil(t, res, "the merge must conflict")
+					ours := virtualCatalog(t, b, branchHash(t, b, "main"), "items").Validator
+					finishWithOurs(t, b, "main")
+					meta := virtualCatalog(t, b, branchHash(t, b, "main"), "items")
+					require.True(t, documentsEqual(ours, meta.Validator), "want ours %v, got %v", ours, meta.Validator)
 					return
 				}
 				require.Nil(t, res, "the merge must be clean")
@@ -110,6 +114,9 @@ func TestMergeViewsOnlyWhenIdentical(t *testing.T) {
 				res := mergeDefinitionBranches(t, b, mode, true, tt.main, tt.feat)
 				if tt.conflict {
 					require.NotNil(t, res, "the merge must conflict")
+					ours := virtualView(t, b, branchHash(t, b, "main"), "v")
+					finishWithOurs(t, b, "main")
+					requireSameView(t, ours, virtualView(t, b, branchHash(t, b, "main"), "v"))
 					return
 				}
 				require.Nil(t, res, "the merge must be clean")

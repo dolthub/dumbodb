@@ -130,6 +130,7 @@ func TestVirtualMergeBase_OuterMergeHonorsCatalogFlags(t *testing.T) {
 				t.Run(tt.name+"/"+mode+"/merge "+d.from+" into "+d.into, func(t *testing.T) {
 					b := newTestBackend(t)
 					buildMetadataCrissCross(t, b, mode, false, setValidator(minU(1)), setValidator(minU(2)), tt.x2, tt.y2)
+					ours := virtualCatalog(t, b, branchHash(t, b, d.into), "items").Validator
 					res := mergeTips(t, b, d.into, d.from)
 					if tt.conflict {
 						require.NotNil(t, res, "merging %s into %s must conflict", d.from, d.into)
@@ -138,6 +139,9 @@ func TestVirtualMergeBase_OuterMergeHonorsCatalogFlags(t *testing.T) {
 							collections = append(collections, mc.Collection)
 						}
 						require.Contains(t, collections, "items")
+						finishWithOurs(t, b, d.into)
+						meta := virtualCatalog(t, b, branchHash(t, b, d.into), "items")
+						require.True(t, documentsEqual(ours, meta.Validator), "want ours %v, got %v", ours, meta.Validator)
 						return
 					}
 					require.Nil(t, res, "merging %s into %s must be clean", d.from, d.into)
@@ -148,6 +152,16 @@ func TestVirtualMergeBase_OuterMergeHonorsCatalogFlags(t *testing.T) {
 			}
 		}
 	}
+}
+
+func requireSameView(t *testing.T, want, got *viewMeta) {
+	t.Helper()
+	if want == nil {
+		require.Nil(t, got, "the view must stay dropped")
+		return
+	}
+	require.NotNil(t, got, "the view must exist")
+	require.True(t, reflectEqual(want.Pipeline, got.Pipeline), "want pipeline %v, got %v", want.Pipeline, got.Pipeline)
 }
 
 // A view flagged in the virtual merge base counts as changed on both sides.
@@ -171,6 +185,7 @@ func TestVirtualMergeBase_OuterMergeHonorsViewFlags(t *testing.T) {
 				t.Run(tt.name+"/"+mode+"/merge "+d.from+" into "+d.into, func(t *testing.T) {
 					b := newTestBackend(t)
 					buildMetadataCrissCross(t, b, mode, tt.withView, tt.x1, tt.y1, tt.x2, tt.y2)
+					ours := virtualView(t, b, branchHash(t, b, d.into), "v")
 					res := mergeTips(t, b, d.into, d.from)
 					if tt.conflict {
 						require.NotNil(t, res, "merging %s into %s must conflict", d.from, d.into)
@@ -179,6 +194,8 @@ func TestVirtualMergeBase_OuterMergeHonorsViewFlags(t *testing.T) {
 							views = append(views, vc.Name)
 						}
 						require.Contains(t, views, "v")
+						finishWithOurs(t, b, d.into)
+						requireSameView(t, ours, virtualView(t, b, branchHash(t, b, d.into), "v"))
 						return
 					}
 					require.Nil(t, res, "merging %s into %s must be clean", d.from, d.into)
