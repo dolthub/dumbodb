@@ -20,6 +20,8 @@ import (
 	"strings"
 	"time"
 
+	projectionpkg "github.com/dolthub/dumbodb/internal/handler/common/aggregations/stages/projection"
+
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
@@ -96,7 +98,11 @@ func findProjectionPathExists(expr string, doc *types.Document) bool {
 func ProjectDocument(doc, projection, filter *types.Document, inclusion bool) (*types.Document, error) {
 	defer doc.ShowRecordKey()()
 	if inclusion && !hasFindProjectionOperator(projection) && operators.SpecHasComputedPath(projection, true) {
-		return operators.ProjectInclusionTree(doc, projection)
+		projected, err := operators.ProjectInclusionTree(doc, projection)
+		if err != nil {
+			return nil, err
+		}
+		return projected, projectionpkg.ProjectIDSubpaths(doc, projected, projection, inclusion)
 	}
 
 	projected, err := projectID(doc, projection)
@@ -111,6 +117,10 @@ func ProjectDocument(doc, projection, filter *types.Document, inclusion bool) (*
 
 	for _, key := range projectedWithoutID.Keys() {
 		projected.Set(key, must.NotFail(projectedWithoutID.Get(key)))
+	}
+
+	if err = projectionpkg.ProjectIDSubpaths(doc, projected, projection, inclusion); err != nil {
+		return nil, err
 	}
 
 	return projected, nil

@@ -35,7 +35,11 @@ import (
 func ProjectDocument(doc, projection *types.Document, inclusion bool) (*types.Document, error) {
 	defer doc.ShowRecordKey()()
 	if inclusion && operators.SpecHasComputedPath(projection, true) {
-		return operators.ProjectInclusionTree(doc, projection)
+		projected, err := operators.ProjectInclusionTree(doc, projection)
+		if err != nil {
+			return nil, err
+		}
+		return projected, ProjectIDSubpaths(doc, projected, projection, inclusion)
 	}
 
 	projected, err := projectID(doc, projection)
@@ -52,7 +56,56 @@ func ProjectDocument(doc, projection *types.Document, inclusion bool) (*types.Do
 		projected.Set(key, must.NotFail(projectedWithoutID.Get(key)))
 	}
 
+	if err = ProjectIDSubpaths(doc, projected, projection, inclusion); err != nil {
+		return nil, err
+	}
+
 	return projected, nil
+}
+
+// ProjectIDSubpaths applies the flags on paths within _id, such as "_id.x",
+// to the projected _id. An inclusion drops an _id that is not a document.
+func ProjectIDSubpaths(doc, projected, projection *types.Document, inclusion bool) error {
+	var paths []types.Path
+	for _, key := range projection.Keys() {
+		if _, isFlag := must.NotFail(projection.Get(key)).(bool); isFlag && strings.HasPrefix(key, "_id.") {
+			path, err := types.NewPathFromString(strings.TrimPrefix(key, "_id."))
+			if err != nil {
+				return lazyerrors.Error(err)
+			}
+			paths = append(paths, path)
+		}
+	}
+	if len(paths) == 0 {
+		return nil
+	}
+	idValue, _ := doc.Get("_id")
+	id, ok := idValue.(*types.Document)
+	if !projected.Has("_id") {
+		return nil
+	}
+	if !ok {
+		if inclusion {
+			projected.Remove("_id")
+		}
+		return nil
+	}
+	if !inclusion {
+		trimmed := id.DeepCopy()
+		for _, path := range paths {
+			trimmed.RemoveByPath(path)
+		}
+		projected.Set("_id", trimmed)
+		return nil
+	}
+	kept := types.MakeDocument(0)
+	for _, path := range paths {
+		if _, err := includeProjection(path, id, kept); err != nil {
+			return err
+		}
+	}
+	projected.Set("_id", kept)
+	return nil
 }
 
 // topLevelInclusionFields returns the fields of a validated inclusion projection
