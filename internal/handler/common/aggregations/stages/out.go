@@ -130,7 +130,11 @@ func NewOutStage(stage *types.Document, sourceDB string, writer OutWriter) (aggr
 func (s *out) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
 	defer iter.Close()
 
-	if err := s.writer(ctx, s.targetDB, s.targetColl, iter); err != nil {
+	checked := &storedIDIterator{iter: iter}
+	if err := s.writer(ctx, s.targetDB, s.targetColl, checked); err != nil {
+		if checked.err != nil {
+			return nil, checked.err
+		}
 		return nil, lazyerrors.Error(err)
 	}
 
@@ -144,3 +148,26 @@ func (s *out) Process(ctx context.Context, iter types.DocumentsIterator, closer 
 var (
 	_ aggregations.Stage = (*out)(nil)
 )
+
+// storedIDIterator fails on a document whose _id cannot be stored.
+type storedIDIterator struct {
+	iter types.DocumentsIterator
+	err  error
+}
+
+func (it *storedIDIterator) Next() (struct{}, *types.Document, error) {
+	_, doc, err := it.iter.Next()
+	if err != nil {
+		return struct{}{}, nil, err
+	}
+	if id, idErr := doc.Get("_id"); idErr == nil {
+		if it.err = storedIDError(id); it.err != nil {
+			return struct{}{}, nil, it.err
+		}
+	}
+	return struct{}{}, doc, nil
+}
+
+func (it *storedIDIterator) Close() {
+	it.iter.Close()
+}
