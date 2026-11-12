@@ -889,6 +889,15 @@ const (
 	ErrFillEmptyOutput    = ErrorCode(6050203) // Location6050203
 	ErrFillBothPartitions = ErrorCode(6050204) // Location6050204
 
+	// ErrSearchMetaWithoutSearch indicates $$SEARCH_META outside a $search pipeline.
+	ErrSearchMetaWithoutSearch = ErrorCode(6347902) // Location6347902
+
+	// ErrLookupSubPipelineWrites indicates $out or $merge in a $lookup sub-pipeline.
+	ErrLookupSubPipelineWrites = ErrorCode(51047) // Location51047
+
+	// ErrBuiltinVariableUnavailable indicates a system variable a standalone server does not define.
+	ErrBuiltinVariableUnavailable = ErrorCode(51144) // Location51144
+
 	// ErrStageIndexedStringVectorDuplicate indicates that input to IndexedStringVector contained duplicate values.
 	ErrStageIndexedStringVectorDuplicate = ErrorCode(7582300) // Location7582300
 

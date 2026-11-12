@@ -107,7 +107,17 @@ func (iter *addFieldsIterator) Next() (struct{}, *types.Document, error) {
 			}
 		case string:
 			// Non-expression strings (no "$" prefix) are used as literals.
-			if strings.HasPrefix(v, "$") {
+			if strings.HasPrefix(v, "$$") {
+				evaluated, isMissing, evalErr := operators.EvalOperand(v, doc)
+				if evalErr != nil {
+					return unused, nil, processAddFieldsError(evalErr)
+				}
+				if isMissing {
+					missing[i] = true
+					continue
+				}
+				val = evaluated
+			} else if strings.HasPrefix(v, "$") {
 				expr, exprErr := aggregations.NewExpression(v, nil)
 				if exprErr == nil {
 					evaluated, evalErr := expr.Evaluate(doc)

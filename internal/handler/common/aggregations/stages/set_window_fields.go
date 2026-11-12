@@ -124,6 +124,9 @@ func newSetWindowFields(stage *types.Document) (aggregations.Stage, error) {
 	// Parse partitionBy (optional).
 	if spec.Has("partitionBy") {
 		pb := must.NotFail(spec.Get("partitionBy"))
+		if err := operators.CheckFieldPaths(pb); err != nil {
+			return nil, err
+		}
 		if err := operators.CheckConstantSubexpressions(pb); err != nil {
 			return nil, err
 		}
@@ -151,6 +154,10 @@ func newSetWindowFields(stage *types.Document) (aggregations.Stage, error) {
 			"$setWindowFields output must be an object",
 			"$setWindowFields (stage)",
 		)
+	}
+
+	if err = operators.CheckFieldPaths(outputDoc); err != nil {
+		return nil, err
 	}
 
 	iter := outputDoc.Iterator()

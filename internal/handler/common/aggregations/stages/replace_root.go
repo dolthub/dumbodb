@@ -61,6 +61,9 @@ func newReplaceRootStage(stage *types.Document, fold bool) (aggregations.Stage, 
 		)
 	}
 
+	if err := operators.CheckFieldPaths(newRootVal); err != nil {
+		return nil, err
+	}
 	if fold {
 		if err := operators.CheckConstantSubexpressions(newRootVal); err != nil {
 			return nil, err
@@ -81,6 +84,9 @@ func newReplaceWith(stage *types.Document) (aggregations.Stage, error) {
 func newReplaceWithStage(stage *types.Document, fold bool) (aggregations.Stage, error) {
 	newRootVal, err := stage.Get("$replaceWith")
 	if err != nil {
+		return nil, err
+	}
+	if err = operators.CheckFieldPaths(newRootVal); err != nil {
 		return nil, err
 	}
 
