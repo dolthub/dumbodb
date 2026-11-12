@@ -81,6 +81,11 @@ func buildViewPipelineStages(db backends.Database, viewPipeline *types.Array, cm
 
 		result = append(result, vs)
 	}
+	specs := make([]*types.Document, len(stageDocs))
+	for i, v := range stageDocs {
+		specs[i] = v.(*types.Document)
+	}
+	stages.MarkLookupsUnwound(result, specs)
 
 	return result, stageDocs, nil
 }

@@ -35,6 +35,8 @@ type unwind struct {
 	field                      *aggregations.Expression
 	includeArrayIndex          string // empty means not set
 	preserveNullAndEmptyArrays bool
+	// absorbed is set when a preceding $lookup unwinds its own matches.
+	absorbed bool
 }
 
 func newUnwind(stage *types.Document) (aggregations.Stage, error) {
@@ -208,6 +210,9 @@ func parseUnwindPath(field string) (*aggregations.Expression, error) {
 }
 
 func (u *unwind) Process(_ context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
+	if u.absorbed {
+		return iter, nil
+	}
 	if u.field == nil {
 		iter.Close()
 		result := iterator.Values(iterator.ForSlice([]*types.Document(nil)))
@@ -229,7 +234,8 @@ type unwindIterator struct {
 	iter      types.DocumentsIterator
 	fieldPath types.Path
 
-	// doc and elements are the input document being unwound and its array.
+	// doc is the input document being unwound, without its array, and
+	// elements is that array.
 	doc      *types.Document
 	elements iterator.Interface[int, any]
 }
@@ -245,9 +251,7 @@ func (it *unwindIterator) Next() (struct{}, *types.Document, error) {
 				if setErr := newDoc.SetByPath(it.fieldPath, v); setErr != nil {
 					return unused, nil, lazyerrors.Error(setErr)
 				}
-				if it.u.includeArrayIndex != "" {
-					newDoc.Set(it.u.includeArrayIndex, int64(idx))
-				}
+				it.u.setIndex(newDoc, int64(idx))
 
 				return unused, newDoc, nil
 			}
@@ -277,42 +281,52 @@ func (it *unwindIterator) Next() (struct{}, *types.Document, error) {
 func (it *unwindIterator) start(doc *types.Document) *types.Document {
 	d, evalErr := it.u.field.Evaluate(doc)
 	if evalErr != nil {
-		// Field does not exist in the document.
-		if it.u.preserveNullAndEmptyArrays {
-			return doc.DeepCopy()
-		}
-
-		return nil
+		return it.u.preserved(doc, false)
 	}
 
 	switch d := d.(type) {
 	case types.NullType:
-		if it.u.preserveNullAndEmptyArrays {
-			return doc.DeepCopy()
-		}
-
-		return nil
+		return it.u.preserved(doc, false)
 
 	case *types.Array:
 		if d.Len() == 0 {
-			if it.u.preserveNullAndEmptyArrays {
-				// Emit the document with the field removed.
-				newDoc := doc.DeepCopy()
-				newDoc.RemoveByPath(it.fieldPath)
-
-				return newDoc
-			}
-
-			return nil
+			return it.u.preserved(doc, true)
 		}
 
-		it.doc, it.elements = doc, d.Iterator()
+		// Copying the array into every output would cost its size per element.
+		template := doc.DeepCopy()
+		if err := template.SetByPath(it.fieldPath, types.Null); err != nil {
+			template = doc
+		}
+		it.doc, it.elements = template, d.Iterator()
 
 		return nil
 
 	default:
-		// Scalar value: pass through unchanged.
-		return doc.DeepCopy()
+		out := doc.DeepCopy()
+		it.u.setIndex(out, types.Null)
+
+		return out
+	}
+}
+
+// preserved returns doc as emitted for a missing, null or empty array value,
+// or nil when such documents are dropped.
+func (u *unwind) preserved(doc *types.Document, removeField bool) *types.Document {
+	if !u.preserveNullAndEmptyArrays {
+		return nil
+	}
+	out := doc.DeepCopy()
+	if removeField {
+		out.RemoveByPath(u.field.GetExpressionPath())
+	}
+	u.setIndex(out, types.Null)
+	return out
+}
+
+func (u *unwind) setIndex(doc *types.Document, idx any) {
+	if u.includeArrayIndex != "" {
+		doc.Set(u.includeArrayIndex, idx)
 	}
 }
 
