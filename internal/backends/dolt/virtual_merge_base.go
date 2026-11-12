@@ -17,9 +17,7 @@ package dolt
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"reflect"
 	"sort"
 
@@ -43,6 +41,8 @@ type virtualFold struct {
 	reverted map[string]map[string]bool
 	// restored lists the collections the fold took from baseAM because one merge base deleted them.
 	restored []string
+	// touched holds, by collection, the documents the merge of the merge bases changed in some index.
+	touched map[string][]val.Tuple
 }
 
 func newVirtualFold(intoAM, fromAM, baseAM prolly.AddressMap) *virtualFold {
@@ -52,7 +52,12 @@ func newVirtualFold(intoAM, fromAM, baseAM prolly.AddressMap) *virtualFold {
 		fromAM:   fromAM,
 		baseAM:   baseAM,
 		reverted: make(map[string]map[string]bool),
+		touched:  make(map[string][]val.Tuple),
 	}
+}
+
+func (f *virtualFold) touch(collection string, key val.Tuple) {
+	f.touched[collection] = append(f.touched[collection], key)
 }
 
 func (f *virtualFold) flag(collection string, key val.Tuple, flag docFlag) {
@@ -218,17 +223,30 @@ func documentID(docs ...*types.Document) any {
 	return nil
 }
 
+// foldIndex is an index of a collection being folded, as it stands.
+type foldIndex struct {
+	info backends.IndexInfo
+	m    prolly.Map
+}
+
+// probeLimit is how many owners of a unique key a probe reads. A larger group is resolved over several passes.
+const probeLimit = 64
+
 // makeValid makes collection |collection| of a virtual merge base, |merged|, as valid as a commit, given the merge
-// bases' documents |into| and |from|, their own merge base's |base|, and the collection's indexes. A document the fold
-// changed that the collection's validator refuses, and a document that loses a unique key, keep their value in |base|,
-// or are left absent when that value is no better; either way they are flagged.
-func (f *virtualFold) makeValid(ctx context.Context, state *dbState, collection string, merged, into, from, base prolly.Map, infos []backends.IndexInfo) (prolly.Map, error) {
+// bases' documents |into| and |from|, their own merge base's |base|, and the collection's |indexes|, which it updates
+// in place. A document the fold changed that the collection's validator refuses, and a document that loses a unique
+// key, keep their value in |base|, or are left absent when that value is no better; either way they are flagged.
+//
+// It reads and edits only the documents the fold changed: only they can fail the validator, and since both merge
+// bases were valid, every document sharing a unique key shares it with one of them.
+func (f *virtualFold) makeValid(ctx context.Context, state *dbState, collection string, merged, into, from, base prolly.Map, indexes []*foldIndex) (prolly.Map, error) {
 	meta, err := f.validation(ctx, state, collection)
 	if err != nil {
 		return prolly.Map{}, err
 	}
-	mut := merged.Mutate()
 	ns := merged.NodeStore()
+	edits := newFoldEdits(merged, indexes)
+	var pending []val.Tuple
 	if meta != nil && meta.Validator != nil && meta.ValidationLevel != "off" && meta.ValidationAction != "warn" {
 		var refused []val.Tuple
 		err := forEachCollectionChange(ctx, base, merged, func(c collChange) (bool, error) {
@@ -252,37 +270,106 @@ func (f *virtualFold) makeValid(ctx context.Context, state *dbState, collection 
 			return prolly.Map{}, err
 		}
 		for _, key := range refused {
-			if err := f.revert(ctx, ns, collection, mut, key, base); err != nil {
+			if err := f.revert(ctx, ns, collection, edits, key, base); err != nil {
 				return prolly.Map{}, err
 			}
 		}
+		pending = append(pending, refused...)
 	}
 
 	// Each pass reverts at least one document, or leaves one absent, so this ends.
-	for {
-		current, err := mut.Map(ctx)
+	pending = append(pending, f.touched[collection]...)
+	for len(pending) > 0 {
+		current, err := edits.flush(ctx)
 		if err != nil {
 			return prolly.Map{}, err
 		}
-		groups, err := uniqueCollisions(ctx, current, infos)
+		groups, err := uniqueCollisions(ctx, current, indexes, pending)
 		if err != nil {
 			return prolly.Map{}, err
 		}
-		if len(groups) == 0 {
-			return current, nil
-		}
+		pending = nil
 		for _, group := range groups {
 			losers, err := f.uniqueLosers(ctx, collection, group, current, into, from)
 			if err != nil {
 				return prolly.Map{}, err
 			}
 			for _, key := range losers {
-				if err := f.revert(ctx, ns, collection, mut, key, base); err != nil {
+				if err := f.revert(ctx, ns, collection, edits, key, base); err != nil {
 					return prolly.Map{}, err
+				}
+			}
+			pending = append(pending, losers...)
+		}
+	}
+	return edits.flush(ctx)
+}
+
+// foldEdits edits a collection's documents and its indexes together.
+type foldEdits struct {
+	docs    *prolly.MutableMap
+	indexes []*foldIndex
+	muts    []*prolly.MutableMap
+}
+
+func newFoldEdits(docs prolly.Map, indexes []*foldIndex) *foldEdits {
+	e := &foldEdits{docs: docs.Mutate(), indexes: indexes, muts: make([]*prolly.MutableMap, len(indexes))}
+	for i, idx := range indexes {
+		e.muts[i] = idx.m.Mutate()
+	}
+	return e
+}
+
+// replace gives document |key| the value |newValue|, nil to remove it, in the documents and in every index.
+func (e *foldEdits) replace(ctx context.Context, key val.Tuple, oldDoc, newDoc *types.Document, newValue val.Tuple) error {
+	if newValue == nil {
+		if err := e.docs.Delete(ctx, key); err != nil {
+			return err
+		}
+	} else if err := e.docs.Put(ctx, key, newValue); err != nil {
+		return err
+	}
+	idBytes, ok := keyDesc.GetBytes(0, key)
+	if !ok {
+		return fmt.Errorf("primary key tuple missing _id bytes")
+	}
+	for i, idx := range e.indexes {
+		if oldDoc != nil {
+			rows, _, _ := indexEntriesForDoc(oldDoc, idx.info)
+			for _, row := range rows {
+				if err := idxpkg.DeleteEntry(ctx, e.muts[i], row, idBytes); err != nil {
+					return err
+				}
+			}
+		}
+		if newDoc != nil {
+			rows, multikey, lossy := indexEntriesForDoc(newDoc, idx.info)
+			idx.info.Multikey = idx.info.Multikey || multikey
+			idx.info.Lossy = idx.info.Lossy || lossy
+			for _, row := range rows {
+				if err := idxpkg.InsertEntry(ctx, e.muts[i], row, idBytes); err != nil {
+					return err
 				}
 			}
 		}
 	}
+	return nil
+}
+
+// flush returns the documents as they stand, and brings the indexes up to date.
+func (e *foldEdits) flush(ctx context.Context) (prolly.Map, error) {
+	docs, err := e.docs.Map(ctx)
+	if err != nil {
+		return prolly.Map{}, err
+	}
+	e.docs = docs.Mutate()
+	for i, idx := range e.indexes {
+		if idx.m, err = e.muts[i].Map(ctx); err != nil {
+			return prolly.Map{}, err
+		}
+		e.muts[i] = idx.m.Mutate()
+	}
+	return docs, nil
 }
 
 // validation returns the collection's validation settings in the virtual merge base: the merge bases' when they
@@ -312,18 +399,13 @@ func (f *virtualFold) validation(ctx context.Context, state *dbState, collection
 
 // revert gives document |key| its value in |base|, or removes it when |base| has none, the document already has
 // that value, or the fold already reverted it, and flags it whole.
-func (f *virtualFold) revert(ctx context.Context, ns tree.NodeStore, collection string, mut *prolly.MutableMap, key val.Tuple, base prolly.Map) error {
-	current, err := getDocument(ctx, ns, mut, key)
+func (f *virtualFold) revert(ctx context.Context, ns tree.NodeStore, collection string, edits *foldEdits, key val.Tuple, base prolly.Map) error {
+	current, err := getDocument(ctx, ns, edits.docs, key)
 	if err != nil {
 		return err
 	}
-	var baseValue val.Tuple
-	if err := base.Get(ctx, key, func(_, v val.Tuple) error {
-		if v != nil {
-			baseValue = append(val.Tuple(nil), v...)
-		}
-		return nil
-	}); err != nil {
+	baseValue, err := mapValue(ctx, base, key)
+	if err != nil {
 		return err
 	}
 	var baseDoc *types.Document
@@ -338,10 +420,11 @@ func (f *virtualFold) revert(ctx context.Context, ns tree.NodeStore, collection 
 		f.reverted[collection] = reverted
 	}
 	if baseDoc == nil || reverted[string(key)] || documentsEqual(current, baseDoc) {
-		if err := mut.Delete(ctx, key); err != nil {
-			return err
-		}
-	} else if err := mut.Put(ctx, key, baseValue); err != nil {
+		err = edits.replace(ctx, key, current, nil, nil)
+	} else {
+		err = edits.replace(ctx, key, current, baseDoc, baseValue)
+	}
+	if err != nil {
 		return err
 	}
 	reverted[string(key)] = true
@@ -385,103 +468,75 @@ func (f *virtualFold) uniqueLosers(ctx context.Context, collection string, group
 	return sorted[1:], nil
 }
 
-// uniqueCollisions returns the groups of documents of |docs| that share a key of a unique index of |infos|.
-func uniqueCollisions(ctx context.Context, docs prolly.Map, infos []backends.IndexInfo) ([][]val.Tuple, error) {
+// uniqueCollisions returns the groups of documents of |docs| that share a key of a unique index of |indexes| with a
+// document of |keys|.
+func uniqueCollisions(ctx context.Context, docs prolly.Map, indexes []*foldIndex, keys []val.Tuple) ([][]val.Tuple, error) {
 	var groups [][]val.Tuple
-	for _, info := range infos {
-		if !info.Unique || info.Lossy {
-			continue
-		}
-		owners := make(map[string][]val.Tuple)
-		var prefixes []string
-		err := eachDocument(ctx, docs, func(key val.Tuple, doc *types.Document) error {
-			rows, _, lossy := indexEntriesForDoc(doc, info)
-			if lossy {
-				return nil
-			}
-			seen := make(map[string]bool)
-			for _, row := range rows {
-				prefix, _ := idxpkg.EqualityProbeBounds(row)
-				if seen[string(prefix)] {
-					continue
-				}
-				seen[string(prefix)] = true
-				if owners[string(prefix)] == nil {
-					prefixes = append(prefixes, string(prefix))
-				}
-				owners[string(prefix)] = append(owners[string(prefix)], append(val.Tuple(nil), key...))
-			}
-			return nil
-		})
+	seen := make(map[string]bool)
+	for _, key := range keys {
+		doc, err := mapDocument(ctx, docs, key)
 		if err != nil {
 			return nil, err
 		}
-		for _, prefix := range prefixes {
-			if len(owners[prefix]) > 1 {
-				groups = append(groups, owners[prefix])
+		if doc == nil {
+			continue
+		}
+		for _, idx := range indexes {
+			if !idx.info.Unique || idx.info.Lossy {
+				continue
+			}
+			rows, _, lossy := indexEntriesForDoc(doc, idx.info)
+			if lossy {
+				continue
+			}
+			for _, row := range rows {
+				start, stop := idxpkg.EqualityProbeBounds(row)
+				ids, _, err := idxpkg.RangeLookupCapped(ctx, idx.m, start, stop, probeLimit)
+				if err != nil {
+					return nil, err
+				}
+				if len(ids) < 2 {
+					continue
+				}
+				group := make([]val.Tuple, len(ids))
+				for i, id := range ids {
+					if group[i], err = buildKey(id); err != nil {
+						return nil, err
+					}
+				}
+				sort.Slice(group, func(i, j int) bool { return bytes.Compare(group[i], group[j]) < 0 })
+				var id bytes.Buffer
+				for _, k := range group {
+					id.Write(k)
+					id.WriteByte(0)
+				}
+				if !seen[id.String()] {
+					seen[id.String()] = true
+					groups = append(groups, group)
+				}
 			}
 		}
 	}
 	return groups, nil
 }
 
-// buildIndexesFromDocuments builds the indexes |infos| over |docs|.
-func buildIndexesFromDocuments(ctx context.Context, state *dbState, docs prolly.Map, infos []backends.IndexInfo) (prolly.AddressMap, error) {
-	maps := make(map[string]prolly.Map, len(infos))
-	built := make([]backends.IndexInfo, len(infos))
-	for i, info := range infos {
-		empty, err := idxpkg.NewEmptyMap(ctx, state.ns)
-		if err != nil {
-			return prolly.AddressMap{}, err
-		}
-		mut := empty.Mutate()
-		err = eachDocument(ctx, docs, func(key val.Tuple, doc *types.Document) error {
-			idBytes, ok := keyDesc.GetBytes(0, key)
-			if !ok {
-				return fmt.Errorf("primary key tuple missing _id bytes")
-			}
-			rows, multikey, lossy := indexEntriesForDoc(doc, info)
-			info.Multikey = info.Multikey || multikey
-			info.Lossy = info.Lossy || lossy
-			for _, row := range rows {
-				if err := idxpkg.InsertEntry(ctx, mut, row, idBytes); err != nil {
-					return err
-				}
-			}
-			return nil
-		})
-		if err != nil {
-			return prolly.AddressMap{}, err
-		}
-		if maps[info.Name], err = mut.Map(ctx); err != nil {
-			return prolly.AddressMap{}, err
-		}
-		built[i] = info
+// foldIndexAM writes |indexes| as an index address map.
+func foldIndexAM(ctx context.Context, state *dbState, indexes []*foldIndex) (prolly.AddressMap, error) {
+	infos := make([]backends.IndexInfo, len(indexes))
+	maps := make(map[string]prolly.Map, len(indexes))
+	for i, idx := range indexes {
+		infos[i] = idx.info
+		maps[idx.info.Name] = idx.m
 	}
-	return buildIndexAM(ctx, state, built, maps)
+	return buildIndexAM(ctx, state, infos, maps)
 }
 
-func eachDocument(ctx context.Context, docs prolly.Map, fn func(key val.Tuple, doc *types.Document) error) error {
-	iter, err := docs.IterAll(ctx)
-	if err != nil {
-		return err
+func mapDocument(ctx context.Context, m prolly.Map, key val.Tuple) (*types.Document, error) {
+	value, err := mapValue(ctx, m, key)
+	if err != nil || value == nil {
+		return nil, err
 	}
-	for {
-		k, v, err := iter.Next(ctx)
-		if errors.Is(err, io.EOF) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		doc, err := readDocFromValue(ctx, docs.NodeStore(), v)
-		if err != nil {
-			return err
-		}
-		if err := fn(k, doc); err != nil {
-			return err
-		}
-	}
+	return readDocFromValue(ctx, m.NodeStore(), value)
 }
 
 func mapValue(ctx context.Context, m prolly.Map, key val.Tuple) (val.Tuple, error) {
@@ -547,7 +602,28 @@ func restoreCatalogDocuments(ctx context.Context, state *dbState, am, baseAM pro
 	if err != nil {
 		return prolly.AddressMap{}, err
 	}
-	mut := catalog.Mutate()
+	catalogH, err := am.Get(ctx, reservedCatalogName)
+	if err != nil {
+		return prolly.AddressMap{}, err
+	}
+	idxAM, err := indexAMForDTBL(ctx, state.cs, state.ns, catalogH)
+	if err != nil {
+		return prolly.AddressMap{}, err
+	}
+	resolved, err := indexSetFromAM(ctx, state, idxAM)
+	if err != nil {
+		return prolly.AddressMap{}, err
+	}
+	var indexes []*foldIndex
+	for _, entry := range resolved {
+		m, err := openIndexMap(ctx, state.vs, state.ns, entry.mapRoot)
+		if err != nil {
+			return prolly.AddressMap{}, err
+		}
+		indexes = append(indexes, &foldIndex{info: entry.info, m: m})
+	}
+	sort.Slice(indexes, func(i, j int) bool { return indexes[i].info.Name < indexes[j].info.Name })
+	edits := newFoldEdits(catalog, indexes)
 	for _, name := range names {
 		key, err := catalogKey(name)
 		if err != nil {
@@ -560,32 +636,23 @@ func restoreCatalogDocuments(ctx context.Context, state *dbState, am, baseAM pro
 		if value == nil {
 			continue
 		}
-		if err := mut.Put(ctx, key, value); err != nil {
+		oldDoc, err := mapDocument(ctx, catalog, key)
+		if err != nil {
+			return prolly.AddressMap{}, err
+		}
+		newDoc, err := readDocFromValue(ctx, state.ns, value)
+		if err != nil {
+			return prolly.AddressMap{}, err
+		}
+		if err := edits.replace(ctx, key, oldDoc, newDoc, value); err != nil {
 			return prolly.AddressMap{}, err
 		}
 	}
-	restored, err := mut.Map(ctx)
+	restored, err := edits.flush(ctx)
 	if err != nil {
 		return prolly.AddressMap{}, err
 	}
-	catalogH, err := am.Get(ctx, reservedCatalogName)
-	if err != nil {
-		return prolly.AddressMap{}, err
-	}
-	idxAM, err := indexAMForDTBL(ctx, state.cs, state.ns, catalogH)
-	if err != nil {
-		return prolly.AddressMap{}, err
-	}
-	indexes, err := indexSetFromAM(ctx, state, idxAM)
-	if err != nil {
-		return prolly.AddressMap{}, err
-	}
-	infos := make([]backends.IndexInfo, 0, len(indexes))
-	for _, entry := range indexes {
-		infos = append(infos, entry.info)
-	}
-	sort.Slice(infos, func(i, j int) bool { return infos[i].Name < infos[j].Name })
-	if idxAM, err = buildIndexesFromDocuments(ctx, state, restored, infos); err != nil {
+	if idxAM, err = foldIndexAM(ctx, state, indexes); err != nil {
 		return prolly.AddressMap{}, err
 	}
 	restoredH, err := state.dtblHashForCollection(ctx, reservedCatalogName, restored, idxAM, hash.Hash{})

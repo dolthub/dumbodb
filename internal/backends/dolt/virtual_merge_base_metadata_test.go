@@ -33,7 +33,7 @@ import (
 //
 // y1 is committed after x1.
 
-func foldEdits(t *testing.T, b *Backend, setup, x, y func(t *testing.T, b *Backend, branch string)) (hash.Hash, virtualBaseFlags) {
+func foldWithEdits(t *testing.T, b *Backend, setup, x, y func(t *testing.T, b *Backend, branch string)) (hash.Hash, virtualBaseFlags) {
 	t.Helper()
 	setup(t, b, "main")
 	commitDB(t, b, "testdb", "c0")
@@ -109,7 +109,7 @@ func TestVirtualMergeBase_FoldsConflictingValidators(t *testing.T) {
 	for _, mode := range mergeModes {
 		t.Run(mode, func(t *testing.T) {
 			b := newTestBackend(t)
-			virtualBase, flags := foldEdits(t, b,
+			virtualBase, flags := foldWithEdits(t, b,
 				func(t *testing.T, b *Backend, branch string) {
 					createItems(t, b, mode)
 					insertDoc(t, b, "testdb", "items", rDoc(t, "seed"))
@@ -165,7 +165,7 @@ func TestVirtualMergeBase_MergeModeJoin(t *testing.T) {
 					sameA(t, b, branch)
 				}
 			}
-			virtualBase, flags := foldEdits(t, b,
+			virtualBase, flags := foldWithEdits(t, b,
 				func(t *testing.T, b *Backend, branch string) {
 					createItems(t, b, tt.c0)
 					insertDoc(t, b, "testdb", "items", rDoc(t, "seed"))
@@ -194,7 +194,7 @@ func TestVirtualMergeBase_MergeBasesCreateTheSameCollection(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			b := newTestBackend(t)
 			doc100 := func(t *testing.T) *types.Document { return mustDoc(t, "_id", int32(100), "v", int32(1)) }
-			virtualBase, flags := foldEdits(t, b,
+			virtualBase, flags := foldWithEdits(t, b,
 				func(t *testing.T, b *Backend, branch string) {
 					createItems(t, b, mode)
 				},
@@ -240,7 +240,7 @@ func TestVirtualMergeBase_CollectionDroppedAndModified(t *testing.T) {
 	for _, mode := range mergeModes {
 		t.Run(mode, func(t *testing.T) {
 			b := newTestBackend(t)
-			virtualBase, flags := foldEdits(t, b,
+			virtualBase, flags := foldWithEdits(t, b,
 				func(t *testing.T, b *Backend, branch string) {
 					createItems(t, b, mode)
 					insertDoc(t, b, "testdb", "items", rDoc(t, "seed"))
@@ -312,13 +312,13 @@ func TestVirtualMergeBase_FoldsConflictingViews(t *testing.T) {
 
 	t.Run("added differently", func(t *testing.T) {
 		b := newTestBackend(t)
-		virtualBase, flags := foldEdits(t, b, setup(false), createView("x"), createView("y"))
+		virtualBase, flags := foldWithEdits(t, b, setup(false), createView("x"), createView("y"))
 		require.Nil(t, virtualView(t, b, virtualBase, "v"))
 		require.Equal(t, map[string]bool{"v": true}, flags.views)
 	})
 	t.Run("changed differently", func(t *testing.T) {
 		b := newTestBackend(t)
-		virtualBase, flags := foldEdits(t, b, setup(true), changeView("x"), changeView("y"))
+		virtualBase, flags := foldWithEdits(t, b, setup(true), changeView("x"), changeView("y"))
 		vm := virtualView(t, b, virtualBase, "v")
 		require.NotNil(t, vm)
 		require.True(t, reflectEqual(matchPipeline(t, "c0"), vm.Pipeline), "want c0's pipeline, got %v", vm.Pipeline)

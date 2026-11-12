@@ -1239,6 +1239,10 @@ func captureConflictsForCollection(
 		if !ok {
 			return fmt.Errorf("merge index maintenance: primary key tuple missing id bytes")
 		}
+		if fold != nil {
+			fold.touch(collection, rawKey)
+			return applier.applyUnchecked(ctx, edit, idBytes)
+		}
 		for attempt := 0; ; attempt++ {
 			if attempt > 2 {
 				return fmt.Errorf("merge index maintenance: unique-collision eviction did not converge")
@@ -1837,23 +1841,20 @@ func mergeCollectionDTBL(
 		return hash.Hash{}, nil, fmt.Errorf("opening merged indexes of %q: %w", name, err)
 	}
 	applier := &indexMergeApplier{state: state, survivors: survivors}
-	if fold != nil {
-		applier = nil
-	}
 	mergedMap, conflicts, err := captureConflictsForCollection(ctx, name, intoMap, fromMap, baseMap,
 		theirHash, applier, oursDesc, theirsDesc, mode, fold)
 	if err != nil {
 		return hash.Hash{}, nil, fmt.Errorf("merging collection %q: %w", name, err)
 	}
 	if fold != nil {
-		infos := make([]backends.IndexInfo, 0, len(survivors))
-		for _, s := range survivors {
-			infos = append(infos, s.info)
+		indexes, err := applier.foldIndexes(ctx)
+		if err != nil {
+			return hash.Hash{}, nil, err
 		}
-		if mergedMap, err = fold.makeValid(ctx, state, name, mergedMap, intoMap, fromMap, baseMap, infos); err != nil {
+		if mergedMap, err = fold.makeValid(ctx, state, name, mergedMap, intoMap, fromMap, baseMap, indexes); err != nil {
 			return hash.Hash{}, nil, fmt.Errorf("folding collection %q: %w", name, err)
 		}
-		mergedIdxAM, err := buildIndexesFromDocuments(ctx, state, mergedMap, infos)
+		mergedIdxAM, err := foldIndexAM(ctx, state, indexes)
 		if err != nil {
 			return hash.Hash{}, nil, fmt.Errorf("indexing folded collection %q: %w", name, err)
 		}

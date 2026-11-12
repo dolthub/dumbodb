@@ -410,6 +410,37 @@ func (a *indexMergeApplier) apply(ctx context.Context, edit mergeDocEdit, idByte
 	return nil, nil
 }
 
+// applyUnchecked routes one edit to every survivor without checking unique keys. A fold checks them once the merge
+// is done, so that a document can give up a key for a value neither side holds.
+func (a *indexMergeApplier) applyUnchecked(ctx context.Context, edit mergeDocEdit, idBytes []byte) error {
+	for _, s := range a.survivors {
+		oldDoc, newDoc, touches := edit.perSurvivor(s)
+		if !touches {
+			continue
+		}
+		if err := s.deleteDoc(ctx, oldDoc, idBytes); err != nil {
+			return err
+		}
+		if err := s.insertDoc(ctx, newDoc, idBytes, edit.incomingOurs()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// foldIndexes returns the survivors' indexes as they stand.
+func (a *indexMergeApplier) foldIndexes(ctx context.Context) ([]*foldIndex, error) {
+	out := make([]*foldIndex, len(a.survivors))
+	for i, s := range a.survivors {
+		m, err := s.mut.Map(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("flushing merged index %q: %w", s.info.Name, err)
+		}
+		out[i] = &foldIndex{info: s.info, m: m}
+	}
+	return out, nil
+}
+
 func (a *indexMergeApplier) removeDocEverywhere(ctx context.Context, doc *types.Document, idBytes []byte) error {
 	for _, s := range a.survivors {
 		if err := s.deleteDoc(ctx, doc, idBytes); err != nil {
