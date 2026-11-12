@@ -109,8 +109,10 @@ func naturalDirection(v any) (int, bool) {
 // hintedIndexOrder returns the key pattern of the index hint names when a
 // read hinted to it does not come back in that index's order on its own, else
 // nil: when the index has a descending key, as DumboDB stores every key
-// ascending, or when filter's top level is an operator, which the backend
-// does not answer by walking the hinted index. An unsorted hinted read returns
+// ascending, when filter's top level is an operator, which the backend
+// does not answer by walking the hinted index, or when filter tests a key
+// field with $type or $regex, which the backend does not bound, so it
+// reaches an array by its least element rather than its first one in bounds. An unsorted hinted read returns
 // index order, so such a read sorts by the pattern (SortIteratorInIndexOrder).
 func hintedIndexOrder(ctx context.Context, coll backends.Collection, hint any, filter *types.Document) (*types.Document, error) {
 	if !backends.HintRequiresExistingIndex(hint) {
@@ -125,7 +127,7 @@ func hintedIndexOrder(ctx context.Context, coll backends.Collection, hint any, f
 		if idx.Name != name {
 			continue
 		}
-		descending := false
+		descending, unbounded := false, false
 		order := types.MakeDocument(len(idx.Key))
 		for _, k := range idx.Key {
 			if k.Text || k.Geo2D || k.Geo2DSphere || k.Hashed {
@@ -136,12 +138,29 @@ func hintedIndexOrder(ctx context.Context, coll backends.Collection, hint any, f
 				dir, descending = -1, true
 			}
 			order.Set(k.Field, dir)
+			unbounded = unbounded || typeOrRegexCondition(filter, k.Field)
 		}
-		if descending || topLevelOperator(filter) {
+		if descending || unbounded || topLevelOperator(filter) {
 			return order, nil
 		}
 	}
 	return nil, nil
+}
+
+// typeOrRegexCondition reports whether filter tests field with $type or
+// $regex, or matches it against a regular expression.
+func typeOrRegexCondition(filter *types.Document, field string) bool {
+	v, err := filter.Get(field)
+	if err != nil {
+		return false
+	}
+	switch v := v.(type) {
+	case types.Regex:
+		return true
+	case *types.Document:
+		return v.Has("$type") || v.Has("$regex")
+	}
+	return false
 }
 
 // topLevelOperator reports whether filter's top level holds an operator such
