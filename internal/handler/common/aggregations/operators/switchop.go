@@ -17,6 +17,7 @@ package operators
 import (
 	"errors"
 
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 )
@@ -109,8 +110,8 @@ func (op *switchOp) Process(doc *types.Document) (any, error) {
 		return evalBranch(op.defaultArg, doc)
 	}
 
-	return nil, newOperatorError(ErrArgsInvalidLen, "$switch",
-		"$switch could not find a matching branch")
+	return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSwitchNoMatch,
+		"Cannot execute a switch statement where all the cases evaluate to false without a default", "$switch")
 }
 
 var _ Operator = (*switchOp)(nil)
