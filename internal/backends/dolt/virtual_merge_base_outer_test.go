@@ -35,22 +35,20 @@ func editAll(edits ...edit) edit {
 	}
 }
 
-// mergeResolving merges |from| into |into|, resolving any conflicts with ours, then applies |resolve| and commits it.
+// mergeResolving merges |from| into |into|, resolving every conflict with ours, including those a deferred collection
+// raises once its metadata conflict is resolved, then applies |resolve| and commits it.
 func mergeResolving(t *testing.T, b *Backend, into, from string, resolve edit) {
 	t.Helper()
 	ctx := context.Background()
 	_, err := b.DumboDBMerge(ctx, &backends.MergeParams{
 		DBName: "testdb", Into: into, From: from, Message: "merge " + from, Author: "testuser <test@example.com>",
 	})
-	if err != nil {
-		res, cerr := b.DumboDBConflicts(ctx, &backends.ConflictsParams{DBName: "testdb", Branch: into})
-		require.NoError(t, cerr, "merge of %s into %s: %v", from, into, err)
-		for _, cc := range res.Collections {
-			for _, c := range cc.Conflicts {
-				require.NoError(t, resolveConflict(t, b, "testdb", into, cc.Collection, c.ConflictID, "ours", nil))
-			}
-		}
-		continueMerge(t, b, "testdb", into)
+	for round := 0; err != nil; round++ {
+		require.Less(t, round, 5, "merge of %s into %s does not finish: %v", from, into, err)
+		resolveAllWithOurs(t, b, into)
+		_, err = b.DumboDBMerge(ctx, &backends.MergeParams{
+			DBName: "testdb", Into: into, Continue: true, Message: "merge continued", Author: "testuser <test@example.com>",
+		})
 	}
 	if resolve != nil {
 		resolve(t, b, into)
@@ -59,6 +57,23 @@ func mergeResolving(t *testing.T, b *Backend, into, from string, resolve edit) {
 			DBName: "testdb", Branch: into, Message: "resolve merge of " + from, Author: "testuser", AllowEmpty: true,
 		})
 		require.NoError(t, err)
+	}
+}
+
+func resolveAllWithOurs(t *testing.T, b *Backend, branch string) {
+	t.Helper()
+	res, err := b.DumboDBConflicts(context.Background(), &backends.ConflictsParams{DBName: "testdb", Branch: branch})
+	require.NoError(t, err)
+	for _, mc := range res.Metadata {
+		require.NoError(t, resolveConflict(t, b, "testdb", branch, mc.Collection, mc.ConflictID, "ours", nil))
+	}
+	for _, vc := range res.Views {
+		require.NoError(t, resolveConflict(t, b, "testdb", branch, vc.Name, vc.ConflictID, "ours", nil))
+	}
+	for _, cc := range res.Collections {
+		for _, c := range cc.Conflicts {
+			require.NoError(t, resolveConflict(t, b, "testdb", branch, cc.Collection, c.ConflictID, "ours", nil))
+		}
 	}
 }
 
