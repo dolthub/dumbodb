@@ -45,7 +45,7 @@ func EvalOperand(expr any, doc *types.Document) (value any, missing bool, err er
 			if errors.Is(err, aggregations.ErrMissingValue) {
 				return nil, true, nil
 			}
-			return value, false, err
+			return value, false, withOperatorContext(err, v.Command())
 		}
 		value, err = evalDocumentExpressions(v, doc)
 		return value, false, err
@@ -507,4 +507,23 @@ func checkFieldPaths(expr any, inOperator bool) error {
 		}
 	}
 	return nil
+}
+
+// OperatorContextError records the innermost operator an evaluation error
+// came from, for errors whose code alone does not say.
+type OperatorContextError struct {
+	Op  string
+	Err error
+}
+
+func (e *OperatorContextError) Error() string { return e.Err.Error() }
+
+func (e *OperatorContextError) Unwrap() error { return e.Err }
+
+func withOperatorContext(err error, op string) error {
+	var ctxErr *OperatorContextError
+	if err == nil || errors.As(err, &ctxErr) {
+		return err
+	}
+	return &OperatorContextError{Op: op, Err: err}
 }

@@ -668,6 +668,15 @@ func appendLenString(b *strings.Builder, s string) {
 // expression evaluation and returns CommandError that can be returned by $group
 // aggregation stage.
 func processGroupStageError(err error) error {
+	res := groupStageError(err)
+	var ctxErr *operators.OperatorContextError
+	if res != err && errors.As(err, &ctxErr) {
+		return &operators.OperatorContextError{Op: ctxErr.Op, Err: res}
+	}
+	return res
+}
+
+func groupStageError(err error) error {
 	var opErr operators.OperatorError
 	var exErr *aggregations.ExpressionError
 
