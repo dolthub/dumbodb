@@ -1183,7 +1183,8 @@ func isTied(a, b *types.Document, sortBy *types.Document) bool {
 	return true
 }
 
-// applyAccumulator applies $sum/$avg/$min/$max over a window slice of documents.
+// applyAccumulator applies a window function without its own state, such as
+// $sum, $push or $stdDevPop, over a window slice of documents.
 func applyAccumulator(op string, expression any, window []*types.Document) (any, error) {
 	switch op {
 	case "$first", "$last":

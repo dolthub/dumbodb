@@ -119,7 +119,7 @@ func (h *Handler) MsgDropIndexes(connCtx context.Context, msg *wire.OpMsg) (*wir
 
 	existing := beforeDrop.Indexes
 	visible := clientVisibleIndexes(connCtx, db, collection, existing)
-	timeSeries := len(visible) != len(existing)
+	timeSeries := isTimeSeriesCollection(connCtx, db, collection)
 	if timeSeries {
 		existing = visible
 	}

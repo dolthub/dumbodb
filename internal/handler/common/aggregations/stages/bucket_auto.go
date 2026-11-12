@@ -45,7 +45,7 @@ import (
 //	      <field1>: { <accumulator1>: <expression1> },
 //	      ...
 //	    },
-//	    granularity: <string>  // optional, not yet implemented
+//	    granularity: <string>  // optional
 //	  }
 //	}
 //

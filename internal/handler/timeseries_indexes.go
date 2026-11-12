@@ -20,11 +20,16 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends"
 )
 
+// isTimeSeriesCollection reports whether collection is a time-series one.
+func isTimeSeriesCollection(ctx context.Context, db backends.Database, collection string) bool {
+	info, err := lookupCollectionInfo(ctx, db, collection)
+	return err == nil && info != nil && info.IsTimeSeries
+}
+
 // clientVisibleIndexes drops the _id index of a time-series collection, which
 // mongod does not have.
 func clientVisibleIndexes(ctx context.Context, db backends.Database, collection string, indexes []backends.IndexInfo) []backends.IndexInfo {
-	info, err := lookupCollectionInfo(ctx, db, collection)
-	if err != nil || info == nil || !info.IsTimeSeries {
+	if !isTimeSeriesCollection(ctx, db, collection) {
 		return indexes
 	}
 	visible := make([]backends.IndexInfo, 0, len(indexes))
