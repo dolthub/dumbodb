@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
@@ -334,10 +335,19 @@ func sbeError(err error) error {
 		return err
 	}
 	var cmdErr *handlererrors.CommandError
-	if !errors.As(err, &cmdErr) || cmdErr.Info() == nil {
+	if !errors.As(err, &cmdErr) {
 		return err
 	}
-	op := cmdErr.Info().Argument
+	var op string
+	if cmdErr.Info() != nil {
+		op = cmdErr.Info().Argument
+	}
+	var ctxErr *operators.OperatorContextError
+	if errors.As(err, &ctxErr) {
+		if _, mapped := sbeOperatorErrors[sbeOperatorError{ctxErr.Op, cmdErr.Code()}]; mapped || sbeDatePartOperators[ctxErr.Op] {
+			op = ctxErr.Op
+		}
+	}
 	code, msg, ok := sbeEquivalent(cmdErr.Code(), op, cmdErr.Err().Error())
 	if !ok {
 		return err
@@ -366,7 +376,73 @@ var sbeMathNonNumeric = map[string]handlererrors.ErrorCode{
 	"$sqrt":  handlererrors.ErrSBESqrtNonNumeric,
 }
 
+// sbeOperatorErrors maps an operator's input error to the code and message
+// SBE reports for it.
+var sbeOperatorErrors = map[sbeOperatorError]struct {
+	code handlererrors.ErrorCode
+	msg  string
+}{
+	{"$concat", 16020}:                          {handlererrors.ErrSBEInput7158201, "$concat supports only strings"},
+	{"$strLenBytes", 16020}:                     {handlererrors.ErrSBEInput5155800, "$strLenBytes requires a string argument"},
+	{"$dateToString", 16006}:                    {handlererrors.ErrSBEInput4997901, "$dateToString parameter 'date' must be coercible to date"},
+	{"$range", 34445}:                           {handlererrors.ErrSBEInput7157712, "$range only supports numeric types for end"},
+	{"$range", 34446}:                           {handlererrors.ErrSBEInput7157715, "$range end must be representable as a 32-bit integer"},
+	{"$toUpper", 16007}:                         {handlererrors.ErrSBEInput7158200, "$toUpper input type is not supported"},
+	{"$toLower", 16007}:                         {handlererrors.ErrSBEInput7158200, "$toLower input type is not supported"},
+	{"$trim", 16020}:                            {handlererrors.ErrSBEInput5156302, "$trim input expression must be a string"},
+	{"$ltrim", 16020}:                           {handlererrors.ErrSBEInput5156302, "$ltrim input expression must be a string"},
+	{"$rtrim", 16020}:                           {handlererrors.ErrSBEInput5156302, "$rtrim input expression must be a string"},
+	{"$indexOfBytes", 40091}:                    {handlererrors.ErrSBEInput7158007, "$indexOfBytes string must resolve to a string or null"},
+	{"$indexOfCP", 40093}:                       {handlererrors.ErrSBEInput7158007, "$indexOfCP string must resolve to a string or null"},
+	{"$regexMatch", 51104}:                      {handlererrors.ErrSBEInput5073401, "$regexMatch: input must be of type string"},
+	{"$regexFind", 51104}:                       {handlererrors.ErrSBEInput5073401, "$regexFind: input must be of type string"},
+	{"$regexFindAll", 51104}:                    {handlererrors.ErrSBEInput5073401, "$regexFindAll: input must be of type string"},
+	{"$replaceOne", 51746}:                      {handlererrors.ErrSBEInput7158302, "$replaceOne requires that 'input' be a string"},
+	{"$dateAdd", 5166403}:                       {handlererrors.ErrSBEInput7157904, "$dateAdd must have startDate argument convertable to date"},
+	{"$dateSubtract", 5166403}:                  {handlererrors.ErrSBEInput7157904, "$dateSubtract must have startDate argument convertable to date"},
+	{"$dateDiff", 5166307}:                      {handlererrors.ErrSBEInput7157921, "$dateDiff parameter 'startDate' must be coercible to date"},
+	{"$dateTrunc", 5439012}:                     {handlererrors.ErrSBEInput7157932, "$dateTrunc parameter 'date' must be coercible to date"},
+	{"$dateToParts", 16006}:                     {handlererrors.ErrSBEInput7157915, "$dateToParts date must have the format of a date"},
+	{"$dateFromParts", 40515}:                   {handlererrors.ErrSBEInput7157917, "'year' must evaluate to an integer"},
+	{"$concatArrays", 28664}:                    {handlererrors.ErrSBEInput7158000, "$concatArrays only supports arrays"},
+	{"$setUnion", 16020}:                        {handlererrors.ErrSBEInput7158100, "All operands of $setUnion must be arrays."},
+	{"$setDifference", 16020}:                   {handlererrors.ErrSBEInput7158100, "All operands of $setDifference must be arrays."},
+	{"$setEquals", 16020}:                       {handlererrors.ErrSBEInput7158100, "All operands of $setEquals must be arrays."},
+	{"$setIntersection", 16020}:                 {handlererrors.ErrSBEInput7158100, "All operands of $setIntersection must be arrays."},
+	{"$setIsSubset", 16020}:                     {handlererrors.ErrSBEInput7158100, "All operands of $setIsSubset must be arrays."},
+	{"$reverseArray", 16020}:                    {handlererrors.ErrSBEInput7158002, "$reverseArray argument must be an array"},
+	{"$objectToArray", 16020}:                   {handlererrors.ErrSBEInput5153215, "$objectToArray requires an object input"},
+	{"$arrayToObject", 40386}:                   {handlererrors.ErrSBEInput5153200, "$arrayToObject requires an array input"},
+	{"$sortArray", 2942504}:                     {handlererrors.ErrSBEInput7158001, "$sortArray input argument must be an array"},
+	{"$anyElementTrue", 16020}:                  {handlererrors.ErrSBEInput7158300, "$anyElementTrue's argument must be an array"},
+	{"$tsSecond", handlererrors.ErrBadValue}:    {handlererrors.ErrSBEInput7157900, "$tsSecond expects argument of type timestamp"},
+	{"$tsIncrement", handlererrors.ErrBadValue}: {handlererrors.ErrSBEInput7157901, "$tsIncrement expects argument of type timestamp"},
+	{"$bsonSize", 31393}:                        {handlererrors.ErrSBEInput7158301, "$bsonSize requires a document input"},
+}
+
+type sbeOperatorError struct {
+	op   string
+	code handlererrors.ErrorCode
+}
+
+// sbeDatePartOperators report a non-date input under one SBE code.
+var sbeDatePartOperators = map[string]bool{
+	"$year": true, "$month": true, "$dayOfMonth": true, "$dayOfWeek": true, "$dayOfYear": true, "$hour": true,
+	"$minute": true, "$second": true, "$millisecond": true, "$week": true, "$isoWeek": true, "$isoWeekYear": true,
+	"$isoDayOfWeek": true,
+}
+
 func sbeEquivalent(code handlererrors.ErrorCode, op, msg string) (handlererrors.ErrorCode, string, bool) {
+	if e, ok := sbeOperatorErrors[sbeOperatorError{op, code}]; ok {
+		return e.code, e.msg, true
+	}
+	if code == handlererrors.ErrBucketNoBranch {
+		return handlererrors.ErrSBEBucketNoBranch,
+			"$switch could not find a matching branch for an input, and no default was specified.", true
+	}
+	if code == handlererrors.ErrCannotConvertToDate && sbeDatePartOperators[op] {
+		return handlererrors.ErrSBEInput5157904, op[1:] + " parameter 'date' must be coercible to date", true
+	}
 	switch code {
 	case handlererrors.ErrBadValue:
 		if op == "$divide" {
