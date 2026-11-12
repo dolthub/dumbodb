@@ -203,9 +203,9 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		if err = documentsNotFirst(d, i); err != nil {
 			return nil, err
 		}
-		if i > 0 && d.Command() == "$listCatalog" {
+		if name := d.Command(); i > 0 && (name == "$listCatalog" || name == "$querySettings") {
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCollStatsIsNotFirstStage,
-				"$listCatalog is only valid as the first stage in a pipeline", document.Command())
+				name+" is only valid as the first stage in a pipeline", document.Command())
 		}
 
 		var s aggregations.Stage
@@ -659,13 +659,15 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 }
 
 var dbLevelSourceStages = map[string]struct{}{
-	"$currentOp":         {},
-	"$documents":         {},
-	"$listLocalSessions": {},
-	"$listSessions":      {},
-	"$changeStream":      {},
-	"$queryStats":        {},
-	"$listCatalog":       {},
+	"$currentOp":          {},
+	"$documents":          {},
+	"$listLocalSessions":  {},
+	"$listSessions":       {},
+	"$changeStream":       {},
+	"$queryStats":         {},
+	"$listCatalog":        {},
+	"$querySettings":      {},
+	"$listClusterCatalog": {},
 }
 
 // checkDatabasePipelineStages returns the error mongod reports while it parses
@@ -790,12 +792,12 @@ func (h *Handler) aggregateDatabase(connCtx context.Context, document *types.Doc
 	switch stageName {
 	case "$documents":
 		return h.aggregateDocuments(connCtx, document, firstStage, pipeline, dbName)
-	case "$queryStats":
-		// DumboDB records no query statistics.
+	case "$queryStats", "$querySettings":
+		// DumboDB records no query statistics and has no query settings.
 		return h.aggregateDocuments(connCtx, document, must.NotFail(types.NewDocument("$documents", types.MakeArray(0))), pipeline, dbName)
-	case "$listCatalog":
+	case "$listCatalog", "$listClusterCatalog":
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrNotImplemented,
-			"$listCatalog is not implemented", "$listCatalog (stage)")
+			stageName+" is not implemented", stageName+" (stage)")
 	}
 
 	if stageName == "$listLocalSessions" {

@@ -90,6 +90,47 @@ func newChangeStream(stage *types.Document) (aggregations.Stage, error) {
 	)
 }
 
+func newListSampledQueries(*types.Document) (aggregations.Stage, error) {
+	return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIllegalOperation,
+		"$listSampledQueries is not supported on a standalone mongod", "$listSampledQueries (stage)")
+}
+
+func newSetVariableFromSubPipeline(*types.Document) (aggregations.Stage, error) {
+	return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrNotAllowedInUserRequests,
+		"$setVariableFromSubPipeline' is not allowed in user requests", "$setVariableFromSubPipeline (stage)")
+}
+
+func newListCachedAndActiveUsers(*types.Document) (aggregations.Stage, error) {
+	return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrQueryFeatureNotAllowed,
+		"$listCachedAndActiveUsers is not allowed with the current configuration. "+
+			"You may need to enable the corresponding feature flag", "$listCachedAndActiveUsers (stage)")
+}
+
+// newChangeStreamSplitLargeEvent is mongod's error for the stage outside a
+// $changeStream pipeline, which a standalone server never runs.
+func newChangeStreamSplitLargeEvent(*types.Document) (aggregations.Stage, error) {
+	return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIllegalOperation,
+		"$changeStreamSplitLargeEvent can only be used in a $changeStream pipeline", "$changeStreamSplitLargeEvent (stage)")
+}
+
+// newQuerySettings is mongod's error for $querySettings on a collection; on
+// {aggregate: 1} it returns no settings, as DumboDB has none.
+func newQuerySettings(*types.Document) (aggregations.Stage, error) {
+	return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace,
+		"'$querySettings' can only be run with {aggregate: 1}", "$querySettings (stage)")
+}
+
+func newListClusterCatalog(*types.Document) (aggregations.Stage, error) {
+	return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrListClusterCatalogOnCollection,
+		"The $listClusterCatalog stage must run on a database, not a collection.", "$listClusterCatalog (stage)")
+}
+
+// newInhibitOptimization builds $_internalInhibitOptimization, which only
+// stops mongod's optimizer and passes documents through.
+func newInhibitOptimization(*types.Document) (aggregations.Stage, error) {
+	return passThroughStage{}, nil
+}
+
 func newShardedDataDistribution(*types.Document) (aggregations.Stage, error) {
 	return nil, handlererrors.NewCommandErrorMsgWithArgument(
 		handlererrors.ErrShardedDataDistributionMongosOnly,
@@ -200,14 +241,17 @@ func newListCatalog(stage *types.Document) (aggregations.Stage, error) {
 // parseFailingStages are the stages that DumboDB, like a standalone mongod,
 // refuses in any position while the pipeline is parsed.
 var parseFailingStages = map[string]newStageFunc{
-	"$changeStream":            newChangeStream,
-	"$listSearchIndexes":       newListSearchIndexes,
-	"$listSessions":            newListSessions,
-	"$queryStats":              newQueryStats,
-	"$search":                  newSearch,
-	"$searchMeta":              newSearch,
-	"$shardedDataDistribution": newShardedDataDistribution,
-	"$vectorSearch":            newSearch,
+	"$changeStream":               newChangeStream,
+	"$listSearchIndexes":          newListSearchIndexes,
+	"$listSessions":               newListSessions,
+	"$listSampledQueries":         newListSampledQueries,
+	"$setVariableFromSubPipeline": newSetVariableFromSubPipeline,
+	"$listCachedAndActiveUsers":   newListCachedAndActiveUsers,
+	"$queryStats":                 newQueryStats,
+	"$search":                     newSearch,
+	"$searchMeta":                 newSearch,
+	"$shardedDataDistribution":    newShardedDataDistribution,
+	"$vectorSearch":               newSearch,
 }
 
 // CheckParseFailingStages returns the error of the first stage of pipeline
@@ -288,7 +332,8 @@ func FailsParsing(stage *types.Document) bool {
 		return true
 	}
 	switch name {
-	case "$documents", "$collStats", "$currentOp", "$listLocalSessions", "$listCatalog", "$facet":
+	case "$documents", "$collStats", "$currentOp", "$listLocalSessions", "$listCatalog", "$facet",
+		"$querySettings", "$listClusterCatalog", "$changeStreamSplitLargeEvent":
 		return false
 	}
 	_, err := newStage(stage)
