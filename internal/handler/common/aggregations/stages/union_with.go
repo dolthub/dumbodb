@@ -146,49 +146,66 @@ func (u *unionWith) Process(ctx context.Context, iter types.DocumentsIterator, c
 		u.sub.viewIsView = isView
 	}
 
-	var fromDocs []*types.Document
-	if u.sub.from != "" {
-		var err error
-		if fromDocs, err = fetcher.Fetch(ctx, u.sub.from, nil); err != nil {
-			if viewInSBE {
-				return nil, sbeError(err)
+	// The sub-pipeline starts once the input is exhausted, as in mongod, so
+	// an error reading the input comes before any from the sub-pipeline.
+	start := func() (types.DocumentsIterator, *iterator.MultiCloser, error) {
+		var fromDocs []*types.Document
+		if u.sub.from != "" {
+			var err error
+			if fromDocs, err = fetcher.Fetch(ctx, u.sub.from, nil); err != nil {
+				if viewInSBE {
+					return nil, nil, sbeError(err)
+				}
+				return nil, nil, lazyerrors.Error(err)
 			}
-			return nil, lazyerrors.Error(err)
 		}
+		return u.sub.pipelineIter(ctx, fetcher, fromDocs, types.MakeDocument(0), nil)
 	}
-	unioned, subCloser, err := u.sub.pipelineIter(ctx, fetcher, fromDocs, types.MakeDocument(0), nil)
-	if err != nil {
-		return nil, err
-	}
-	res := &concatIterator{iters: []types.DocumentsIterator{iter, unioned}, closer: subCloser}
+	res := &unionIterator{input: iter, start: start}
 	closer.Add(res)
 	return res, nil
 }
 
-// concatIterator yields the documents of each iterator in turn.
-type concatIterator struct {
-	iters  []types.DocumentsIterator
-	closer *iterator.MultiCloser
+// unionIterator returns its input's documents, then those of a sub-pipeline
+// it starts when the input is exhausted.
+type unionIterator struct {
+	input    types.DocumentsIterator
+	start    func() (types.DocumentsIterator, *iterator.MultiCloser, error)
+	unioned  types.DocumentsIterator
+	closer   *iterator.MultiCloser
+	finished bool
 }
 
-func (it *concatIterator) Next() (struct{}, *types.Document, error) {
-	for len(it.iters) > 0 {
-		_, doc, err := it.iters[0].Next()
-		if errors.Is(err, iterator.ErrIteratorDone) {
-			it.iters = it.iters[1:]
-			continue
+func (it *unionIterator) Next() (struct{}, *types.Document, error) {
+	var unused struct{}
+	if it.finished {
+		return unused, nil, iterator.ErrIteratorDone
+	}
+	if it.unioned == nil {
+		_, doc, err := it.input.Next()
+		if !errors.Is(err, iterator.ErrIteratorDone) {
+			return unused, doc, err
 		}
-		return struct{}{}, doc, err
+		if it.unioned, it.closer, err = it.start(); err != nil {
+			it.finished = true
+			return unused, nil, err
+		}
 	}
-	return struct{}{}, nil, iterator.ErrIteratorDone
+	_, doc, err := it.unioned.Next()
+	if errors.Is(err, iterator.ErrIteratorDone) {
+		it.finished = true
+	}
+	return unused, doc, err
 }
 
-func (it *concatIterator) Close() {
-	for _, iter := range it.iters {
-		iter.Close()
+func (it *unionIterator) Close() {
+	it.input.Close()
+	if it.unioned != nil {
+		it.unioned.Close()
 	}
-	it.iters = nil
-	it.closer.Close()
+	if it.closer != nil {
+		it.closer.Close()
+	}
 }
 
 var _ aggregations.Stage = (*unionWith)(nil)
