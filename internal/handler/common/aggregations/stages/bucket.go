@@ -71,54 +71,14 @@ type bucketOutput struct {
 	accumulator accumulators.Accumulator
 }
 
-func newBucket(stage *types.Document) (aggregations.Stage, error) {
-	v, err := stage.Get("$bucket")
-	if err != nil {
-		return nil, lazyerrors.Error(err)
-	}
-
-	spec, ok := v.(*types.Document)
+// parseBucketBoundaries returns $bucket's boundaries, which must be at
+// least two sorted values of one type.
+func parseBucketBoundaries(v any) ([]any, error) {
+	boundariesArr, ok := v.(*types.Array)
 	if !ok {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrBadValue,
-			"Argument to $bucket stage must be a document",
-			"$bucket (stage)",
-		)
-	}
-
-	// groupBy is required.
-	groupByVal, err := spec.Get("groupBy")
-	if err != nil {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrFailedToParse,
-			"The $bucket stage specification must have a 'groupBy' field",
-			"$bucket (stage)",
-		)
-	}
-
-	if !isGroupExpression(groupByVal) {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketGroupBy,
-			"The $bucket 'groupBy' field must be defined as a $-prefixed path or an expression, but found: "+
-				types.FormatAnyValue(groupByVal)+".", "$bucket (stage)")
-	}
-
-	// boundaries is required.
-	boundariesVal, err := spec.Get("boundaries")
-	if err != nil {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrBucketMissingBoundaries,
-			"$bucket requires 'groupBy' and 'boundaries' to be specified.",
-			"$bucket (stage)",
-		)
-	}
-
-	boundariesArr, ok := boundariesVal.(*types.Array)
-	if !ok {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrBadValue,
-			"The $bucket stage specification requires 'boundaries' to be an array",
-			"$bucket (stage)",
-		)
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketBoundariesNotArray,
+			"The $bucket 'boundaries' field must be an array, but found type: "+handlerparams.AliasFromType(v)+".",
+			"$bucket (stage)")
 	}
 
 	if boundariesArr.Len() < 2 {
@@ -131,8 +91,7 @@ func newBucket(stage *types.Document) (aggregations.Stage, error) {
 
 	boundaries := make([]any, boundariesArr.Len())
 	for i := 0; i < boundariesArr.Len(); i++ {
-		bv := must.NotFail(boundariesArr.Get(i))
-		boundaries[i] = bv
+		boundaries[i] = must.NotFail(boundariesArr.Get(i))
 	}
 
 	for i := 1; i < len(boundaries); i++ {
@@ -149,6 +108,51 @@ func newBucket(stage *types.Document) (aggregations.Stage, error) {
 					"ascending order (%s is not less than %s).", i-1, i, types.FormatAnyValue(prev), types.FormatAnyValue(cur)),
 				"$bucket (stage)")
 		}
+	}
+	return boundaries, nil
+}
+
+func newBucket(stage *types.Document) (aggregations.Stage, error) {
+	v, err := stage.Get("$bucket")
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+
+	spec, ok := v.(*types.Document)
+	if !ok {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrBadValue,
+			"Argument to $bucket stage must be a document",
+			"$bucket (stage)",
+		)
+	}
+
+	// mongod checks groupBy and boundaries in the order the specification
+	// gives them, and only then that both are present.
+	var groupByVal any
+	var boundaries []any
+	for _, key := range spec.Keys() {
+		val := must.NotFail(spec.Get(key))
+		switch key {
+		case "groupBy":
+			if !isGroupExpression(val) {
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketGroupBy,
+					"The $bucket 'groupBy' field must be defined as a $-prefixed path or an expression, but found: "+
+						types.FormatAnyValue(val)+".", "$bucket (stage)")
+			}
+			groupByVal = val
+		case "boundaries":
+			if boundaries, err = parseBucketBoundaries(val); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if groupByVal == nil || boundaries == nil {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrBucketMissingBoundaries,
+			"$bucket requires 'groupBy' and 'boundaries' to be specified.",
+			"$bucket (stage)",
+		)
 	}
 
 	if err := operators.CheckFieldPaths(groupByVal); err != nil {

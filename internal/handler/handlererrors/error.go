@@ -684,6 +684,9 @@ const (
 	// ErrBucketMissingBoundaries indicates that $bucket stage specification is missing the required 'boundaries' field.
 	ErrBucketMissingBoundaries = ErrorCode(40198) // Location40198
 
+	// ErrBucketBoundariesNotArray indicates $bucket boundaries that are not an array.
+	ErrBucketBoundariesNotArray = ErrorCode(40200) // Location40200
+
 	// $arrayToObject input errors.
 	ErrArrayToObjectInput           = ErrorCode(40386) // Location40386
 	ErrArrayToObjectObjectsExpected = ErrorCode(40391) // Location40391
