@@ -218,20 +218,13 @@ func (op *nOp) Process(doc *types.Document) (any, error) {
 		values = append(values, must.NotFail(arr.Get(i)))
 	}
 	switch op.name {
-	case "$maxN", "$minN":
+	case "$minN":
+		// The n smallest, of tied values the earliest, as mongod keeps them.
 		values = slices.DeleteFunc(values, isNullish)
-		order := types.Ascending
-		if op.name == "$maxN" {
-			order = types.Descending
-		}
-		slices.SortStableFunc(values, func(a, b any) int {
-			c := types.CompareOrder(a, b, types.Ascending)
-			if order == types.Descending {
-				c = -c
-			}
-			return int(c)
-		})
+		slices.SortStableFunc(values, func(a, b any) int { return int(types.CompareOrder(a, b, types.Ascending)) })
 		values = values[:min(int64(len(values)), n)]
+	case "$maxN":
+		values = largestN(slices.DeleteFunc(values, isNullish), n)
 	case "$firstN":
 		values = values[:min(int64(len(values)), n)]
 	case "$lastN":
@@ -313,6 +306,60 @@ func formatCoercedDouble(x float64) string {
 		return "-inf"
 	}
 	return strconv.FormatFloat(x, 'g', -1, 64)
+}
+
+// largestN returns the n largest values, greatest first, as mongod's $maxN
+// keeps them: a value that only ties the least kept one is refused, and a
+// greater one evicts the earliest of the least.
+func largestN(values []any, n int64) []any {
+	type entry struct {
+		v   any
+		seq int
+	}
+	order := func(a, b entry) int {
+		if c := types.CompareOrder(a.v, b.v, types.Ascending); c != types.Equal {
+			return int(c)
+		}
+		return a.seq - b.seq
+	}
+	kept := make([]entry, 0, min(int64(len(values)), n))
+	// kept is a heap whose root is the least, earliest entry.
+	down := func(i int) {
+		for {
+			least, l, r := i, 2*i+1, 2*i+2
+			if l < len(kept) && order(kept[l], kept[least]) < 0 {
+				least = l
+			}
+			if r < len(kept) && order(kept[r], kept[least]) < 0 {
+				least = r
+			}
+			if least == i {
+				return
+			}
+			kept[i], kept[least] = kept[least], kept[i]
+			i = least
+		}
+	}
+	for i, v := range values {
+		e := entry{v: v, seq: i}
+		if int64(len(kept)) < n {
+			kept = append(kept, e)
+			for j := len(kept) - 1; j > 0 && order(kept[j], kept[(j-1)/2]) < 0; j = (j - 1) / 2 {
+				kept[j], kept[(j-1)/2] = kept[(j-1)/2], kept[j]
+			}
+			continue
+		}
+		if types.CompareOrder(v, kept[0].v, types.Ascending) == types.Greater {
+			kept[0] = e
+			down(0)
+		}
+	}
+	slices.SortFunc(kept, func(a, b entry) int { return -order(a, b) })
+	out := make([]any, len(kept))
+	for i, e := range kept {
+		out[i] = e.v
+	}
+	return out
 }
 
 // percentileOp represents { $percentile: { input, p, method } } and

@@ -568,12 +568,22 @@ func deferredWindowOutput(operator string) bool {
 	return false
 }
 
+// accumulateWindow applies acc to a window. mongod computes a window whose
+// lower edge is bounded with accumulators that keep every value.
+func accumulateWindow(acc accumulators.Accumulator, frame *windowFrame, window []*types.Document) (any, error) {
+	iter := iterator.Values(iterator.ForSlice(window))
+	if frame != nil && !frame.lower.unbounded {
+		return accumulators.AccumulateWindow(acc, iter)
+	}
+	return accumulators.Accumulate(acc, iter)
+}
+
 // windowValueAt computes a deferred window output for the document at index i
 // of the partition.
 func (s *setWindowFields) windowValueAt(partition []*types.Document, wof windowOutputField, i int) (any, error) {
 	window := s.windowDocs(wof.frame, i, partition)
 	if acc, ok := wof.opSpec.(accumulators.Accumulator); ok {
-		return accumulators.Accumulate(acc, iterator.Values(iterator.ForSlice(window)))
+		return accumulateWindow(acc, wof.frame, window)
 	}
 	return applyAccumulator(wof.operator, wof.expression, window)
 }
@@ -767,7 +777,7 @@ func (s *setWindowFields) computeWindowValues(partition []*types.Document, wof w
 		acc := wof.opSpec.(accumulators.Accumulator)
 		for i := range partition {
 			window := s.windowDocs(wof.frame, i, partition)
-			val, err := accumulators.Accumulate(acc, iterator.Values(iterator.ForSlice(window)))
+			val, err := accumulateWindow(acc, wof.frame, window)
 			if err != nil {
 				return nil, err
 			}

@@ -192,7 +192,10 @@ type nState struct {
 	n      int64
 	ready  bool
 	mem    keptMemory
+	all    bool
 }
+
+func (s *nState) keepAll() { s.all = true }
 
 func (s *nState) Accumulate(doc *types.Document) error {
 	if !s.ready {
@@ -203,9 +206,12 @@ func (s *nState) Accumulate(doc *types.Document) error {
 		s.n, s.ready = n, true
 		switch s.spec.name {
 		case "$minN":
-			s.ranked = newRankedSet(n, compareValues, false)
+			s.ranked = newRankedSet(n, compareValues, false, s.spec.n.sbe)
 		case "$maxN":
-			s.ranked = newRankedSet(n, compareValues, true)
+			s.ranked = newRankedSet(n, compareValues, true, s.spec.n.sbe)
+		}
+		if s.ranked != nil {
+			s.ranked.all = s.all
 		}
 	}
 	full := s.spec.name == "$firstN" && int64(len(s.values)) >= s.n
@@ -236,9 +242,14 @@ func (s *nState) Accumulate(doc *types.Document) error {
 func (s *nState) Result() (any, error) {
 	values := s.values
 	if s.ranked != nil {
-		values = s.ranked.sorted()
-		if s.spec.name == "$maxN" {
-			slices.Reverse(values)
+		switch {
+		case s.ranked.sbe:
+			values = s.ranked.sortedSBE(s.spec.name == "$maxN")
+		default:
+			values = s.ranked.sorted()
+			if s.spec.name == "$maxN" {
+				slices.Reverse(values)
+			}
 		}
 	}
 	out := types.MakeArray(len(values))
