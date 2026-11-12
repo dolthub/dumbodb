@@ -99,7 +99,7 @@ func appendProjectStageRootFields(projection *types.Document, roots *[]string, t
 		}
 		switch v := v.(type) {
 		case bool, int32, int64, float64:
-			if !isTruthy(v) {
+			if !common.IsTruthy(v) {
 				if top && key == "_id" {
 					continue
 				}
