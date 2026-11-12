@@ -57,15 +57,16 @@ func newFill(stage *types.Document) (aggregations.Stage, error) {
 		case "sortBy":
 			sortBy = val
 		case "partitionBy":
+			// mongod's IDL parser checks the type of each field as it reads it.
+			if _, isNull := val.(types.NullType); isNull {
+				return nil, fillWrongType("partitionBy", val, "object")
+			}
 			partitionBy = val
 		case "partitionByFields":
 			partitionByFields = val
 		default:
 			return nil, fillError(handlererrors.ErrIDLUnknownField, "BSON field '$fill."+key+"' is an unknown field.")
 		}
-	}
-	if _, isNull := partitionBy.(types.NullType); isNull {
-		return nil, fillWrongType("partitionBy", partitionBy, "object")
 	}
 	if output == nil {
 		return nil, fillError(handlererrors.ErrMissingField, "BSON field '$fill.output' is missing but a required field")
