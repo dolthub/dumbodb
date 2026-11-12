@@ -139,7 +139,7 @@ func (db *dbState) mergeIntoVirtualBase(ctx context.Context, x, y *doltdb.Commit
 	if err != nil {
 		return nil, nil, err
 	}
-	fold := newVirtualFold()
+	fold := newVirtualFold(xAM, yAM, baseAM)
 	mergedAM, conflicts, viewConflicts, metaConflicts, deferred, err := mergeAddressMaps(ctx, db, xAM, yAM, baseAM,
 		yHash, baseHash, "merge base "+xHash.String(), "merge base "+yHash.String(), fold)
 	if err != nil {

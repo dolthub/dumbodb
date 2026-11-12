@@ -1620,12 +1620,27 @@ func mergeAddressMaps(ctx context.Context, state *dbState, intoAM, fromAM, baseA
 		intoChanged := intoH != baseH
 		fromChanged := fromH != baseH
 
-		if !fromChanged {
+		// A fold merges a collection either merge base changed, because the other may have changed its
+		// validator or indexes, which the documents must then satisfy.
+		foldOneSided := false
+		if fold != nil && name != reservedCatalogName && (intoChanged != fromChanged) &&
+			!intoH.IsEmpty() && !fromH.IsEmpty() && !baseH.IsEmpty() {
+			foldOneSided = true
+			for _, h := range []hash.Hash{intoH, fromH, baseH} {
+				isView, err := isViewEntry(ctx, state.cs, h)
+				if err != nil {
+					return prolly.AddressMap{}, nil, nil, nil, nil, err
+				}
+				foldOneSided = foldOneSided && !isView
+			}
+		}
+
+		if !fromChanged && !foldOneSided {
 			// From did not touch this collection; keep Into's version.
 			continue
 		}
 
-		if !intoChanged {
+		if !intoChanged && !foldOneSided {
 			// Only From changed this collection; apply From's change.
 			switch {
 			case fromH.IsEmpty():
@@ -1709,8 +1724,10 @@ func mergeAddressMaps(ctx context.Context, state *dbState, intoAM, fromAM, baseA
 		return prolly.AddressMap{}, nil, nil, nil, nil, err
 	}
 
-	if err := crossValidateMergedDocuments(ctx, state, am, baseAM, allConflicts, metaConflicts, theirHash, theirsDesc, false); err != nil {
-		return prolly.AddressMap{}, nil, nil, nil, nil, fmt.Errorf("merge cross-validation: %w", err)
+	if fold == nil {
+		if err := crossValidateMergedDocuments(ctx, state, am, baseAM, allConflicts, metaConflicts, theirHash, theirsDesc, false); err != nil {
+			return prolly.AddressMap{}, nil, nil, nil, nil, fmt.Errorf("merge cross-validation: %w", err)
+		}
 	}
 
 	return am, allConflicts, viewConflicts, metaConflicts, deferredCollections, nil
@@ -1782,10 +1799,31 @@ func mergeCollectionDTBL(
 		return hash.Hash{}, nil, fmt.Errorf("opening merged indexes of %q: %w", name, err)
 	}
 	applier := &indexMergeApplier{state: state, survivors: survivors}
+	if fold != nil {
+		applier = nil
+	}
 	mergedMap, conflicts, err := captureConflictsForCollection(ctx, name, intoMap, fromMap, baseMap,
 		theirHash, applier, oursDesc, theirsDesc, mode, fold)
 	if err != nil {
 		return hash.Hash{}, nil, fmt.Errorf("merging collection %q: %w", name, err)
+	}
+	if fold != nil {
+		infos := make([]backends.IndexInfo, 0, len(survivors))
+		for _, s := range survivors {
+			infos = append(infos, s.info)
+		}
+		if mergedMap, err = fold.makeValid(ctx, state, name, mergedMap, intoMap, fromMap, baseMap, infos); err != nil {
+			return hash.Hash{}, nil, fmt.Errorf("folding collection %q: %w", name, err)
+		}
+		mergedIdxAM, err := buildIndexesFromDocuments(ctx, state, mergedMap, infos)
+		if err != nil {
+			return hash.Hash{}, nil, fmt.Errorf("indexing folded collection %q: %w", name, err)
+		}
+		mergedH, err := state.dtblHashForCollection(ctx, name, mergedMap, mergedIdxAM, hash.Hash{})
+		if err != nil {
+			return hash.Hash{}, nil, fmt.Errorf("writing folded collection %q: %w", name, err)
+		}
+		return mergedH, conflicts, nil
 	}
 	var artHash hash.Hash
 	if len(conflicts) > 0 && name != reservedCatalogName {
