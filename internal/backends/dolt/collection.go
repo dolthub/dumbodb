@@ -1911,6 +1911,8 @@ type explainStage struct {
 	// subplan marks the plan of a lone $or, which MongoDB plans per branch
 	// under SUBPLAN.
 	subplan bool
+	// amount is a LIMIT's limitAmount or a SKIP's skipAmount.
+	amount int64
 }
 
 func (s *explainStage) toDoc() *types.Document {
@@ -1920,6 +1922,12 @@ func (s *explainStage) toDoc() *types.Document {
 	}
 	if s.keyPattern != nil {
 		d.Set("keyPattern", s.keyPattern)
+	}
+	switch s.stage {
+	case "LIMIT":
+		d.Set("limitAmount", explainAmount(s.amount))
+	case "SKIP":
+		d.Set("skipAmount", explainAmount(s.amount))
 	}
 	if len(s.inputs) > 0 {
 		arr := types.MakeArray(len(s.inputs))
@@ -1931,6 +1939,15 @@ func (s *explainStage) toDoc() *types.Document {
 		d.Set("inputStage", s.input.toDoc())
 	}
 	return d
+}
+
+// explainAmount is n as mongod reports a limit or skip amount: an int32
+// when it fits.
+func explainAmount(n int64) any {
+	if n >= math.MinInt32 && n <= math.MaxInt32 {
+		return int32(n)
+	}
+	return n
 }
 
 // partialFilterScalar extracts the scalar a condition pins a field to:
@@ -2573,12 +2590,12 @@ func wrapScanPlan(params *backends.ExplainParams, scan *explainStage, sorted boo
 		node = &explainStage{stage: "SORT", input: node}
 	}
 	if params.Skip > 0 {
-		node = &explainStage{stage: "SKIP", input: node}
+		node = &explainStage{stage: "SKIP", input: node, amount: params.Skip}
 	}
 	// A scan that sorts its index keys also absorbs the limit.
 	keysSorted := scan.input != nil && scan.input.stage == "SORT"
 	if params.Limit > 0 && !sortPresent && !keysSorted {
-		node = &explainStage{stage: "LIMIT", input: node}
+		node = &explainStage{stage: "LIMIT", input: node, amount: max(params.Limit, -params.Limit)}
 	}
 	if params.Projection.Len() > 0 {
 		projStage := "PROJECTION_SIMPLE"

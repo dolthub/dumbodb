@@ -468,11 +468,7 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 		params.StagesDocs = mergeLeadingMatches(dropShapingBeforeCount(aggregations.MoveMatchesAhead(moved)))
 		params.Filter, params.Sort = aggregations.GetPushdownQuery(params.StagesDocs)
 		common.CanonicalizeFilter(params.Filter)
-		params.Limit = pushdownLimit(params.StagesDocs)
-		if first := stageDocAt(params.StagesDocs, 0); params.Limit == 0 && first != nil && first.Command() == "$limit" {
-			// The query absorbs a leading $limit too.
-			params.Limit, _ = stageInt64(first, "$limit", common.GetLimitStageParam)
-		}
+		params.Skip, params.Limit = pushdownWindow(params.StagesDocs)
 	}
 
 	if !h.DisablePushdown {
@@ -772,4 +768,26 @@ func checkInnerMaxTimeMS(inner *types.Document) error {
 func explainMaxTimeMS(document *types.Document) (int64, error) {
 	v, _ := document.Get("maxTimeMS")
 	return handlerparams.CommandMaxTimeMS(v)
+}
+
+// pushdownWindow returns the $skip and $limit the query plan absorbs from
+// stages: those directly after its leading $match and $sort, a $skip before
+// a $limit.
+func pushdownWindow(stages []any) (skip, limit int64) {
+	i := 0
+	for seen := map[string]bool{}; i < 2; i++ {
+		d := stageDocAt(stages, i)
+		if d == nil || d.Command() != "$match" && d.Command() != "$sort" || seen[d.Command()] {
+			break
+		}
+		seen[d.Command()] = true
+	}
+	if d := stageDocAt(stages, i); d != nil && d.Command() == "$skip" {
+		skip, _ = stageInt64(d, "$skip", common.GetSkipStageParam)
+		i++
+	}
+	if d := stageDocAt(stages, i); d != nil && d.Command() == "$limit" {
+		limit, _ = stageInt64(d, "$limit", common.GetLimitStageParam)
+	}
+	return skip, limit
 }
