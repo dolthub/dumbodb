@@ -164,7 +164,10 @@ type topBottomState struct {
 	spec   *topBottomAccumulator
 	ranked *rankedSet
 	mem    keptMemory
+	all    bool
 }
+
+func (s *topBottomState) keepAll() { s.all = true }
 
 func (s *topBottomState) Accumulate(doc *types.Document) error {
 	if s.ranked == nil {
@@ -177,7 +180,8 @@ func (s *topBottomState) Accumulate(doc *types.Document) error {
 		if err != nil {
 			return err
 		}
-		s.ranked = newRankedSet(n, s.spec.compareKeys, s.spec.bottom)
+		s.ranked = newRankedSet(n, s.spec.compareKeys, s.spec.bottom, s.spec.n.sbe)
+		s.ranked.all = s.all
 	}
 	out, missing, err := s.spec.output.evaluate(doc)
 	if err != nil {

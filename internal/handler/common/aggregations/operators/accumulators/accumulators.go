@@ -83,9 +83,28 @@ type Accumulation interface {
 // Used by stages that must buffer their input for other reasons ($bucket,
 // $bucketAuto); $group folds incrementally without it.
 func Accumulate(acc Accumulator, iter types.DocumentsIterator) (any, error) {
-	defer iter.Close()
+	return accumulate(acc.New(), iter)
+}
 
+// keepingAll is implemented by the accumulations that keep every value when
+// mongod computes them over a window that can drop documents.
+type keepingAll interface {
+	keepAll()
+}
+
+// AccumulateWindow is Accumulate over a window whose lower edge is bounded.
+// mongod computes such a window with an accumulator that keeps every value,
+// so ties are chosen from the whole window in its order.
+func AccumulateWindow(acc Accumulator, iter types.DocumentsIterator) (any, error) {
 	state := acc.New()
+	if k, ok := state.(keepingAll); ok {
+		k.keepAll()
+	}
+	return accumulate(state, iter)
+}
+
+func accumulate(state Accumulation, iter types.DocumentsIterator) (any, error) {
+	defer iter.Close()
 
 	for {
 		_, doc, err := iter.Next()
