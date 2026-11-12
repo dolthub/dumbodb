@@ -48,6 +48,20 @@ type docFlag struct {
 	paths [][]string
 }
 
+// union flags what either |f| or |other| flags, for a document flagged by two folds.
+func (f docFlag) union(other docFlag) docFlag {
+	if f.whole || other.whole {
+		return docFlag{id: f.id, whole: true}
+	}
+	paths := append([][]string(nil), f.paths...)
+	for _, path := range other.paths {
+		if !containsPath(paths, path) {
+			paths = append(paths, path)
+		}
+	}
+	return docFlag{id: f.id, paths: paths}
+}
+
 // virtualBaseFlags holds what a virtual merge base flags: documents, by collection, the catalog included, and by
 // document key; and views its merge bases defined differently, by name.
 type virtualBaseFlags struct {
@@ -65,6 +79,9 @@ func (f virtualBaseFlags) add(other virtualBaseFlags) {
 			f.docs[collection] = make(map[string]docFlag)
 		}
 		for key, flag := range docs {
+			if earlier, ok := f.docs[collection][key]; ok {
+				flag = earlier.union(flag)
+			}
 			f.docs[collection][key] = flag
 		}
 	}
