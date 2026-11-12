@@ -444,6 +444,7 @@ var sbeOperatorErrors = map[sbeOperatorError]struct {
 	code handlererrors.ErrorCode
 	msg  string
 }{
+	{"$switch", 40066}:                          {handlererrors.ErrSBEBucketNoBranch, "$switch could not find a matching branch for an input, and no default was specified."},
 	{"$concat", 16702}:                          {handlererrors.ErrSBEInput7158201, "$concat supports only strings"},
 	{"$strLenBytes", 34473}:                     {handlererrors.ErrSBEInput5155800, "$strLenBytes requires a string argument"},
 	{"$dateToString", 16006}:                    {handlererrors.ErrSBEInput4997901, "$dateToString parameter 'date' must be coercible to date"},
