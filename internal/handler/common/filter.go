@@ -58,19 +58,41 @@ func FilterDocumentColl(doc, filter *types.Document, cmp *collation.Comparator) 
 	// Top-level filters are ANDed together. Like mongod, which orders a
 	// query's predicates by cost, it checks $expr last, so a predicate that
 	// fails first spares the expression's evaluation and its errors.
+	iter := filter.Iterator()
+	defer iter.Close()
+
+	var deferred []int
+	for i := 0; ; i++ {
+		filterKey, filterValue, err := iter.Next()
+		if err != nil {
+			if errors.Is(err, iterator.ErrIteratorDone) {
+				break
+			}
+			return false, lazyerrors.Error(err)
+		}
+		if filterKey == "$expr" || clausesUseExpr(filterKey, filterValue) {
+			deferred = append(deferred, i)
+			continue
+		}
+		matches, err := filterDocumentPair(doc, filterKey, filterValue, cmp)
+		if err != nil {
+			return false, lazyerrors.Error(err)
+		}
+		if !matches {
+			return false, nil
+		}
+	}
+	if len(deferred) == 0 {
+		return true, nil
+	}
 	keys, values := filter.Keys(), filter.Values()
-	for pass := range 2 {
-		for i, filterKey := range keys {
-			if (pass == 1) != (filterKey == "$expr" || clausesUseExpr(filterKey, values[i])) {
-				continue
-			}
-			matches, err := filterDocumentPair(doc, filterKey, values[i], cmp)
-			if err != nil {
-				return false, lazyerrors.Error(err)
-			}
-			if !matches {
-				return false, nil
-			}
+	for _, i := range deferred {
+		matches, err := filterDocumentPair(doc, keys[i], values[i], cmp)
+		if err != nil {
+			return false, lazyerrors.Error(err)
+		}
+		if !matches {
+			return false, nil
 		}
 	}
 	return true, nil
@@ -96,9 +118,11 @@ func clausesUseExpr(key string, value any) bool {
 }
 
 func filterUsesExpr(filter *types.Document) bool {
-	keys, values := filter.Keys(), filter.Values()
-	for i, k := range keys {
-		if k == "$expr" || clausesUseExpr(k, values[i]) {
+	if filter.Has("$expr") {
+		return true
+	}
+	for _, k := range []string{"$and", "$or", "$nor"} {
+		if v, err := filter.Get(k); err == nil && clausesUseExpr(k, v) {
 			return true
 		}
 	}
@@ -106,16 +130,22 @@ func filterUsesExpr(filter *types.Document) bool {
 }
 
 // exprClausesLast returns the indexes of exprs with the clauses that use
-// $expr last.
+// $expr last, or nil when none does.
 func exprClausesLast(exprs *types.Array) []int {
-	order := make([]int, 0, exprs.Len())
 	var withExpr []int
 	for i := range exprs.Len() {
 		if filterUsesExpr(must.NotFail(exprs.Get(i)).(*types.Document)) {
 			withExpr = append(withExpr, i)
-			continue
 		}
-		order = append(order, i)
+	}
+	if withExpr == nil {
+		return nil
+	}
+	order := make([]int, 0, exprs.Len())
+	for i := range exprs.Len() {
+		if !slices.Contains(withExpr, i) {
+			order = append(order, i)
+		}
 	}
 	return append(order, withExpr...)
 }
@@ -410,7 +440,12 @@ func filterOperator(doc *types.Document, operator string, filterValue any, cmp *
 			}
 		}
 
-		for _, i := range exprClausesLast(exprs) {
+		order := exprClausesLast(exprs)
+		for k := range exprs.Len() {
+			i := k
+			if order != nil {
+				i = order[k]
+			}
 			expr := must.NotFail(exprs.Get(i)).(*types.Document)
 
 			matches, err := FilterDocumentColl(doc, expr, cmp)
@@ -454,7 +489,12 @@ func filterOperator(doc *types.Document, operator string, filterValue any, cmp *
 			}
 		}
 
-		for _, i := range exprClausesLast(exprs) {
+		order := exprClausesLast(exprs)
+		for k := range exprs.Len() {
+			i := k
+			if order != nil {
+				i = order[k]
+			}
 			expr := must.NotFail(exprs.Get(i)).(*types.Document)
 
 			matches, err := FilterDocumentColl(doc, expr, cmp)
@@ -498,7 +538,12 @@ func filterOperator(doc *types.Document, operator string, filterValue any, cmp *
 			}
 		}
 
-		for _, i := range exprClausesLast(exprs) {
+		order := exprClausesLast(exprs)
+		for k := range exprs.Len() {
+			i := k
+			if order != nil {
+				i = order[k]
+			}
 			expr := must.NotFail(exprs.Get(i)).(*types.Document)
 
 			matches, err := FilterDocumentColl(doc, expr, cmp)
