@@ -119,24 +119,24 @@ func (c *collection) query(ctx context.Context, params *backends.QueryParams) (*
 	// index lookup and the _id point lookup below.
 	naturalHint := params != nil && backends.HintIsNatural(params.Hint)
 
-	sparseHint, err := c.hintedSparseIndex(ctx, state, params)
+	memberHint, err := c.hintedMemberIndex(ctx, state, params)
 	if err != nil {
 		return nil, nil, err
 	}
-	if sparseHint != nil && !sparseHint.Lossy {
-		iter, err := c.sparseMembers(ctx, state, m, *sparseHint, params.Fields)
+	if memberHint != nil && !memberHint.Lossy {
+		iter, err := c.indexMembers(ctx, state, m, *memberHint, params.Fields)
 		if err != nil {
 			return nil, nil, err
 		}
-		return &backends.QueryResult{Iter: iter}, fetchStage(ixscanStage(*sparseHint)), nil
+		return &backends.QueryResult{Iter: iter}, fetchStage(ixscanStage(*memberHint)), nil
 	}
-	if sparseHint != nil {
-		res, err := c.queryUnhintedSparse(ctx, params)
+	if memberHint != nil {
+		res, err := c.queryUnhintedMembers(ctx, params)
 		if err != nil {
 			return nil, nil, err
 		}
-		res.Iter = newSparseMemberIter(res.Iter, *sparseHint)
-		return res, fetchStage(ixscanStage(*sparseHint)), nil
+		res.Iter = newIndexMemberIter(res.Iter, *memberHint)
+		return res, fetchStage(ixscanStage(*memberHint)), nil
 	}
 
 	// An _id equality is one primary-key read, cheaper than any index range,
@@ -387,8 +387,9 @@ func (c *collection) query(ctx context.Context, params *backends.QueryParams) (*
 	return &backends.QueryResult{Iter: iter}, collscanStage(), nil
 }
 
-// hintedSparseIndex returns the sparse index params hints, or nil.
-func (c *collection) hintedSparseIndex(ctx context.Context, state *dbState, params *backends.QueryParams) (*backends.IndexInfo, error) {
+// hintedMemberIndex returns the index params hints when it holds only some
+// documents, a sparse or partial index, or nil.
+func (c *collection) hintedMemberIndex(ctx context.Context, state *dbState, params *backends.QueryParams) (*backends.IndexInfo, error) {
 	if params == nil || params.Hint == nil || params.OnlyRecordIDs || backends.HintIsNatural(params.Hint) {
 		return nil, nil
 	}
@@ -398,16 +399,16 @@ func (c *collection) hintedSparseIndex(ctx context.Context, state *dbState, para
 	}
 	name := backends.MatchHintedIndex(params.Hint, infos)
 	for i := range infos {
-		if infos[i].Name == name && infos[i].Sparse {
+		if infos[i].Name == name && (infos[i].Sparse || infos[i].PartialFilterExpression != nil) {
 			return &infos[i], nil
 		}
 	}
 	return nil, nil
 }
 
-// sparseMembers reads, in index order, the documents the sparse index idx
-// holds, lazily, so a downstream limit stops the reads.
-func (c *collection) sparseMembers(ctx context.Context, state *dbState, primary prolly.Map, idx backends.IndexInfo, fields []string) (types.DocumentsIterator, error) {
+// indexMembers reads, in index order, the documents the sparse or partial
+// index idx holds, lazily, so a downstream limit stops the reads.
+func (c *collection) indexMembers(ctx context.Context, state *dbState, primary prolly.Map, idx backends.IndexInfo, fields []string) (types.DocumentsIterator, error) {
 	infos, maps, err := resolveIndexesLocked(ctx, c, state)
 	if err != nil {
 		return nil, err
@@ -426,32 +427,41 @@ func (c *collection) sparseMembers(ctx context.Context, state *dbState, primary 
 	}, nil
 }
 
-// queryUnhintedSparse runs params with its sparse-index hint removed; the
+// queryUnhintedMembers runs params with its index hint removed; the
 // caller restricts the result to the index's members.
-func (c *collection) queryUnhintedSparse(ctx context.Context, params *backends.QueryParams) (*backends.QueryResult, error) {
+func (c *collection) queryUnhintedMembers(ctx context.Context, params *backends.QueryParams) (*backends.QueryResult, error) {
 	unhinted := *params
 	unhinted.Hint = nil
 	return c.Query(ctx, &unhinted)
 }
 
-// sparseMemberIter yields only documents a sparse index holds. MongoDB answers
-// a query hinted onto a sparse index from the index alone, so documents
-// missing every indexed field are absent even when the filter matches them.
-type sparseMemberIter struct {
+// indexMemberIter yields only documents a sparse or partial index holds.
+// MongoDB answers a query hinted onto such an index from the index alone, so
+// documents it leaves out are absent even when the filter matches them.
+type indexMemberIter struct {
 	types.DocumentsIterator
 	idx backends.IndexInfo
 }
 
-func newSparseMemberIter(iter types.DocumentsIterator, idx backends.IndexInfo) types.DocumentsIterator {
-	return &sparseMemberIter{DocumentsIterator: iter, idx: idx}
+func newIndexMemberIter(iter types.DocumentsIterator, idx backends.IndexInfo) types.DocumentsIterator {
+	return &indexMemberIter{DocumentsIterator: iter, idx: idx}
 }
 
-func (it *sparseMemberIter) Next() (struct{}, *types.Document, error) {
+func (it *indexMemberIter) Next() (struct{}, *types.Document, error) {
 	for {
 		k, doc, err := it.DocumentsIterator.Next()
-		if err != nil || !sparseExcludes(doc, it.idx) {
+		if err != nil {
 			return k, doc, err
 		}
+		if sparseExcludes(doc, it.idx) {
+			continue
+		}
+		if it.idx.MatchesPartialFilter != nil {
+			if member, merr := it.idx.MatchesPartialFilter(doc); merr != nil || !member {
+				continue
+			}
+		}
+		return k, doc, nil
 	}
 }
 
