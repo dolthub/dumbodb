@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"runtime/debug"
 	"time"
 
 	"github.com/FerretDB/wire"
@@ -132,6 +133,8 @@ func (f *Fetcher) Run(ctx context.Context) error {
 			return err
 		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 			return ctx.Err()
+		case errors.As(err, new(*FetchPanicError)):
+			return err
 		case errors.Is(err, ErrSourceChanged):
 			state := f.manager.Snapshot()
 			if state.State == topology.StateRemoved || state.SyncSource == "" {
@@ -173,7 +176,26 @@ func (f *Fetcher) FetchFrom(ctx context.Context, position control.OpTime) error 
 	return f.fetchFrom(ctx, f.manager.Snapshot(), position)
 }
 
-func (f *Fetcher) fetchFrom(ctx context.Context, state topology.Snapshot, position control.OpTime) error {
+// FetchPanicError reports a panic raised while fetching or decoding the sync
+// source's oplog. Fetching again would likely panic again, so replication must
+// stop.
+type FetchPanicError struct {
+	Source string
+	Value  any
+	Stack  []byte
+}
+
+func (e *FetchPanicError) Error() string {
+	return fmt.Sprintf("panic fetching oplog from %q: %v", e.Source, e.Value)
+}
+
+// fetchFrom returns a panic as *FetchPanicError.
+func (f *Fetcher) fetchFrom(ctx context.Context, state topology.Snapshot, position control.OpTime) (err error) {
+	defer func() {
+		if value := recover(); value != nil {
+			err = &FetchPanicError{Source: state.SyncSource, Value: value, Stack: debug.Stack()}
+		}
+	}()
 	source := state.SyncSource
 	if source == "" {
 		return errors.New("no eligible oplog sync source")

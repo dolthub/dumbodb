@@ -154,6 +154,12 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 			return nil, lazyerrors.Error(err)
 		}
 
+		if upsert || param.IsPipeline || !param.HasUpdateOperators {
+			if err = types.ValidateReplacementID(must.NotFail(doc.Get("_id"))); err != nil {
+				return nil, lazyerrors.Error(err)
+			}
+		}
+
 		if param.Validator != nil {
 			mustValidate := true
 			if !upsert && param.ValidationLevel == "moderate" {
@@ -1403,6 +1409,88 @@ func ValidateUpdateOperators(command string, update *types.Document) error {
 		return err
 	}
 
+	if err = validatePullConditions(command, pull); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// validatePullConditions returns the error mongod raises while parsing the
+// $pull conditions, before any document is read.
+func validatePullConditions(command string, pull *types.Document) error {
+	if pull == nil {
+		return nil
+	}
+	for _, key := range pull.Keys() {
+		condition, ok := must.NotFail(pull.Get(key)).(*types.Document)
+		if !ok {
+			continue
+		}
+		if err := validatePullCondition(condition); err != nil {
+			var cmdErr *handlererrors.CommandError
+			if errors.As(err, &cmdErr) {
+				return NewUpdateError(cmdErr.Code(), cmdErr.Err().Error(), command)
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+// validatePullCondition checks one $pull condition. mongod applies a
+// condition whose first key is a field operator to each element, and parses
+// any other document as a query on embedded documents, where $not is not an
+// operator and some query features are not allowed.
+func validatePullCondition(condition *types.Document) error {
+	if condition.Len() > 0 && condition.Keys()[0] == "$not" {
+		return handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrBadValue,
+			"unknown top level operator: $not. If you are trying to negate an entire expression, use $nor.",
+			"$pull",
+		)
+	}
+	if isFieldOperatorExpression(condition) {
+		return ValidateFilter(must.NotFail(types.NewDocument("v", condition)), nil)
+	}
+	if err := checkPullQueryFeatures(condition); err != nil {
+		return err
+	}
+	return ValidateFilter(condition, nil)
+}
+
+// checkPullQueryFeatures rejects the query features mongod does not allow in
+// a $pull condition, at the top level or inside $and, $or and $nor.
+func checkPullQueryFeatures(query *types.Document) error {
+	for _, key := range query.Keys() {
+		switch key {
+		case "$expr":
+			return handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrQueryFeatureNotAllowed, "$expr is not allowed in this context", "$pull",
+			)
+		case "$text", "$where":
+			return handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrBadValue, key+" is not allowed in this context", "$pull",
+			)
+		case "$and", "$or", "$nor":
+			branches, ok := must.NotFail(query.Get(key)).(*types.Array)
+			if !ok {
+				continue
+			}
+			for i := range branches.Len() {
+				if branch, ok := must.NotFail(branches.Get(i)).(*types.Document); ok {
+					if err := checkPullQueryFeatures(branch); err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
+	if FindGeoSortKey(query) != nil {
+		return handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrGeoNearNotAllowedInContext, GeoNearNotAllowedMsg, "$pull",
+		)
+	}
 	return nil
 }
 

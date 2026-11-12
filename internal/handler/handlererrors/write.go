@@ -120,6 +120,14 @@ func (we *WriteErrors) Append(err error, index int32) {
 	}
 }
 
+// First returns the code and message of the first write error, if any.
+func (we *WriteErrors) First() (ErrorCode, string, bool) {
+	if len(we.errs) == 0 {
+		return 0, "", false
+	}
+	return we.errs[0].code, we.errs[0].errmsg, true
+}
+
 func (we *WriteErrors) Len() int {
 	return len(we.errs)
 }

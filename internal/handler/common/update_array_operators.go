@@ -553,7 +553,7 @@ func processPullAllArrayUpdateExpression(command string, doc *types.Document, ke
 	var changed bool
 
 	for j := range pullArray.Len() {
-		pullElem := must.NotFail(pullArray.Get(j))
+		pullElem := sortedKeys(must.NotFail(pullArray.Get(j)))
 
 		// we remove all instances of pullElem in array
 		for i := array.Len() - 1; i >= 0; i-- {
@@ -605,17 +605,15 @@ func processPullArrayUpdateExpression(command string, doc *types.Document, key s
 
 	var changed bool
 
+	pullVal = canonicalPullCondition(pullVal)
+
 	for i := array.Len() - 1; i >= 0; i-- {
 		elem := must.NotFail(array.Get(i))
 
 		var match bool
 
 		if pullDoc, ok := pullVal.(*types.Document); ok {
-			// Use filter matching when pullVal is a document (may contain query operators).
-			// Wrap the element in a temp doc so filterDocumentPair can evaluate it.
-			tmpDoc := must.NotFail(types.NewDocument("v", elem))
-
-			match, err = filterDocumentPair(tmpDoc, "v", pullDoc, nil)
+			match, err = pullConditionMatches(elem, pullDoc)
 			if err != nil {
 				return false, lazyerrors.Error(err)
 			}
@@ -634,4 +632,34 @@ func processPullArrayUpdateExpression(command string, doc *types.Document, key s
 	}
 
 	return changed, nil
+}
+
+// canonicalPullCondition returns a copy of a $pull condition whose document
+// values have sorted keys, as embedded documents are stored.
+func canonicalPullCondition(condition any) any {
+	doc, ok := condition.(*types.Document)
+	if !ok {
+		return sortedKeys(condition)
+	}
+	doc = doc.DeepCopy()
+	if isFieldOperatorExpression(doc) {
+		return canonicalCondition(doc)
+	}
+	CanonicalizeFilter(doc)
+	return doc
+}
+
+// pullConditionMatches reports whether a $pull document condition matches
+// elem. As in mongod, a condition whose first key is a field operator, like
+// {$gt: 1}, applies to the element itself; any other document is a query
+// that matches embedded documents only.
+func pullConditionMatches(elem any, condition *types.Document) (bool, error) {
+	if isFieldOperatorExpression(condition) {
+		return filterDocumentPair(must.NotFail(types.NewDocument("v", elem)), "v", condition, nil)
+	}
+	elemDoc, ok := elem.(*types.Document)
+	if !ok {
+		return false, nil
+	}
+	return FilterDocument(elemDoc, condition)
 }

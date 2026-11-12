@@ -276,7 +276,7 @@ func filterFieldExprBranches(branches []*types.Document, filterKey, filterSuffix
 	// Zero branches still evaluate once so invalid operator arguments surface.
 	errProbe := types.MakeDocument(0)
 
-	if expr.Len() == 0 || !strings.HasPrefix(expr.Keys()[0], "$") {
+	if expr.Len() == 0 || !strings.HasPrefix(expr.Keys()[0], "$") || isDBRefLiteral(expr) {
 		if _, err := filterFieldExpr(errProbe, filterKey, filterSuffix, expr, cmp); err != nil {
 			return false, err
 		}
@@ -596,8 +596,74 @@ func validatedExpr(exprValue any) (operators.Operator, error) {
 	return op, nil
 }
 
+// checkNoOperatorUnderIn rejects an operator expression as an $in or $nin
+// element. A DBRef is a literal value.
+func checkNoOperatorUnderIn(element *types.Document, operator string) error {
+	if isDBRefLiteral(element) {
+		return nil
+	}
+	for _, key := range element.Keys() {
+		if strings.HasPrefix(key, "$") {
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue, "cannot nest $ under $in", operator)
+		}
+	}
+	return nil
+}
+
+// isDBRefLiteral reports whether a filter value is a DBRef, which mongod
+// compares as a literal value rather than parsing as operators: its first key
+// is $ref, $id or $db, and it has both $ref and $id. Key order is not checked
+// because DumboDB stores non-_id documents with sorted keys.
+func isDBRefLiteral(doc *types.Document) bool {
+	if doc.Len() == 0 {
+		return false
+	}
+	switch doc.Keys()[0] {
+	case "$ref", "$id", "$db":
+		return doc.Has("$ref") && doc.Has("$id")
+	}
+	return false
+}
+
 // filterFieldExpr handles {field: {expr}} or {field: {document}} filter.
+// A DBRef is a literal value, as in mongod, not an operator expression.
 func filterFieldExpr(doc *types.Document, filterKey, filterSuffix string, expr *types.Document, cmp *collation.Comparator) (bool, error) {
+	if isDBRefLiteral(expr) {
+		expr = must.NotFail(types.NewDocument("$eq", expr))
+	}
+	return filterFieldOperators(doc, filterKey, filterSuffix, expr, cmp)
+}
+
+// checkNotOperand returns the error mongod raises while parsing the operand
+// of $not, which must be a regex or a non-empty document of operators.
+func checkNotOperand(operand any) error {
+	switch operand := operand.(type) {
+	case types.Regex:
+		return nil
+	case *types.Document:
+		if operand.Len() == 0 {
+			return handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrBadValue, "$not argument must be a non-empty object", "$not",
+			)
+		}
+		for _, key := range operand.Keys() {
+			if !strings.HasPrefix(key, "$") {
+				return handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrBadValue, fmt.Sprintf("unknown operator: %s", key), "$not",
+				)
+			}
+		}
+		return nil
+	default:
+		return handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrBadValue, "$not argument must be a regex or an object", "$not",
+		)
+	}
+}
+
+// filterFieldOperators is filterFieldExpr for a document that mongod always
+// parses as operators, such as the operand of $not, even when it is a DBRef.
+func filterFieldOperators(doc *types.Document, filterKey, filterSuffix string, expr *types.Document, cmp *collation.Comparator) (bool, error) {
 	if expr.Len() == 0 {
 		fieldValue, err := doc.Get(filterSuffix)
 		if err != nil {
@@ -787,14 +853,8 @@ func filterFieldExpr(doc *types.Document, filterKey, filterSuffix string, expr *
 
 				switch arrValue := must.NotFail(arr.Get(i)).(type) {
 				case *types.Document:
-					for _, key := range arrValue.Keys() {
-						if strings.HasPrefix(key, "$") {
-							return false, handlererrors.NewCommandErrorMsgWithArgument(
-								handlererrors.ErrBadValue,
-								"cannot nest $ under $in",
-								exprKey,
-							)
-						}
+					if err := checkNoOperatorUnderIn(arrValue, exprKey); err != nil {
+						return false, err
 					}
 
 					if equalsOrHasElement(fieldValue, arrValue, cmp) {
@@ -838,14 +898,8 @@ func filterFieldExpr(doc *types.Document, filterKey, filterSuffix string, expr *
 
 				switch arrValue := must.NotFail(arr.Get(i)).(type) {
 				case *types.Document:
-					for _, key := range arrValue.Keys() {
-						if strings.HasPrefix(key, "$") {
-							return false, handlererrors.NewCommandErrorMsgWithArgument(
-								handlererrors.ErrBadValue,
-								"cannot nest $ under $in",
-								exprKey,
-							)
-						}
+					if err := checkNoOperatorUnderIn(arrValue, exprKey); err != nil {
+						return false, err
 					}
 
 					if equalsOrHasElement(fieldValue, arrValue, cmp) {
@@ -872,9 +926,12 @@ func filterFieldExpr(doc *types.Document, filterKey, filterSuffix string, expr *
 
 		case "$not":
 			// {field: {$not: {expr}}}
+			if err := checkNotOperand(exprValue); err != nil {
+				return false, err
+			}
 			switch exprValue := exprValue.(type) {
 			case *types.Document:
-				res, err := filterFieldExpr(doc, filterKey, filterSuffix, exprValue, cmp)
+				res, err := filterFieldOperators(doc, filterKey, filterSuffix, exprValue, cmp)
 				if res || err != nil {
 					return false, err
 				}
@@ -884,12 +941,6 @@ func filterFieldExpr(doc *types.Document, filterKey, filterSuffix string, expr *
 				if res || err != nil {
 					return false, err
 				}
-			default:
-				return false, handlererrors.NewCommandErrorMsgWithArgument(
-					handlererrors.ErrBadValue,
-					"$not needs a regex or a document",
-					exprKey,
-				)
 			}
 
 		case "$regex":

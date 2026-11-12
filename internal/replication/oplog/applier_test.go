@@ -28,6 +28,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends/dolt"
 	"github.com/dolthub/dumbodb/internal/replication/catalog"
 	"github.com/dolthub/dumbodb/internal/replication/control"
+	"github.com/dolthub/dumbodb/internal/replication/idlookup"
 	replicationspecial "github.com/dolthub/dumbodb/internal/replication/special"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
@@ -927,7 +928,7 @@ func assertStoredDocument(t *testing.T, ctx context.Context, backend backends.Ba
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, found, err := findDocumentByID(ctx, collection, must.NotFail(want.Get("_id")))
+	got, found, err := idlookup.FindDocument(ctx, collection, must.NotFail(want.Get("_id")))
 	if err != nil {
 		t.Fatal(err)
 	}

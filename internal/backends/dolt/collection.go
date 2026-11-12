@@ -475,23 +475,35 @@ const (
 )
 
 // simpleIDEquality reports whether filter contains an "_id" field bound to a
-// concrete scalar value that can be hashed into a primary key. It rejects
-// operator forms ({_id: {$eq: x}}), array equality ({_id: [1,2]}), and null.
+// concrete value that can be hashed into a primary key, either bare or as the
+// literal operand of {$eq: x}. It rejects other operator forms, array
+// equality ({_id: [1,2]}), regex, and bare null.
 // Other filter fields are allowed  -- the handler re-checks them on the result.
 func simpleIDEquality(filter *types.Document) (any, bool) {
 	v, err := filter.Get("_id")
 	if err != nil {
 		return nil, false
 	}
-	switch val := v.(type) {
-	case *types.Document:
-		// {$eq: x} / {$gt: x} / etc.  -- let the full scan handle it.
+	if val, ok := v.(*types.Document); ok {
+		if val.Len() == 1 && val.Keys()[0] == "$eq" {
+			// A null operand also matches a missing field, but every stored
+			// document has an _id, so the point lookup finds the same rows.
+			v = must.NotFail(val.Get("$eq"))
+			switch v.(type) {
+			case *types.Array, types.Regex:
+				return nil, false
+			}
+			return v, true
+		}
+		// {$gt: x} / {$in: x} / etc.  -- let the full scan handle it.
 		for _, k := range val.Keys() {
 			if strings.HasPrefix(k, "$") {
 				return nil, false
 			}
 		}
 		return v, true
+	}
+	switch v.(type) {
 	case *types.Array, types.NullType:
 		return nil, false
 	default:

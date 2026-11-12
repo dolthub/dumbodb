@@ -16,6 +16,7 @@ package common_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/dolthub/dumbodb/internal/handler/common"
@@ -147,4 +148,49 @@ func TestPipelineUpdate_replaceWith(t *testing.T) {
 			t.Fatal("expected document to be unchanged when replacement is equivalent")
 		}
 	})
+}
+
+func TestValidateUpdateOperatorsRejectsPullStartingWithNot(t *testing.T) {
+	t.Parallel()
+	doc := func(pairs ...any) *types.Document { return must.NotFail(types.NewDocument(pairs...)) }
+	pull := func(condition any) *types.Document { return doc("$pull", doc("arr", condition)) }
+
+	for name, update := range map[string]*types.Document{
+		"not":       pull(doc("$not", doc("$eq", int32(5)))),
+		"not regex": pull(doc("$not", types.Regex{Pattern: "^s"})),
+	} {
+		err := common.ValidateUpdateOperators("update", update)
+		if err == nil || !strings.Contains(err.Error(), "unknown top level operator: $not") {
+			t.Errorf("%s: err = %v", name, err)
+		}
+	}
+	for name, update := range map[string]*types.Document{
+		"operator then not": pull(doc("$gte", int32(5), "$not", doc("$eq", int32(5)))),
+		"ne":                pull(doc("$ne", int32(5))),
+		"value":             pull(int32(5)),
+	} {
+		if err := common.ValidateUpdateOperators("update", update); err != nil {
+			t.Errorf("%s: err = %v", name, err)
+		}
+	}
+}
+
+func TestValidateUpdateOperatorsRejectsDisallowedPullConditions(t *testing.T) {
+	t.Parallel()
+	doc := func(pairs ...any) *types.Document { return must.NotFail(types.NewDocument(pairs...)) }
+	pull := func(condition any) *types.Document { return doc("$pull", doc("arr", condition)) }
+	or := func(branches ...any) *types.Document { return doc("$or", must.NotFail(types.NewArray(branches...))) }
+
+	for name, update := range map[string]*types.Document{
+		"$expr":            pull(doc("$expr", true)),
+		"$expr inside $or": pull(or(doc("a", int32(1)), doc("$expr", true))),
+		"$text":            pull(doc("$text", doc("$search", "x"))),
+		"$where":           pull(doc("$where", "true")),
+		"unknown operator": pull(doc("$nope", int32(1))),
+		"invalid subfield": pull(doc("a", doc("$in", int32(1)))),
+	} {
+		if err := common.ValidateUpdateOperators("update", update); err == nil {
+			t.Errorf("%s: no error", name)
+		}
+	}
 }

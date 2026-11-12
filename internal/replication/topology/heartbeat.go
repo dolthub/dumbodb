@@ -16,7 +16,9 @@ package topology
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -129,15 +131,7 @@ func (m *HeartbeatMesh) poll(ctx context.Context) {
 func (m *HeartbeatMesh) pollPeer(parent context.Context, state Snapshot, host string, peer *heartbeatPeer) {
 	ctx, cancel := context.WithTimeout(parent, m.timeout)
 	defer cancel()
-	response, err := peer.client.Request(ctx, heartbeatRequest(state))
-	observedAt := m.now()
-	if err == nil {
-		var heartbeat Heartbeat
-		heartbeat, err = parseHeartbeatResponse(response, state.SetName, peer.memberID, observedAt)
-		if err == nil {
-			err = m.manager.ObserveHeartbeat(host, heartbeat)
-		}
-	}
+	observedAt, err := m.exchangeHeartbeat(ctx, state, host, peer)
 	if err == nil {
 		m.mu.Lock()
 		peer.lastSuccess = observedAt
@@ -156,6 +150,38 @@ func (m *HeartbeatMesh) pollPeer(parent context.Context, state Snapshot, host st
 			m.logger.Debug("could not mark heartbeat peer down", "host", host, "err", markErr)
 		}
 	}
+}
+
+// exchangeHeartbeat sends one heartbeat to peer and records its response.
+func (m *HeartbeatMesh) exchangeHeartbeat(ctx context.Context, state Snapshot, host string, peer *heartbeatPeer) (time.Time, error) {
+	observedAt, heartbeat, err := m.requestHeartbeat(ctx, state, host, peer)
+	if err != nil {
+		return observedAt, err
+	}
+	return observedAt, m.manager.ObserveHeartbeat(host, heartbeat)
+}
+
+// requestHeartbeat returns a panic while sending the request or parsing the
+// peer's reply as an error, so it counts as a failed heartbeat. Recording the
+// reply stays outside: ObserveHeartbeat holds the manager lock, so a panic
+// there must still exit the process.
+func (m *HeartbeatMesh) requestHeartbeat(ctx context.Context, state Snapshot, host string, peer *heartbeatPeer) (observedAt time.Time, heartbeat Heartbeat, err error) {
+	defer func() {
+		if value := recover(); value != nil {
+			m.logger.Debug("replica-set heartbeat panic", "host", host, "panic", value, "stack", string(debug.Stack()))
+			err = fmt.Errorf("panic in heartbeat with %s: %v", host, value)
+			if observedAt.IsZero() {
+				observedAt = m.now()
+			}
+		}
+	}()
+	response, err := peer.client.Request(ctx, heartbeatRequest(state))
+	observedAt = m.now()
+	if err != nil {
+		return observedAt, Heartbeat{}, err
+	}
+	heartbeat, err = parseHeartbeatResponse(response, state.SetName, peer.memberID, observedAt)
+	return observedAt, heartbeat, err
 }
 
 func heartbeatTargets(state Snapshot) map[string]int {

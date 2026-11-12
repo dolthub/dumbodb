@@ -26,8 +26,8 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/bson"
 	"github.com/dolthub/dumbodb/internal/replication/control"
+	"github.com/dolthub/dumbodb/internal/replication/idlookup"
 	"github.com/dolthub/dumbodb/internal/types"
-	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
@@ -117,7 +117,7 @@ func (a *Applier) InsertKeyDocument(ctx context.Context, document *types.Documen
 	if err != nil {
 		return err
 	}
-	existing, found, err := findDocumentByID(ctx, collection, id)
+	existing, found, err := idlookup.FindDocument(ctx, collection, id)
 	if err != nil {
 		return err
 	}
@@ -140,7 +140,7 @@ func (a *Applier) ReplaceKeyDocument(ctx context.Context, document *types.Docume
 	if err != nil {
 		return err
 	}
-	existing, found, err := findDocumentByID(ctx, collection, id)
+	existing, found, err := idlookup.FindDocument(ctx, collection, id)
 	if err != nil {
 		return err
 	}
@@ -169,7 +169,7 @@ func (a *Applier) DeleteKeyDocument(ctx context.Context, documentKey *types.Docu
 	if err != nil {
 		return err
 	}
-	_, found, err := findDocumentByID(ctx, collection, id)
+	_, found, err := idlookup.FindDocument(ctx, collection, id)
 	if err != nil || !found {
 		return err
 	}
@@ -192,7 +192,7 @@ func (a *Applier) KeyDocument(ctx context.Context, documentKey *types.Document) 
 	if err != nil {
 		return nil, err
 	}
-	document, found, err := findDocumentByID(ctx, collection, id)
+	document, found, err := idlookup.FindDocument(ctx, collection, id)
 	if err != nil {
 		return nil, err
 	}
@@ -211,7 +211,7 @@ func (a *Applier) InsertAuthDocument(ctx context.Context, namespace string, docu
 	if err != nil {
 		return err
 	}
-	existing, found, err := findDocumentByID(ctx, collection, identity)
+	existing, found, err := idlookup.FindDocument(ctx, collection, identity)
 	if err != nil {
 		return err
 	}
@@ -254,7 +254,7 @@ func (a *Applier) ReplaceAuthDocument(ctx context.Context, namespace string, doc
 	if err != nil {
 		return err
 	}
-	existing, found, err := findDocumentByID(ctx, collection, identity)
+	existing, found, err := idlookup.FindDocument(ctx, collection, identity)
 	if err != nil {
 		return err
 	}
@@ -297,7 +297,7 @@ func (a *Applier) DeleteAuthDocument(ctx context.Context, namespace string, docu
 	if err != nil {
 		return err
 	}
-	_, found, err := findDocumentByID(ctx, collection, identity)
+	_, found, err := idlookup.FindDocument(ctx, collection, identity)
 	if err != nil {
 		return err
 	}
@@ -332,7 +332,7 @@ func (a *Applier) AuthDocument(ctx context.Context, namespace string, documentKe
 	if err != nil {
 		return nil, err
 	}
-	document, found, err := findDocumentByID(ctx, collection, identity)
+	document, found, err := idlookup.FindDocument(ctx, collection, identity)
 	if err != nil {
 		return nil, err
 	}
@@ -634,28 +634,6 @@ func requireOpTime(document *types.Document, field string) error {
 		return fmt.Errorf("%s.t has type %T, want int64", field, value)
 	}
 	return nil
-}
-
-func findDocumentByID(ctx context.Context, collection backends.Collection, id any) (*types.Document, bool, error) {
-	filter := must.NotFail(types.NewDocument("_id", id))
-	result, err := collection.Query(ctx, &backends.QueryParams{Filter: filter})
-	if err != nil {
-		return nil, false, err
-	}
-	defer result.Iter.Close()
-	for {
-		_, document, err := result.Iter.Next()
-		if errors.Is(err, iterator.ErrIteratorDone) {
-			return nil, false, nil
-		}
-		if err != nil {
-			return nil, false, err
-		}
-		candidate, candidateErr := document.Get("_id")
-		if candidateErr == nil && types.Compare(candidate, id) == types.Equal {
-			return document, true, nil
-		}
-	}
 }
 
 func authValuesEqual(left, right any) bool {

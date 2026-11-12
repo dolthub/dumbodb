@@ -20,6 +20,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -32,6 +33,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/replication/catalog"
 	"github.com/dolthub/dumbodb/internal/replication/control"
+	"github.com/dolthub/dumbodb/internal/replication/idlookup"
 	"github.com/dolthub/dumbodb/internal/replication/special"
 	"github.com/dolthub/dumbodb/internal/sqlctx"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -80,7 +82,38 @@ func (a *Applier) ForInitialSync() *Applier {
 	return &initialSync
 }
 
-func (a *Applier) Apply(ctx context.Context, entry Entry) error {
+// ApplyPanicError reports a panic raised while applying one oplog entry.
+// Reapplying the entry would panic again, so replication must stop.
+type ApplyPanicError struct {
+	OpTime    control.OpTime
+	Namespace string
+	Operation string
+	Value     any
+	Stack     []byte
+}
+
+func (e *ApplyPanicError) Error() string {
+	return fmt.Sprintf("panic applying oplog entry at %v (op %q, ns %q): %v", e.OpTime, e.Operation, e.Namespace, e.Value)
+}
+
+// Apply applies entry. A panic is recovered and returned as *ApplyPanicError.
+func (a *Applier) Apply(ctx context.Context, entry Entry) (err error) {
+	defer func() {
+		if value := recover(); value != nil {
+			stack := debug.Stack()
+			if recovered, ok := value.(*recoveredPanic); ok {
+				value, stack = recovered.value, recovered.stack
+			}
+			err = &ApplyPanicError{
+				OpTime: entry.OpTime, Namespace: entry.Namespace, Operation: entry.Operation,
+				Value: value, Stack: stack,
+			}
+		}
+	}()
+	return a.apply(ctx, entry)
+}
+
+func (a *Applier) apply(ctx context.Context, entry Entry) error {
 	document, err := bson.ToDocument(wirebson.RawDocument(entry.RawBSON))
 	if err != nil {
 		return fmt.Errorf("decoding oplog entry at %v: %w", entry.OpTime, err)
@@ -671,14 +704,17 @@ func (a *Applier) withAtomicVisibility(ctx context.Context, apply func(context.C
 	connectionInfo.SetCachedShadow(owner, shadow)
 	transactionContext := conninfo.Ctx(ctx, connectionInfo)
 	defer sessionBackend.OnSessionEnd(owner)
+	var recovered *recoveredPanic
 	err = shadow.Commit(time.Now(), func(session *dsess.DoltSession) error {
 		sqlContext := sqlctx.Wrap(transactionContext, session)
 		if _, err := sqlctx.EnsureTxn(sqlContext, session); err != nil {
 			return err
 		}
-		if err := apply(transactionContext); err != nil {
+		var applyErr error
+		recovered, applyErr = applyRecoveringPanic(transactionContext, apply)
+		if applyErr != nil {
 			sessionBackend.OnTransactionAbort(owner)
-			return err
+			return applyErr
 		}
 		if err := sessionBackend.OnTransactionCommit(transactionContext, owner); err != nil {
 			sessionBackend.OnTransactionAbort(owner)
@@ -690,7 +726,29 @@ func (a *Applier) withAtomicVisibility(ctx context.Context, apply func(context.C
 	if err != nil {
 		sessionBackend.OnTransactionAbort(owner)
 	}
+	if recovered != nil {
+		panic(recovered)
+	}
 	return err
+}
+
+// recoveredPanic carries a panic past a transaction's abort path to Apply,
+// keeping the stack of the original panic.
+type recoveredPanic struct {
+	value any
+	stack []byte
+}
+
+// applyRecoveringPanic runs apply and returns a panic as an error and a
+// recoveredPanic, so the caller's transaction abort path still runs.
+func applyRecoveringPanic(ctx context.Context, apply func(context.Context) error) (recovered *recoveredPanic, err error) {
+	defer func() {
+		if value := recover(); value != nil {
+			recovered = &recoveredPanic{value: value, stack: debug.Stack()}
+			err = fmt.Errorf("panic in replicated transaction: %v", value)
+		}
+	}()
+	return nil, apply(ctx)
 }
 
 func transactionKey(document *types.Document) (string, bool, error) {
@@ -878,7 +936,7 @@ func applyInsert(ctx context.Context, collection backends.Collection, document *
 	if getErr != nil {
 		return errors.New("insert oplog document has no _id")
 	}
-	existing, found, err := findDocumentByID(ctx, collection, id)
+	existing, found, err := idlookup.FindDocument(ctx, collection, id)
 	if err != nil {
 		return err
 	}
@@ -903,7 +961,7 @@ func applyUpdate(ctx context.Context, collection backends.Collection, update, cr
 	if getErr != nil {
 		return errors.New("update oplog document key has no _id")
 	}
-	existing, found, err := findDocumentByID(ctx, collection, id)
+	existing, found, err := idlookup.FindDocument(ctx, collection, id)
 	if err != nil {
 		return err
 	}
@@ -970,7 +1028,7 @@ func applyDelete(ctx context.Context, collection backends.Collection, documentKe
 	if getErr != nil {
 		return errors.New("delete oplog document key has no _id")
 	}
-	_, found, err := findDocumentByID(ctx, collection, id)
+	_, found, err := idlookup.FindDocument(ctx, collection, id)
 	if err != nil || !found {
 		return err
 	}
@@ -982,31 +1040,6 @@ func applyDelete(ctx context.Context, collection backends.Collection, documentKe
 		return fmt.Errorf("delete oplog target _id %v matched %d documents", id, result.Deleted)
 	}
 	return nil
-}
-
-func findDocumentByID(ctx context.Context, collection backends.Collection, id any) (*types.Document, bool, error) {
-	filter, err := types.NewDocument("_id", id)
-	if err != nil {
-		return nil, false, err
-	}
-	result, err := collection.Query(ctx, &backends.QueryParams{Filter: filter})
-	if err != nil {
-		return nil, false, err
-	}
-	defer result.Iter.Close()
-	for {
-		_, document, err := result.Iter.Next()
-		if errors.Is(err, iterator.ErrIteratorDone) {
-			return nil, false, nil
-		}
-		if err != nil {
-			return nil, false, err
-		}
-		candidate, candidateErr := document.Get("_id")
-		if candidateErr == nil && types.Compare(candidate, id) == types.Equal {
-			return document, true, nil
-		}
-	}
 }
 
 func splitNamespace(namespace string) (string, string, error) {

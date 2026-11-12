@@ -25,6 +25,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/backends/dolt"
 	"github.com/dolthub/dumbodb/internal/replication/control"
+	"github.com/dolthub/dumbodb/internal/replication/idlookup"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
@@ -54,7 +55,7 @@ func TestAuthApplierOwnsDocumentsAndRefusesLocalCollision(t *testing.T) {
 	if err := applier.DeleteAuthDocument(ctx, UsersNamespace, key, specialOpTime(2)); err != nil {
 		t.Fatal(err)
 	}
-	if _, found, err := findDocumentByID(ctx, users, "sales.ada"); err != nil || !found {
+	if _, found, err := idlookup.FindDocument(ctx, users, "sales.ada"); err != nil || !found {
 		t.Fatalf("source deletion changed local administrator: found=%v err=%v", found, err)
 	}
 	ownership, ok := store.AuthOwnershipFor(UsersNamespace, "sales.ada")

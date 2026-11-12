@@ -103,6 +103,57 @@ func TestHeartbeatMeshMarksUnreachableMemberDown(t *testing.T) {
 	}
 }
 
+type panickingHeartbeatClient struct {
+	fakeHeartbeatClient
+	panicInRequest bool
+}
+
+// Request panics itself, or returns a nil reply that panics while parsing.
+func (c *panickingHeartbeatClient) Request(context.Context, *wire.OpMsg) (*wire.OpMsg, error) {
+	if c.panicInRequest {
+		panic("injected heartbeat panic")
+	}
+	return nil, nil
+}
+
+func TestHeartbeatMeshTreatsPanicAsFailedHeartbeat(t *testing.T) {
+	for name, panicInRequest := range map[string]bool{"request": true, "parse": false} {
+		t.Run(name, func(t *testing.T) { testHeartbeatPanicIsFailedHeartbeat(t, panicInRequest) })
+	}
+}
+
+func testHeartbeatPanicIsFailedHeartbeat(t *testing.T, panicInRequest bool) {
+	manager := New(openControlStore(t, t.TempDir()))
+	if err := manager.InstallConfiguration(testReplicaConfiguration(), 8); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.ObserveHeartbeat("primary.example:27017", Heartbeat{
+		SetName: "rs0", MemberID: 1, State: StatePrimary, Term: 8, PrimaryID: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	nowValues := []time.Time{time.Unix(100, 0), time.Unix(111, 0)}
+	var nowMu sync.Mutex
+	mesh := NewHeartbeatMesh(manager, nil)
+	mesh.timeout = 10 * time.Second
+	mesh.now = func() time.Time {
+		nowMu.Lock()
+		defer nowMu.Unlock()
+		result := nowValues[0]
+		if len(nowValues) > 1 {
+			nowValues = nowValues[1:]
+		}
+		return result
+	}
+	mesh.newClient = func(string) heartbeatClient {
+		return &panickingHeartbeatClient{panicInRequest: panicInRequest}
+	}
+	mesh.poll(context.Background())
+	if member := manager.Snapshot().Members[1]; member.Healthy || member.State != StateDown {
+		t.Fatalf("member after panicking heartbeat = %+v", member)
+	}
+}
+
 func TestParseHeartbeatResponseRejectsWrongSet(t *testing.T) {
 	response := wire.MustOpMsg(
 		"set", "other",

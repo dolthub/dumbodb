@@ -90,14 +90,14 @@ func (d *Document) validateData(isTopLevel bool) error {
 
 		value := values[i]
 
+		if isTopLevel && key == "_id" {
+			if err := ValidateID(value); err != nil {
+				return err
+			}
+		}
+
 		switch value := value.(type) {
 		case *Document:
-			if isTopLevel && key == "_id" {
-				if err := validateNoDollarInID(value); err != nil {
-					return err
-				}
-			}
-
 			err := value.validateData(false)
 			if err != nil {
 				var vErr *ValidationError
@@ -109,10 +109,6 @@ func (d *Document) validateData(isTopLevel bool) error {
 				return err
 			}
 		case *Array:
-			if isTopLevel && key == "_id" {
-				return newValidationError(ErrWrongIDType, fmt.Errorf("The '_id' value cannot be of type array"))
-			}
-
 			for i := 0; i < value.Len(); i++ {
 				if doc, ok := must.NotFail(value.Get(i)).(*Document); ok {
 					err := doc.validateData(false)
@@ -127,10 +123,6 @@ func (d *Document) validateData(isTopLevel bool) error {
 					}
 				}
 			}
-		case Regex:
-			if isTopLevel && key == "_id" {
-				return newValidationError(ErrWrongIDType, fmt.Errorf("The '_id' value cannot be of type regex"))
-			}
 		}
 	}
 
@@ -141,13 +133,68 @@ func (d *Document) validateData(isTopLevel bool) error {
 	return nil
 }
 
+// ValidateID checks id against the rules MongoDB applies to a stored
+// top-level _id. It returns *ValidationError.
+func ValidateID(id any) error {
+	switch id := id.(type) {
+	case *Document:
+		return validateNoDollarInID(id)
+	case *Array:
+		return newValidationError(ErrWrongIDType, fmt.Errorf("The '_id' value cannot be of type array"))
+	case Regex:
+		return newValidationError(ErrWrongIDType, fmt.Errorf("The '_id' value cannot be of type regex"))
+	}
+	return nil
+}
+
+// ValidateReplacementID checks the _id of a whole document an update produces
+// (a replacement, a pipeline update or an upsert). mongod applies a stricter
+// rule there than on insert: $-prefixed fields inside a DBRef's values are
+// rejected too. It returns *ValidationError.
+func ValidateReplacementID(id any) error {
+	if err := ValidateID(id); err != nil {
+		return err
+	}
+	return validateNoDollarInReplacementID(id, "_id")
+}
+
+func validateNoDollarInReplacementID(value any, path string) error {
+	switch value := value.(type) {
+	case *Document:
+		dbRef := isDBRef(value)
+		for i, key := range value.Keys() {
+			fieldPath := path + "." + key
+			if strings.HasPrefix(key, "$") && !(dbRef && (key == "$ref" || key == "$id" || key == "$db")) {
+				return newValidationError(ErrDollarPrefixedID, fmt.Errorf(
+					"The dollar ($) prefixed field '%s' in '%s' is not allowed in the context of an update's "+
+						"replacement document. Consider using an aggregation pipeline with $replaceWith.", key, fieldPath))
+			}
+			if err := validateNoDollarInReplacementID(value.Values()[i], fieldPath); err != nil {
+				return err
+			}
+		}
+	case *Array:
+		for i := 0; i < value.Len(); i++ {
+			if err := validateNoDollarInReplacementID(must.NotFail(value.Get(i)), fmt.Sprintf("%s.%d", path, i)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// validateNoDollarInID treats the values of a DBRef's $ref, $id and $db as
+// opaque, as mongod does; its other fields are still checked.
 func validateNoDollarInID(doc *Document) error {
 	dbRef := isDBRef(doc)
 	keys := doc.Keys()
 	values := doc.Values()
 
 	for i, key := range keys {
-		if !dbRef && strings.HasPrefix(key, "$") {
+		if dbRef && (key == "$ref" || key == "$id" || key == "$db") {
+			continue
+		}
+		if strings.HasPrefix(key, "$") {
 			return newValidationError(ErrDollarPrefixedID, fmt.Errorf(
 				"_id fields may not contain '$'-prefixed fields: %s is not valid for storage.", key))
 		}

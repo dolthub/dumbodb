@@ -21,6 +21,7 @@ import (
 	"io"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -364,5 +365,160 @@ func TestRollbackRecoveryInvalidatesCachedPrivileges(t *testing.T) {
 	_ = runtime.runRecovery(context.Background())
 	if bumps != 1 {
 		t.Fatalf("auth generation bumps after recovery = %d, want 1", bumps)
+	}
+}
+
+// panicOnQueryBackend panics on every Query of collection panicCollection.
+type panicOnQueryBackend struct {
+	backends.Backend
+	panicCollection string
+}
+
+func (b *panicOnQueryBackend) Database(name string) (backends.Database, error) {
+	database, err := b.Backend.Database(name)
+	if err != nil {
+		return nil, err
+	}
+	return &panicOnQueryDatabase{Database: database, panicCollection: b.panicCollection}, nil
+}
+
+type panicOnQueryDatabase struct {
+	backends.Database
+	panicCollection string
+}
+
+func (d *panicOnQueryDatabase) Collection(name string) (backends.Collection, error) {
+	collection, err := d.Database.Collection(name)
+	if err != nil || name != d.panicCollection {
+		return collection, err
+	}
+	return &panicOnQueryCollection{Collection: collection}, nil
+}
+
+type panicOnQueryCollection struct {
+	backends.Collection
+}
+
+func (c *panicOnQueryCollection) Query(context.Context, *backends.QueryParams) (*backends.QueryResult, error) {
+	panic("injected query panic")
+}
+
+// panicOnResetBackend panics on every DumboDBReset.
+type panicOnResetBackend struct {
+	versionedBackend
+}
+
+func (b *panicOnResetBackend) DumboDBReset(context.Context, *backends.ResetParams) (*backends.ResetResult, error) {
+	panic("injected reset panic")
+}
+
+func lastReplicationFailure(t *testing.T, store *control.Store) control.ReplicationFailure {
+	t.Helper()
+	history := store.Snapshot().FailureHistory
+	if len(history) == 0 {
+		t.Fatal("no replication failure recorded")
+	}
+	return history[len(history)-1]
+}
+
+func TestApplyEntryPanicDiscardsPublicationAndStopsReplication(t *testing.T) {
+	ctx := context.Background()
+	replicationRuntime, backend, store := newRecoveryRuntime(t)
+	catalogApplier, err := catalog.NewApplier(backend, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceUUID := uuid.MustParse("12345678-1234-4234-9234-123456789abc")
+	if _, err := catalogApplier.Create(ctx, "recovery", backends.CreateCollectionParams{Name: "events"}, sourceUUID.String(), control.OpTime{Seconds: 99, Increment: 1, Term: 2}); err != nil {
+		t.Fatal(err)
+	}
+	database := must.NotFail(backend.Database("recovery"))
+	collection := must.NotFail(database.Collection("events"))
+	insertRecoveryDocument(t, ctx, collection, 1)
+	commitRecoveryDatabase(t, ctx, backend, "base")
+
+	applier, err := oplog.NewApplier(&panicOnQueryBackend{Backend: backend, panicCollection: "events"}, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, err := oplog.ParseEntry(must.NotFail(types.NewDocument(
+		"ts", types.Timestamp(uint64(100)<<32|1), "t", int64(2), "op", "d", "ns", "recovery.events",
+		"ui", types.Binary{Subtype: types.BinaryUUID, B: sourceUUID[:]},
+		"o", must.NotFail(types.NewDocument("_id", int32(1))),
+	)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := replicationRuntime.manager.AdvanceFetched(entry.OpTime, entry.OpTime); err != nil {
+		t.Fatal(err)
+	}
+	applyErr := replicationRuntime.applyEntry(ctx, applier, entry)
+	var panicErr *oplog.ApplyPanicError
+	if !errors.As(applyErr, &panicErr) || panicErr.OpTime != entry.OpTime {
+		t.Fatalf("applyEntry error = %v, want *oplog.ApplyPanicError at %v", applyErr, entry.OpTime)
+	}
+	if _, ok := store.PendingPublication(); ok {
+		t.Fatal("publication of the panicking entry remained pending")
+	}
+	if count := recoveryCount(t, ctx, collection); count != 1 {
+		t.Fatalf("document count after panic = %d, want 1", count)
+	}
+	if !replicationRuntime.stopOnPanic(applyErr) {
+		t.Fatal("stopOnPanic did not stop on an apply panic")
+	}
+	if phase := replicationRuntime.manager.Snapshot().Runtime.Phase; phase != "failed" {
+		t.Fatalf("runtime phase = %q, want failed", phase)
+	}
+	if failure := lastReplicationFailure(t, store); failure.Retryable || failure.Classification != "apply_panic" {
+		t.Fatalf("recorded failure = %+v", failure)
+	}
+	if replicationRuntime.stopOnPanic(errors.New("connection reset")) {
+		t.Fatal("stopOnPanic stopped on an ordinary error")
+	}
+}
+
+func TestRunRecoversPanicAndStops(t *testing.T) {
+	replicationRuntime, backend, store := newRecoveryRuntime(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	recoveryCollection(t, ctx, backend)
+	position := control.OpTime{Seconds: 100, Increment: 2, Term: 1}
+	checkpoint := control.Checkpoint{
+		Fetched: position, Buffered: position, Written: position, Durable: position, Applied: position,
+	}
+	if _, err := replicationRuntime.publisher.Begin(position, position, []string{"recovery"}, checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	replicationRuntime.backend = &panicOnResetBackend{versionedBackend: replicationRuntime.backend}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		replicationRuntime.Run(ctx)
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		t.Fatal("Run did not return after a panic")
+	}
+	if phase := replicationRuntime.manager.Snapshot().Runtime.Phase; phase != "failed" {
+		t.Fatalf("runtime phase = %q, want failed", phase)
+	}
+	if failure := lastReplicationFailure(t, store); failure.Retryable || failure.Classification != "panic" {
+		t.Fatalf("recorded failure = %+v", failure)
+	}
+}
+
+func TestStopOnPanicStopsOnFetchPanic(t *testing.T) {
+	replicationRuntime, _, store := newRecoveryRuntime(t)
+	err := fmt.Errorf("initial sync oplog fetch ended: %w", &oplog.FetchPanicError{Source: "mongo-a:27017", Value: "boom"})
+	if !replicationRuntime.stopOnPanic(err) {
+		t.Fatal("stopOnPanic did not stop on a fetch panic")
+	}
+	if phase := replicationRuntime.manager.Snapshot().Runtime.Phase; phase != "failed" {
+		t.Fatalf("runtime phase = %q, want failed", phase)
+	}
+	if failure := lastReplicationFailure(t, store); failure.Retryable || failure.Classification != "fetch_panic" {
+		t.Fatalf("recorded failure = %+v", failure)
 	}
 }
