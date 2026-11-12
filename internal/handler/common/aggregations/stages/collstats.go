@@ -34,6 +34,7 @@ type collStats struct {
 	storageStats   *storageStats
 	count          bool
 	latencyStats   bool
+	histograms     bool
 	queryExecStats bool
 }
 
@@ -59,7 +60,22 @@ func newCollStats(stage *types.Document) (aggregations.Stage, error) {
 	// Return error on invalid type of count.
 	cs.count = fields.Has("count")
 
-	cs.latencyStats = fields.Has("latencyStats")
+	if v, getErr := fields.Get("latencyStats"); getErr == nil {
+		spec, ok := v.(*types.Document)
+		if !ok {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrTypeMismatch,
+				fmt.Sprintf("BSON field '$collStats.latencyStats' is the wrong type '%s', expected type 'object'",
+					handlerparams.AliasFromType(v)), "$collStats (stage)")
+		}
+		for _, k := range spec.Keys() {
+			if k != "histograms" {
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIDLUnknownField,
+					fmt.Sprintf("BSON field '$collStats.latencyStats.%s' is an unknown field.", k), "$collStats (stage)")
+			}
+			cs.histograms = common.IsTruthy(must.NotFail(spec.Get(k)))
+		}
+		cs.latencyStats = true
+	}
 
 	cs.queryExecStats = fields.Has("queryExecStats")
 
@@ -124,6 +140,22 @@ func (c *collStats) Process(ctx context.Context, iter types.DocumentsIterator, c
 		}
 
 		must.NoError(res.SetByPath(types.NewStaticPath("storageStats", "scaleFactor"), scale))
+	}
+
+	if c.latencyStats {
+		// DumboDB does not time operations, so every counter is zero.
+		stats := types.MakeDocument(4)
+		for _, kind := range []string{"commands", "reads", "writes", "transactions"} {
+			counters := types.MakeDocument(4)
+			if c.histograms {
+				counters.Set("histogram", types.MakeArray(0))
+			}
+			counters.Set("latency", int64(0))
+			counters.Set("ops", int64(0))
+			counters.Set("queryableEncryptionLatencyMicros", int64(0))
+			stats.Set(kind, counters)
+		}
+		res.Set("latencyStats", stats)
 	}
 
 	if _, _, err := iter.Next(); err == nil || !errors.Is(err, iterator.ErrIteratorDone) {
