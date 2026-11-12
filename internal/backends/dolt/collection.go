@@ -3845,7 +3845,7 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 
 	// On a multikey field each side of a range may be met by a different
 	// element, so no index range holds exactly the matches (multikeyScanBound).
-	if chosen.KeyMultikey(0) && isTwoSidedRange(v) {
+	if chosen.KeyMultikey(0) && isTwoSidedRange(v) || !boundsExactForCount(v) {
 		return 0, false, nil
 	}
 
@@ -3934,7 +3934,7 @@ func exactCompoundCountBounds(idx backends.IndexInfo, filter *types.Document, qu
 			prefix = append(prefix, idxpkg.EncodeValue(eq)...)
 			continue
 		}
-		if idx.KeyMultikey(i) && isTwoSidedRange(v) {
+		if idx.KeyMultikey(i) && isTwoSidedRange(v) || !boundsExactForCount(v) {
 			return nil, nil, false
 		}
 		s, e, bok := indexBoundsForFilterValue(v)
@@ -3948,6 +3948,28 @@ func exactCompoundCountBounds(idx backends.IndexInfo, filter *types.Document, qu
 		}
 	}
 	return start, end, true
+}
+
+// boundsExactForCount reports whether the index bounds of field condition v
+// hold exactly its matches, so a count may skip the re-filter: an equality
+// alone or a pure range. indexBoundsForFilterValue takes $eq's range alone
+// beside other operators, a superset the re-filter narrows.
+func boundsExactForCount(v any) bool {
+	ops, ok := v.(*types.Document)
+	if !ok || ops.Len() == 0 || !strings.HasPrefix(ops.Keys()[0], "$") {
+		return true
+	}
+	if ops.Len() == 1 && ops.Has("$eq") {
+		return true
+	}
+	for _, op := range ops.Keys() {
+		switch op {
+		case "$gt", "$gte", "$lt", "$lte":
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // sparseExistsCount reports whether filter is an $exists: true on the field
