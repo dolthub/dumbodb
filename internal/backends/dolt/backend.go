@@ -1940,7 +1940,7 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 		return nil, fmt.Errorf("DumboDBMerge: resolving merge source %q: %w", params.From, err)
 	}
 
-	baseHash, hasBase, err := db.mergeBase(ctx, intoHash, fromHash)
+	baseHash, baseFlags, hasBase, err := db.mergeBaseWithFlags(ctx, intoHash, fromHash)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBMerge: finding common ancestor: %w", err)
 	}
@@ -2011,8 +2011,8 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 		return nil, fmt.Errorf("DumboDBMerge: loading base AM: %w", err)
 	}
 
-	mergedAM, conflicts, viewConflicts, metaConflicts, deferredCollections, err := mergeAddressMapsWithConflicts(ctx, db, intoAM, fromAM, baseAM, fromHash, baseHash,
-		fmt.Sprintf("branch '%s' (ours)", params.Into), fmt.Sprintf("%s (theirs)", refLabel(ctx, db, params.From)))
+	mergedAM, conflicts, viewConflicts, metaConflicts, deferredCollections, err := mergeAddressMaps(ctx, db, intoAM, fromAM, baseAM, fromHash, baseHash,
+		fmt.Sprintf("branch '%s' (ours)", params.Into), fmt.Sprintf("%s (theirs)", refLabel(ctx, db, params.From)), nil, baseFlags)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBMerge: %w", err)
 	}

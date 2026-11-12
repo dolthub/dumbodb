@@ -1135,6 +1135,7 @@ func captureConflictsForCollection(
 	oursDesc, theirsDesc string,
 	mode MergeMode,
 	fold *virtualFold,
+	flags map[string]docFlag,
 ) (mergedMap prolly.Map, entries []*conflictEntry, err error) {
 	ns := baseMap.NodeStore()
 
@@ -1368,46 +1369,42 @@ func captureConflictsForCollection(
 		}
 	}
 
-	sqlCtx := sql.NewEmptyContext()
-	for {
-		diff, err := differ.Next(sqlCtx)
-		if err == io.EOF {
-			break
+	// handle applies one three-way decision to the merged map and the indexes.
+	handle := func(diff tree.ThreeWayDiff) error {
+		var inherited *docFlag
+		if flag, ok := flags[string(diff.Key)]; ok {
+			inherited = &flag
 		}
-		if err != nil {
-			return prolly.Map{}, nil, fmt.Errorf("three-way differ: %w", err)
-		}
-
 		switch diff.Op {
 		// Left-only changes: apply to the merged map (starting from the from map).
 		case tree.DiffOpLeftAdd, tree.DiffOpLeftModify:
 			if err := mut.Put(ctx, diff.Key, diff.Left); err != nil {
-				return prolly.Map{}, nil, fmt.Errorf("applying left change: %w", err)
+				return fmt.Errorf("applying left change: %w", err)
 			}
 			if indexing {
 				baseDoc, derr := baseDocOf(diff.Key)
 				if derr != nil {
-					return prolly.Map{}, nil, derr
+					return derr
 				}
 				leftDoc, derr := docOf(val.Tuple(diff.Left))
 				if derr != nil {
-					return prolly.Map{}, nil, derr
+					return derr
 				}
 				if err := applyIndexEdit(mergeDocEdit{kind: editLeftChange, base: baseDoc, left: leftDoc}, diff.Key); err != nil {
-					return prolly.Map{}, nil, err
+					return err
 				}
 			}
 		case tree.DiffOpLeftDelete:
 			if err := mut.Delete(ctx, diff.Key); err != nil {
-				return prolly.Map{}, nil, fmt.Errorf("applying left delete: %w", err)
+				return fmt.Errorf("applying left delete: %w", err)
 			}
 			if indexing {
 				baseDoc, derr := baseDocOf(diff.Key)
 				if derr != nil {
-					return prolly.Map{}, nil, derr
+					return derr
 				}
 				if err := applyIndexEdit(mergeDocEdit{kind: editLeftChange, base: baseDoc}, diff.Key); err != nil {
-					return prolly.Map{}, nil, err
+					return err
 				}
 			}
 
@@ -1416,14 +1413,14 @@ func captureConflictsForCollection(
 			if indexing {
 				baseDoc, derr := docOf(val.Tuple(diff.Base))
 				if derr != nil {
-					return prolly.Map{}, nil, derr
+					return derr
 				}
 				rightDoc, derr := docOf(val.Tuple(diff.Right))
 				if derr != nil {
-					return prolly.Map{}, nil, derr
+					return derr
 				}
 				if err := applyIndexEdit(mergeDocEdit{kind: editRightChange, base: baseDoc, right: rightDoc}, diff.Key); err != nil {
-					return prolly.Map{}, nil, err
+					return err
 				}
 			}
 
@@ -1433,10 +1430,10 @@ func captureConflictsForCollection(
 		// Divergent edits: real conflicts. Keep "ours" (left) value in the merged map.
 		case tree.DiffOpDivergentModifyConflict, tree.DiffOpDivergentDeleteConflict:
 			if fold != nil {
-				if err := foldConflict(ctx, fold, collection, diff, mode, ns, mut, docOf, applyIndexEdit, indexing); err != nil {
-					return prolly.Map{}, nil, err
+				if err := foldConflict(ctx, fold, collection, diff, mode, ns, mut, docOf, applyIndexEdit, indexing, inherited); err != nil {
+					return err
 				}
-				continue
+				return nil
 			}
 			// Clone everything retained beyond this iteration: the
 			// differ reuses its tuple buffers between Next calls.
@@ -1454,13 +1451,13 @@ func captureConflictsForCollection(
 				entry.ourDiffType = "modified"
 				// Override from's value with ours in the merged map.
 				if err := mut.Put(ctx, diff.Key, diff.Left); err != nil {
-					return prolly.Map{}, nil, fmt.Errorf("applying ours for conflict: %w", err)
+					return fmt.Errorf("applying ours for conflict: %w", err)
 				}
 			} else {
 				entry.ourDiffType = "deleted"
 				// Our side deleted; remove from the merged map.
 				if err := mut.Delete(ctx, diff.Key); err != nil {
-					return prolly.Map{}, nil, fmt.Errorf("deleting for our-side delete conflict: %w", err)
+					return fmt.Errorf("deleting for our-side delete conflict: %w", err)
 				}
 			}
 			if diff.Right != nil {
@@ -1476,7 +1473,7 @@ func captureConflictsForCollection(
 				}
 				d, derr := readDocFromValue(ctx, ns, rv)
 				if derr != nil {
-					return prolly.Map{}, nil, fmt.Errorf("decoding conflict document for _id: %w", derr)
+					return fmt.Errorf("decoding conflict document for _id: %w", derr)
 				}
 				if v, gerr := d.Get("_id"); gerr == nil {
 					idVal = v
@@ -1489,14 +1486,14 @@ func captureConflictsForCollection(
 			if indexing {
 				leftDoc, derr := docOf(val.Tuple(diff.Left))
 				if derr != nil {
-					return prolly.Map{}, nil, derr
+					return derr
 				}
 				rightDoc, derr := docOf(val.Tuple(diff.Right))
 				if derr != nil {
-					return prolly.Map{}, nil, derr
+					return derr
 				}
 				if err := applyIndexEdit(mergeDocEdit{kind: editKeepOurs, left: leftDoc, right: rightDoc}, diff.Key); err != nil {
-					return prolly.Map{}, nil, err
+					return err
 				}
 			}
 
@@ -1504,52 +1501,102 @@ func captureConflictsForCollection(
 		// the merged value to the map.
 		case tree.DiffOpDivergentModifyResolved:
 			if err := mut.Put(ctx, diff.Key, diff.Merged); err != nil {
-				return prolly.Map{}, nil, fmt.Errorf("applying resolved merge: %w", err)
+				return fmt.Errorf("applying resolved merge: %w", err)
 			}
 			if indexing {
 				leftDoc, derr := docOf(val.Tuple(diff.Left))
 				if derr != nil {
-					return prolly.Map{}, nil, derr
+					return derr
 				}
 				rightDoc, derr := docOf(val.Tuple(diff.Right))
 				if derr != nil {
-					return prolly.Map{}, nil, derr
+					return derr
 				}
 				mergedDoc, derr := docOf(val.Tuple(diff.Merged))
 				if derr != nil {
-					return prolly.Map{}, nil, derr
+					return derr
 				}
 				if err := applyIndexEdit(mergeDocEdit{kind: editResolved, left: leftDoc, right: rightDoc, merged: mergedDoc}, diff.Key); err != nil {
-					return prolly.Map{}, nil, err
+					return err
 				}
 			}
 		case tree.DiffOpDivergentDeleteResolved:
 			// Delete-modify resolved by callback (unlikely for JSON merge).
 			if diff.Merged == nil {
 				if err := mut.Delete(ctx, diff.Key); err != nil {
-					return prolly.Map{}, nil, fmt.Errorf("applying resolved delete: %w", err)
+					return fmt.Errorf("applying resolved delete: %w", err)
 				}
 			} else {
 				if err := mut.Put(ctx, diff.Key, diff.Merged); err != nil {
-					return prolly.Map{}, nil, fmt.Errorf("applying resolved merge: %w", err)
+					return fmt.Errorf("applying resolved merge: %w", err)
 				}
 			}
 			if indexing {
 				leftDoc, derr := docOf(val.Tuple(diff.Left))
 				if derr != nil {
-					return prolly.Map{}, nil, derr
+					return derr
 				}
 				rightDoc, derr := docOf(val.Tuple(diff.Right))
 				if derr != nil {
-					return prolly.Map{}, nil, derr
+					return derr
 				}
 				mergedDoc, derr := docOf(val.Tuple(diff.Merged))
 				if derr != nil {
-					return prolly.Map{}, nil, derr
+					return derr
 				}
 				if err := applyIndexEdit(mergeDocEdit{kind: editResolved, left: leftDoc, right: rightDoc, merged: mergedDoc}, diff.Key); err != nil {
-					return prolly.Map{}, nil, err
+					return err
 				}
+			}
+		}
+		return nil
+	}
+
+	// A document the merge base flags counts as changed on both sides; see flaggedDiff.
+	flagMode := mode
+	if collection == reservedCatalogName {
+		flagMode = MergeModeFieldDivergent
+	}
+	seen := make(map[string]bool, len(flags))
+	sqlCtx := sql.NewEmptyContext()
+	for {
+		diff, err := differ.Next(sqlCtx)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return prolly.Map{}, nil, fmt.Errorf("three-way differ: %w", err)
+		}
+		if flag, ok := flags[string(diff.Key)]; ok {
+			seen[string(diff.Key)] = true
+			if diff, err = flaggedDiff(ctx, diff, flag, flagMode, baseMap, docOf); err != nil {
+				return prolly.Map{}, nil, err
+			}
+		}
+		if err := handle(diff); err != nil {
+			return prolly.Map{}, nil, err
+		}
+	}
+	// The differ does not report a flagged document neither side changed, which the touched modes conflict on.
+	if flagMode == MergeModeDocumentTouched || flagMode == MergeModeFieldTouched {
+		keys := make([]string, 0, len(flags))
+		for key := range flags {
+			if !seen[key] {
+				keys = append(keys, key)
+			}
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			value, err := mapValue(ctx, baseMap, val.Tuple(key))
+			if err != nil {
+				return prolly.Map{}, nil, err
+			}
+			op := tree.DiffOpDivergentModifyConflict
+			if value == nil {
+				op = tree.DiffOpDivergentDeleteConflict
+			}
+			if err := handle(tree.ThreeWayDiff{Op: op, Key: val.Tuple(key), Base: value, Left: value, Right: value}); err != nil {
+				return prolly.Map{}, nil, err
 			}
 		}
 	}
@@ -1575,12 +1622,12 @@ func captureConflictsForCollection(
 // Returns the partial merged AM (with "ours" values for conflicting documents) and a
 // per-collection map of captured conflict entries. The conflicts map is non-nil but may be empty.
 func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, fromAM, baseAM prolly.AddressMap, theirHash, baseHash hash.Hash, oursDesc, theirsDesc string) (prolly.AddressMap, map[string][]*conflictEntry, map[string]*viewConflictEntry, map[string]*metaConflictEntry, map[string]struct{}, error) {
-	return mergeAddressMaps(ctx, state, intoAM, fromAM, baseAM, theirHash, baseHash, oursDesc, theirsDesc, nil)
+	return mergeAddressMaps(ctx, state, intoAM, fromAM, baseAM, theirHash, baseHash, oursDesc, theirsDesc, nil, virtualBaseFlags{})
 }
 
 // mergeAddressMaps is mergeAddressMapsWithConflicts, folding merge bases into a virtual merge base when |fold| is
-// non-nil.
-func mergeAddressMaps(ctx context.Context, state *dbState, intoAM, fromAM, baseAM prolly.AddressMap, theirHash, baseHash hash.Hash, oursDesc, theirsDesc string, fold *virtualFold) (prolly.AddressMap, map[string][]*conflictEntry, map[string]*viewConflictEntry, map[string]*metaConflictEntry, map[string]struct{}, error) {
+// non-nil. |baseFlags| are the flags of baseAM when it is a virtual merge base.
+func mergeAddressMaps(ctx context.Context, state *dbState, intoAM, fromAM, baseAM prolly.AddressMap, theirHash, baseHash hash.Hash, oursDesc, theirsDesc string, fold *virtualFold, baseFlags virtualBaseFlags) (prolly.AddressMap, map[string][]*conflictEntry, map[string]*viewConflictEntry, map[string]*metaConflictEntry, map[string]struct{}, error) {
 	viewConflicts := map[string]*viewConflictEntry{}
 	metaConflicts := map[string]*metaConflictEntry{}
 	deferredCollections := map[string]struct{}{}
@@ -1645,6 +1692,14 @@ func mergeAddressMaps(ctx context.Context, state *dbState, intoAM, fromAM, baseA
 				}
 				foldOneSided = foldOneSided && !isView
 			}
+		}
+
+		// A collection with flagged documents, or a flagged view the tips differ on, is merged in full: a flag
+		// counts as a change on both sides, which the hashes do not show.
+		flagged := len(baseFlags.docs[name]) > 0 && !intoH.IsEmpty() && !fromH.IsEmpty() && !baseH.IsEmpty()
+		flagged = flagged || (baseFlags.views[name] && intoH != fromH)
+		if flagged {
+			foldOneSided = true
 		}
 
 		if !fromChanged && !foldOneSided {
@@ -1730,7 +1785,7 @@ func mergeAddressMaps(ctx context.Context, state *dbState, intoAM, fromAM, baseA
 			return prolly.AddressMap{}, nil, nil, nil, nil, modeErr
 		}
 		mergedH, collConflicts, err := mergeCollectionDTBL(ctx, state, name, intoH, fromH, baseH,
-			theirHash, baseHash, oursDesc, theirsDesc, mode, fold)
+			theirHash, baseHash, oursDesc, theirsDesc, mode, fold, baseFlags.docs[name])
 		if err != nil {
 			return prolly.AddressMap{}, nil, nil, nil, nil, err
 		}
@@ -1784,6 +1839,7 @@ func mergeCollectionDTBL(
 	oursDesc, theirsDesc string,
 	mode MergeMode,
 	fold *virtualFold,
+	flags map[string]docFlag,
 ) (hash.Hash, []*conflictEntry, error) {
 	intoMap, err := openCollection(ctx, state.cs, state.ns, intoH)
 	if err != nil {
@@ -1842,7 +1898,7 @@ func mergeCollectionDTBL(
 	}
 	applier := &indexMergeApplier{state: state, survivors: survivors}
 	mergedMap, conflicts, err := captureConflictsForCollection(ctx, name, intoMap, fromMap, baseMap,
-		theirHash, applier, oursDesc, theirsDesc, mode, fold)
+		theirHash, applier, oursDesc, theirsDesc, mode, fold, flags)
 	if err != nil {
 		return hash.Hash{}, nil, fmt.Errorf("merging collection %q: %w", name, err)
 	}

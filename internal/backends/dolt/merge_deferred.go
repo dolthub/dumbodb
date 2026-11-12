@@ -105,6 +105,16 @@ func operationBaseHash(ctx context.Context, state *dbState, ms *mergeInProgress)
 	}
 }
 
+// operationBaseFlags returns the flags of a merge's base when it is a virtual merge base. Other operations replay a
+// commit against its parent, which is never virtual.
+func operationBaseFlags(ctx context.Context, state *dbState, ms *mergeInProgress) (virtualBaseFlags, error) {
+	if ms.isRebase || ms.isCherryPick || ms.isRevert {
+		return virtualBaseFlags{}, nil
+	}
+	_, flags, _, err := state.mergeBaseWithFlags(ctx, ms.intoHash, ms.fromHash)
+	return flags, err
+}
+
 func mergeDeferredCollections(ctx context.Context, state *dbState, ms *mergeInProgress) (bool, error) {
 	if len(ms.deferredCollections) == 0 {
 		return false, nil
@@ -114,6 +124,10 @@ func mergeDeferredCollections(ctx context.Context, state *dbState, ms *mergeInPr
 		return false, err
 	}
 	baseHash, err := operationBaseHash(ctx, state, ms)
+	if err != nil {
+		return false, err
+	}
+	baseFlags, err := operationBaseFlags(ctx, state, ms)
 	if err != nil {
 		return false, err
 	}
@@ -151,7 +165,7 @@ func mergeDeferredCollections(ctx context.Context, state *dbState, ms *mergeInPr
 			continue
 		}
 		mergedH, conflicts, mergeErr := mergeCollectionDTBL(ctx, state, name, intoH, fromH, baseH,
-			ms.theirHash(), baseHash, oursDesc, theirsDesc, mergeModeOrDefault(resolvedMeta.MergeMode), nil)
+			ms.theirHash(), baseHash, oursDesc, theirsDesc, mergeModeOrDefault(resolvedMeta.MergeMode), nil, baseFlags.docs[name])
 		if mergeErr != nil {
 			return false, mergeErr
 		}

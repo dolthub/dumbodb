@@ -83,21 +83,27 @@ const (
 // they have several, it is a virtual merge base: a commit that no branch references, which merges them as git's
 // merge-ort does.
 func (db *dbState) mergeBase(ctx context.Context, ours, theirs hash.Hash) (hash.Hash, bool, error) {
+	base, _, ok, err := db.mergeBaseWithFlags(ctx, ours, theirs)
+	return base, ok, err
+}
+
+// mergeBaseWithFlags is mergeBase, also returning the flags of a virtual merge base.
+func (db *dbState) mergeBaseWithFlags(ctx context.Context, ours, theirs hash.Hash) (hash.Hash, virtualBaseFlags, bool, error) {
 	bases, err := db.mergeBases(ctx, ours, theirs)
 	if errors.Is(err, doltdb.ErrNoCommonAncestor) {
-		return hash.Hash{}, false, nil
+		return hash.Hash{}, virtualBaseFlags{}, false, nil
 	}
 	if err != nil {
-		return hash.Hash{}, false, err
+		return hash.Hash{}, virtualBaseFlags{}, false, err
 	}
 	if len(bases) == 1 {
-		return bases[0], true, nil
+		return bases[0], virtualBaseFlags{}, true, nil
 	}
-	virtualBase, _, err := db.virtualMergeBase(ctx, bases)
+	virtualBase, flags, err := db.virtualMergeBase(ctx, bases)
 	if err != nil {
-		return hash.Hash{}, false, fmt.Errorf("building the virtual merge base: %w", err)
+		return hash.Hash{}, virtualBaseFlags{}, false, fmt.Errorf("building the virtual merge base: %w", err)
 	}
-	return virtualBase, true, nil
+	return virtualBase, flags, true, nil
 }
 
 // virtualMergeBase merges |bases|, which are newest first, oldest first into a dangling commit and returns its hash
@@ -135,7 +141,7 @@ func (db *dbState) mergeIntoVirtualBase(ctx context.Context, x, y *doltdb.Commit
 	if err != nil {
 		return nil, virtualBaseFlags{}, err
 	}
-	baseHash, ok, err := db.mergeBase(ctx, xHash, yHash)
+	baseHash, baseFlags, ok, err := db.mergeBaseWithFlags(ctx, xHash, yHash)
 	if err != nil {
 		return nil, virtualBaseFlags{}, err
 	}
@@ -156,7 +162,7 @@ func (db *dbState) mergeIntoVirtualBase(ctx context.Context, x, y *doltdb.Commit
 	}
 	fold := newVirtualFold(xAM, yAM, baseAM)
 	mergedAM, conflicts, viewConflicts, metaConflicts, deferred, err := mergeAddressMaps(ctx, db, xAM, yAM, baseAM,
-		yHash, baseHash, "merge base "+xHash.String(), "merge base "+yHash.String(), fold)
+		yHash, baseHash, "merge base "+xHash.String(), "merge base "+yHash.String(), fold, baseFlags)
 	if err != nil {
 		return nil, virtualBaseFlags{}, err
 	}

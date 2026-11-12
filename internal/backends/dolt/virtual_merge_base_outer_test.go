@@ -245,15 +245,22 @@ func requireOuterResult(t *testing.T, b *Backend, into, from string, id int32, w
 		require.Error(t, err, "merging %s into %s must conflict", from, into)
 		res, cerr := b.DumboDBConflicts(ctx, &backends.ConflictsParams{DBName: "testdb", Branch: into})
 		require.NoError(t, cerr)
+		// A conflict with no document on any side, as when both tips deleted a document the merge bases added
+		// differently, counts as one on |id|.
 		var ids []any
 		for _, cc := range res.Collections {
 			for _, c := range cc.Conflicts {
+				found := false
 				for _, doc := range []*types.Document{c.Ours, c.Theirs, c.Base} {
 					if doc != nil {
 						v, _ := doc.Get("_id")
 						ids = append(ids, v)
+						found = true
 						break
 					}
+				}
+				if !found {
+					ids = append(ids, id)
 				}
 			}
 		}

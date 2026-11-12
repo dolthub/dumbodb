@@ -82,6 +82,7 @@ func foldConflict(
 	docOf func(val.Tuple) (*types.Document, error),
 	applyIndexEdit func(mergeDocEdit, val.Tuple) error,
 	indexing bool,
+	inherited *docFlag,
 ) error {
 	base, err := docOf(diff.Base)
 	if err != nil {
@@ -107,7 +108,7 @@ func foldConflict(
 			}
 		}
 	}
-	value, flag := conflictValue(base, left, right, mode)
+	value, flag := conflictValue(base, left, right, mode, inherited)
 	if value == nil {
 		if err := mut.Delete(ctx, key); err != nil {
 			return fmt.Errorf("folding a conflict: %w", err)
@@ -141,7 +142,10 @@ func foldConflict(
 //   - a delete against a modify keeps the base document unflagged, as git does;
 //   - in the field modes, fields the merge bases did not conflict on keep their merged value, and the flag lists the
 //     field paths they conflicted on.
-func conflictValue(base, left, right *types.Document, mode MergeMode) (*types.Document, *docFlag) {
+//
+// |inherited| is the document's flag in the merge bases' own merge base, when that is a virtual merge base too: its
+// paths count as changed on both sides.
+func conflictValue(base, left, right *types.Document, mode MergeMode, inherited *docFlag) (*types.Document, *docFlag) {
 	id := documentID(base, left, right)
 	switch {
 	case base == nil:
@@ -152,8 +156,17 @@ func conflictValue(base, left, right *types.Document, mode MergeMode) (*types.Do
 		return base, nil
 	case mode == MergeModeDocumentTouched || mode == MergeModeDocumentDivergent:
 		return base, &docFlag{id: id, whole: true}
+	case inherited != nil && inherited.whole:
+		return base, &docFlag{id: id, whole: true}
 	}
 	paths := mode.conflictingPaths(base, left, right, nil)
+	if inherited != nil {
+		for _, path := range inherited.paths {
+			if (mode == MergeModeFieldTouched || !pathsEqual(left, right, path)) && !containsPath(paths, path) {
+				paths = append(paths, path)
+			}
+		}
+	}
 	merged, conflict := mergeBSONDoc(base, withBaseAt(left, base, paths), withBaseAt(right, base, paths))
 	if conflict || len(paths) == 0 {
 		return base, &docFlag{id: id, whole: true}
@@ -664,4 +677,80 @@ func restoreCatalogDocuments(ctx context.Context, state *dbState, am, baseAM pro
 		return prolly.AddressMap{}, err
 	}
 	return editor.Flush(ctx)
+}
+
+// flaggedDiff returns |diff| for a document its merge base flags with |flag|, or a conflict in its place. A flagged
+// document counts as changed on both sides: the touched modes conflict on it, and the divergent modes when the sides
+// differ on it, at its flagged paths or anywhere when it is flagged whole.
+func flaggedDiff(ctx context.Context, diff tree.ThreeWayDiff, flag docFlag, mode MergeMode, baseMap prolly.Map, docOf func(val.Tuple) (*types.Document, error)) (tree.ThreeWayDiff, error) {
+	if diff.Op == tree.DiffOpDivergentModifyConflict || diff.Op == tree.DiffOpDivergentDeleteConflict {
+		return diff, nil
+	}
+	baseValue, err := mapValue(ctx, baseMap, diff.Key)
+	if err != nil {
+		return diff, err
+	}
+	left, right := diff.Left, diff.Right
+	switch diff.Op {
+	case tree.DiffOpLeftAdd, tree.DiffOpLeftModify, tree.DiffOpLeftDelete:
+		right = baseValue
+	case tree.DiffOpRightAdd, tree.DiffOpRightModify, tree.DiffOpRightDelete:
+		left = baseValue
+	case tree.DiffOpConvergentAdd, tree.DiffOpConvergentModify, tree.DiffOpConvergentDelete:
+		right = left
+	}
+	conflict := mode == MergeModeDocumentTouched || mode == MergeModeFieldTouched
+	if !conflict {
+		leftDoc, err := docOf(left)
+		if err != nil {
+			return diff, err
+		}
+		rightDoc, err := docOf(right)
+		if err != nil {
+			return diff, err
+		}
+		if flag.whole {
+			conflict = !documentsEqual(leftDoc, rightDoc)
+		}
+		for _, path := range flag.paths {
+			conflict = conflict || !pathsEqual(leftDoc, rightDoc, path)
+		}
+	}
+	if !conflict {
+		return diff, nil
+	}
+	op := tree.DiffOpDivergentModifyConflict
+	if left == nil || right == nil {
+		op = tree.DiffOpDivergentDeleteConflict
+	}
+	return tree.ThreeWayDiff{Op: op, Key: diff.Key, Base: baseValue, Left: left, Right: right}, nil
+}
+
+// pathsEqual reports whether |left| and |right| hold the same value at |path|, or both none.
+func pathsEqual(left, right *types.Document, path []string) bool {
+	leftValue, leftOK := pathValue(left, path)
+	rightValue, rightOK := pathValue(right, path)
+	return leftOK == rightOK && reflect.DeepEqual(leftValue, rightValue)
+}
+
+func pathValue(doc *types.Document, path []string) (any, bool) {
+	for _, key := range path[:len(path)-1] {
+		next, ok := getOrNil(doc, key)
+		if !ok {
+			return nil, false
+		}
+		if doc, ok = next.(*types.Document); !ok {
+			return nil, false
+		}
+	}
+	return getOrNil(doc, path[len(path)-1])
+}
+
+func containsPath(paths [][]string, path []string) bool {
+	for _, p := range paths {
+		if reflect.DeepEqual(p, path) {
+			return true
+		}
+	}
+	return false
 }
