@@ -297,7 +297,7 @@ func TestVirtualMergeBase_FoldsConflictingViews(t *testing.T) {
 	}
 	changeView := func(value string) func(t *testing.T, b *Backend, branch string) {
 		return func(t *testing.T, b *Backend, branch string) {
-			collModOn(t, b, branch, &backends.CollModParams{Name: "v", ViewPipeline: matchPipeline(t, value), SetViewPipeline: true})
+			collModOn(t, b, branch, &backends.CollModParams{Name: "v", SetView: true, ViewPipeline: matchPipeline(t, value), SetViewPipeline: true})
 		}
 	}
 	setup := func(withView bool) func(t *testing.T, b *Backend, branch string) {

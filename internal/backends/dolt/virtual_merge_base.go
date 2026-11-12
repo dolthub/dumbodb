@@ -23,6 +23,7 @@ import (
 	"reflect"
 	"sort"
 
+	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/prolly"
 	"github.com/dolthub/dolt/go/store/prolly/tree"
 	"github.com/dolthub/dolt/go/store/val"
@@ -40,6 +41,8 @@ type virtualFold struct {
 	intoAM, fromAM, baseAM prolly.AddressMap
 	// reverted holds the documents the fold gave their value in baseAM to keep the virtual merge base valid.
 	reverted map[string]map[string]bool
+	// restored lists the collections the fold took from baseAM because one merge base deleted them.
+	restored []string
 }
 
 func newVirtualFold(intoAM, fromAM, baseAM prolly.AddressMap) *virtualFold {
@@ -88,6 +91,17 @@ func foldConflict(
 		return err
 	}
 	key := append(val.Tuple(nil), diff.Key...)
+	if collection == reservedCatalogName {
+		// Catalog documents merge field by field. A collection both merge bases created starts from the fields
+		// they agree on, so that the virtual merge base still has a catalog document for it.
+		mode = MergeModeFieldDivergent
+		if base == nil && left != nil && right != nil {
+			base = types.MakeDocument(1)
+			if id, ok := getOrNil(left, "_id"); ok {
+				base.Set("_id", id)
+			}
+		}
+	}
 	value, flag := conflictValue(base, left, right, mode)
 	if value == nil {
 		if err := mut.Delete(ctx, key); err != nil {
@@ -492,4 +506,95 @@ func getDocument(ctx context.Context, ns tree.NodeStore, mut *prolly.MutableMap,
 		return err
 	})
 	return doc, err
+}
+
+// foldMergeMode returns the mode a fold merges collection |name| in when its merge bases' modes do not resolve
+// three-way: their join in the lattice of merge modes.
+func foldMergeMode(ctx context.Context, state *dbState, intoAM, fromAM prolly.AddressMap, name string) (MergeMode, error) {
+	ours, err := readCatalogDoc(ctx, state, intoAM, name)
+	if err != nil {
+		return "", err
+	}
+	theirs, err := readCatalogDoc(ctx, state, fromAM, name)
+	if err != nil {
+		return "", err
+	}
+	return joinMergeModes(effectiveMetadataMergeMode(ours), effectiveMetadataMergeMode(theirs)), nil
+}
+
+// joinMergeModes returns the least strict merge mode at least as strict as both |a| and |b|. documentTouched is the
+// strictest and fieldDivergent the least; fieldTouched and documentDivergent are incomparable.
+func joinMergeModes(a, b MergeMode) MergeMode {
+	switch {
+	case a == b:
+		return a
+	case a == MergeModeFieldDivergent:
+		return b
+	case b == MergeModeFieldDivergent:
+		return a
+	default:
+		return MergeModeDocumentTouched
+	}
+}
+
+// restoreCatalogDocuments gives the collections |names| of |am| their catalog documents in |baseAM|.
+func restoreCatalogDocuments(ctx context.Context, state *dbState, am, baseAM prolly.AddressMap, names []string) (prolly.AddressMap, error) {
+	catalog, err := catalogMapFromAM(ctx, state, am)
+	if err != nil {
+		return prolly.AddressMap{}, err
+	}
+	baseCatalog, err := catalogMapFromAM(ctx, state, baseAM)
+	if err != nil {
+		return prolly.AddressMap{}, err
+	}
+	mut := catalog.Mutate()
+	for _, name := range names {
+		key, err := catalogKey(name)
+		if err != nil {
+			return prolly.AddressMap{}, err
+		}
+		value, err := mapValue(ctx, baseCatalog, key)
+		if err != nil {
+			return prolly.AddressMap{}, err
+		}
+		if value == nil {
+			continue
+		}
+		if err := mut.Put(ctx, key, value); err != nil {
+			return prolly.AddressMap{}, err
+		}
+	}
+	restored, err := mut.Map(ctx)
+	if err != nil {
+		return prolly.AddressMap{}, err
+	}
+	catalogH, err := am.Get(ctx, reservedCatalogName)
+	if err != nil {
+		return prolly.AddressMap{}, err
+	}
+	idxAM, err := indexAMForDTBL(ctx, state.cs, state.ns, catalogH)
+	if err != nil {
+		return prolly.AddressMap{}, err
+	}
+	indexes, err := indexSetFromAM(ctx, state, idxAM)
+	if err != nil {
+		return prolly.AddressMap{}, err
+	}
+	infos := make([]backends.IndexInfo, 0, len(indexes))
+	for _, entry := range indexes {
+		infos = append(infos, entry.info)
+	}
+	sort.Slice(infos, func(i, j int) bool { return infos[i].Name < infos[j].Name })
+	if idxAM, err = buildIndexesFromDocuments(ctx, state, restored, infos); err != nil {
+		return prolly.AddressMap{}, err
+	}
+	restoredH, err := state.dtblHashForCollection(ctx, reservedCatalogName, restored, idxAM, hash.Hash{})
+	if err != nil {
+		return prolly.AddressMap{}, err
+	}
+	editor := am.Editor()
+	if err := editor.Update(ctx, reservedCatalogName, restoredH); err != nil {
+		return prolly.AddressMap{}, err
+	}
+	return editor.Flush(ctx)
 }

@@ -1420,7 +1420,7 @@ func captureConflictsForCollection(
 
 		// Divergent edits: real conflicts. Keep "ours" (left) value in the merged map.
 		case tree.DiffOpDivergentModifyConflict, tree.DiffOpDivergentDeleteConflict:
-			if fold != nil && collection != reservedCatalogName {
+			if fold != nil {
 				if err := foldConflict(ctx, fold, collection, diff, mode, ns, mut, docOf, applyIndexEdit, indexing); err != nil {
 					return prolly.Map{}, nil, err
 				}
@@ -1675,6 +1675,19 @@ func mergeAddressMaps(ctx context.Context, state *dbState, intoAM, fromAM, baseA
 		if err != nil {
 			return prolly.AddressMap{}, nil, nil, nil, nil, err
 		}
+		if (intoIsView || fromIsView || baseIsView) && fold != nil {
+			// A view the merge bases define differently keeps its definition in their own merge base, or is left
+			// absent when both added it.
+			if baseH.IsEmpty() {
+				if err := editor.Delete(ctx, name); err != nil {
+					return prolly.AddressMap{}, nil, nil, nil, nil, fmt.Errorf("folding view %q: %w", name, err)
+				}
+			} else if err := editor.Update(ctx, name, baseH); err != nil {
+				return prolly.AddressMap{}, nil, nil, nil, nil, fmt.Errorf("folding view %q: %w", name, err)
+			}
+			fold.flags.views[name] = true
+			continue
+		}
 		if intoIsView || fromIsView || baseIsView {
 			vce, vErr := buildViewConflict(ctx, state, name, intoH, fromH, baseH, theirHash)
 			if vErr != nil {
@@ -1684,11 +1697,23 @@ func mergeAddressMaps(ctx context.Context, state *dbState, intoAM, fromAM, baseA
 			continue
 		}
 
+		if (fromH.IsEmpty() || intoH.IsEmpty()) && fold != nil {
+			// As for a document, a collection deleted on one merge base and modified on the other keeps its value in
+			// their own merge base.
+			if err := editor.Update(ctx, name, baseH); err != nil {
+				return prolly.AddressMap{}, nil, nil, nil, nil, fmt.Errorf("folding collection %q: %w", name, err)
+			}
+			fold.restored = append(fold.restored, name)
+			continue
+		}
 		if fromH.IsEmpty() || intoH.IsEmpty() {
 			return prolly.AddressMap{}, nil, nil, nil, nil, fmt.Errorf("conflict in %q: deleted on one branch and modified on the other", name)
 		}
 
 		mode, modeErr := mergedCollectionMode(ctx, state, intoAM, fromAM, baseAM, name)
+		if modeErr != nil && fold != nil {
+			mode, modeErr = foldMergeMode(ctx, state, intoAM, fromAM, name)
+		}
 		if modeErr != nil {
 			return prolly.AddressMap{}, nil, nil, nil, nil, modeErr
 		}
@@ -1722,6 +1747,11 @@ func mergeAddressMaps(ctx context.Context, state *dbState, intoAM, fromAM, baseA
 	am, err := editor.Flush(ctx)
 	if err != nil {
 		return prolly.AddressMap{}, nil, nil, nil, nil, err
+	}
+	if fold != nil && len(fold.restored) > 0 {
+		if am, err = restoreCatalogDocuments(ctx, state, am, baseAM, fold.restored); err != nil {
+			return prolly.AddressMap{}, nil, nil, nil, nil, err
+		}
 	}
 
 	if fold == nil {
