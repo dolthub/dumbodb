@@ -66,7 +66,12 @@ type groupBy struct {
 
 // retainingAccumulators keep (part of) every input value, so their memory
 // grows with the input rather than with the number of groups.
-var retainingAccumulators = map[string]bool{"$addToSet": true, "$mergeObjects": true, "$push": true}
+var retainingAccumulators = map[string]bool{
+	"$addToSet": true, "$mergeObjects": true, "$push": true,
+	"$firstN": true, "$lastN": true, "$minN": true, "$maxN": true,
+	"$top": true, "$bottom": true, "$topN": true, "$bottomN": true,
+	"$median": true, "$percentile": true,
+}
 
 func newGroup(stage *types.Document) (aggregations.Stage, error) {
 	return NewGroupStage(stage, nil)
