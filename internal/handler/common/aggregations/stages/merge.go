@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
@@ -377,6 +378,10 @@ func (s *merge) Process(ctx context.Context, iter types.DocumentsIterator, close
 			return nil, lazyerrors.Error(err)
 		}
 
+		if err = s.checkWrittenDocument(doc); err != nil {
+			return nil, err
+		}
+
 		batch = append(batch, doc)
 		batchBytes += doc.BSONSize()
 		if len(batch) >= MergeBatchSize || batchBytes >= mergeBatchBytes {
@@ -400,3 +405,46 @@ func (s *merge) Process(ctx context.Context, iter types.DocumentsIterator, close
 var (
 	_ aggregations.Stage = (*merge)(nil)
 )
+
+// checkWrittenDocument returns mongod's error for a document $merge cannot
+// write: an array 'on' field, or an _id that cannot be stored.
+func (s *merge) checkWrittenDocument(doc *types.Document) error {
+	on := s.on
+	if len(on) == 0 {
+		on = []string{"_id"}
+	}
+	for _, field := range on {
+		path, err := types.NewPathFromString(field)
+		if err != nil {
+			continue
+		}
+		if v, err := doc.GetByPath(path); err == nil {
+			if _, isArr := v.(*types.Array); isArr {
+				return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrMergeOnFieldArray,
+					fmt.Sprintf("$merge write error: 'on' field '%s' is an array", field), "$merge")
+			}
+		}
+	}
+	id, err := doc.Get("_id")
+	if err != nil {
+		return nil
+	}
+	if d, ok := id.(*types.Document); ok && d.Len() > 0 && strings.HasPrefix(d.Keys()[0], "$") {
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
+			"unknown operator: "+d.Keys()[0], "$merge")
+	}
+	return storedIDError(id)
+}
+
+// storedIDError returns mongod's error for an _id that cannot be stored.
+func storedIDError(id any) error {
+	var ve *types.ValidationError
+	if err := types.ValidateID(id); !errors.As(err, &ve) {
+		return err
+	}
+	code := handlererrors.ErrInvalidID
+	if ve.Code() == types.ErrDollarPrefixedID {
+		code = handlererrors.ErrDollarPrefixedFieldName
+	}
+	return handlererrors.NewCommandErrorMsgWithArgument(code, ve.Error(), "_id")
+}
