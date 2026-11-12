@@ -425,7 +425,7 @@ func indexFingerprint(idxInfos []backends.IndexInfo) string {
 		for _, kp := range idx.Key {
 			fmt.Fprintf(h, "%q:%+v,", kp.Field, kp)
 		}
-		fmt.Fprintf(h, "|%t|%t|%t|%t|%t|", idx.Unique, idx.Sparse, idx.Hidden, idx.Lossy, idx.Multikey)
+		fmt.Fprintf(h, "|%t|%t|%t|%t|%t|%d|%t|", idx.Unique, idx.Sparse, idx.Hidden, idx.Lossy, idx.Multikey, idx.MultikeyFields, idx.MultikeyFieldsKnown)
 		if idx.PartialFilterExpression != nil {
 			var b strings.Builder
 			writeFilterShape(&b, idx.PartialFilterExpression)
