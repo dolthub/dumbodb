@@ -492,6 +492,7 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 		params.Filter, params.Sort = aggregations.GetPushdownQuery(params.StagesDocs)
 		common.CanonicalizeFilter(params.Filter)
 		params.Skip, params.Limit = pushdownWindow(params.StagesDocs)
+		params.Projection = absorbedProjection(params.StagesDocs)
 	}
 
 	if !h.DisablePushdown {
@@ -827,4 +828,41 @@ func pushdownWindow(stages []any) (skip, limit int64) {
 			return skip, limit
 		}
 	}
+}
+
+// absorbedProjection returns the projection of the $project or $unset the
+// query plan absorbs from stages, when it only includes or excludes fields,
+// or nil.
+func absorbedProjection(stages []any) *types.Document {
+	docs := make([]*types.Document, 0, len(stages))
+	for _, s := range stages {
+		d, _ := s.(*types.Document)
+		if d == nil || d.Len() != 1 {
+			return nil
+		}
+		docs = append(docs, d)
+	}
+	n := queryAbsorbedStages(docs)
+	if n == 0 || n != len(docs) {
+		return nil
+	}
+	last := docs[n-1]
+	switch last.Command() {
+	case "$unset":
+		return must.NotFail(reportedStage(last).Get("$project")).(*types.Document)
+	case "$project":
+		spec, _ := must.NotFail(last.Get("$project")).(*types.Document)
+		if spec == nil {
+			return nil
+		}
+		for _, k := range spec.Keys() {
+			switch must.NotFail(spec.Get(k)).(type) {
+			case bool, int32, int64, float64:
+			default:
+				return nil
+			}
+		}
+		return spec
+	}
+	return nil
 }
