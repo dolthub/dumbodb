@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strconv"
 
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
@@ -259,7 +260,14 @@ func integralN(v any, name string) (int64, error) {
 	case int64:
 		n = x
 	case float64:
-		if x != math.Trunc(x) || x >= math.MaxInt64 || x < math.MinInt64 {
+		if math.IsNaN(x) || math.IsInf(x, 0) || x >= math.MaxInt64 || x < math.MinInt64 {
+			return 0, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrCoerceLongOutOfRange,
+				fmt.Sprintf("Can't coerce out of range value %s to long", formatCoercedDouble(x)),
+				name,
+			)
+		}
+		if x != math.Trunc(x) {
 			return 0, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrNOperatorNFractional,
 				fmt.Sprintf("Value for 'n' must be of integral type, but found %v", x),
@@ -292,6 +300,19 @@ func integralN(v any, name string) (int64, error) {
 		)
 	}
 	return n, nil
+}
+
+// formatCoercedDouble formats a double as mongod's out of range error does.
+func formatCoercedDouble(x float64) string {
+	switch {
+	case math.IsNaN(x):
+		return "nan"
+	case math.IsInf(x, 1):
+		return "inf"
+	case math.IsInf(x, -1):
+		return "-inf"
+	}
+	return strconv.FormatFloat(x, 'g', -1, 64)
 }
 
 // percentileOp represents { $percentile: { input, p, method } } and
