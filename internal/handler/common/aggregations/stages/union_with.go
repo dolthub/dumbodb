@@ -105,7 +105,6 @@ func NewUnionWithStage(stage *types.Document, fetcher CollectionFetcher) (aggreg
 		}
 	}
 
-	sub.sbePrefix = SBEPrefixLen(sbeSpecs(sub.pipeline))
 	sub.sbeSubPipeline = true
 
 	return &unionWith{sub: sub, fetcher: fetcher}, nil
@@ -121,10 +120,36 @@ func unionWithWrongType(field string, v any, want string) error {
 func (u *unionWith) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
 	fetcher := withFetchCache(u.fetcher)
 	ctx = WithJoinStages(ctx, JoinStages{})
+
+	isView := func(name string) bool {
+		_, ok := fetcher.ViewPipeline(ctx, name)
+		return ok
+	}
+
+	// mongod runs a $unionWith sub-pipeline in SBE, after the stages of the
+	// view it reads from, unless it is nested in a $lookup sub-pipeline.
+	subSpecs := sbeSpecs(u.sub.pipeline)
+	var viewSpecs []*types.Document
+	if view, ok := fetcher.ViewPipeline(ctx, u.sub.from); ok && u.sub.from != "" {
+		viewSpecs = sbeSpecs(view)
+	}
+	viewInSBE := false
+	if u.sub.inClassic {
+		u.sub.sbePrefix, u.sub.sbeSubPipeline = 0, false
+	} else {
+		combined := SBEPrefixLen(append(append([]*types.Document{}, viewSpecs...), subSpecs...), isView)
+		u.sub.sbePrefix = max(0, combined-len(viewSpecs))
+		viewInSBE = len(viewSpecs) > 0 && combined > 0
+		u.sub.viewIsView = isView
+	}
+
 	var fromDocs []*types.Document
 	if u.sub.from != "" {
 		var err error
 		if fromDocs, err = fetcher.Fetch(ctx, u.sub.from, nil); err != nil {
+			if viewInSBE {
+				return nil, sbeError(err)
+			}
 			return nil, lazyerrors.Error(err)
 		}
 	}

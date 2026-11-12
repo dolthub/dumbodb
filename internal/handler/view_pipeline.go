@@ -119,6 +119,24 @@ type foreignViewDepthKey struct{}
 // aggregateDBNameKey holds the database an aggregate command runs on.
 type aggregateDBNameKey struct{}
 
+// ViewPipeline implements stages.ViewResolver: the stages of a view and of
+// the views it reads from.
+func (f *foreignFetcher) ViewPipeline(ctx context.Context, name string) (*types.Array, bool) {
+	info, err := lookupCollectionInfo(ctx, f.db, name)
+	if err != nil || info == nil || !info.IsView {
+		return nil, false
+	}
+	_, _, raw, err := resolveViewChain(ctx, f.db, info.Name, info.ViewOn, info.ViewPipeline, nil)
+	if err != nil {
+		return types.MakeArray(0), true
+	}
+	arr := types.MakeArray(len(raw))
+	for _, st := range raw {
+		arr.Append(st)
+	}
+	return arr, true
+}
+
 // CollStats implements stages.StatsFetcher.
 func (f *foreignFetcher) CollStats(ctx context.Context, collName string, pipeline []aggregations.Stage, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
 	c, err := f.db.Collection(collName)

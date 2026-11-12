@@ -95,6 +95,20 @@ type cachingFetcher struct {
 	eqIndexes map[string]*equalityIndex
 }
 
+// ViewResolver is implemented by fetchers that can report the full pipeline
+// of a view.
+type ViewResolver interface {
+	ViewPipeline(ctx context.Context, name string) (*types.Array, bool)
+}
+
+// ViewPipeline implements ViewResolver when the wrapped fetcher does.
+func (c *cachingFetcher) ViewPipeline(ctx context.Context, name string) (*types.Array, bool) {
+	if vr, ok := c.CollectionFetcher.(ViewResolver); ok {
+		return vr.ViewPipeline(ctx, name)
+	}
+	return nil, false
+}
+
 // CollStats implements StatsFetcher when the wrapped fetcher does.
 func (c *cachingFetcher) CollStats(ctx context.Context, collectionName string, pipeline []aggregations.Stage, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
 	sf, ok := c.CollectionFetcher.(StatsFetcher)
@@ -187,6 +201,11 @@ type lookup struct {
 	// sbeSubPipeline is set for a $unionWith sub-pipeline, whose leading
 	// stages mongod runs in SBE.
 	sbeSubPipeline bool
+	// inClassic is set for a sub-pipeline nested in a $lookup sub-pipeline,
+	// which mongod runs entirely in its classic engine.
+	inClassic bool
+	// viewIsView reports which collections are views, for MarkSBELookups.
+	viewIsView func(string) bool
 }
 
 // NewLookupStage creates a new $lookup stage with a collection fetcher.
@@ -1042,8 +1061,17 @@ func (l *lookup) pipelineIter(ctx context.Context, fetcher CollectionFetcher, fr
 		}
 		return stats, closer, nil
 	}
-	if l.sbeSubPipeline {
-		MarkSBELookups(built, specs)
+	classic := l.inClassic || !l.sbeSubPipeline
+	for _, st := range built {
+		switch st := st.(type) {
+		case *lookup:
+			st.inClassic = st.inClassic || classic
+		case *unionWith:
+			st.sub.inClassic = st.sub.inClassic || classic
+		}
+	}
+	if l.sbeSubPipeline && !l.inClassic {
+		MarkSBELookups(built, specs, l.viewIsView)
 	}
 
 	for stageIndex, stage := range built {

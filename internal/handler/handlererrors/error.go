@@ -437,6 +437,7 @@ const (
 	ErrConcatArraysNotArray      = ErrorCode(28664)   // Location28664
 	ErrGroupInclusionStyle       = ErrorCode(17390)   // Location17390
 	ErrAddTwoDates               = ErrorCode(16612)   // Location16612
+	ErrSBEAddTwoDates            = ErrorCode(7157722) // Location7157722
 	ErrReplaceReplacementType    = ErrorCode(51744)   // Location51744
 	ErrReplaceFindType           = ErrorCode(51745)   // Location51745
 	ErrReplaceInputType          = ErrorCode(51746)   // Location51746
