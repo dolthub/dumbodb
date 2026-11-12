@@ -1092,53 +1092,72 @@ func (op *arrayToObjectOp) Process(doc *types.Document) (any, error) {
 
 	arr, ok := v.(*types.Array)
 	if !ok {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$arrayToObject",
-			fmt.Sprintf("$arrayToObject requires an array argument, got %T", v))
+		return nil, arrayToObjectError(handlererrors.ErrArrayToObjectInput,
+			"$arrayToObject requires an array input, found: "+handlerparams.AliasFromType(v))
 	}
 
 	result := types.MakeDocument(arr.Len())
+	if arr.Len() == 0 {
+		return result, nil
+	}
 
-	iter := arr.Iterator()
-	defer iter.Close()
-
-	for {
-		_, elem, iterErr := iter.Next()
-		if errors.Is(iterErr, iterator.ErrIteratorDone) {
-			break
+	// The first element decides the format: [k, v] pairs or {k, v} objects.
+	_, pairs := must.NotFail(arr.Get(0)).(*types.Array)
+	for i := range arr.Len() {
+		elem := must.NotFail(arr.Get(i))
+		var key, val any
+		switch e := elem.(type) {
+		case *types.Array:
+			if !pairs {
+				return nil, arrayToObjectError(handlererrors.ErrArrayToObjectObjectsExpected,
+					"$arrayToObject requires a consistent input format. Elements must all be arrays or all be objects. "+
+						"Object was detected, now found: array")
+			}
+			if e.Len() != 2 {
+				return nil, arrayToObjectError(handlererrors.ErrArrayToObjectPairSize,
+					fmt.Sprintf("$arrayToObject requires an array of size 2 arrays,found array of size: %d", e.Len()))
+			}
+			key, val = must.NotFail(e.Get(0)), must.NotFail(e.Get(1))
+			if _, ok := key.(string); !ok {
+				return nil, arrayToObjectError(handlererrors.ErrArrayToObjectPairKeyType,
+					"$arrayToObject requires an array of key-value pairs, where the key must be of type string. Found key type: "+
+						handlerparams.AliasFromType(key))
+			}
+		case *types.Document:
+			if pairs {
+				return nil, arrayToObjectError(handlererrors.ErrArrayToObjectArraysExpected,
+					"$arrayToObject requires a consistent input format. Elements must all be arrays or all be objects. "+
+						"Array was detected, now found: object")
+			}
+			if e.Len() != 2 {
+				return nil, arrayToObjectError(handlererrors.ErrArrayToObjectObjectSize,
+					fmt.Sprintf("$arrayToObject requires an object keys of 'k' and 'v'. Found incorrect number of keys:%d", e.Len()))
+			}
+			var kErr, vErr error
+			key, kErr = e.Get("k")
+			val, vErr = e.Get("v")
+			if kErr != nil || vErr != nil {
+				return nil, arrayToObjectError(handlererrors.ErrArrayToObjectObjectKeys,
+					"$arrayToObject requires an object with keys 'k' and 'v'. Missing either or both keys from: "+
+						types.FormatAnyValue(e))
+			}
+			if _, ok := key.(string); !ok {
+				return nil, arrayToObjectError(handlererrors.ErrArrayToObjectObjectKeyType,
+					"$arrayToObject requires an object with keys 'k' and 'v', where the value of 'k' must be of type string. Found type: "+
+						handlerparams.AliasFromType(key))
+			}
+		default:
+			return nil, arrayToObjectError(handlererrors.ErrArrayToObjectElementType,
+				"Unrecognised input type format for $arrayToObject: "+handlerparams.AliasFromType(elem))
 		}
-
-		if iterErr != nil {
-			return nil, iterErr
-		}
-
-		pair, ok := elem.(*types.Document)
-		if !ok {
-			return nil, newOperatorError(ErrArgsInvalidLen, "$arrayToObject",
-				"$arrayToObject requires an array of objects with 'k' and 'v' fields")
-		}
-
-		kv, err := pair.Get("k")
-		if err != nil {
-			return nil, newOperatorError(ErrArgsInvalidLen, "$arrayToObject",
-				"$arrayToObject element must have a 'k' field")
-		}
-
-		key, ok := kv.(string)
-		if !ok {
-			return nil, newOperatorError(ErrArgsInvalidLen, "$arrayToObject",
-				"$arrayToObject element 'k' field must be a string")
-		}
-
-		val, err := pair.Get("v")
-		if err != nil {
-			return nil, newOperatorError(ErrArgsInvalidLen, "$arrayToObject",
-				"$arrayToObject element must have a 'v' field")
-		}
-
-		result.Set(key, val)
+		result.Set(key.(string), val)
 	}
 
 	return result, nil
+}
+
+func arrayToObjectError(code handlererrors.ErrorCode, msg string) error {
+	return handlererrors.NewCommandErrorMsgWithArgument(code, msg, "$arrayToObject")
 }
 
 var _ Operator = (*arrayToObjectOp)(nil)
