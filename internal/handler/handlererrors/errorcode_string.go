@@ -351,6 +351,7 @@ func _() {
 	_ = x[ErrCollStatsIsNotFirstStage-40602]
 	_ = x[ErrShardedDataDistributionMongosOnly-6789101]
 	_ = x[ErrSearchNotAllowedInContext-6600901]
+	_ = x[ErrDropClusteredIndex-5979800]
 	_ = x[ErrOpQueryInvalidField-40621]
 	_ = x[ErrSetEmptyPassword-50687]
 	_ = x[ErrStringProhibited-50692]

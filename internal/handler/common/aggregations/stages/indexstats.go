@@ -34,7 +34,8 @@ type indexStatsStage struct {
 // NewIndexStatsStage creates a new $indexStats stage.
 // It pre-fetches the index list from the collection at construction time.
 // host is the server's "hostname:port" included in each stats document.
-func NewIndexStatsStage(stage *types.Document, ctx context.Context, c backends.Collection, host string) (aggregations.Stage, error) {
+// visible keeps the indexes clients see.
+func NewIndexStatsStage(stage *types.Document, ctx context.Context, c backends.Collection, host string, visible func([]backends.IndexInfo) []backends.IndexInfo) (aggregations.Stage, error) { //nolint:lll // for readability
 	res, err := c.ListIndexes(ctx, nil)
 	if err != nil {
 		if backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist) {
@@ -45,6 +46,7 @@ func NewIndexStatsStage(stage *types.Document, ctx context.Context, c backends.C
 		return nil, err
 	}
 
+	res.Indexes = visible(res.Indexes)
 	now := time.Now().UTC()
 	docs := make([]*types.Document, len(res.Indexes))
 

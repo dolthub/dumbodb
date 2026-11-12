@@ -226,7 +226,9 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 
 		case "$indexStats":
 			// $indexStats requires collection access to retrieve index metadata.
-			s, err = stages.NewIndexStatsStage(d, connCtx, c, h.TCPHost)
+			s, err = stages.NewIndexStatsStage(d, connCtx, c, h.TCPHost, func(indexes []backends.IndexInfo) []backends.IndexInfo {
+				return clientVisibleIndexes(connCtx, db, cName, indexes)
+			})
 
 		case "$planCacheStats":
 			s, err = stages.NewPlanCacheStatsStage(connCtx, c, dbName+"."+cName, h.TCPHost)
@@ -1248,9 +1250,10 @@ func processStagesStats(ctx context.Context, closer *iterator.MultiCloser, p *st
 	))
 
 	var (
-		collStats *backends.CollectionStatsResult
-		cInfo     backends.CollectionInfo
-		nIndexes  int64
+		collStats      *backends.CollectionStatsResult
+		cInfo          backends.CollectionInfo
+		nIndexes       int64
+		visibleIndexes []backends.IndexInfo
 	)
 
 	if hasCount || hasStorage {
@@ -1296,7 +1299,9 @@ func processStagesStats(ctx context.Context, closer *iterator.MultiCloser, p *st
 			return nil, lazyerrors.Error(err)
 		}
 
+		iList.Indexes = clientVisibleIndexes(ctx, p.db, p.cName, iList.Indexes)
 		nIndexes = int64(len(iList.Indexes))
+		visibleIndexes = iList.Indexes
 	}
 
 	if hasStorage {
@@ -1308,6 +1313,9 @@ func processStagesStats(ctx context.Context, closer *iterator.MultiCloser, p *st
 		indexSizes := types.MakeDocument(len(collStats.IndexSizes))
 		indexDetails := types.MakeDocument(len(collStats.IndexSizes))
 		for _, indexSize := range collStats.IndexSizes {
+			if visibleIndexes != nil && !hasIndexNamed(visibleIndexes, indexSize.Name) {
+				continue
+			}
 			indexSizes.Set(indexSize.Name, int32(indexSize.Size))
 			indexDetails.Set(indexSize.Name, must.NotFail(types.NewDocument()))
 		}
