@@ -1136,6 +1136,23 @@ func isTied(a, b *types.Document, sortBy *types.Document) bool {
 
 // applyAccumulator applies $sum/$avg/$min/$max over a window slice of documents.
 func applyAccumulator(op string, expression any, window []*types.Document) (any, error) {
+	switch op {
+	case "$first", "$last":
+		// The value of the first or last document, null when it is missing.
+		if len(window) == 0 {
+			return types.Null, nil
+		}
+		doc := window[0]
+		if op == "$last" {
+			doc = window[len(window)-1]
+		}
+		v, missing, err := operators.EvalOperand(expression, doc)
+		if err != nil || missing {
+			return types.Null, err
+		}
+		return v, nil
+	}
+
 	// Collect values from window documents by evaluating the expression.
 	values, err := collectWindowValues(expression, window)
 	if err != nil {
