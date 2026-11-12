@@ -958,26 +958,10 @@ func parseListSessionsSpec(stage *types.Document, callerPrincipal string) (listS
 // array elements are fed through any remaining pipeline stages and returned
 // through the normal cursor/batch machinery.
 func (h *Handler) aggregateDocuments(connCtx context.Context, document, firstStage *types.Document, pipeline *types.Array, dbName string) (*wire.OpMsg, error) {
-	arr, ok := must.NotFail(firstStage.Get("$documents")).(*types.Array)
-	if !ok {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrTypeMismatch,
-			"$documents value must be an array of objects",
-			document.Command(),
-		)
-	}
-
-	srcDocs := make([]*types.Document, 0, arr.Len())
-	for i := 0; i < arr.Len(); i++ {
-		d, ok := must.NotFail(arr.Get(i)).(*types.Document)
-		if !ok {
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrTypeMismatch,
-				"$documents array element must be an object",
-				document.Command(),
-			)
-		}
-		srcDocs = append(srcDocs, d)
+	// $documents evaluates its argument as an expression.
+	srcDocs, err := stages.EvalDocuments(firstStage)
+	if err != nil {
+		return nil, err
 	}
 
 	pipelineStages := make([]aggregations.Stage, 0, pipeline.Len()-1)
