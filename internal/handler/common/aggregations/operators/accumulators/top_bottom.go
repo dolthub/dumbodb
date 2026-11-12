@@ -19,23 +19,24 @@ import (
 	"strings"
 
 	"github.com/dolthub/dumbodb/internal/handler/common"
+	"github.com/dolthub/dumbodb/internal/handler/commonpath"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // topBottomAccumulator implements $top, $bottom, $topN and $bottomN: the
-// output of the first or last documents in sortBy order. Documents that tie
-// keep their input order, and a later one never displaces an earlier tie.
+// output of the first or last documents in sortBy order, chosen as rankedSet
+// does.
 type topBottomAccumulator struct {
-	name     string
-	output   operand
-	sortBy   *types.Document
-	reversed *types.Document
-	n        nArg
-	single   bool
-	bottom   bool
-	textMeta bool
+	name      string
+	output    operand
+	paths     []types.Path
+	sortTypes []types.SortType
+	n         nArg
+	single    bool
+	bottom    bool
+	textMeta  bool
 }
 
 func newTopBottomFunc(name string) newAccumulatorFunc {
@@ -78,19 +79,30 @@ func newTopBottomFunc(name string) newAccumulatorFunc {
 		}
 
 		acc := &topBottomAccumulator{name: name, single: single, bottom: strings.HasPrefix(name, "$bottom")}
-		var err error
-		if acc.sortBy, acc.textMeta, err = parseSortBy(sortBy); err != nil {
+		sortDoc, textMeta, err := parseSortBy(sortBy)
+		if err != nil {
 			return nil, err
 		}
-		acc.reversed = reverseSort(acc.sortBy)
+		acc.textMeta = textMeta
+		for _, key := range sortDoc.Keys() {
+			sortType, err := common.GetSortType(key, must.NotFail(sortDoc.Get(key)))
+			if err != nil {
+				return nil, err
+			}
+			path, err := types.NewPathFromString(key)
+			if err != nil {
+				return nil, err
+			}
+			acc.paths = append(acc.paths, path)
+			acc.sortTypes = append(acc.sortTypes, sortType)
+		}
 		if acc.output, err = newOperand(output); err != nil {
 			return nil, err
 		}
 		if single {
-			acc.n = nArg{value: 1}
-		} else if acc.n, err = newNArg(n); err != nil {
-			return nil, err
+			n = int32(1)
 		}
+		acc.n = newNArg(n)
 		return acc, nil
 	}
 }
@@ -128,36 +140,33 @@ func parseSortBy(v any) (*types.Document, bool, error) {
 	return validated, textMeta, nil
 }
 
-// reverseSort returns sortBy with each direction flipped.
-func reverseSort(sortBy *types.Document) *types.Document {
-	res := types.MakeDocument(sortBy.Len())
-	for _, key := range sortBy.Keys() {
-		v := must.NotFail(sortBy.Get(key))
-		switch d := v.(type) {
-		case int64:
-			v = -d
-		case int32:
-			v = -d
-		case float64:
-			v = -d
-		}
-		res.Set(key, v)
-	}
-	return res
+// UseSBE implements SBEAccumulator.
+func (a *topBottomAccumulator) UseSBE() error {
+	return a.n.useSBE()
 }
 
 func (a *topBottomAccumulator) New() Accumulation {
 	return &topBottomState{spec: a}
 }
 
+// compareKeys compares two documents' sort keys in sortBy order.
+func (a *topBottomAccumulator) compareKeys(x, y any) int {
+	xs, ys := x.([]any), y.([]any)
+	for i, order := range a.sortTypes {
+		if c := common.CompareSortKeys(xs[i], ys[i], order); c != types.Equal {
+			return int(c)
+		}
+	}
+	return 0
+}
+
 type topBottomState struct {
-	spec *topBottomAccumulator
-	docs []*types.Document
-	n    int64
+	spec   *topBottomAccumulator
+	ranked *rankedSet
 }
 
 func (s *topBottomState) Accumulate(doc *types.Document) error {
-	if s.docs == nil {
+	if s.ranked == nil {
 		if s.spec.textMeta {
 			return handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrMetadataUnavailable, "query requires text score metadata, but it is not available", s.spec.name,
@@ -167,39 +176,28 @@ func (s *topBottomState) Accumulate(doc *types.Document) error {
 		if err != nil {
 			return err
 		}
-		s.n = n
+		s.ranked = newRankedSet(n, s.spec.compareKeys, s.spec.bottom)
 	}
-	s.docs = append(s.docs, doc)
+	out, missing, err := s.spec.output.evaluate(doc)
+	if err != nil {
+		return err
+	}
+	if missing {
+		out = types.Null
+	}
+	keys := make([]any, len(s.spec.paths))
+	for i, p := range s.spec.paths {
+		keys[i] = commonpath.SortKeyValue(doc, p)
+	}
+	s.ranked.add(keys, out)
 	return nil
 }
 
 func (s *topBottomState) Result() (any, error) {
-	order := s.spec.sortBy
-	if s.spec.bottom {
-		order = s.spec.reversed
+	var outputs []any
+	if s.ranked != nil {
+		outputs = s.ranked.sorted()
 	}
-	if err := common.SortDocuments(s.docs, order); err != nil {
-		return nil, err
-	}
-	selected := s.docs[:min(int64(len(s.docs)), s.n)]
-	if s.spec.bottom {
-		if err := common.SortDocuments(selected, s.spec.sortBy); err != nil {
-			return nil, err
-		}
-	}
-
-	outputs := make([]any, 0, len(selected))
-	for _, doc := range selected {
-		v, missing, err := s.spec.output.evaluate(doc)
-		if err != nil {
-			return nil, err
-		}
-		if missing {
-			v = types.Null
-		}
-		outputs = append(outputs, v)
-	}
-
 	if s.spec.single {
 		if len(outputs) == 0 {
 			return types.Null, nil

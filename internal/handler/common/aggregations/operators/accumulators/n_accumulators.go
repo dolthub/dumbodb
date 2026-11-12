@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strings"
 
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
@@ -26,42 +27,97 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// nArg is the 'n' of an N accumulator. mongod validates a constant n while
-// parsing and evaluates any other once per group, where no document field is
-// available.
+// nArg is the 'n' of an N accumulator, evaluated once per group where no
+// document field is available. mongod's classic engine validates it then;
+// its SBE engine validates a constant n while it builds the plan and reports
+// errors under its own codes.
 type nArg struct {
-	expr  any
-	value int64
+	expr any
+	kind nKind
+	sbe  bool
 }
 
-func newNArg(expr any) (nArg, error) {
-	if !operators.IsConstantExpression(expr) {
-		return nArg{expr: expr}, nil
-	}
-	n, err := evalN(expr, handlererrors.ErrNAccumulatorNInvalid)
-	if err != nil {
-		return nArg{}, err
-	}
-	return nArg{value: n}, nil
+type nKind int
+
+const (
+	nConstant nKind = iota
+	nFieldPath
+	nRoot
+)
+
+func newNArg(expr any) nArg {
+	return nArg{expr: expr, kind: classifyN(expr)}
 }
 
-func (a nArg) resolve() (int64, error) {
-	if a.expr == nil {
-		return a.value, nil
+// classifyN reports what n reads: nothing that varies by document, a field,
+// or the whole document.
+func classifyN(expr any) nKind {
+	kind := nConstant
+	var walk func(v any)
+	walk = func(v any) {
+		switch v := v.(type) {
+		case string:
+			switch {
+			case v == "$$ROOT" || v == "$$CURRENT" || strings.HasPrefix(v, "$$ROOT.") || strings.HasPrefix(v, "$$CURRENT."):
+				kind = nRoot
+			case strings.HasPrefix(v, "$") && !strings.HasPrefix(v, "$$") && kind == nConstant:
+				kind = nFieldPath
+			}
+		case *types.Array:
+			for i := range v.Len() {
+				walk(must.NotFail(v.Get(i)))
+			}
+		case *types.Document:
+			if v.Command() == "$literal" {
+				return
+			}
+			for _, k := range v.Keys() {
+				walk(must.NotFail(v.Get(k)))
+			}
+		}
 	}
-	return evalN(a.expr, handlererrors.ErrNAccumulatorNInvalidAtRuntime)
+	walk(expr)
+	return kind
 }
 
-func evalN(expr any, code handlererrors.ErrorCode) (int64, error) {
-	v, missing, err := operators.EvalOperand(expr, types.MakeDocument(0))
+// useSBE switches n to SBE's validation, reporting an invalid constant n.
+func (a *nArg) useSBE() error {
+	a.sbe = true
+	if a.kind != nConstant {
+		return nil
+	}
+	_, err := a.resolve()
+	return err
+}
+
+func (a *nArg) resolve() (int64, error) {
+	v, missing, err := operators.EvalOperand(a.expr, types.MakeDocument(0))
 	if err != nil {
 		return 0, err
+	}
+	if !a.sbe {
+		if missing {
+			return 0, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrNOperatorNNotIntegral, "Value for 'n' must be of integral type, but found MISSING", "n",
+			)
+		}
+		return operators.IntegralN(v, "n")
 	}
 	if n, ok := positiveInt64(v); ok && !missing {
 		return n, nil
 	}
+	switch a.kind {
+	case nRoot:
+		return 0, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrNAccumulatorStateNotArray, "The accumulator state should be an array", "n",
+		)
+	case nFieldPath:
+		return 0, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrNAccumulatorNInvalidAtRuntime, "parameter 'n' must be coercible to a positive 64-bit integer", "n",
+		)
+	}
 	return 0, handlererrors.NewCommandErrorMsgWithArgument(
-		code, "parameter 'n' must be coercible to a positive 64-bit integer", "n",
+		handlererrors.ErrNAccumulatorNInvalid, "parameter 'n' must be coercible to a positive 64-bit integer", "n",
 	)
 }
 
@@ -135,12 +191,13 @@ func newNAccumulatorFunc(name string) newAccumulatorFunc {
 		if err != nil {
 			return nil, err
 		}
-		nValue, err := newNArg(n)
-		if err != nil {
-			return nil, err
-		}
-		return &nAccumulator{name: name, input: inputOperand, n: nValue}, nil
+		return &nAccumulator{name: name, input: inputOperand, n: newNArg(n)}, nil
 	}
+}
+
+// UseSBE implements SBEAccumulator.
+func (a *nAccumulator) UseSBE() error {
+	return a.n.useSBE()
 }
 
 func (a *nAccumulator) New() Accumulation {
@@ -150,6 +207,7 @@ func (a *nAccumulator) New() Accumulation {
 type nState struct {
 	spec   *nAccumulator
 	values []any
+	ranked *rankedSet
 	n      int64
 	ready  bool
 }
@@ -161,20 +219,25 @@ func (s *nState) Accumulate(doc *types.Document) error {
 			return err
 		}
 		s.n, s.ready = n, true
+		switch s.spec.name {
+		case "$minN":
+			s.ranked = newRankedSet(n, compareValues, false)
+		case "$maxN":
+			s.ranked = newRankedSet(n, compareValues, true)
+		}
+	}
+	if s.spec.name == "$firstN" && int64(len(s.values)) >= s.n {
+		return nil
 	}
 	v, missing, err := s.spec.input.evaluate(doc)
 	if err != nil {
 		return err
 	}
-	switch s.spec.name {
-	case "$firstN":
-		if int64(len(s.values)) >= s.n {
-			return nil
+	if s.ranked != nil {
+		if !missing && !isNull(v) {
+			s.ranked.add(v, v)
 		}
-	case "$minN", "$maxN":
-		if missing || isNull(v) {
-			return nil
-		}
+		return nil
 	}
 	if missing {
 		v = types.Null
@@ -188,21 +251,21 @@ func (s *nState) Accumulate(doc *types.Document) error {
 
 func (s *nState) Result() (any, error) {
 	values := s.values
-	if s.spec.name == "$minN" || s.spec.name == "$maxN" {
-		slices.SortStableFunc(values, func(a, b any) int {
-			c := int(types.CompareOrder(a, b, types.Ascending))
-			if s.spec.name == "$maxN" {
-				c = -c
-			}
-			return c
-		})
-		values = values[:min(int64(len(values)), s.n)]
+	if s.ranked != nil {
+		values = s.ranked.sorted()
+		if s.spec.name == "$maxN" {
+			slices.Reverse(values)
+		}
 	}
 	out := types.MakeArray(len(values))
 	for _, v := range values {
 		out.Append(v)
 	}
 	return out, nil
+}
+
+func compareValues(a, b any) int {
+	return int(types.CompareOrder(a, b, types.Ascending))
 }
 
 func isNull(v any) bool {

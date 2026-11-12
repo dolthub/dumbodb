@@ -245,6 +245,12 @@ func (op *nOp) Process(doc *types.Document) (any, error) {
 
 // integralN reads the 'n' of an N operator, which must be a positive integral
 // number.
+// IntegralN validates the 'n' of an N operator or accumulator as mongod's
+// classic engine does.
+func IntegralN(v any, name string) (int64, error) {
+	return integralN(v, name)
+}
+
 func integralN(v any, name string) (int64, error) {
 	var n int64
 	switch x := v.(type) {
@@ -253,7 +259,7 @@ func integralN(v any, name string) (int64, error) {
 	case int64:
 		n = x
 	case float64:
-		if x != math.Trunc(x) {
+		if x != math.Trunc(x) || x >= math.MaxInt64 || x < math.MinInt64 {
 			return 0, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrNOperatorNFractional,
 				fmt.Sprintf("Value for 'n' must be of integral type, but found %v", x),

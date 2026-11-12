@@ -427,3 +427,9 @@ func getSortValue(key string, value any) (int64, error) {
 
 	return sortValue, nil
 }
+
+// CompareSortKeys compares two values extracted by commonpath.SortKeyValue as
+// a sort in order compares them.
+func CompareSortKeys(a, b any, order types.SortType) types.CompareResult {
+	return compareSortKeys(a, b, order)
+}

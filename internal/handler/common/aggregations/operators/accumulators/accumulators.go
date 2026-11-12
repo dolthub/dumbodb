@@ -53,6 +53,21 @@ type CollatedAccumulator interface {
 	NewCollated(cmp *collation.Comparator) Accumulation
 }
 
+// SBEAccumulator is implemented by accumulators that mongod's SBE engine
+// validates differently from its classic engine. UseSBE switches to SBE's
+// validation and reports what SBE reports while building the plan.
+type SBEAccumulator interface {
+	UseSBE() error
+}
+
+// UseSBE calls UseSBE on acc when it is an SBEAccumulator.
+func UseSBE(acc Accumulator) error {
+	if s, ok := acc.(SBEAccumulator); ok {
+		return s.UseSBE()
+	}
+	return nil
+}
+
 // Accumulation folds the documents of a single group and produces the
 // accumulated result. It is stateful and not safe for concurrent use; one
 // instance is created per group.

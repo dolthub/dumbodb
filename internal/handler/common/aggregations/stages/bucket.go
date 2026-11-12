@@ -54,6 +54,16 @@ type bucket struct {
 	output       []bucketOutput
 }
 
+// useSBE implements sbeAware.
+func (b *bucket) useSBE() error {
+	for _, o := range b.output {
+		if err := accumulators.UseSBE(o.accumulator); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 type bucketOutput struct {
 	field       string
 	accumulator accumulators.Accumulator

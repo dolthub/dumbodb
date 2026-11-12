@@ -149,7 +149,19 @@ type sbeStage struct {
 	inner aggregations.Stage
 }
 
+// sbeAware is implemented by stages that validate differently when mongod
+// runs them in SBE.
+type sbeAware interface {
+	useSBE() error
+}
+
 func (s *sbeStage) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
+	if a, ok := s.inner.(sbeAware); ok {
+		if err := a.useSBE(); err != nil {
+			iter.Close()
+			return nil, err
+		}
+	}
 	out, err := s.inner.Process(ctx, iter, closer)
 	if err != nil {
 		return nil, sbeError(err)

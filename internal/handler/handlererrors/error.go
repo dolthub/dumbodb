@@ -765,6 +765,7 @@ const (
 	ErrNAccumulatorMissingInput      = ErrorCode(5787907) // Location5787907
 	ErrNAccumulatorNInvalid          = ErrorCode(7548606) // Location7548606
 	ErrNAccumulatorNInvalidAtRuntime = ErrorCode(7548607) // Location7548607
+	ErrNAccumulatorStateNotArray     = ErrorCode(7695201) // Location7695201
 	ErrTopSpecNotObject              = ErrorCode(5788001) // Location5788001
 	ErrTopUnknownArgument            = ErrorCode(5788002) // Location5788002
 	ErrTopMissingN                   = ErrorCode(5788003) // Location5788003
