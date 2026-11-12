@@ -63,6 +63,7 @@ var notAllowedInFacet = map[string]bool{
 	"$listSessions":      true,
 	"$currentOp":         true,
 	"$listLocalSessions": true,
+	"$listCatalog":       true,
 }
 
 // newFacet creates a new $facet stage.
@@ -129,6 +130,9 @@ func newFacet(stage *types.Document) (aggregations.Stage, error) {
 					"A pipeline stage specification object must contain exactly one field.",
 					"$facet (stage)",
 				)
+			}
+			if err := CheckParseFailingStages(must.NotFail(types.NewArray(stage))); err != nil {
+				return nil, err
 			}
 			if cmd := stage.Command(); notAllowedInFacet[cmd] {
 				return nil, handlererrors.NewCommandErrorMsgWithArgument(

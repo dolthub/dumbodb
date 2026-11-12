@@ -257,6 +257,9 @@ func NewLookupStage(stage *types.Document, fetcher CollectionFetcher) (aggregati
 			return nil, err
 		}
 
+		if err := CheckParseFailingStages(pipelineArr); err != nil {
+			return nil, err
+		}
 		l.pipeline = pipelineArr
 
 		if hasLet {

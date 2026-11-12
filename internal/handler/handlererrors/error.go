@@ -678,6 +678,13 @@ const (
 	// ErrCollStatsIsNotFirstStage indicates that $collStats must be the first stage in the pipeline.
 	ErrCollStatsIsNotFirstStage = ErrorCode(40602) // Location40602
 
+	// ErrShardedDataDistributionMongosOnly indicates $shardedDataDistribution
+	// outside mongos.
+	ErrShardedDataDistributionMongosOnly = ErrorCode(6789101) // Location6789101
+
+	// ErrSearchNotAllowedInContext indicates $searchMeta in an update pipeline.
+	ErrSearchNotAllowedInContext = ErrorCode(6600901) // Location6600901
+
 	// ErrOpQueryInvalidField indicates that the field is not allowed for op query.
 	ErrOpQueryInvalidField = ErrorCode(40621) // Location40621
 

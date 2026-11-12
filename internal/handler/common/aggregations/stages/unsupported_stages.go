@@ -18,6 +18,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // searchNotEnabledMessage is mongod's error for an Atlas Search stage on a
@@ -84,4 +85,65 @@ func newChangeStream(stage *types.Document) (aggregations.Stage, error) {
 		"The $changeStream stage is only supported on replica sets",
 		"$changeStream (stage)",
 	)
+}
+
+func newShardedDataDistribution(*types.Document) (aggregations.Stage, error) {
+	return nil, handlererrors.NewCommandErrorMsgWithArgument(
+		handlererrors.ErrShardedDataDistributionMongosOnly,
+		"The $shardedDataDistribution stage can only be run on mongoS",
+		"$shardedDataDistribution (stage)",
+	)
+}
+
+// newQueryStats rejects $queryStats outside {aggregate: 1} on admin, which
+// msg_aggregate.go handles.
+func newQueryStats(*types.Document) (aggregations.Stage, error) {
+	return nil, handlererrors.NewCommandErrorMsgWithArgument(
+		handlererrors.ErrInvalidNamespace,
+		"$queryStats must be run against the 'admin' database with {aggregate: 1}",
+		"$queryStats (stage)",
+	)
+}
+
+// newListCatalog rejects $listCatalog, whose catalog entries DumboDB does
+// not have.
+func newListCatalog(*types.Document) (aggregations.Stage, error) {
+	return nil, handlererrors.NewCommandErrorMsgWithArgument(
+		handlererrors.ErrNotImplemented,
+		"$listCatalog is not implemented",
+		"$listCatalog (stage)",
+	)
+}
+
+// parseFailingStages are the stages that DumboDB, like a standalone mongod,
+// refuses in any position while the pipeline is parsed.
+var parseFailingStages = map[string]newStageFunc{
+	"$changeStream":            newChangeStream,
+	"$listSearchIndexes":       newListSearchIndexes,
+	"$listSessions":            newListSessions,
+	"$queryStats":              newQueryStats,
+	"$search":                  newSearch,
+	"$searchMeta":              newSearch,
+	"$shardedDataDistribution": newShardedDataDistribution,
+	"$vectorSearch":            newSearch,
+}
+
+// CheckParseFailingStages returns the error of the first stage of pipeline
+// that fails in any position, as mongod reports it when it parses the
+// pipeline, before checks that depend on where the pipeline runs.
+func CheckParseFailingStages(pipeline *types.Array) error {
+	if pipeline == nil {
+		return nil
+	}
+	for i := range pipeline.Len() {
+		stage, ok := must.NotFail(pipeline.Get(i)).(*types.Document)
+		if !ok || stage.Len() != 1 {
+			continue
+		}
+		if newStage, fails := parseFailingStages[stage.Command()]; fails {
+			_, err := newStage(stage)
+			return err
+		}
+	}
+	return nil
 }

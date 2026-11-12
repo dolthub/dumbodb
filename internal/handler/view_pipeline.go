@@ -16,6 +16,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/dolthub/dumbodb/internal/backends"
@@ -57,14 +58,8 @@ func buildViewPipelineStages(db backends.Database, viewPipeline *types.Array, cm
 		var err error
 
 		switch vd.Command() {
-		case "$lookup", "$graphLookup":
-			fetcher := foreignCollectionFetcher(db)
-
-			if vd.Command() == "$graphLookup" {
-				vs, err = stages.NewGraphLookupStage(vd, fetcher)
-			} else {
-				vs, err = stages.NewLookupStage(vd, fetcher)
-			}
+		case "$lookup", "$graphLookup", "$unionWith", "$facet":
+			vs, err = newForeignCollectionStage(vd, db)
 		case "$match":
 			vs, err = stages.NewMatchStage(vd, cmp, stages.SeesStoredDocuments(stageDocs, i))
 		case "$sort":
@@ -88,6 +83,35 @@ func buildViewPipelineStages(db backends.Database, viewPipeline *types.Array, cm
 	stages.MarkLookupsUnwound(result, specs)
 
 	return result, stageDocs, nil
+}
+
+// validateViewPipeline returns mongod's error for a view definition whose
+// pipeline cannot be parsed or writes to disk.
+func validateViewPipeline(dbName, viewName string, pipeline *types.Array) error {
+	if pipeline == nil {
+		return nil
+	}
+	prefix := fmt.Sprintf("Invalid pipeline for view %s.%s :: caused by :: ", dbName, viewName)
+	if err := stages.CheckParseFailingStages(pipeline); err != nil {
+		var cerr *handlererrors.CommandError
+		if errors.As(err, &cerr) {
+			return cerr.WithMessage(prefix + cerr.Err().Error())
+		}
+		return err
+	}
+	for i := range pipeline.Len() {
+		stage, ok := must.NotFail(pipeline.Get(i)).(*types.Document)
+		if !ok || stage.Len() != 1 {
+			continue
+		}
+		if name := stage.Command(); name == "$out" || name == "$merge" {
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrOptionNotSupportedOnView,
+				fmt.Sprintf("%sThe aggregation stage %s in location %d of the pipeline cannot be used in the view "+
+					"definition of %s.%s because it writes to disk", prefix, name, i, dbName, viewName),
+				"create")
+		}
+	}
+	return nil
 }
 
 type foreignViewDepthKey struct{}
