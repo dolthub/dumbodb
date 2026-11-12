@@ -93,29 +93,9 @@ func newBucketAuto(stage *types.Document) (aggregations.Stage, error) {
 		)
 	}
 
-	var numBuckets int32
-
-	switch bv := bucketsVal.(type) {
-	case int32:
-		numBuckets = bv
-	case int64:
-		numBuckets = int32(bv)
-	case float64:
-		numBuckets = int32(bv)
-	default:
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrBadValue,
-			fmt.Sprintf("The $bucketAuto stage requires 'buckets' to be a number, got %s", types.FormatAnyValue(bucketsVal)),
-			"$bucketAuto (stage)",
-		)
-	}
-
-	if numBuckets <= 0 {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrBadValue,
-			"The $bucketAuto stage requires 'buckets' to be a positive number",
-			"$bucketAuto (stage)",
-		)
+	numBuckets, err := parseBucketAutoBuckets(bucketsVal)
+	if err != nil {
+		return nil, err
 	}
 
 	if err := operators.CheckFieldPaths(groupByVal); err != nil {
@@ -296,6 +276,28 @@ func (ba *bucketAuto) Process(ctx context.Context, iter types.DocumentsIterator,
 	closer.Add(result)
 
 	return result, nil
+}
+
+// parseBucketAutoBuckets returns the number of buckets: a number with a
+// positive 32-bit integer value, as mongod requires.
+func parseBucketAutoBuckets(v any) (int32, error) {
+	f, ok := numberAsFloat(v)
+	if !ok {
+		return 0, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketAutoBucketsNotNumber,
+			"The $bucketAuto 'buckets' field must be a numeric value, but found type: "+handlerparams.AliasFromType(v),
+			"$bucketAuto (stage)")
+	}
+	if f != math.Trunc(f) || f < math.MinInt32 || f > math.MaxInt32 {
+		return 0, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketAutoBucketsNotInt32,
+			"The $bucketAuto 'buckets' field must be representable as a 32-bit integer, but found "+
+				strconv.FormatFloat(f, 'g', 6, 64), "$bucketAuto (stage)")
+	}
+	if f <= 0 {
+		return 0, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketAutoBucketsNotPositive,
+			fmt.Sprintf("The $bucketAuto 'buckets' field must be greater than 0, but found: %d", int64(f)),
+			"$bucketAuto (stage)")
+	}
+	return int32(f), nil
 }
 
 // checkGranularityValue returns mongod's error for a groupBy value that a

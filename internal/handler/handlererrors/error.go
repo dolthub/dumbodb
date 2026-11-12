@@ -687,6 +687,15 @@ const (
 	// ErrBucketBoundariesNotArray indicates $bucket boundaries that are not an array.
 	ErrBucketBoundariesNotArray = ErrorCode(40200) // Location40200
 
+	// ErrBucketAutoBucketsNotNumber indicates a $bucketAuto buckets value that is not a number.
+	ErrBucketAutoBucketsNotNumber = ErrorCode(40241) // Location40241
+
+	// ErrBucketAutoBucketsNotInt32 indicates a $bucketAuto buckets value that is not a 32-bit integer.
+	ErrBucketAutoBucketsNotInt32 = ErrorCode(40242) // Location40242
+
+	// ErrBucketAutoBucketsNotPositive indicates a $bucketAuto buckets value that is not positive.
+	ErrBucketAutoBucketsNotPositive = ErrorCode(40243) // Location40243
+
 	// $arrayToObject input errors.
 	ErrArrayToObjectInput           = ErrorCode(40386) // Location40386
 	ErrArrayToObjectObjectsExpected = ErrorCode(40391) // Location40391
