@@ -232,6 +232,9 @@ func GetExplainParams(document *types.Document, l *slog.Logger) (*ExplainParams,
 			return nil, err
 		}
 		stagesDocs = must.NotFail(iterator.ConsumeValues(pipeline.Iterator()))
+		if err := aggregations.CheckExpandedPipelineLength(aggregations.ExpandedLength(stagesDocs)); err != nil {
+			return nil, err
+		}
 		for _, d := range stagesDocs {
 			if _, ok := d.(*types.Document); !ok {
 				return nil, handlererrors.NewCommandErrorMsgWithArgument(

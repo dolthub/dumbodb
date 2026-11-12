@@ -179,6 +179,9 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 	}
 
 	aggregationStages := aggregations.MoveMatchesAhead(must.NotFail(iterator.ConsumeValues(pipeline.Iterator())))
+	if err = aggregations.CheckExpandedPipelineLength(aggregations.ExpandedLength(aggregationStages)); err != nil {
+		return nil, err
+	}
 	stagesDocuments := make([]aggregations.Stage, 0, len(aggregationStages))
 	collStatsDocuments := make([]aggregations.Stage, 0, len(aggregationStages))
 
@@ -485,7 +488,8 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 				closer.Close()
 				return nil, handleMaxTimeMSError(vErr, maxTimeMS, "aggregate")
 			}
-			if err = viewPipelineLength(len(aggregationStages))(len(rawViewStages)); err != nil {
+			if err = viewPipelineLength(aggregations.ExpandedLength(aggregationStages)+
+				aggregations.ExpandedLength(rawViewStages)-len(rawViewStages))(len(rawViewStages)); err != nil {
 				closer.Close()
 				return nil, err
 			}
