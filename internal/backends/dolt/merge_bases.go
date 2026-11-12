@@ -48,8 +48,30 @@ type docFlag struct {
 	paths [][]string
 }
 
-// virtualBaseFlags holds the flagged documents of a virtual merge base, by collection and by document key.
-type virtualBaseFlags map[string]map[string]docFlag
+// virtualBaseFlags holds what a virtual merge base flags: documents, by collection, the catalog included, and by
+// document key; and views its merge bases defined differently, by name.
+type virtualBaseFlags struct {
+	docs  map[string]map[string]docFlag
+	views map[string]bool
+}
+
+func newVirtualBaseFlags() virtualBaseFlags {
+	return virtualBaseFlags{docs: make(map[string]map[string]docFlag), views: make(map[string]bool)}
+}
+
+func (f virtualBaseFlags) add(other virtualBaseFlags) {
+	for collection, docs := range other.docs {
+		if f.docs[collection] == nil {
+			f.docs[collection] = make(map[string]docFlag)
+		}
+		for key, flag := range docs {
+			f.docs[collection][key] = flag
+		}
+	}
+	for name := range other.views {
+		f.views[name] = true
+	}
+}
 
 const (
 	virtualMergeBaseName        = "dumbodb"
@@ -83,26 +105,19 @@ func (db *dbState) mergeBase(ctx context.Context, ours, theirs hash.Hash) (hash.
 func (db *dbState) virtualMergeBase(ctx context.Context, bases []hash.Hash) (hash.Hash, virtualBaseFlags, error) {
 	merged, err := db.doltCommit(ctx, bases[len(bases)-1])
 	if err != nil {
-		return hash.Hash{}, nil, err
+		return hash.Hash{}, virtualBaseFlags{}, err
 	}
-	flags := make(virtualBaseFlags)
+	flags := newVirtualBaseFlags()
 	for i := len(bases) - 2; i >= 0; i-- {
 		next, err := db.doltCommit(ctx, bases[i])
 		if err != nil {
-			return hash.Hash{}, nil, err
+			return hash.Hash{}, virtualBaseFlags{}, err
 		}
 		var foldFlags virtualBaseFlags
 		if merged, foldFlags, err = db.mergeIntoVirtualBase(ctx, merged, next); err != nil {
-			return hash.Hash{}, nil, err
+			return hash.Hash{}, virtualBaseFlags{}, err
 		}
-		for collection, docs := range foldFlags {
-			if flags[collection] == nil {
-				flags[collection] = make(map[string]docFlag)
-			}
-			for key, flag := range docs {
-				flags[collection][key] = flag
-			}
-		}
+		flags.add(foldFlags)
 	}
 	h, err := merged.HashOf()
 	return h, flags, err
@@ -114,52 +129,52 @@ func (db *dbState) virtualMergeBase(ctx context.Context, bases []hash.Hash) (has
 func (db *dbState) mergeIntoVirtualBase(ctx context.Context, x, y *doltdb.Commit) (*doltdb.Commit, virtualBaseFlags, error) {
 	xHash, err := x.HashOf()
 	if err != nil {
-		return nil, nil, err
+		return nil, virtualBaseFlags{}, err
 	}
 	yHash, err := y.HashOf()
 	if err != nil {
-		return nil, nil, err
+		return nil, virtualBaseFlags{}, err
 	}
 	baseHash, ok, err := db.mergeBase(ctx, xHash, yHash)
 	if err != nil {
-		return nil, nil, err
+		return nil, virtualBaseFlags{}, err
 	}
 	if !ok {
-		return nil, nil, fmt.Errorf("merge bases %s and %s have no common ancestor", xHash, yHash)
+		return nil, virtualBaseFlags{}, fmt.Errorf("merge bases %s and %s have no common ancestor", xHash, yHash)
 	}
 	xAM, err := amFromCommitHash(ctx, db, xHash.String())
 	if err != nil {
-		return nil, nil, err
+		return nil, virtualBaseFlags{}, err
 	}
 	yAM, err := amFromCommitHash(ctx, db, yHash.String())
 	if err != nil {
-		return nil, nil, err
+		return nil, virtualBaseFlags{}, err
 	}
 	baseAM, err := amFromCommitHash(ctx, db, baseHash.String())
 	if err != nil {
-		return nil, nil, err
+		return nil, virtualBaseFlags{}, err
 	}
 	fold := newVirtualFold(xAM, yAM, baseAM)
 	mergedAM, conflicts, viewConflicts, metaConflicts, deferred, err := mergeAddressMaps(ctx, db, xAM, yAM, baseAM,
 		yHash, baseHash, "merge base "+xHash.String(), "merge base "+yHash.String(), fold)
 	if err != nil {
-		return nil, nil, err
+		return nil, virtualBaseFlags{}, err
 	}
 	if len(conflicts) > 0 || len(viewConflicts) > 0 || len(metaConflicts) > 0 || len(deferred) > 0 {
-		return nil, nil, fmt.Errorf("merge bases %s and %s conflict", xHash, yHash)
+		return nil, virtualBaseFlags{}, fmt.Errorf("merge bases %s and %s conflict", xHash, yHash)
 	}
 	root, err := rootValueFromAM(ctx, db, mergedAM)
 	if err != nil {
-		return nil, nil, err
+		return nil, virtualBaseFlags{}, err
 	}
 	date, err := laterCommitterDate(ctx, x, y)
 	if err != nil {
-		return nil, nil, err
+		return nil, virtualBaseFlags{}, err
 	}
 	ident := datas.CommitIdent{Name: virtualMergeBaseName, Email: virtualMergeBaseEmail, Date: datas.CommitDateAt(date)}
 	meta, err := datas.NewCommitMetaWithAuthorCommitter(ident, ident, virtualMergeBaseDescription)
 	if err != nil {
-		return nil, nil, err
+		return nil, virtualBaseFlags{}, err
 	}
 	commit, err := doltdb.NewDanglingCommit(ctx, root, []*doltdb.Commit{x, y}, meta)
 	return commit, fold.flags, err

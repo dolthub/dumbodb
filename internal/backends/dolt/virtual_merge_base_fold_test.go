@@ -237,7 +237,7 @@ func virtualBaseItems(t *testing.T, b *Backend, h hash.Hash) map[int32]*types.Do
 // flagsByID returns the flags of collection items by _id, with their paths sorted.
 func flagsByID(flags virtualBaseFlags) map[int32]docFlag {
 	byID := make(map[int32]docFlag)
-	for _, flag := range flags["items"] {
+	for _, flag := range flags.docs["items"] {
 		sort.Slice(flag.paths, func(i, j int) bool { return pathLess(flag.paths[i], flag.paths[j]) })
 		byID[flag.id.(int32)] = docFlag{whole: flag.whole, paths: flag.paths}
 	}

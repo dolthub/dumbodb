@@ -44,7 +44,7 @@ type virtualFold struct {
 
 func newVirtualFold(intoAM, fromAM, baseAM prolly.AddressMap) *virtualFold {
 	return &virtualFold{
-		flags:    make(virtualBaseFlags),
+		flags:    newVirtualBaseFlags(),
 		intoAM:   intoAM,
 		fromAM:   fromAM,
 		baseAM:   baseAM,
@@ -53,10 +53,10 @@ func newVirtualFold(intoAM, fromAM, baseAM prolly.AddressMap) *virtualFold {
 }
 
 func (f *virtualFold) flag(collection string, key val.Tuple, flag docFlag) {
-	docs, ok := f.flags[collection]
+	docs, ok := f.flags.docs[collection]
 	if !ok {
 		docs = make(map[string]docFlag)
-		f.flags[collection] = docs
+		f.flags.docs[collection] = docs
 	}
 	docs[string(key)] = flag
 }
@@ -341,7 +341,7 @@ func (f *virtualFold) revert(ctx context.Context, ns tree.NodeStore, collection 
 func (f *virtualFold) uniqueLosers(ctx context.Context, collection string, group []val.Tuple, current, into, from prolly.Map) ([]val.Tuple, error) {
 	var flagged, later []val.Tuple
 	for _, key := range group {
-		if _, ok := f.flags[collection][string(key)]; ok {
+		if _, ok := f.flags.docs[collection][string(key)]; ok {
 			flagged = append(flagged, key)
 		}
 		currentValue, err := mapValue(ctx, current, key)
