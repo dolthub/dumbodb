@@ -47,6 +47,9 @@ func newUpdatePipeline(pipeline *types.Array) ([]aggregations.Stage, error) {
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrTypeMismatch,
 				"Each element of the 'pipeline' array must be an object", "update")
 		}
+		if err := checkUpdatePipelineParse(stage); err != nil {
+			return nil, err
+		}
 		newStage := NewStage
 		if stage.Len() == 1 {
 			name := stage.Command()
@@ -66,4 +69,21 @@ func newUpdatePipeline(pipeline *types.Array) ([]aggregations.Stage, error) {
 		}
 	}
 	return stages, nil
+}
+
+// checkUpdatePipelineParse returns the error mongod reports while it parses an
+// update pipeline stage, before it checks that the stage is allowed there.
+func checkUpdatePipelineParse(stage *types.Document) error {
+	if stage.Len() != 1 {
+		return nil
+	}
+	switch name := stage.Command(); name {
+	case "$changeStream", "$currentOp", "$listSessions", "$queryStats", "$shardedDataDistribution":
+		_, err := NewStage(stage)
+		return err
+	case "$searchMeta":
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSearchNotAllowedInContext,
+			"Running search command in non-allowed context (update pipeline)", "update")
+	}
+	return nil
 }

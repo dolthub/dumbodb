@@ -354,6 +354,9 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 	}
 
 	if params.ViewOn != "" {
+		if verr := validateViewPipeline(dbName, collectionName, params.ViewPipeline); verr != nil {
+			return nil, verr
+		}
 		if verr := validateViewChainAcyclic(connCtx, db, collectionName, params.ViewOn); verr != nil {
 			return nil, verr
 		}

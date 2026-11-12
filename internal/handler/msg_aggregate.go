@@ -200,6 +200,10 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		if err = documentsNotFirst(d, i); err != nil {
 			return nil, err
 		}
+		if i > 0 && d.Command() == "$listCatalog" {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCollStatsIsNotFirstStage,
+				"$listCatalog is only valid as the first stage in a pipeline", document.Command())
+		}
 
 		var s aggregations.Stage
 
@@ -650,6 +654,40 @@ var dbLevelSourceStages = map[string]struct{}{
 	"$changeStream":      {},
 }
 
+// checkDatabasePipelineStages returns the error mongod reports while it parses
+// the stages of an {aggregate: 1} pipeline, before it checks that each stage
+// may run without a collection.
+func checkDatabasePipelineStages(pipeline *types.Array, dbName string) error {
+	for i := range pipeline.Len() {
+		stage, ok := must.NotFail(pipeline.Get(i)).(*types.Document)
+		if !ok || stage.Len() != 1 {
+			return nil
+		}
+		switch name := stage.Command(); name {
+		case "$queryStats", "$listCatalog":
+			if dbName == "admin" && i == 0 {
+				return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrNotImplemented,
+					name+" is not implemented", name+" (stage)")
+			}
+			if name == "$listCatalog" {
+				return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace,
+					"Collectionless $listCatalog must be run against the 'admin' database with {aggregate: 1}", "$listCatalog (stage)")
+			}
+			_, err := stages.NewStage(stage)
+			return err
+		case "$documents", "$currentOp", "$listLocalSessions":
+		default:
+			if _, known := stages.Stages[name]; !known {
+				continue
+			}
+			if _, err := stages.NewStage(stage); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func (h *Handler) aggregateDatabase(connCtx context.Context, document *types.Document, dbName string) (*wire.OpMsg, error) {
 	v, _ := document.Get("cursor")
 	if v == nil {
@@ -697,6 +735,9 @@ func (h *Handler) aggregateDatabase(connCtx context.Context, document *types.Doc
 	}
 
 	stageName := firstStage.Command()
+	if err = checkDatabasePipelineStages(pipeline, dbName); err != nil {
+		return nil, err
+	}
 	if !stages.IsKnownStage(stageName) {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrStageUnrecognized,
