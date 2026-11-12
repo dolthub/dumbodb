@@ -153,9 +153,10 @@ func specNotObjectError(code handlererrors.ErrorCode, op string, v any) error {
 
 // nAccumulator implements $firstN, $lastN, $minN and $maxN.
 type nAccumulator struct {
-	name  string
-	input operand
-	n     nArg
+	name         string
+	input        operand
+	n            nArg
+	stopWhenFull bool
 }
 
 func newNAccumulatorFunc(name string) newAccumulatorFunc {
@@ -226,11 +227,12 @@ func (s *nState) Accumulate(doc *types.Document) error {
 			s.ranked = newRankedSet(n, compareValues, true)
 		}
 	}
-	if s.spec.name == "$firstN" && int64(len(s.values)) >= s.n {
+	full := s.spec.name == "$firstN" && int64(len(s.values)) >= s.n
+	if full && s.spec.stopWhenFull {
 		return nil
 	}
 	v, missing, err := s.spec.input.evaluate(doc)
-	if err != nil {
+	if err != nil || full {
 		return err
 	}
 	if s.ranked != nil {
