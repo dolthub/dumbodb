@@ -530,6 +530,9 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			stages.MarkLookupsUnwound(stagesDocuments, stagesSpecs)
 		}
 
+		if !isView {
+			stages.MarkSBELookups(stagesDocuments, stagesSpecs)
+		}
 		stages.WrapSBEStages(stagesDocuments, stages.SBEPrefixLen(stagesSpecs))
 
 		switch {

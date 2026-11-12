@@ -165,6 +165,12 @@ type lookup struct {
 	// sbePrefix is how many leading sub-pipeline stages report errors as
 	// mongod's SBE engine does; see SBEPrefixLen.
 	sbePrefix int
+	// sbe is set when mongod runs this equality $lookup in SBE, which limits
+	// the size of one document's matches differently; see MarkSBELookups.
+	sbe bool
+	// sbeSubPipeline is set for a $unionWith sub-pipeline, whose leading
+	// stages mongod runs in SBE.
+	sbeSubPipeline bool
 }
 
 // NewLookupStage creates a new $lookup stage with a collection fetcher.
@@ -344,7 +350,14 @@ type equalityIndex struct {
 func newEqualityIndex(docs []*types.Document, foreignField string) *equalityIndex {
 	idx := &equalityIndex{docs: docs, byKey: make(map[string][]int)}
 	for pos, d := range docs {
-		keys, ok := equalityKeys(getFieldValue(d, foreignField))
+		values, missing := lookupForeignValues(d, foreignField)
+		var keys []string
+		ok := !missing
+		for _, v := range values {
+			vk, vok := equalityKeys(v)
+			ok = ok && vok
+			keys = append(keys, vk...)
+		}
 		if !ok {
 			idx.unkeyed = append(idx.unkeyed, pos)
 			continue
@@ -356,12 +369,19 @@ func newEqualityIndex(docs []*types.Document, foreignField string) *equalityInde
 	return idx
 }
 
-// candidates returns, in their original order, the foreign documents that can
-// equal localVal: all of them when localVal has no key.
-func (idx *equalityIndex) candidates(localVal any) []*types.Document {
-	keys, ok := equalityKeys(localVal)
-	if !ok {
-		return idx.docs
+// candidatesFor returns, in their original order, the foreign documents that
+// can match one of the local candidates: all of them when one has no key.
+func (idx *equalityIndex) candidatesFor(cands []any) []*types.Document {
+	keys := make([]string, 0, len(cands))
+	for _, c := range cands {
+		if _, isArr := c.(*types.Array); isArr {
+			return idx.docs
+		}
+		key, ok := equalityKey(c)
+		if !ok {
+			return idx.docs
+		}
+		keys = append(keys, key)
 	}
 
 	positions := append([]int(nil), idx.unkeyed...)
@@ -434,15 +454,101 @@ func equalityKey(v any) (string, bool) {
 // equalityMatches returns the foreign documents whose foreignField matches
 // doc's localField under MongoDB's equality join semantics.
 func (l *lookup) equalityMatches(doc *types.Document, idx *equalityIndex) []*types.Document {
-	localVal := getFieldValue(doc, l.localField)
+	candidates := lookupLocalCandidates(doc, l.localField)
 
 	matched := make([]*types.Document, 0)
-	for _, fromDoc := range idx.candidates(localVal) {
-		if lookupValuesMatch(localVal, getFieldValue(fromDoc, l.foreignField)) {
+	for _, fromDoc := range idx.candidatesFor(candidates) {
+		if foreignMatches(fromDoc, l.foreignField, candidates) {
 			matched = append(matched, fromDoc)
 		}
 	}
 	return matched
+}
+
+// lookupLocalCandidates returns the values mongod compares with foreignField
+// for doc's localField: every value along the path, with arrays on the way
+// and at its end expanded one level. With none, the candidate is null.
+func lookupLocalCandidates(doc *types.Document, field string) []any {
+	var out []any
+	var walk func(v any, parts []string)
+	walk = func(v any, parts []string) {
+		if len(parts) == 0 {
+			if arr, ok := v.(*types.Array); ok {
+				for i := range arr.Len() {
+					out = append(out, must.NotFail(arr.Get(i)))
+				}
+				return
+			}
+			out = append(out, v)
+			return
+		}
+		switch v := v.(type) {
+		case *types.Document:
+			if next, err := v.Get(parts[0]); err == nil {
+				walk(next, parts[1:])
+			}
+		case *types.Array:
+			for i := range v.Len() {
+				if elem, ok := must.NotFail(v.Get(i)).(*types.Document); ok {
+					walk(elem, parts)
+				}
+			}
+		}
+	}
+	walk(doc, strings.Split(field, "."))
+	if len(out) == 0 {
+		return []any{nil}
+	}
+	return out
+}
+
+// lookupForeignValues returns the values a query on field reaches in doc,
+// traversing arrays along the path, and whether some branch lacks the field.
+func lookupForeignValues(doc *types.Document, field string) ([]any, bool) {
+	var out []any
+	missing := false
+	var walk func(v any, parts []string)
+	walk = func(v any, parts []string) {
+		if len(parts) == 0 {
+			out = append(out, v)
+			return
+		}
+		switch v := v.(type) {
+		case *types.Document:
+			next, err := v.Get(parts[0])
+			if err != nil {
+				missing = true
+				return
+			}
+			walk(next, parts[1:])
+		case *types.Array:
+			for i := range v.Len() {
+				if elem, ok := must.NotFail(v.Get(i)).(*types.Document); ok {
+					walk(elem, parts)
+				}
+			}
+		default:
+			missing = true
+		}
+	}
+	walk(doc, strings.Split(field, "."))
+	return out, missing || len(out) == 0
+}
+
+// foreignMatches reports whether doc matches {field: {$in: candidates}}.
+func foreignMatches(doc *types.Document, field string, candidates []any) bool {
+	values, missing := lookupForeignValues(doc, field)
+	for _, c := range candidates {
+		if isNullOrMissing(c) && missing {
+			return true
+		}
+		for _, v := range values {
+			if foreignMatchesCandidate(v, c) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (l *lookup) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
@@ -668,13 +774,14 @@ func (it *lookupIterator) Close() {
 func (it *lookupIterator) matches(doc *types.Document) ([]*types.Document, error) {
 	l := it.l
 	if l.pipeline == nil {
-		// mongod refuses a match that would take the matches past
-		// lookupMaxMatchBytes.
 		matched := l.equalityMatches(doc, it.eqIdx)
 		total := 0
 		for i, m := range matched {
-			size := m.BSONSize() + lookupArrayElementOverhead
-			if total+size > lookupMaxMatchBytes {
+			size := m.BSONSize()
+			switch {
+			case l.sbe && total+size+lookupArrayElementOverhead > lookupMaxMatchBytes:
+				// SBE refuses a match that would take the matches past the limit.
+				size += lookupArrayElementOverhead
 				return nil, handlererrors.NewCommandErrorMsgWithArgument(
 					handlererrors.ErrExceededMemoryLimit,
 					fmt.Sprintf("Used too much memory for a single array. Memory limit: %d bytes. "+
@@ -682,6 +789,12 @@ func (it *lookupIterator) matches(doc *types.Document) ([]*types.Document, error
 						lookupMaxMatchBytes, i, total, size),
 					"$lookup",
 				)
+			case !l.sbe && total > lookupMaxMatchBytes:
+				// The classic engine refuses one once the matches so far pass it.
+				return nil, l.matchesTooLarge()
+			}
+			if l.sbe {
+				size += lookupArrayElementOverhead
 			}
 			total += size
 			matched[i] = m.DeepCopy()
@@ -898,6 +1011,9 @@ func (l *lookup) pipelineIter(ctx context.Context, fetcher CollectionFetcher, fr
 		}
 	}
 	MarkLookupsUnwound(built, specs)
+	if l.sbeSubPipeline {
+		MarkSBELookups(built, specs)
+	}
 
 	for stageIndex, stage := range built {
 		if stage == nil {
@@ -945,16 +1061,20 @@ func (l *lookup) collectMatches(iter types.DocumentsIterator) ([]*types.Document
 			return nil, err
 		}
 		if total > lookupMaxMatchBytes {
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrLookupMatchesTooLarge,
-				fmt.Sprintf("Total size of documents in %s matching pipeline's $lookup stage exceeds %d bytes",
-					l.from, lookupMaxMatchBytes),
-				"$lookup",
-			)
+			return nil, l.matchesTooLarge()
 		}
 		total += doc.BSONSize()
 		matched = append(matched, doc)
 	}
+}
+
+func (l *lookup) matchesTooLarge() error {
+	return handlererrors.NewCommandErrorMsgWithArgument(
+		handlererrors.ErrLookupMatchesTooLarge,
+		fmt.Sprintf("Total size of documents in %s matching pipeline's $lookup stage exceeds %d bytes",
+			l.from, lookupMaxMatchBytes),
+		"$lookup",
+	)
 }
 
 // deepCopyIterator yields a deep copy of each document of iter.
@@ -1301,36 +1421,7 @@ func valuesEqual(a, b any) bool {
 		return isNullOrMissing(a) && isNullOrMissing(b)
 	}
 
-	// Use types.Compare if available, otherwise use reflect-based comparison.
-	// For now, use a simple type-switch approach for common types.
 	switch av := a.(type) {
-	case int32:
-		switch bv := b.(type) {
-		case int32:
-			return av == bv
-		case int64:
-			return int64(av) == bv
-		case float64:
-			return float64(av) == bv
-		}
-	case int64:
-		switch bv := b.(type) {
-		case int64:
-			return av == bv
-		case int32:
-			return av == int64(bv)
-		case float64:
-			return float64(av) == bv
-		}
-	case float64:
-		switch bv := b.(type) {
-		case float64:
-			return av == bv
-		case int32:
-			return av == float64(bv)
-		case int64:
-			return av == float64(bv)
-		}
 	case string:
 		bv, ok := b.(string)
 		return ok && av == bv
@@ -1369,19 +1460,8 @@ func equalityFetchFilter(docs []*types.Document, localField, foreignField string
 	}
 
 	for _, doc := range docs {
-		v := getFieldValue(doc, localField)
-		arr, isArr := v.(*types.Array)
-		if !isArr {
+		for _, v := range lookupLocalCandidates(doc, localField) {
 			if !add(v) {
-				return nil
-			}
-			continue
-		}
-		if arr.Len() == 0 {
-			return nil
-		}
-		for i := 0; i < arr.Len(); i++ {
-			if !add(must.NotFail(arr.Get(i))) {
 				return nil
 			}
 		}
