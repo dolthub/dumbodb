@@ -44,7 +44,7 @@ func SortIteratorInIndexOrder(iter types.DocumentsIterator, closer *iterator.Mul
 }
 
 func sortDocumentsInIndexOrder(docs []*types.Document, pattern, filter *types.Document, cmp *collation.Comparator) error {
-	if branches := orBranchesInPlanOrder(filter); branches != nil {
+	if branches := orBranchesInPlanOrder(filter, pattern.Keys()[0]); branches != nil {
 		return sortByOrBranches(docs, pattern, branches, cmp)
 	}
 	fields := pattern.Keys()
@@ -245,9 +245,11 @@ func firstOf(ops *types.Document, names ...string) string {
 }
 
 // orBranchesInPlanOrder returns the branches of a filter that is a lone $or,
-// in the order mongod's OR stage runs them, or nil when mongod reads it as
-// one scan: an $or of equalities on one field, which it rewrites to $in.
-func orBranchesInPlanOrder(filter *types.Document) []*types.Document {
+// in the order mongod's OR stage runs them on an index led by field, or nil
+// when mongod reads the index in one scan: when a branch does not bound field,
+// so the whole index is scanned, or when each branch is one comparison of
+// field, whose bounds merge.
+func orBranchesInPlanOrder(filter *types.Document, field string) []*types.Document {
 	if filter.Len() != 1 || filter.Keys()[0] != "$or" {
 		return nil
 	}
@@ -255,19 +257,16 @@ func orBranchesInPlanOrder(filter *types.Document) []*types.Document {
 	if len(branches) < 2 {
 		return nil
 	}
-	field, collapsible := "", true
+	merged := true
 	for _, b := range branches {
-		if b.Len() != 1 || strings.HasPrefix(b.Keys()[0], "$") || field != "" && b.Keys()[0] != field {
-			collapsible = false
-			break
+		if !b.Has(field) {
+			return nil
 		}
-		field = b.Keys()[0]
-		if _, isEq := equalityOperand(must.NotFail(b.Get(field))); !isEq {
-			collapsible = false
-			break
-		}
+		ops, isOps := must.NotFail(b.Get(field)).(*types.Document)
+		leaf := !isOps || ops.Len() == 1 || !strings.HasPrefix(ops.Keys()[0], "$")
+		merged = merged && b.Len() == 1 && leaf
 	}
-	if collapsible {
+	if merged {
 		return nil
 	}
 	ordered := slices.Clone(branches)
