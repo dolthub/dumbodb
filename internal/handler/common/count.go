@@ -24,6 +24,7 @@ import (
 	"github.com/cockroachdb/apd/v3"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -177,25 +178,23 @@ func countParseError(msg string) error {
 // half to even and an out-of-range value saturates; without it, ok is false
 // for either. ok is false for NaN.
 func decimalToIntegral(d types.Decimal128, round bool) (int64, bool) {
-	coeff, exp, err := primitive.NewDecimal128(d.H, d.L).BigInt()
-	if err != nil {
+	a := aggregations.DecimalToAPD(d)
+	switch a.Form {
+	case apd.NaN, apd.NaNSignaling:
+		return 0, false
+	case apd.Infinite:
 		if !round {
 			return 0, false
 		}
-		s := decimalString(d)
-		switch {
-		case strings.HasPrefix(s, "-Inf"):
+		if a.Negative {
 			return math.MinInt64, true
-		case strings.HasPrefix(s, "Inf"):
-			return math.MaxInt64, true
 		}
-		return 0, false
+		return math.MaxInt64, true
 	}
-	a := apd.NewWithBigInt(new(apd.BigInt).SetMathBigInt(coeff), int32(exp))
 	var integral apd.Decimal
 	ctx := apd.BaseContext.WithPrecision(6200)
 	ctx.Rounding = apd.RoundHalfEven
-	if _, err = ctx.RoundToIntegralValue(&integral, a); err != nil {
+	if _, err := ctx.RoundToIntegralValue(&integral, a); err != nil {
 		return 0, false
 	}
 	if !round && integral.Cmp(a) != 0 {

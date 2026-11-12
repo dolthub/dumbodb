@@ -19,6 +19,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
@@ -236,7 +237,7 @@ func sbeProjectPushable(spec *types.Document, afterSort bool) bool {
 	for i, val := range proj.Values() {
 		switch val := val.(type) {
 		case bool, int32, int64, float64, types.Decimal128:
-			if isProjectionTruthy(val) {
+			if common.IsTruthy(val) {
 				included = true
 			} else if keys[i] != "_id" {
 				return false
@@ -249,22 +250,6 @@ func sbeProjectPushable(spec *types.Document, afterSort bool) bool {
 		}
 	}
 	return included
-}
-
-func isProjectionTruthy(v any) bool {
-	switch v := v.(type) {
-	case bool:
-		return v
-	case int32:
-		return v != 0
-	case int64:
-		return v != 0
-	case float64:
-		return v != 0
-	case types.Decimal128:
-		return types.Compare(v, int32(0)) != types.Equal
-	}
-	return false
 }
 
 // MarkSBELookups has each equality $lookup that mongod runs in SBE apply
