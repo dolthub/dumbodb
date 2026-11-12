@@ -17,7 +17,6 @@ package common
 import (
 	"fmt"
 	"strconv"
-	"strings"
 
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
@@ -574,65 +573,9 @@ func processPullAllArrayUpdateExpression(command string, doc *types.Document, ke
 	return changed, nil
 }
 
-// pullConditionMatches reports whether a $pull condition document removes
-// elem. As on mongod, one led by a value operator such as $gte applies to the
-// element itself; any other is a query each element document must match.
-func pullConditionMatches(elem any, cond *types.Document) (bool, error) {
-	if first := cond.Keys(); len(first) > 0 && strings.HasPrefix(first[0], "$") && !isTopLevelQueryOperator(first[0]) {
-		return filterDocumentPair(must.NotFail(types.NewDocument("v", elem)), "v", cond, nil)
-	}
-	elemDoc, ok := elem.(*types.Document)
-	if !ok {
-		return false, nil
-	}
-	return FilterDocumentColl(elemDoc, cond, nil)
-}
-
-// checkPullCondition returns mongod's error for a $pull condition holding an
-// operator it does not allow there: $expr, $where or $text anywhere in the
-// query, or a leading $not, which mongod reads as a top-level operator.
-func checkPullCondition(command string, cond *types.Document, top bool) error {
-	for i, k := range cond.Keys() {
-		switch k {
-		case "$expr":
-			return NewUpdateError(handlererrors.ErrQueryFeatureNotAllowed, "$expr is not allowed in this context", command)
-		case "$where", "$text":
-			return NewUpdateError(handlererrors.ErrBadValue, k+" is not allowed in this context", command)
-		case "$not":
-			if top && i == 0 {
-				return NewUpdateError(handlererrors.ErrBadValue,
-					"unknown top level operator: $not. If you are trying to negate an entire expression, use $nor.", command)
-			}
-		case "$and", "$or", "$nor":
-			for _, branch := range filterBranches(must.NotFail(cond.Get(k))) {
-				if err := checkPullCondition(command, branch, false); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	return nil
-}
-
-// isTopLevelQueryOperator reports whether op combines or evaluates whole
-// queries rather than comparing one value.
-func isTopLevelQueryOperator(op string) bool {
-	switch op {
-	case "$and", "$or", "$nor", "$expr", "$where", "$comment", "$text":
-		return true
-	}
-	return false
-}
-
 // processPullArrayUpdateExpression changes document according to $pull array update operator.
 // If the document was changed it returns true.
 func processPullArrayUpdateExpression(command string, doc *types.Document, key string, pullVal any) (bool, error) {
-	if cond, ok := pullVal.(*types.Document); ok {
-		if err := checkPullCondition(command, cond, true); err != nil {
-			return false, err
-		}
-	}
-
 	path, err := types.NewPathFromString(key)
 	if err != nil {
 		return false, lazyerrors.Error(err)

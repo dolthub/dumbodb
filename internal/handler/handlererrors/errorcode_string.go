@@ -360,7 +360,6 @@ func _() {
 	_ = x[ErrWindowDerivativeUnitRequiresDate-5624900]
 	_ = x[ErrWindowIntegralUnitRequiresDate-5423901]
 	_ = x[ErrGeoNearNotAllowedInContext-5626500]
-	_ = x[ErrQueryFeatureNotAllowed-224]
 	_ = x[ErrInvalidReplicaSetConfig-93]
 	_ = x[ErrNotYetInitialized-94]
 	_ = x[ErrTopologyVersionMissingProcessID-31368]

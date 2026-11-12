@@ -250,11 +250,17 @@ statements:
 
 		result, err := common.UpdateDocument(ctx, c, "update", iter, &u)
 		if err != nil {
-			if backends.ErrorCodeIs(err, backends.ErrorCodeReadOnlyDatabase, backends.ErrorCodeReadOnlyCollection, backends.ErrorCodeBranchInConflict) {
+			if backends.ErrorCodeIs(err, backends.ErrorCodeReadOnlyDatabase, backends.ErrorCodeReadOnlyCollection,
+				backends.ErrorCodeBranchInConflict, backends.ErrorCodeWriteConflict) {
 				return 0, 0, nil, nil, common.TranslateBackendWriteError(ctx, err)
 			}
-			if backends.ErrorCodeIs(err, backends.ErrorCodeWriteConflict) {
-				return 0, 0, nil, nil, common.TranslateBackendWriteError(ctx, err)
+			// mongod reports a statement that fails as it writes as that
+			// statement's write error and keeps the statements before it.
+			if ce := statementWriteError(params.DB, params.Collection, err); ce != nil {
+				if statementFailed(i, ce) {
+					break statements
+				}
+				continue
 			}
 			return 0, 0, nil, nil, lazyerrors.Error(err)
 		}
@@ -270,7 +276,7 @@ statements:
 		if result.Upserted.Doc != nil {
 			doc := result.Upserted.Doc
 			upserted.Append(must.NotFail(types.NewDocument(
-				"index", int32(upserted.Len()),
+				"index", int32(i),
 				"_id", must.NotFail(doc.Get("_id")),
 			)))
 
@@ -280,4 +286,39 @@ statements:
 	}
 
 	return matched, modified, &upserted, writeErrors, nil
+}
+
+// statementWriteError returns the write error an update statement's failed
+// write reports, or nil when err is not one.
+func statementWriteError(db, coll string, err error) *handlererrors.CommandError {
+	var be *backends.Error
+	if errors.As(err, &be) && be.Code() == backends.ErrorCodeInsertDuplicateID {
+		idxName, keyDoc := backends.DefaultIndexName, types.MakeDocument(0)
+		if be.DupIndex() != "" {
+			idxName = be.DupIndex()
+		}
+		if k := be.DupKey(); k != nil {
+			keyDoc = k
+		}
+		msg := fmt.Sprintf(`E11000 duplicate key error collection: %s.%s index: %s dup key: %s`, db, coll, idxName, formatDupKey(keyDoc))
+		ce, _ := handlererrors.NewCommandErrorMsg(handlererrors.ErrDuplicateKeyInsert, msg).(*handlererrors.CommandError)
+		return ce
+	}
+	var ve *types.ValidationError
+	if errors.As(err, &ve) {
+		err = validationErrToUpdateErr("update", ve)
+	}
+	var we *handlererrors.WriteErrors
+	if errors.As(err, &we) {
+		if code, msg, ok := we.First(); ok {
+			ce, _ := handlererrors.NewCommandErrorMsg(code, msg).(*handlererrors.CommandError)
+			return ce
+		}
+		return nil
+	}
+	var ce *handlererrors.CommandError
+	if errors.As(err, &ce) {
+		return ce
+	}
+	return nil
 }

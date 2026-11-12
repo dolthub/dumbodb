@@ -766,10 +766,6 @@ const (
 	// were used in a context that does not sort (e.g. a $match stage or count).
 	ErrGeoNearNotAllowedInContext = ErrorCode(5626500) // Location5626500
 
-	// ErrQueryFeatureNotAllowed indicates a query feature, such as $expr in a
-	// $pull condition, that is not allowed in the context it was used in.
-	ErrQueryFeatureNotAllowed = ErrorCode(224) // QueryFeatureNotAllowed
-
 	ErrInvalidReplicaSetConfig               = ErrorCode(93)    // InvalidReplicaSetConfig
 	ErrNotYetInitialized                     = ErrorCode(94)    // NotYetInitialized
 	ErrTopologyVersionMissingProcessID       = ErrorCode(31368) // Location31368
