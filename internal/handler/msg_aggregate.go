@@ -517,7 +517,15 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 				qp.Filter, _ = aggregations.GetPushdownQuery(pushdownStages)
 				common.CanonicalizeFilter(qp.Filter)
 			}
+			specs := make([]*types.Document, 0, len(rawViewStages)+len(stagesSpecs))
+			for _, v := range rawViewStages {
+				d, _ := v.(*types.Document)
+				specs = append(specs, d)
+			}
+			stagesSpecs = append(specs, stagesSpecs...)
 		}
+
+		stages.WrapSBEStages(stagesDocuments, stages.SBEPrefixLen(stagesSpecs))
 
 		switch {
 		case h.DisablePushdown:

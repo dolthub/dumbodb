@@ -100,6 +100,7 @@ func NewUnionWithStage(stage *types.Document, fetcher CollectionFetcher) (aggreg
 	}
 
 	sub.unlimitedMatches = true
+	sub.sbePrefix = SBEPrefixLen(sbeSpecs(sub.pipeline))
 
 	return &unionWith{sub: sub, fetcher: fetcher}, nil
 }
