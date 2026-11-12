@@ -19,6 +19,7 @@ import (
 	"errors"
 
 	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/stages"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -107,7 +108,7 @@ func explainClassicStages(ctx context.Context, coll backends.Collection, qp *bac
 		}
 		out.Append(entry)
 	}
-	response.Set("stages", out)
+	response.Set("stages", reportSorts(out))
 }
 
 // reportedStage is stage as mongod's explain shows it: a $unset as the
@@ -252,4 +253,119 @@ func toInt32(v any) int32 {
 		return int32(n)
 	}
 	return 0
+}
+
+// explainStatsStages explains a pipeline led by $collStats or $indexStats as
+// mongod does, reporting false for any other: only its stages, which read no
+// query, each at executionStats verbosity with the documents it returned.
+func (h *Handler) explainStatsStages(ctx context.Context, db backends.Database, dbName, cName string, coll backends.Collection, pipeline []any, response *types.Document, execStats bool) bool {
+	docs := make([]*types.Document, 0, len(pipeline))
+	for _, s := range pipeline {
+		doc, _ := s.(*types.Document)
+		if doc == nil || doc.Len() != 1 {
+			return false
+		}
+		docs = append(docs, doc)
+	}
+	if len(docs) == 0 || docs[0].Command() != "$collStats" && docs[0].Command() != "$indexStats" {
+		return false
+	}
+	out := types.MakeArray(len(docs))
+	for i, doc := range docs {
+		entry := reportedStage(doc)
+		if execStats {
+			n, err := h.statsPipelineReturns(ctx, db, dbName, cName, coll, docs[:i+1])
+			if err != nil {
+				return false
+			}
+			setStageReturned(entry, n)
+		}
+		out.Append(entry)
+	}
+	response.Remove("queryPlanner")
+	response.Remove("executionStats")
+	response.Set("stages", out)
+	return true
+}
+
+// statsPipelineReturns runs docs, a pipeline led by $collStats or
+// $indexStats, and returns how many documents it returns.
+func (h *Handler) statsPipelineReturns(ctx context.Context, db backends.Database, dbName, cName string, coll backends.Collection, docs []*types.Document) (int32, error) {
+	built := make([]aggregations.Stage, len(docs))
+	for i, doc := range docs {
+		var err error
+		switch doc.Command() {
+		case "$indexStats":
+			built[i], err = stages.NewIndexStatsStage(doc, ctx, coll, h.TCPHost)
+		default:
+			built[i], err = foreignStageBuilder(db)(doc)
+		}
+		if err != nil {
+			return 0, err
+		}
+	}
+	closer := iterator.NewMultiCloser()
+	defer closer.Close()
+	var iter types.DocumentsIterator
+	var err error
+	if docs[0].Command() == "$collStats" {
+		iter, err = processStagesStats(ctx, closer, &stagesStatsParams{
+			coll, db, dbName, cName, stages.GetStatistics(built), built, h.TCPHost,
+		})
+	} else {
+		iter = iterator.Values(iterator.ForSlice([]*types.Document{}))
+		for _, stage := range built {
+			if iter, err = stage.Process(ctx, iter, closer); err != nil {
+				return 0, err
+			}
+		}
+	}
+	if err != nil {
+		return 0, err
+	}
+	counter := &countingIterator{DocumentsIterator: iter}
+	for {
+		if _, _, err = counter.Next(); err != nil {
+			break
+		}
+	}
+	if !errors.Is(err, iterator.ErrIteratorDone) {
+		return 0, err
+	}
+	return counter.n, nil
+}
+
+// reportSorts rewrites each $sort entry of an explain's stages as mongod
+// reports it: its pattern under sortKey, with the $limit directly after it
+// folded in as limit, and, at executionStats verbosity, its sort counters.
+func reportSorts(out *types.Array) *types.Array {
+	res := types.MakeArray(out.Len())
+	for i := 0; i < out.Len(); i++ {
+		entry := must.NotFail(out.Get(i)).(*types.Document)
+		if entry.Command() != "$sort" {
+			res.Append(entry)
+			continue
+		}
+		sort := must.NotFail(types.NewDocument("sortKey", must.NotFail(entry.Get("$sort"))))
+		returned, hasStats := entry.Get("nReturned")
+		if i+1 < out.Len() {
+			if next := must.NotFail(out.Get(i + 1)).(*types.Document); next.Command() == "$limit" {
+				limit, _ := common.GetLimitStageParam(must.NotFail(next.Get("$limit")))
+				sort.Set("limit", limit)
+				returned, hasStats = next.Get("nReturned")
+				i++
+			}
+		}
+		reported := must.NotFail(types.NewDocument("$sort", sort))
+		if hasStats == nil {
+			reported.Set("totalDataSizeSortedBytesEstimate", int64(0))
+			reported.Set("usedDisk", false)
+			reported.Set("spills", int64(0))
+			reported.Set("spilledDataStorageSize", int64(0))
+			reported.Set("nReturned", returned)
+			reported.Set("executionTimeMillisEstimate", int64(0))
+		}
+		res.Append(reported)
+	}
+	return res
 }

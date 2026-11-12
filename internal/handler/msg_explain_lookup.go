@@ -126,7 +126,7 @@ func explainLookups(ctx context.Context, db backends.Database, coll backends.Col
 		}
 		out.Append(entry)
 	}
-	response.Set("stages", out)
+	response.Set("stages", reportSorts(out))
 }
 
 // runsInQueryPlan reports whether MongoDB runs the $lookup spec inside the

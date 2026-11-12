@@ -606,7 +606,8 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 		explainCountingGroup(response, afterCount)
 	}
 
-	if params.Aggregate && !viaView {
+	if params.Aggregate && !viaView && !h.explainStatsStages(connCtx, db, params.DB, params.Collection, coll, params.StagesDocs, response,
+		params.Verbosity != "queryPlanner") {
 		explainLookups(connCtx, db, coll, qp, params.DB, params.StagesDocs, response, params.Verbosity != "queryPlanner", qp.Collated)
 		if !qp.CountOnly && !response.Has("stages") {
 			explainClassicStages(connCtx, coll, qp, params.StagesDocs, response, params.Verbosity != "queryPlanner")
