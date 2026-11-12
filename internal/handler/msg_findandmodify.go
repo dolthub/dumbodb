@@ -26,6 +26,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
+	stageProjection "github.com/dolthub/dumbodb/internal/handler/common/aggregations/stages/projection"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
@@ -76,7 +77,7 @@ func (h *Handler) MsgFindAndModify(connCtx context.Context, msg *wire.OpMsg) (*w
 	var projection *types.Document
 	var inclusion bool
 	if params.Fields != nil {
-		if projection, inclusion, err = common.ValidateProjection(params.Fields); err != nil {
+		if projection, inclusion, err = stageProjection.ValidateFindProjection(params.Fields); err != nil {
 			return nil, err
 		}
 	}

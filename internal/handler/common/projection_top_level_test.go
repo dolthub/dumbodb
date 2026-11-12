@@ -19,6 +19,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	stageProjection "github.com/dolthub/dumbodb/internal/handler/common/aggregations/stages/projection"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/must"
@@ -45,7 +46,7 @@ func TestProjectTopLevelInclusionMatchesProjectDocument(t *testing.T) {
 	}
 
 	for _, projection := range projections {
-		validated, inclusion, err := ValidateProjection(projection)
+		validated, inclusion, err := stageProjection.ValidateFindProjection(projection)
 		require.NoError(t, err)
 		fields, ok := topLevelInclusionFields(validated, inclusion)
 		require.True(t, ok, "projection %v", projection)
@@ -74,7 +75,7 @@ func TestTopLevelInclusionFieldsRejects(t *testing.T) {
 		doc("a", int32(0)),
 		doc("_id", int32(0)),
 	} {
-		validated, inclusion, err := ValidateProjection(projection)
+		validated, inclusion, err := stageProjection.ValidateFindProjection(projection)
 		require.NoError(t, err)
 		_, ok := topLevelInclusionFields(validated, inclusion)
 		require.False(t, ok, "projection %v", projection)
@@ -84,7 +85,7 @@ func TestTopLevelInclusionFieldsRejects(t *testing.T) {
 func TestProjectTopLevelInclusionCopiesComposites(t *testing.T) {
 	inner := must.NotFail(types.NewDocument("x", int32(1)))
 	d := must.NotFail(types.NewDocument("_id", int32(1), "c", inner))
-	validated, inclusion, err := ValidateProjection(must.NotFail(types.NewDocument("c", int32(1))))
+	validated, inclusion, err := stageProjection.ValidateFindProjection(must.NotFail(types.NewDocument("c", int32(1))))
 	require.NoError(t, err)
 	fields, ok := topLevelInclusionFields(validated, inclusion)
 	require.True(t, ok)
@@ -105,7 +106,7 @@ func TestEmptyProjectionMatchesProjectDocument(t *testing.T) {
 		doc("c", 1.5),
 		doc(),
 	}
-	empty, inclusion, err := ValidateProjection(nil)
+	empty, inclusion, err := stageProjection.ValidateFindProjection(nil)
 	require.NoError(t, err)
 	for _, d := range docs {
 		d.SetRecordID(42)
