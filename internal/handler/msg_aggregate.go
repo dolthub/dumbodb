@@ -533,10 +533,14 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			stages.MarkLookupsUnwound(stagesDocuments, stagesSpecs)
 		}
 
-		if !isView {
-			stages.MarkSBELookups(stagesDocuments, stagesSpecs)
+		collectionIsView := func(name string) bool {
+			info, err := lookupCollectionInfo(ctx, db, name)
+			return err == nil && info != nil && info.IsView
 		}
-		stages.WrapSBEStages(stagesDocuments, stages.SBEPrefixLen(stagesSpecs))
+		if !isView {
+			stages.MarkSBELookups(stagesDocuments, stagesSpecs, collectionIsView)
+		}
+		stages.WrapSBEStages(stagesDocuments, stages.SBEPrefixLen(stagesSpecs, collectionIsView))
 
 		switch {
 		case h.DisablePushdown:

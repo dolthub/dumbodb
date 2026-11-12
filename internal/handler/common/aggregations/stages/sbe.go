@@ -34,14 +34,16 @@ import (
 // SBEPrefixLen returns how many leading stages of a top-level pipeline mongod
 // runs in SBE: through its last $group, $bucket or $sortByCount when every
 // stage before it can be pushed down with it, else 0.
-func SBEPrefixLen(specs []*types.Document) int {
-	end, _ := sbePrefix(specs)
+// isView, when not nil, reports whether a collection is a view; an equality
+// $lookup from a view ends the prefix.
+func SBEPrefixLen(specs []*types.Document, isView func(string) bool) int {
+	end, _ := sbePrefix(specs, isView)
 	return end
 }
 
 // sbePrefix returns SBEPrefixLen and the number of leading stages mongod could
 // push down into SBE at all, which bounds the $lookup stages it runs there.
-func sbePrefix(specs []*types.Document) (int, int) {
+func sbePrefix(specs []*types.Document, isView func(string) bool) (int, int) {
 	var sawSort, sawProject, sawLimit, sawLookup, sawGroup bool
 	end := 0
 	for i, spec := range specs {
@@ -49,6 +51,9 @@ func sbePrefix(specs []*types.Document) (int, int) {
 			return end, i
 		}
 		pushed := sawLookup || sawGroup
+		if !sbeCompatibleStage(spec) {
+			return end, i
+		}
 		switch spec.Command() {
 		case "$match":
 			if sawLimit || sawGroup {
@@ -65,7 +70,7 @@ func sbePrefix(specs []*types.Document) (int, int) {
 			}
 			sawLimit = true
 		case "$project":
-			if sawProject || pushed || !sbeProjectPushable(spec, sawSort) {
+			if sawProject || pushed || !sbeProjectPushable(spec, sawSort || sawLimit) {
 				return end, i
 			}
 			sawProject = true
@@ -76,8 +81,14 @@ func sbePrefix(specs []*types.Document) (int, int) {
 			return i + 1, i + 1
 		case "$lookup":
 			if v, _ := spec.Get("$lookup"); v != nil {
-				if d, ok := v.(*types.Document); !ok || d.Has("pipeline") {
+				d, ok := v.(*types.Document)
+				if !ok || d.Has("pipeline") {
 					return end, i
+				}
+				if from, _ := d.Get("from"); isView != nil {
+					if name, ok := from.(string); ok && isView(name) {
+						return end, i
+					}
 				}
 			}
 			sawLookup = true
@@ -86,6 +97,117 @@ func sbePrefix(specs []*types.Document) (int, int) {
 		}
 	}
 	return end, len(specs)
+}
+
+// sbeClassicOperators are the expression operators that make mongod 8.0 run
+// a stage in its classic engine instead of SBE.
+var sbeClassicOperators = map[string]bool{
+	"$allElementsTrue": true, "$arrayElemAt": true, "$avg": true, "$binarySize": true, "$convert": true,
+	"$filter": true, "$first": true, "$firstN": true, "$getField": true, "$in": true, "$indexOfArray": true,
+	"$last": true, "$lastN": true, "$log": true, "$map": true, "$max": true, "$maxN": true, "$median": true,
+	"$mergeObjects": true, "$min": true, "$minN": true, "$percentile": true, "$rand": true, "$reduce": true,
+	"$replaceAll": true, "$setField": true, "$size": true, "$slice": true, "$split": true, "$stdDevPop": true,
+	"$stdDevSamp": true, "$strcasecmp": true, "$strLenCP": true, "$substr": true, "$substrBytes": true,
+	"$substrCP": true, "$sum": true, "$toBool": true, "$toDate": true, "$toDecimal": true, "$toDouble": true,
+	"$toInt": true, "$toLong": true, "$toObjectId": true, "$toString": true, "$toUUID": true,
+	"$unsetField": true, "$type": true, "$zip": true,
+}
+
+// sbeClassicAccumulators are the $group accumulators that make mongod run the
+// $group in its classic engine.
+var sbeClassicAccumulators = map[string]bool{"$median": true, "$percentile": true}
+
+// sbeCompatibleStage reports whether every expression of a stage, and for a
+// grouping stage every accumulator, can run in mongod's SBE engine.
+func sbeCompatibleStage(spec *types.Document) bool {
+	name := spec.Command()
+	v, _ := spec.Get(name)
+	switch name {
+	case "$group":
+		d, ok := v.(*types.Document)
+		if !ok {
+			return true
+		}
+		for _, field := range d.Keys() {
+			val := must.NotFail(d.Get(field))
+			if acc, ok := val.(*types.Document); ok && field != "_id" && acc.Len() == 1 {
+				if sbeClassicAccumulators[acc.Command()] {
+					return false
+				}
+				if !sbeCompatibleExpression(must.NotFail(acc.Get(acc.Command()))) {
+					return false
+				}
+				continue
+			}
+			if !sbeCompatibleExpression(val) {
+				return false
+			}
+		}
+		return true
+	case "$bucket":
+		d, ok := v.(*types.Document)
+		if !ok {
+			return true
+		}
+		if out, _ := d.Get("output"); out != nil {
+			if !sbeCompatibleStage(must.NotFail(types.NewDocument("$group", out))) {
+				return false
+			}
+		}
+		g, _ := d.Get("groupBy")
+		return sbeCompatibleExpression(g)
+	case "$project":
+		return sbeCompatibleExpression(v)
+	case "$match":
+		d, ok := v.(*types.Document)
+		return !ok || sbeCompatibleFilter(d)
+	}
+	return true
+}
+
+// sbeCompatibleFilter checks the $expr expressions of a query filter.
+func sbeCompatibleFilter(filter *types.Document) bool {
+	for _, k := range filter.Keys() {
+		val := must.NotFail(filter.Get(k))
+		switch k {
+		case "$expr":
+			if !sbeCompatibleExpression(val) {
+				return false
+			}
+		case "$and", "$or", "$nor":
+			arr, ok := val.(*types.Array)
+			if !ok {
+				continue
+			}
+			for i := range arr.Len() {
+				if d, ok := must.NotFail(arr.Get(i)).(*types.Document); ok && !sbeCompatibleFilter(d) {
+					return false
+				}
+			}
+		}
+	}
+	return true
+}
+
+func sbeCompatibleExpression(v any) bool {
+	switch v := v.(type) {
+	case *types.Array:
+		for i := range v.Len() {
+			if !sbeCompatibleExpression(must.NotFail(v.Get(i))) {
+				return false
+			}
+		}
+	case *types.Document:
+		if v.Command() == "$literal" {
+			return true
+		}
+		for _, k := range v.Keys() {
+			if sbeClassicOperators[k] || !sbeCompatibleExpression(must.NotFail(v.Get(k))) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // sbeSpecs returns the stage documents of pipeline, nil for a non-document.
@@ -146,8 +268,8 @@ func isProjectionTruthy(v any) bool {
 
 // MarkSBELookups has each equality $lookup that mongod runs in SBE apply
 // SBE's limit on one document's matches.
-func MarkSBELookups(pipeline []aggregations.Stage, specs []*types.Document) {
-	_, pushable := sbePrefix(specs)
+func MarkSBELookups(pipeline []aggregations.Stage, specs []*types.Document, isView func(string) bool) {
+	_, pushable := sbePrefix(specs, isView)
 	for i := 0; i < pushable && i < len(pipeline); i++ {
 		if l, ok := pipeline[i].(*lookup); ok {
 			l.sbe = true
@@ -275,6 +397,8 @@ func sbeEquivalent(code handlererrors.ErrorCode, op, msg string) (handlererrors.
 		case sbeUnboundedTrigOps[op]:
 			return handlererrors.ErrSBETrigNonNumeric, op + " supports only numeric types", true
 		}
+	case handlererrors.ErrAddTwoDates:
+		return handlererrors.ErrSBEAddTwoDates, "only one date allowed in an $add expression", true
 	case handlererrors.ErrAbsOfLongMin:
 		return handlererrors.ErrSBEAbsOfLongMin, msg, true
 	case handlererrors.ErrLnNonPositive:
