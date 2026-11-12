@@ -47,6 +47,7 @@ func SBEPrefixLen(specs []*types.Document, isView func(string) bool) int {
 // push down into SBE at all, which bounds the $lookup stages it runs there.
 func sbePrefix(specs []*types.Document, isView func(string) bool) (int, int) {
 	var sawSort, sawProject, sawLimit, sawLookup, sawGroup bool
+	var project *types.Document
 	end := 0
 	for i, spec := range specs {
 		if spec == nil {
@@ -67,7 +68,16 @@ func sbePrefix(specs []*types.Document, isView func(string) bool) (int, int) {
 			}
 			sawSort = true
 		case "$limit", "$skip":
+			if spec.Command() == "$skip" && isZeroSkip(spec) {
+				// mongod drops a $skip of 0.
+				continue
+			}
 			if pushed {
+				return end, i
+			}
+			if sawProject && !sbeProjectPushable(project, true) {
+				// mongod moves the $limit or $skip ahead of the $project,
+				// which then no longer qualifies.
 				return end, i
 			}
 			sawLimit = true
@@ -76,6 +86,7 @@ func sbePrefix(specs []*types.Document, isView func(string) bool) (int, int) {
 				return end, i
 			}
 			sawProject = true
+			project = spec
 		case "$group":
 			sawGroup = true
 			end = i + 1
@@ -99,6 +110,11 @@ func sbePrefix(specs []*types.Document, isView func(string) bool) (int, int) {
 		}
 	}
 	return end, len(specs)
+}
+
+func isZeroSkip(spec *types.Document) bool {
+	n, ok := toFloat64(must.NotFail(spec.Get("$skip")))
+	return ok && n == 0
 }
 
 // sbeClassicOperators are the expression operators that make mongod 8.0 run
@@ -185,7 +201,7 @@ func sbeCompatibleStage(spec *types.Document) bool {
 		}
 		g, _ := d.Get("groupBy")
 		return sbeCompatibleExpression(g)
-	case "$project":
+	case "$project", "$sortByCount":
 		return sbeCompatibleExpression(v)
 	case "$match":
 		d, ok := v.(*types.Document)
@@ -210,6 +226,40 @@ func sbeCompatibleFilter(filter *types.Document) bool {
 			}
 			for i := range arr.Len() {
 				if d, ok := must.NotFail(arr.Get(i)).(*types.Document); ok && !sbeCompatibleFilter(d) {
+					return false
+				}
+			}
+		case "$jsonSchema":
+			return false
+		default:
+			if d, ok := val.(*types.Document); ok && !sbeCompatiblePredicate(d) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// sbeClassicQueryOperators are the query operators that make mongod 8.0 run
+// a $match in its classic engine.
+var sbeClassicQueryOperators = map[string]bool{
+	"$bitsAllSet": true, "$bitsAnySet": true, "$bitsAllClear": true, "$bitsAnyClear": true,
+}
+
+// sbeCompatiblePredicate checks the operators of a field's predicate.
+func sbeCompatiblePredicate(pred *types.Document) bool {
+	for _, op := range pred.Keys() {
+		if sbeClassicQueryOperators[op] {
+			return false
+		}
+		if inner, ok := must.NotFail(pred.Get(op)).(*types.Document); ok {
+			switch op {
+			case "$not":
+				if !sbeCompatiblePredicate(inner) {
+					return false
+				}
+			case "$elemMatch":
+				if !sbeCompatiblePredicate(inner) || !sbeCompatibleFilter(inner) {
 					return false
 				}
 			}
