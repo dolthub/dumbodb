@@ -196,3 +196,74 @@ decides directly: an offending document becomes a merge conflict surfaced by
 can have identical `ours` and `theirs` values; that is expected, not a bug -- it
 is the mode reporting that both sides wrote the field.
 
+## Branches with more than one merge base
+
+A merge usually compares both branches against one common ancestor, their
+**merge base**. Two branches can have several: when they have merged each other
+(a criss-cross), when both merged the same shared branch, such as a branch that
+only changes indexes or validators, or when a long-running branch keeps merging
+`main` while `main` merges it back. No single ancestor is then the right base:
+picking one makes changes the other ancestor already had look new, which can
+resurrect deleted documents or raise conflicts nobody caused.
+
+DumboDB does what Git does: it merges the merge bases, oldest first, into a
+**virtual merge base**, and merges the two branches against that. The virtual
+merge base is never a branch or a commit you can check out, and it is built the
+same way every time, so a paused merge continues against the same base after a
+restart or a garbage collection.
+
+### Where the merge bases disagree
+
+Merging the merge bases can itself conflict, and nobody is there to resolve it.
+DumboDB does not stop. It keeps the older value, the one both merge bases can be
+compared against, and **marks** what conflicted:
+
+- in `documentTouched` and `documentDivergent`, the whole document;
+- in `fieldTouched` and `fieldDivergent`, only the fields that conflicted; the
+  other fields keep their merged values;
+- a document the merge bases added differently is left absent, and marked;
+- a document one merge base deleted and the other changed keeps its older
+  value, unmarked;
+- validators and collations are compared whole, never field by field, and views
+  by their whole definition; merge bases that set different merge modes use
+  their join in the [lattice](#they-are-a-lattice-not-a-ranking).
+
+The virtual merge base also stays as valid as any commit. When the merged
+merge bases would hold the same key twice in a unique index, or a document that
+fails the collection's validator, DumboDB keeps the older value of the document
+the later merge base changed, or leaves it absent, and marks it.
+
+### What a mark means to your merge
+
+A marked document or field counts as **written by both branches**, since the
+merge bases already disagreed about it. So the merge mode decides as it would for
+two concurrent writers:
+
+- `documentTouched` and `fieldTouched` always conflict on it, even when both
+  branches resolved it the same way. The conflict comes back on every merge
+  across those merge bases, and is resolved again each time.
+- `fieldDivergent` and `documentDivergent` conflict only when the two branches
+  hold different values for it, including when one of them went back to the
+  older value.
+
+For example, with merge bases that set the same field to `x` and `y`:
+
+| the two branches then | `documentTouched` | `fieldTouched` | `fieldDivergent` | `documentDivergent` |
+|---|---|---|---|---|
+| both resolve it to the same value | CONFLICT | CONFLICT | merge | merge |
+| resolve it differently | CONFLICT | CONFLICT | CONFLICT | CONFLICT |
+| one goes back to the original value | CONFLICT | CONFLICT | CONFLICT | CONFLICT |
+| both resolve it alike, then one edits another field | CONFLICT | CONFLICT | merge | CONFLICT |
+
+And with merge bases that made other kinds of changes, the branches agreeing:
+
+| the merge bases | `documentTouched` | `fieldTouched` | `fieldDivergent` | `documentDivergent` |
+|---|---|---|---|---|
+| edit different fields of a document | CONFLICT | merge | merge | merge |
+| add the same `_id` with different content | CONFLICT | CONFLICT | merge | merge |
+| collide on a unique index | CONFLICT | CONFLICT | merge | merge |
+
+Documents the merge bases agree on, and documents only one branch changed since,
+merge as they always do. If your branches merge each other often, prefer a
+`Divergent` mode for collections where both branches routinely resolve the same
+conflicts the same way; the `Touched` modes will ask again each time.
