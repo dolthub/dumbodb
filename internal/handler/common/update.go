@@ -129,7 +129,7 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 		}
 
 		if upsert {
-			if err = processFilterEqualityCondition(doc, param.Filter); err != nil {
+			if err = processFilterEqualityCondition(doc, param.Filter, !param.IsPipeline && !param.HasUpdateOperators); err != nil {
 				return failAfterWrites(lazyerrors.Error(err))
 			}
 		} else {
@@ -236,16 +236,60 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 	}
 }
 
-// processFilterEqualityCondition copies the fields with equality condition from filter to doc.
-func processFilterEqualityCondition(doc, filter *types.Document) error {
-	var seeded []string
-	return seedFromFilter(doc, filter, &seeded)
+// processFilterEqualityCondition copies the fields with equality condition from
+// filter to doc. A replacement takes only the _id equality, as in mongod.
+func processFilterEqualityCondition(doc, filter *types.Document, replacement bool) error {
+	return seedFromFilter(doc, filter, newSeededPaths(), replacement)
 }
 
-// seedFromFilter sets doc's fields from filter's equalities. seeded holds the
-// paths set so far; mongod refuses a path that two equalities set, or that
-// lies within another set one.
-func seedFromFilter(doc, filter *types.Document, seeded *[]string) error {
+// seededPaths holds the paths an upsert has seeded so far. mongod refuses a
+// path that two equalities set, or that lies within another set one.
+type seededPaths struct {
+	full     map[string]struct{}
+	prefixes map[string]string
+}
+
+func newSeededPaths() *seededPaths {
+	return &seededPaths{full: map[string]struct{}{}, prefixes: map[string]string{}}
+}
+
+func (s *seededPaths) add(key string) error {
+	conflict := func(other string) error {
+		longer, shorter := key, other
+		if len(other) > len(key) {
+			longer, shorter = other, key
+		}
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrNotSingleValueField,
+			fmt.Sprintf("cannot infer query fields to set, both paths '%s' and '%s' are matched", longer, shorter), "update")
+	}
+	if _, ok := s.full[key]; ok {
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrNotSingleValueField,
+			fmt.Sprintf("cannot infer query fields to set, path '%s' is matched twice", key), "update")
+	}
+	if other, ok := s.prefixes[key]; ok {
+		return conflict(other)
+	}
+	for i := range len(key) {
+		if key[i] != '.' {
+			continue
+		}
+		if _, ok := s.full[key[:i]]; ok {
+			return conflict(key[:i])
+		}
+	}
+	s.full[key] = struct{}{}
+	for i := range len(key) {
+		if key[i] != '.' {
+			continue
+		}
+		if _, ok := s.prefixes[key[:i]]; !ok {
+			s.prefixes[key[:i]] = key
+		}
+	}
+	return nil
+}
+
+func seedFromFilter(doc, filter *types.Document, seeded *seededPaths, replacement bool) error {
 	iter := filter.Iterator()
 	defer iter.Close()
 
@@ -268,10 +312,18 @@ func seedFromFilter(doc, filter *types.Document, seeded *[]string) error {
 			}
 			for i := range clauses.Len() {
 				if clause, ok := must.NotFail(clauses.Get(i)).(*types.Document); ok {
-					if err = seedFromFilter(doc, clause, seeded); err != nil {
+					if err = seedFromFilter(doc, clause, seeded, replacement); err != nil {
 						return err
 					}
 				}
+			}
+			continue
+		}
+
+		if replacement && key != "_id" {
+			if strings.HasPrefix(key, "_id.") {
+				return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrNotExactValueField,
+					fmt.Sprintf("field at '_id' must be exactly specified, field at sub-path '%s'found", key), "update")
 			}
 			continue
 		}
@@ -301,17 +353,9 @@ func seedFromFilter(doc, filter *types.Document, seeded *[]string) error {
 			}
 		}
 
-		for _, other := range *seeded {
-			switch {
-			case other == key:
-				return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrNotSingleValueField,
-					fmt.Sprintf("cannot infer query fields to set, path '%s' is matched twice", key), "update")
-			case strings.HasPrefix(key, other+"."), strings.HasPrefix(other, key+"."):
-				return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrNotSingleValueField,
-					fmt.Sprintf("cannot infer query fields to set, both paths '%s' and '%s' are matched", other, key), "update")
-			}
+		if err = seeded.add(key); err != nil {
+			return err
 		}
-		*seeded = append(*seeded, key)
 
 		path, err := types.NewPathFromString(key)
 		if err != nil {
