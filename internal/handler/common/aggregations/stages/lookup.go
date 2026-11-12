@@ -28,6 +28,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
@@ -1178,7 +1179,7 @@ func (l *lookup) pipelineIter(ctx context.Context, fetcher CollectionFetcher, fr
 		specs[stageIndex] = substituted
 
 		if stageIndex == 0 && l.from == "" {
-			docs, err := evalDocuments(substituted)
+			docs, err := EvalDocuments(substituted)
 			if err != nil {
 				return fail(err)
 			}
@@ -1758,7 +1759,7 @@ func checkSubPipelineSource(coll string, spec *types.Document, stage string) err
 
 // evalDocuments evaluates a $documents stage as mongod's desugaring does:
 // the value must be an array (5858203) of documents (40228).
-func evalDocuments(stage *types.Document) ([]*types.Document, error) {
+func EvalDocuments(stage *types.Document) ([]*types.Document, error) {
 	v, _, err := operators.EvalOperand(must.NotFail(stage.Get("$documents")), types.MakeDocument(0))
 	if err != nil {
 		return nil, err
@@ -1773,8 +1774,9 @@ func evalDocuments(stage *types.Document) ([]*types.Document, error) {
 		d, ok := must.NotFail(arr.Get(i)).(*types.Document)
 		if !ok {
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrReplaceRootNotObject,
-				"'replacement document' must evaluate to an object, but resulting value was: "+
-					types.FormatAnyValue(must.NotFail(arr.Get(i))), "$documents (stage)")
+				fmt.Sprintf("elements within the array passed to $documents must evaluate to an object, but resulting value was: %s. "+
+					"Type of resulting value: '%s'.", types.FormatAnyValue(must.NotFail(arr.Get(i))), handlerparams.AliasFromType(must.NotFail(arr.Get(i)))),
+				"$documents (stage)")
 		}
 		docs[i] = d
 	}
