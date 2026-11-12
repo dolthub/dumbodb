@@ -421,11 +421,17 @@ func (s *merge) checkWrittenDocument(doc *types.Document) error {
 		if err != nil {
 			continue
 		}
-		if v, err := doc.GetByPath(path); err == nil {
-			if _, isArr := v.(*types.Array); isArr {
-				return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrMergeOnFieldArray,
-					fmt.Sprintf("$merge write error: 'on' field '%s' is an array", field), "$merge")
-			}
+		v, err := doc.GetByPath(path)
+		switch v.(type) {
+		case *types.Array:
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrMergeOnFieldArray,
+				fmt.Sprintf("$merge write error: 'on' field '%s' is an array", field), "$merge")
+		case types.NullType, types.UndefinedType:
+			err = errors.New("null")
+		}
+		if err != nil && field != "_id" {
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrMergeOnFieldMissing,
+				fmt.Sprintf("$merge write error: 'on' field '%s' cannot be missing, null, undefined or an array", field), "$merge")
 		}
 	}
 	id, err := doc.Get("_id")
