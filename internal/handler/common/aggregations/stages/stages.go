@@ -21,6 +21,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // newStageFunc is a type for a function that creates a new aggregation stage.
@@ -117,4 +118,39 @@ func newDocumentsOnCollection(*types.Document) (aggregations.Stage, error) {
 		"'$documents' can only be run with {aggregate: 1}",
 		"$documents (stage)",
 	)
+}
+
+// MoveSkipsBeforeTransforms returns pipeline with each $skip moved ahead of
+// the $project, $addFields, $set and $unset stages just before it, as mongod
+// optimizes the pipeline, so the documents skipped are never transformed.
+func MoveSkipsBeforeTransforms(pipeline *types.Array) *types.Array {
+	stages := make([]any, pipeline.Len())
+	for i := range stages {
+		stages[i] = must.NotFail(pipeline.Get(i))
+	}
+	for i := range stages {
+		if command(stages[i]) != "$skip" {
+			continue
+		}
+		for j := i; j > 0; j-- {
+			switch command(stages[j-1]) {
+			case "$project", "$addFields", "$set", "$unset":
+				stages[j-1], stages[j] = stages[j], stages[j-1]
+				continue
+			}
+			break
+		}
+	}
+	out := types.MakeArray(len(stages))
+	for _, s := range stages {
+		out.Append(s)
+	}
+	return out
+}
+
+func command(stage any) string {
+	if d, ok := stage.(*types.Document); ok && d.Len() == 1 {
+		return d.Command()
+	}
+	return ""
 }
