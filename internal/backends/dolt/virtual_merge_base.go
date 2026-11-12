@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"slices"
 	"sort"
 
 	"github.com/dolthub/dolt/go/store/hash"
@@ -108,7 +109,11 @@ func foldConflict(
 			}
 		}
 	}
-	value, flag := conflictValue(base, left, right, mode, inherited)
+	var definitions []string
+	if collection == reservedCatalogName {
+		definitions = definitionFields
+	}
+	value, flag := conflictValue(base, left, right, mode, inherited, definitions)
 	if value == nil {
 		if err := mut.Delete(ctx, key); err != nil {
 			return fmt.Errorf("folding a conflict: %w", err)
@@ -144,8 +149,8 @@ func foldConflict(
 //     field paths they conflicted on.
 //
 // |inherited| is the document's flag in the merge bases' own merge base, when that is a virtual merge base too: its
-// paths count as changed on both sides.
-func conflictValue(base, left, right *types.Document, mode MergeMode, inherited *docFlag) (*types.Document, *docFlag) {
+// paths count as changed on both sides. |definitions| are top-level fields compared whole, never field by field.
+func conflictValue(base, left, right *types.Document, mode MergeMode, inherited *docFlag, definitions []string) (*types.Document, *docFlag) {
 	id := documentID(base, left, right)
 	switch {
 	case base == nil:
@@ -159,7 +164,7 @@ func conflictValue(base, left, right *types.Document, mode MergeMode, inherited 
 	case inherited != nil && inherited.whole:
 		return base, &docFlag{id: id, whole: true}
 	}
-	paths := mode.conflictingPaths(base, left, right, nil)
+	paths := mode.conflictingPaths(base, left, right, nil, definitions)
 	if inherited != nil {
 		for _, path := range inherited.paths {
 			if (mode == MergeModeFieldTouched || !pathsEqual(left, right, path)) && !containsPath(paths, path) {
@@ -176,7 +181,7 @@ func conflictValue(base, left, right *types.Document, mode MergeMode, inherited 
 
 // conflictingPaths returns the field paths, below |prefix|, that make |left| and |right| conflict against |base| in
 // a field mode. It walks the documents as fieldConflicts does.
-func (m MergeMode) conflictingPaths(base, left, right *types.Document, prefix []string) [][]string {
+func (m MergeMode) conflictingPaths(base, left, right *types.Document, prefix []string, definitions []string) [][]string {
 	var paths [][]string
 	for _, key := range mergeDocumentKeys(base, left, right) {
 		if prefix == nil && key == "_id" {
@@ -187,8 +192,8 @@ func (m MergeMode) conflictingPaths(base, left, right *types.Document, prefix []
 		leftValue, leftPresent := getOrNil(left, key)
 		rightValue, rightPresent := getOrNil(right, key)
 		baseDoc, leftDoc, rightDoc, documents := nestedMergeDocuments(baseValue, leftValue, rightValue)
-		if documents {
-			paths = append(paths, m.conflictingPaths(baseDoc, leftDoc, rightDoc, path)...)
+		if documents && !(prefix == nil && slices.Contains(definitions, key)) {
+			paths = append(paths, m.conflictingPaths(baseDoc, leftDoc, rightDoc, path, nil)...)
 			continue
 		}
 		leftChanged := basePresent != leftPresent || !reflect.DeepEqual(baseValue, leftValue)

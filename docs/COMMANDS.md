@@ -1363,13 +1363,17 @@ Every entry carries these three fields; the rest depend on `type`:
 | `base` | document or null | `{ _id, doc }` (common ancestor); null if absent. No `diffType`. |
 | `ours` / `theirs` | document or null | `{ _id, doc, diffType }` with `diffType` `"added"`/`"modified"`/`"deleted"`; null if that side deleted it. A `uniqueKeyCollision` carries different `_id`s for `ours` and `theirs`. |
 
-**`type: "view"`** -- both branches changed the same view definition:
+**`type: "view"`** -- both branches changed the same view definition, to different definitions. A view merges
+automatically only when both branches' full definitions are identical: whether two different definitions combine
+correctly depends on the application.
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `base` / `ours` / `theirs` | document or null | `{ viewOn, pipeline, diffType? }`; null if the view was absent/deleted on that side |
 
-**`type: "metadata"`** -- both branches changed the same collection's validator/options:
+**`type: "metadata"`** -- both branches changed the same collection's validator/options differently. Like a view, a
+validator or collation merges automatically only when both branches' are identical; it is never merged field by
+field.
 
 | Field | Type | Description |
 |-------|------|-------------|

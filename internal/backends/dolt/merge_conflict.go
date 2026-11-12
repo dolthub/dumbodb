@@ -1161,7 +1161,11 @@ func captureConflictsForCollection(
 		if baseDoc == nil {
 			baseDoc = types.MakeDocument(0)
 		}
-		mergedDoc, conflict := mergeBSONDoc(baseDoc, leftDoc, rightDoc)
+		merge := mergeBSONDoc
+		if collection == reservedCatalogName {
+			merge = mergeCatalogDoc
+		}
+		mergedDoc, conflict := merge(baseDoc, leftDoc, rightDoc)
 		if conflict {
 			return nil, false, nil
 		}
@@ -1741,6 +1745,10 @@ func mergeAddressMaps(ctx context.Context, state *dbState, intoAM, fromAM, baseA
 		baseIsView, err := isViewEntry(ctx, state.cs, baseH)
 		if err != nil {
 			return prolly.AddressMap{}, nil, nil, nil, nil, err
+		}
+		if (intoIsView || fromIsView || baseIsView) && intoH == fromH {
+			// Both sides made the same view, and a definition merges when both are identical.
+			continue
 		}
 		if (intoIsView || fromIsView || baseIsView) && fold != nil {
 			// A view the merge bases define differently keeps its definition in their own merge base, or is left
