@@ -489,9 +489,13 @@ func sameOptionalCollation(a, b *types.Document) bool {
 
 // conflictCollation prints a collation in a view conflict as mongod does:
 // {} for none, the stored one in full, the requested one without its
-// backwards and version fields.
+// backwards and version fields, and a requested simple one expanded.
 func conflictCollation(c *types.Document, stored bool) string {
 	if collation.Parse(c).IsSimple() {
+		if locale, _ := c.Get("locale"); !stored && locale == "simple" {
+			return `{ locale: "simple", caseLevel: false, caseFirst: "off", strength: 3, numericOrdering: false, ` +
+				`alternate: "non-ignorable", maxVariable: "punct", normalization: false }`
+		}
 		return "{}"
 	}
 	full := resolvedCollationString(c)

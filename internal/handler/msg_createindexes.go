@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/FerretDB/wire"
+	"github.com/google/uuid"
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/collation"
@@ -140,7 +141,11 @@ func (h *Handler) MsgCreateIndexes(connCtx context.Context, msg *wire.OpMsg) (*w
 	// An index created without an explicit collation inherits the collection's
 	// default collation.
 	var collectionCollation *types.Document
-	if cInfo, cerr := lookupCollectionInfo(connCtx, db, collection); cerr == nil && cInfo != nil {
+	cInfo, cerr := lookupCollectionInfo(connCtx, db, collection)
+	if cerr != nil {
+		cInfo = nil
+	}
+	if cInfo != nil {
 		if err = checkClusteredIndexName(command, cInfo.ClusteredIndexName, toCreate); err != nil {
 			return nil, err
 		}
@@ -193,8 +198,15 @@ func (h *Handler) MsgCreateIndexes(connCtx context.Context, msg *wire.OpMsg) (*w
 
 	// A clustered collection's clustered index is not counted, in the reply
 	// or toward the limit.
-	if !createCollection && recordedClusteredName(connCtx, db, collection) != "" {
+	if !createCollection && cInfo != nil && cInfo.ClusteredIndexName != "" {
 		numIndexesBefore--
+	}
+
+	// An existing collection with room for an index starts a build, which
+	// fails naming the collection's UUID.
+	buildingIn := ""
+	if !createCollection && cInfo != nil && numIndexesBefore < maxIndexes {
+		buildingIn = cInfo.UUID
 	}
 
 	requested := len(toCreate)
@@ -211,14 +223,14 @@ func (h *Handler) MsgCreateIndexes(connCtx context.Context, msg *wire.OpMsg) (*w
 				fresh = append(fresh, idx)
 			}
 		}
-		if err = checkIndexCount(command, dbName, collection, numIndexesBefore, fresh); err != nil {
+		if err = checkIndexCount(command, dbName, collection, numIndexesBefore, fresh, buildingIn); err != nil {
 			return nil, err
 		}
 	}
 	if toCreate, err = validateIndexesForCreation(command, beforeCreate.Indexes, toCreate); err != nil {
 		return nil, err
 	}
-	if err = checkIndexCount(command, dbName, collection, numIndexesBefore, toCreate); err != nil {
+	if err = checkIndexCount(command, dbName, collection, numIndexesBefore, toCreate, buildingIn); err != nil {
 		return nil, err
 	}
 
@@ -695,13 +707,18 @@ const maxIndexes = 64
 
 // checkIndexCount returns mongod's error when creating toCreate beside
 // existing indexes would pass maxIndexes, naming the first index past it.
-func checkIndexCount(command, dbName, collection string, existing int, toCreate []backends.IndexInfo) error {
+// A build started in the collection with UUID buildingIn, when not empty,
+// reports it as a failed build.
+func checkIndexCount(command, dbName, collection string, existing int, toCreate []backends.IndexInfo, buildingIn string) error {
 	if existing+len(toCreate) <= maxIndexes {
 		return nil
 	}
 	first := toCreate[max(maxIndexes-existing, 0)]
-	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCannotCreateIndex,
-		fmt.Sprintf("add index fails, too many indexes for %s.%s key:{ %s }", dbName, collection, formatIndexKey(first.Key)), command)
+	msg := fmt.Sprintf("add index fails, too many indexes for %s.%s key:{ %s }", dbName, collection, formatIndexKey(first.Key))
+	if buildingIn != "" {
+		msg = fmt.Sprintf("Index build failed: %s: Collection %s.%s ( %s ) :: caused by :: %s", uuid.NewString(), dbName, collection, buildingIn, msg)
+	}
+	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCannotCreateIndex, msg, command)
 }
 
 // conflictSpec is idx's spec as mongod prints it in an index conflict.
@@ -799,6 +816,20 @@ func validateIndexesForCreation(command string, existing, toCreate []backends.In
 			)
 
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCannotCreateIndex, msg, command)
+		}
+
+		if strings.Contains(newIdx.Name, "\x00") {
+			msg := fmt.Sprintf(
+				"Error in specification { key: { %s }, name: \"%s\", v: 2 } :: caused by :: index name cannot contain NUL bytes",
+				newKey, newIdx.Name,
+			)
+
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCannotCreateIndex, msg, command)
+		}
+
+		// "*" means every index to dropIndexes.
+		if newIdx.Name == "*" {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue, "The index name '*' is not valid.", command)
 		}
 
 		if newIdx.Name == backends.DefaultIndexName && newKey != "_id: 1" {
