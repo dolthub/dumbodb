@@ -193,7 +193,7 @@ func (h *Handler) findAndModifyDocument(ctx context.Context, params *common.Find
 		// The first match is in the hinted index's order.
 		var order *types.Document
 		var sortFilter *types.Document
-		if order, sortFilter, err = hintedIndexOrder(ctx, c, params.Hint, params.Query); err != nil {
+		if order, sortFilter, err = hintedIndexOrder(ctx, c, params.Hint, params.Query, params.Collation); err != nil {
 			return nil, err
 		}
 		if order != nil {

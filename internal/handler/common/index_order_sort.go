@@ -71,7 +71,10 @@ func sortDocumentsInIndexOrder(docs []*types.Document, pattern, filter *types.Do
 		// mongod bounds a field only below bounded ones; past an unbounded
 		// field it reads every key.
 		if bounded {
-			if admits[i] = elementAdmitter(boundedByFewerKeys(docs, filter, field, path, cmp), field, cmp); admits[i] == nil {
+			oneBound, _ := boundedByFewerKeys(filter, field, func(cond *types.Document) (int, error) {
+				return countAdmittedKeys(docs, path, cond, cmp), nil
+			}, cmp)
+			if admits[i] = elementAdmitter(oneBound, field, cmp); admits[i] == nil {
 				bounded = false
 			}
 		}
@@ -81,7 +84,7 @@ func sortDocumentsInIndexOrder(docs []*types.Document, pattern, filter *types.Do
 	for d, doc := range docs {
 		row := make([]any, len(fields))
 		for i := range fields {
-			row[i] = indexKeyValue(commonpath.SortKeyValue(doc, paths[i]), admits[i])
+			row[i] = indexKeyValue(indexKeys(doc, paths[i]), admits[i])
 		}
 		keys[d] = row
 	}
@@ -113,6 +116,22 @@ func sortDocumentsInIndexOrder(docs []*types.Document, pattern, filter *types.Do
 	}
 	copy(docs, sorted)
 	return nil
+}
+
+// indexKeys is doc's index keys on path: one key alone, or several, or a
+// nested array key, gathered in an array.
+func indexKeys(doc *types.Document, path types.Path) any {
+	keys := commonpath.IndexKeyValues(doc, path)
+	if len(keys) == 1 {
+		if _, nested := keys[0].(*types.Array); !nested {
+			return keys[0]
+		}
+	}
+	arr := types.MakeArray(len(keys))
+	for _, k := range keys {
+		arr.Append(k)
+	}
+	return arr
 }
 
 // indexKeyValue is the key an index walk first reaches for a field holding
@@ -197,76 +216,68 @@ func elementAdmitter(filter *types.Document, field string, cmp *collation.Compar
 }
 
 // boundedByFewerKeys returns filter with field's lower or upper comparison
-// dropped when it has both: a multikey walk takes one bound, and mongod's plan
-// trial keeps the one whose range holds fewer keys, the upper on a tie.
-func boundedByFewerKeys(docs []*types.Document, filter *types.Document, field string, path types.Path, cmp *collation.Comparator) *types.Document {
+// dropped when it has both, at the top level or in the one $and branch that
+// holds field: a multikey walk takes one bound, and mongod's plan trial keeps
+// the one whose scan does less work, the upper on a tie. keysIn counts the
+// work of a scan of a one-sided condition on field.
+func boundedByFewerKeys(filter *types.Document, field string, keysIn func(cond *types.Document) (int, error), cmp *collation.Comparator) (*types.Document, error) {
 	v, err := filter.Get(field)
 	if err != nil {
-		return boundedByFewerKeysUnderAnd(docs, filter, field, path, cmp)
+		return boundedByFewerKeysUnderAnd(filter, field, keysIn, cmp)
 	}
 	ops, ok := v.(*types.Document)
 	if !ok {
-		return filter
+		return filter, nil
 	}
 	lower, upper := firstOf(ops, "$gt", "$gte"), firstOf(ops, "$lt", "$lte")
 	// A $type naming arrays scans every key, whichever bound is kept.
 	if lower == "" || upper == "" || conditionAdmitter(ops, cmp) == nil {
-		return filter
+		return filter, nil
 	}
 	without := func(op string) *types.Document {
 		cond := ops.DeepCopy()
 		cond.Remove(op)
-		f := filter.DeepCopy()
-		f.Set(field, cond)
-		return f
-	}
-	keysIn := func(f *types.Document) int {
-		admit := conditionAdmitter(must.NotFail(f.Get(field)), cmp)
-		n := 0
-		for _, doc := range docs {
-			v := commonpath.SortKeyValue(doc, path)
-			if arr, isArr := v.(*types.Array); isArr {
-				for j := 0; j < arr.Len(); j++ {
-					if admit(must.NotFail(arr.Get(j))) {
-						n++
-					}
-				}
-			} else if admit(v) {
-				n++
-			}
-		}
-		return n
+		return cond
 	}
 	upperOnly, lowerOnly := without(lower), without(upper)
-	if keysIn(lowerOnly) < keysIn(upperOnly) {
-		return lowerOnly
+	lowerKeys, err := keysIn(lowerOnly)
+	if err != nil {
+		return nil, err
 	}
-	return upperOnly
+	upperKeys, err := keysIn(upperOnly)
+	if err != nil {
+		return nil, err
+	}
+	kept := upperOnly
+	if lowerKeys < upperKeys {
+		kept = lowerOnly
+	}
+	f := filter.DeepCopy()
+	f.Set(field, kept)
+	return f, nil
 }
 
-// boundedByFewerKeysUnderAnd applies boundedByFewerKeys to the one $and
-// branch that holds field's condition.
-func boundedByFewerKeysUnderAnd(docs []*types.Document, filter *types.Document, field string, path types.Path, cmp *collation.Comparator) *types.Document {
+func boundedByFewerKeysUnderAnd(filter *types.Document, field string, keysIn func(cond *types.Document) (int, error), cmp *collation.Comparator) (*types.Document, error) {
 	and, err := filter.Get("$and")
 	branches := filterBranches(and)
 	if err != nil || branches == nil {
-		return filter
+		return filter, nil
 	}
 	holder := -1
 	for i, b := range branches {
 		if andHolds(b, field) {
 			if holder >= 0 {
-				return filter
+				return filter, nil
 			}
 			holder = i
 		}
 	}
 	if holder < 0 {
-		return filter
+		return filter, nil
 	}
-	reduced := boundedByFewerKeys(docs, branches[holder], field, path, cmp)
-	if reduced == branches[holder] {
-		return filter
+	reduced, err := boundedByFewerKeys(branches[holder], field, keysIn, cmp)
+	if err != nil || reduced == branches[holder] {
+		return filter, err
 	}
 	arr := types.MakeArray(len(branches))
 	for i, b := range branches {
@@ -277,7 +288,45 @@ func boundedByFewerKeysUnderAnd(docs []*types.Document, filter *types.Document, 
 	}
 	f := filter.DeepCopy()
 	f.Set("$and", arr)
-	return f
+	return f, nil
+}
+
+// BoundedByFewerKeys returns filter with only the bound of a two-sided range
+// on multikey field that mongod's plan trial keeps (boundedByFewerKeys), the
+// keys counted over documents rangeDocs returns for a one-sided condition.
+func BoundedByFewerKeys(filter *types.Document, field string, rangeDocs func(cond *types.Document) ([]*types.Document, error), cmp *collation.Comparator) (*types.Document, error) {
+	path, err := types.NewPathFromString(field)
+	if err != nil {
+		return filter, nil
+	}
+	return boundedByFewerKeys(filter, field, func(cond *types.Document) (int, error) {
+		docs, err := rangeDocs(cond)
+		if err != nil {
+			return 0, err
+		}
+		return countAdmittedKeys(docs, path, cond, cmp), nil
+	}, cmp)
+}
+
+// countAdmittedKeys is the work a scan of the keys cond admits does over docs'
+// index keys on path: one per key, each distinct key once per document as an
+// index stores them, and one per document it fetches.
+func countAdmittedKeys(docs []*types.Document, path types.Path, cond *types.Document, cmp *collation.Comparator) int {
+	admit := conditionAdmitter(cond, cmp)
+	n := 0
+	for _, doc := range docs {
+		var counted []any
+		for _, key := range commonpath.IndexKeyValues(doc, path) {
+			if !admit(key) || slices.ContainsFunc(counted, func(c any) bool { return types.Compare(c, key) == types.Equal }) {
+				continue
+			}
+			counted = append(counted, key)
+		}
+		if len(counted) > 0 {
+			n += len(counted) + 1
+		}
+	}
+	return n
 }
 
 // andHolds reports whether filter holds field at its top level or under $and.

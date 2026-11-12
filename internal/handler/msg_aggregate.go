@@ -539,7 +539,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		if hint, _ := document.Get("hint"); hint != nil {
 			qp.Hint = hint
 			if qp.Sort == nil {
-				if hintOrder, hintSortFilter, err = hintedIndexOrder(ctx, c, hint, qp.Filter); err != nil {
+				if hintOrder, hintSortFilter, err = hintedIndexOrder(ctx, c, hint, qp.Filter, qp.Collation); err != nil {
 					closer.Close()
 					return nil, err
 				}

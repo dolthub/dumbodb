@@ -16,12 +16,15 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
@@ -176,7 +179,7 @@ func naturalDirection(v any) (int, bool) {
 // reaches an array by its least element rather than its first one in bounds. An unsorted hinted read returns
 // index order, so such a read sorts by the pattern (SortIteratorInIndexOrder)
 // and sortFilter, which is filter, or marks it read in one scan of the index.
-func hintedIndexOrder(ctx context.Context, coll backends.Collection, hint any, filter *types.Document) (order, sortFilter *types.Document, err error) {
+func hintedIndexOrder(ctx context.Context, coll backends.Collection, hint any, filter, queryCollation *types.Document) (order, sortFilter *types.Document, err error) {
 	if !backends.HintRequiresExistingIndex(hint) {
 		return nil, nil, nil
 	}
@@ -206,10 +209,58 @@ func hintedIndexOrder(ctx context.Context, coll backends.Collection, hint any, f
 			if (idx.Sparse || idx.PartialFilterExpression != nil) && orBranchMatchesMissing(filter) {
 				return order, common.AsOneIndexScan(filter), nil
 			}
-			return order, filter, nil
+			sortFilter = filter
+			cmp := collation.Parse(queryCollation).Comparator()
+			for i, k := range idx.Key {
+				if !idx.KeyMultikey(i) {
+					continue
+				}
+				rangeDocs := func(cond *types.Document) ([]*types.Document, error) {
+					return indexRangeDocs(ctx, coll, idx, hint, k.Field, cond, queryCollation)
+				}
+				if sortFilter, err = common.BoundedByFewerKeys(sortFilter, k.Field, rangeDocs, cmp); err != nil {
+					return nil, nil, err
+				}
+			}
+			return order, sortFilter, nil
 		}
 	}
 	return nil, nil, nil
+}
+
+// indexRangeDocs returns the documents idx holds with a key on field that
+// cond admits, read through the hinted index.
+func indexRangeDocs(ctx context.Context, coll backends.Collection, idx backends.IndexInfo, hint any, field string, cond, queryCollation *types.Document) ([]*types.Document, error) {
+	filter := must.NotFail(types.NewDocument(field, cond))
+	res, err := coll.Query(ctx, &backends.QueryParams{
+		Filter: filter, Hint: hint, Collation: queryCollation, Collated: !collation.Parse(queryCollation).IsSimple(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer res.Iter.Close()
+	var docs []*types.Document
+	for {
+		_, doc, err := res.Iter.Next()
+		if errors.Is(err, iterator.ErrIteratorDone) {
+			return docs, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		if idx.PartialFilterExpression != nil {
+			if in, ferr := common.FilterDocument(doc, idx.PartialFilterExpression); ferr != nil || !in {
+				continue
+			}
+		}
+		if idx.Sparse {
+			if in, ferr := common.FilterDocument(doc, must.NotFail(types.NewDocument(field,
+				must.NotFail(types.NewDocument("$exists", true))))); ferr != nil || !in {
+				continue
+			}
+		}
+		docs = append(docs, doc)
+	}
 }
 
 // orBranchMatchesMissing reports whether filter is a lone $or with a branch

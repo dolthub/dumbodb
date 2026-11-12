@@ -251,7 +251,7 @@ statements:
 		if !u.Multi {
 			// The one document updated is the first match in the hinted
 			// index's order.
-			order, sortFilter, err := hintedIndexOrder(ctx, c, u.Hint, u.Filter)
+			order, sortFilter, err := hintedIndexOrder(ctx, c, u.Hint, u.Filter, u.Collation)
 			if err != nil {
 				return 0, 0, nil, nil, err
 			}
