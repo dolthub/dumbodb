@@ -71,6 +71,13 @@ func newDensify(stage *types.Document) (aggregations.Stage, error) {
 		}
 		switch key {
 		case "field":
+			// mongod's IDL parser checks each field's type as it reads it,
+			// before it looks for missing ones.
+			if _, isString := val.(string); !isString {
+				if _, err := stagePath(val, "$densify.field", "$densify (stage)"); err != nil {
+					return nil, err
+				}
+			}
 			fieldVal = val
 		case "range":
 			rangeVal = val

@@ -15,8 +15,11 @@
 package stages
 
 import (
+	"fmt"
+
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
@@ -97,7 +100,10 @@ func newShardedDataDistribution(*types.Document) (aggregations.Stage, error) {
 
 // newQueryStats rejects $queryStats outside {aggregate: 1} on admin, which
 // msg_aggregate.go handles.
-func newQueryStats(*types.Document) (aggregations.Stage, error) {
+func newQueryStats(stage *types.Document) (aggregations.Stage, error) {
+	if err := CheckQueryStatsSpec(stage); err != nil {
+		return nil, err
+	}
 	return nil, handlererrors.NewCommandErrorMsgWithArgument(
 		handlererrors.ErrInvalidNamespace,
 		"$queryStats must be run against the 'admin' database with {aggregate: 1}",
@@ -105,9 +111,85 @@ func newQueryStats(*types.Document) (aggregations.Stage, error) {
 	)
 }
 
+// CheckQueryStatsSpec returns mongod's error for a $queryStats
+// specification its IDL parser refuses.
+func CheckQueryStatsSpec(stage *types.Document) error {
+	v := must.NotFail(stage.Get("$queryStats"))
+	spec, ok := v.(*types.Document)
+	if !ok {
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFailedToParse,
+			"$queryStats value must be an object. Found: "+handlerparams.AliasFromType(v), "$queryStats (stage)")
+	}
+	for _, key := range spec.Keys() {
+		val := must.NotFail(spec.Get(key))
+		if key != "transformIdentifiers" {
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIDLUnknownField,
+				fmt.Sprintf("BSON field '$queryStats.%s' is an unknown field.", key), "$queryStats (stage)")
+		}
+		ti, ok := val.(*types.Document)
+		if !ok {
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrTypeMismatch,
+				fmt.Sprintf("BSON field '$queryStats.transformIdentifiers' is the wrong type '%s', expected type 'object'",
+					handlerparams.AliasFromType(val)), "$queryStats (stage)")
+		}
+		algorithm, hasKey := "", false
+		for _, k := range ti.Keys() {
+			tv := must.NotFail(ti.Get(k))
+			switch k {
+			case "algorithm":
+				s, ok := tv.(string)
+				if !ok {
+					return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrTypeMismatch,
+						fmt.Sprintf("BSON field '$queryStats.transformIdentifiers.algorithm' is the wrong type '%s', expected type 'string'",
+							handlerparams.AliasFromType(tv)), "$queryStats (stage)")
+				}
+				if s != "hmac-sha-256" {
+					return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
+						fmt.Sprintf("Enumeration value '%s' for field '$queryStats.transformIdentifiers.algorithm' is not a valid value.", s),
+						"$queryStats (stage)")
+				}
+				algorithm = s
+			case "hmacKey":
+				if _, ok := tv.(types.Binary); !ok {
+					return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrTypeMismatch,
+						fmt.Sprintf("BSON field '$queryStats.transformIdentifiers.hmacKey' is the wrong type '%s', expected type 'binData'",
+							handlerparams.AliasFromType(tv)), "$queryStats (stage)")
+				}
+				hasKey = true
+			default:
+				return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIDLUnknownField,
+					fmt.Sprintf("BSON field '$queryStats.transformIdentifiers.%s' is an unknown field.", k), "$queryStats (stage)")
+			}
+		}
+		if algorithm == "" {
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrMissingField,
+				"BSON field '$queryStats.transformIdentifiers.algorithm' is missing but a required field", "$queryStats (stage)")
+		}
+		if !hasKey {
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFailedToParse,
+				"The 'hmacKey' parameter of the $queryStats stage must be specified when applying the hmac-sha-256 algorithm",
+				"$queryStats (stage)")
+		}
+	}
+	return nil
+}
+
+// CheckListCatalogSpec returns mongod's error for a $listCatalog
+// specification other than an empty object.
+func CheckListCatalogSpec(stage *types.Document) error {
+	if spec, ok := must.NotFail(stage.Get("$listCatalog")).(*types.Document); ok && spec.Len() == 0 {
+		return nil
+	}
+	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrListCatalogSpec,
+		"The $listCatalog stage specification must be an empty object", "$listCatalog (stage)")
+}
+
 // newListCatalog rejects $listCatalog, whose catalog entries DumboDB does
 // not have.
-func newListCatalog(*types.Document) (aggregations.Stage, error) {
+func newListCatalog(stage *types.Document) (aggregations.Stage, error) {
+	if err := CheckListCatalogSpec(stage); err != nil {
+		return nil, err
+	}
 	return nil, handlererrors.NewCommandErrorMsgWithArgument(
 		handlererrors.ErrNotImplemented,
 		"$listCatalog is not implemented",
@@ -140,10 +222,75 @@ func CheckParseFailingStages(pipeline *types.Array) error {
 		if !ok || stage.Len() != 1 {
 			continue
 		}
-		if newStage, fails := parseFailingStages[stage.Command()]; fails {
+		name := stage.Command()
+		if newStage, fails := parseFailingStages[name]; fails {
 			_, err := newStage(stage)
+			return err
+		}
+		if FailsParsing(stage) {
+			// mongod parses stages in order, so this stage's own error,
+			// which building the pipeline reports, comes first.
+			return nil
+		}
+	}
+	return nil
+}
+
+// checkSubPipelineParses returns the error of the first stage of a
+// sub-pipeline that fails to parse on its own, nested sub-pipelines
+// included when fetcher can build their stages.
+func checkSubPipelineParses(pipeline *types.Array, fetcher CollectionFetcher) error {
+	if pipeline == nil {
+		return nil
+	}
+	for i := range pipeline.Len() {
+		stage, ok := must.NotFail(pipeline.Get(i)).(*types.Document)
+		if !ok || stage.Len() != 1 {
+			continue
+		}
+		var err error
+		switch name := stage.Command(); {
+		case fetcher != nil && (name == "$lookup" || name == "$unionWith" || name == "$facet"):
+			_, err = newSubPipelineStage(stage, fetcher, false)
+		case FailsParsing(stage):
+			if newStage, known := stageConstructors[name]; known {
+				_, err = newStage(stage)
+			} else {
+				err = handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrStageUnrecognized,
+					fmt.Sprintf("Unrecognized pipeline stage name: '%s'", name), name+" (stage)")
+			}
+		}
+		if err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// stageConstructors is Stages, set at init to break the cycle through the
+// stages that check their sub-pipelines.
+var stageConstructors map[string]newStageFunc
+
+func init() {
+	stageConstructors = Stages
+}
+
+// FailsParsing reports whether a stage fails to parse on its own: an
+// unknown stage, or one whose specification its constructor refuses.
+// Stages whose checks depend on where they run are not tried.
+func FailsParsing(stage *types.Document) bool {
+	name := stage.Command()
+	if specialStages[name] {
+		return false
+	}
+	newStage, known := stageConstructors[name]
+	if !known {
+		return true
+	}
+	switch name {
+	case "$documents", "$collStats", "$currentOp", "$listLocalSessions", "$listCatalog", "$facet":
+		return false
+	}
+	_, err := newStage(stage)
+	return err != nil
 }

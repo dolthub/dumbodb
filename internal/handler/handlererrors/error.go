@@ -934,6 +934,9 @@ const (
 	// ErrWindowOutputPathCollision indicates $setWindowFields outputs writing one path within another.
 	ErrWindowOutputPathCollision = ErrorCode(6307900) // Location6307900
 
+	// ErrListCatalogSpec indicates a $listCatalog specification other than an empty object.
+	ErrListCatalogSpec = ErrorCode(6200600) // Location6200600
+
 	// ErrStageIndexedStringVectorDuplicate indicates that input to IndexedStringVector contained duplicate values.
 	ErrStageIndexedStringVectorDuplicate = ErrorCode(7582300) // Location7582300
 
