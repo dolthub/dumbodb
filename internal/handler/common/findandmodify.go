@@ -19,6 +19,7 @@ import (
 	"log/slog"
 
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -95,11 +96,13 @@ func GetFindAndModifyParams(doc *types.Document, l *slog.Logger) (*FindAndModify
 		)
 	}
 
+	now := operators.CommandNow()
 	if params.UpdateValue != nil {
 		switch updateParam := params.UpdateValue.(type) {
 		case *types.Document:
 			params.Update = updateParam
 		case *types.Array:
+			updateParam = operators.BindNowInPipeline(updateParam, now)
 			stages, err := ParseUpdatePipeline(updateParam)
 			if err != nil {
 				return nil, err
@@ -137,6 +140,7 @@ func GetFindAndModifyParams(doc *types.Document, l *slog.Logger) (*FindAndModify
 	params.HasUpdateOperators = hasUpdateOperators
 
 	CanonicalizeFilter(params.Query)
+	params.Query = operators.BindNowInFilter(params.Query, now)
 
 	return &params, nil
 }

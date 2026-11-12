@@ -25,6 +25,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
@@ -54,6 +55,7 @@ func (h *Handler) MsgCount(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMs
 	}
 
 	common.CanonicalizeFilter(params.Filter)
+	params.Filter = operators.BindNowInFilter(params.Filter, operators.CommandNow())
 	if err := common.ValidateFilter(params.Filter, nil); err != nil {
 		return nil, err
 	}

@@ -17,6 +17,7 @@ package common
 import (
 	"log/slog"
 
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
 )
@@ -65,6 +66,11 @@ func GetDeleteParams(document *types.Document, l *slog.Logger) (*DeleteParams, e
 	err := handlerparams.ExtractParams(document, "delete", &params, l)
 	if err != nil {
 		return nil, err
+	}
+
+	now := operators.CommandNow()
+	for i := range params.Deletes {
+		params.Deletes[i].Filter = operators.BindNowInFilter(params.Deletes[i].Filter, now)
 	}
 
 	return &params, nil
