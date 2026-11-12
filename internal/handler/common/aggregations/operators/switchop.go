@@ -110,8 +110,8 @@ func (op *switchOp) Process(doc *types.Document) (any, error) {
 		return evalBranch(op.defaultArg, doc)
 	}
 
-	return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSwitchNoMatch,
-		"Cannot execute a switch statement where all the cases evaluate to false without a default", "$switch")
+	return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketNoBranch,
+		"$switch could not find a matching branch for an input, and no default was specified.", "$switch")
 }
 
 var _ Operator = (*switchOp)(nil)

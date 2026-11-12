@@ -237,6 +237,12 @@ func foldDocumentConstants(doc *types.Document) (any, bool, error) {
 	}
 
 	value, missing, err := foldConstant(folded, nil)
+	var cmdErr *handlererrors.CommandError
+	if name == "$switch" && errors.As(err, &cmdErr) && cmdErr.Code() == handlererrors.ErrBucketNoBranch {
+		// mongod's optimizer reports a constant $switch without a match.
+		return nil, false, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSwitchNoMatch,
+			"Cannot execute a switch statement where all the cases evaluate to false without a default", "$switch")
+	}
 	if err != nil {
 		return nil, false, err
 	}
