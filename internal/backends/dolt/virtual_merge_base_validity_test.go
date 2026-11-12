@@ -224,9 +224,9 @@ func foldValidity(t *testing.T, b *Backend, mode string, s validityScenario) (ha
 	return virtualBase, flags
 }
 
-// requireValidVirtualBase checks rule 4 on collection items of the commit |h|: each index holds exactly the entries
-// its documents give, and no unique index holds a key twice.
-func requireValidVirtualBase(t *testing.T, b *Backend, h hash.Hash) {
+// requireIndexesMatchItems checks that each index of collection items in the commit |h| holds exactly the entries its
+// documents give, and that no unique index holds a key twice: rule 4 for a virtual merge base.
+func requireIndexesMatchItems(t *testing.T, b *Backend, h hash.Hash) {
 	t.Helper()
 	ctx := context.Background()
 	db, err := b.getOrOpenDB(ctx, "testdb", false)
@@ -307,7 +307,7 @@ func TestVirtualMergeBase_StaysValid(t *testing.T) {
 					require.True(t, expected, "unexpected document %d", id)
 				}
 				require.Equal(t, wantFlags, flagsByID(flags))
-				requireValidVirtualBase(t, b, virtualBase)
+				requireIndexesMatchItems(t, b, virtualBase)
 			})
 		}
 	}

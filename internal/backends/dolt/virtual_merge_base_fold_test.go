@@ -279,7 +279,7 @@ func TestVirtualMergeBase_FoldsConflictingDocuments(t *testing.T) {
 					wantFlags[s.id] = *want.flag
 				}
 				require.Equal(t, wantFlags, flagsByID(flags))
-				requireValidVirtualBase(t, b, virtualBase)
+				requireIndexesMatchItems(t, b, virtualBase)
 			})
 		}
 	}
