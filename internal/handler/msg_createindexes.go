@@ -490,9 +490,6 @@ func processIndex(command string, indexDoc *types.Document, ignoreUnknownIndexOp
 }
 
 func processIndexKey(command string, keyDoc *types.Document) ([]backends.IndexKeyPair, error) {
-	if keyDoc.Len() > backends.MaxIndexKeyFields {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrTooManyCompoundKeys, "too many compound keys", command)
-	}
 	res := make([]backends.IndexKeyPair, 0, keyDoc.Len())
 
 	keyIter := keyDoc.Iterator()
@@ -629,6 +626,61 @@ func sameCollation(a, b *types.Document) bool {
 	return collation.Parse(a).Identity() == collation.Parse(b).Identity()
 }
 
+// indexConflict returns mongod's error for creating idx beside other, or
+// whether the two are identical, so idx need not be created. Indexes on one
+// key differ when their unique, sparse, partialFilterExpression or collation
+// do; other options, such as hidden, do not make them different indexes.
+func indexConflict(command string, idx, other backends.IndexInfo, sameRequest bool) (bool, error) {
+	sameKey := formatIndexKey(idx.Key) == formatIndexKey(other.Key)
+	equivalent := sameKey && idx.Unique == other.Unique && idx.Sparse == other.Sparse &&
+		sameBSON(idx.PartialFilterExpression, other.PartialFilterExpression) && sameCollation(idx.Collation, other.Collation)
+	sameOptions := equivalent && idx.Hidden == other.Hidden
+	specs := fmt.Sprintf("Requested index: %s, existing index: %s", conflictSpec(idx), conflictSpec(other))
+	switch {
+	case idx.Name == other.Name && sameOptions:
+		return true, nil
+	case idx.Name == other.Name && equivalent:
+		return false, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIndexOptionsConflict,
+			"An equivalent index already exists with the same name but different options. "+specs, command)
+	case idx.Name == other.Name:
+		return false, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIndexKeySpecsConflict,
+			"An existing index has the same name as the requested index."+
+				" When index names are not specified, they are auto generated and can cause conflicts."+
+				" Please refer to our documentation. "+specs, command)
+	case sameOptions || equivalent && sameRequest:
+		return false, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIndexOptionsConflict,
+			"Index already exists with a different name: "+other.Name, command)
+	case equivalent:
+		return false, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIndexOptionsConflict,
+			"An equivalent index already exists with a different name and options. "+specs, command)
+	}
+	return false, nil
+}
+
+// conflictSpec is idx's spec as mongod prints it in an index conflict.
+func conflictSpec(idx backends.IndexInfo) string {
+	var b strings.Builder
+	b.WriteString("{ v: 2")
+	if idx.Hidden {
+		b.WriteString(", hidden: true")
+	}
+	if idx.Unique {
+		b.WriteString(", unique: true")
+	}
+	fmt.Fprintf(&b, ", key: { %s }, name: %q", formatIndexKey(idx.Key), idx.Name)
+	if idx.Sparse {
+		b.WriteString(", sparse: true")
+	}
+	if idx.PartialFilterExpression != nil {
+		b.WriteString(", partialFilterExpression: " + types.FormatAnyValue(idx.PartialFilterExpression))
+	}
+	if idx.Collation != nil {
+		b.WriteString(", collation: " + resolvedCollationString(idx.Collation))
+	}
+	b.WriteString(" }")
+	return b.String()
+}
+
 // idIndexOptionError returns mongod's error for option, which an _id index
 // spec may not hold, in indexDoc when index is on _id alone.
 func idIndexOptionError(command string, index backends.IndexInfo, indexDoc *types.Document, option string) error {
@@ -702,6 +754,11 @@ func validateIndexesForCreation(command string, existing, toCreate []backends.In
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCannotCreateIndex, msg, command)
 		}
 
+		// mongod checks the name before the key's field count.
+		if len(newIdx.Key) > backends.MaxIndexKeyFields {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrTooManyCompoundKeys, "too many compound keys", command)
+		}
+
 		if newIdx.Name == backends.DefaultIndexName && newKey != "_id: 1" {
 			msg := fmt.Sprintf(
 				"The index name '_id_' is reserved for the _id index, which must have key pattern {_id: 1},"+
@@ -719,61 +776,22 @@ func validateIndexesForCreation(command string, existing, toCreate []backends.In
 
 		// Compare against earlier entries in the same request.
 		for j := i - 1; j >= 0; j-- {
-			otherKey := formatIndexKey(toCreate[j].Key)
-			otherName := toCreate[j].Name
-
-			if otherName == newIdx.Name && otherKey == newKey {
-				msg := fmt.Sprintf("Identical index already exists: %s", otherName)
-
+			if identical, err := indexConflict(command, newIdx, toCreate[j], true); err != nil {
+				return nil, err
+			} else if identical {
+				msg := fmt.Sprintf("Identical index already exists: %s", toCreate[j].Name)
 				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIndexAlreadyExists, msg, command)
-			}
-
-			if newIdx.Name == otherName {
-				msg := fmt.Sprintf(
-					"An existing index has the same name as the requested index."+
-						" When index names are not specified, they are auto generated and can cause conflicts."+
-						" Please refer to our documentation. Requested index: { v: 2, key: { %s }, name: %q },"+
-						" existing index: { v: 2, key: { %s }, name: %q }",
-					newKey, newIdx.Name, otherKey, otherName,
-				)
-
-				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIndexKeySpecsConflict, msg, command)
-			}
-
-			if newKey == otherKey && sameCollation(newIdx.Collation, toCreate[j].Collation) {
-				msg := fmt.Sprintf(
-					"Index already exists with a different name: %s", otherName,
-				)
-
-				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIndexOptionsConflict, msg, command)
 			}
 		}
 
-		identical := false
+		identical := newKey == "_id: 1"
 		for _, existingIdx := range existing {
-			existingKey := formatIndexKey(existingIdx.Key)
-
-			if (newIdx.Name == existingIdx.Name && newKey == existingKey && sameCollation(newIdx.Collation, existingIdx.Collation)) || newKey == "_id: 1" {
-				// Fully identical indexes are ignored, no need to attempt to create them.
-				identical = true
+			if identical {
 				break
 			}
-
-			if newIdx.Name == existingIdx.Name {
-				msg := fmt.Sprintf(
-					"An existing index has the same name as the requested index."+
-						" When index names are not specified, they are auto generated and can cause conflicts."+
-						" Please refer to our documentation. Requested index: { v: 2, key: { %s }, name: %q },"+
-						" existing index: { v: 2, key: { %s }, name: %q }",
-					newKey, newIdx.Name, existingKey, existingIdx.Name,
-				)
-
-				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIndexKeySpecsConflict, msg, command)
-			}
-
-			if newKey == existingKey && sameCollation(newIdx.Collation, existingIdx.Collation) {
-				msg := fmt.Sprintf("Index already exists with a different name: %s", existingIdx.Name)
-				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIndexOptionsConflict, msg, command)
+			var err error
+			if identical, err = indexConflict(command, newIdx, existingIdx, false); err != nil {
+				return nil, err
 			}
 		}
 		if !identical {
