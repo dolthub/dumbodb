@@ -252,6 +252,9 @@ type ExplainParams struct {
 	Projection *types.Document
 	Limit      int64
 	Skip       int64
+	// ZeroLimit marks a limit of 0, which Limit's 0 cannot tell from none: a
+	// skip after a limit used it up, and the plan returns nothing.
+	ZeroLimit bool
 
 	// Command is the original wire command being explained ("find", "count",
 	// "distinct", "aggregate"). The backend picks a top-level explain shape

@@ -2659,6 +2659,9 @@ func wrapScanPlan(params *backends.ExplainParams, scan *explainStage, sorted boo
 	if params.Limit > 0 && !sortPresent && !keysSorted {
 		node = &explainStage{stage: "LIMIT", input: node, amount: max(params.Limit, -params.Limit)}
 	}
+	if params.ZeroLimit {
+		node = &explainStage{stage: "LIMIT", input: node}
+	}
 	if projStage != "" {
 		node = &explainStage{stage: projStage, input: node}
 	}

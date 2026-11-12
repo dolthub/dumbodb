@@ -77,6 +77,8 @@ func (h *Handler) runExplained(ctx context.Context, coll backends.Collection, pa
 	ctx, examined := backends.WithExaminedCounts(ctx)
 	var run explainRun
 	switch {
+	case qp.ZeroLimit:
+		// A limit of 0 reads nothing.
 	case qp.Command == "count" && !viaView:
 		run = h.runExplainedCount(ctx, coll, params, qp)
 	case qp.Command == "distinct" && !viaView:
@@ -483,6 +485,7 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 	}
 
 	qp := new(backends.ExplainParams)
+	var zeroLimit bool
 
 	if params.Aggregate {
 		// A match may need to pass shaping stages to reach a $lookup it can
@@ -491,7 +494,9 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 		params.StagesDocs = mergeLeadingMatches(dropShapingBeforeCount(aggregations.MoveMatchesAhead(moved)))
 		params.Filter, params.Sort = aggregations.GetPushdownQuery(params.StagesDocs)
 		common.CanonicalizeFilter(params.Filter)
-		params.Skip, params.Limit = pushdownWindow(params.StagesDocs)
+		var limited bool
+		params.Skip, params.Limit, limited = pushdownWindow(params.StagesDocs)
+		zeroLimit = limited && params.Limit == 0
 		params.Projection = absorbedProjection(params.StagesDocs)
 	}
 
@@ -501,6 +506,7 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 
 	qp.Hint = params.Hint
 	qp.Skip = params.Skip
+	qp.ZeroLimit = zeroLimit
 	qp.Projection = params.Projection
 	qp.Command = params.CommandName
 	qp.DistinctKey = params.DistinctKey
@@ -797,8 +803,9 @@ func explainMaxTimeMS(document *types.Document) (int64, error) {
 
 // pushdownWindow returns the skip and limit the query plan absorbs from the
 // run of $skip and $limit stages directly after its leading $match and
-// $sort, combined as mongod combines them: a skip after a limit shortens it.
-func pushdownWindow(stages []any) (skip, limit int64) {
+// $sort, combined as mongod combines them: a skip after a limit takes what
+// it can from it. limited reports whether a limit applies, as it may be 0.
+func pushdownWindow(stages []any) (skip, limit int64, limited bool) {
 	i := 0
 	for seen := map[string]bool{}; i < 2; i++ {
 		d := stageDocAt(stages, i)
@@ -810,22 +817,24 @@ func pushdownWindow(stages []any) (skip, limit int64) {
 	for ; ; i++ {
 		d := stageDocAt(stages, i)
 		if d == nil {
-			return skip, limit
+			return skip, limit, limited
 		}
 		switch d.Command() {
 		case "$skip":
 			n, _ := stageInt64(d, "$skip", common.GetSkipStageParam)
-			skip += n
-			if limit > 0 {
-				limit = max(limit-n, 0)
+			if limited {
+				n = min(n, limit)
+				limit -= n
 			}
+			skip += n
 		case "$limit":
 			n, _ := stageInt64(d, "$limit", common.GetLimitStageParam)
-			if limit == 0 || n < limit {
+			if !limited || n < limit {
 				limit = n
 			}
+			limited = true
 		default:
-			return skip, limit
+			return skip, limit, limited
 		}
 	}
 }
