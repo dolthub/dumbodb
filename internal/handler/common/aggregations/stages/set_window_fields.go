@@ -529,7 +529,7 @@ func (s *setWindowFields) partitionDocuments(docs []*types.Document) ([][]*types
 	for _, doc := range docs {
 		key, err := s.evaluatePartitionKey(doc)
 		if err != nil {
-			key = types.Null
+			return nil, err
 		}
 
 		found := false
@@ -559,24 +559,18 @@ func (s *setWindowFields) partitionDocuments(docs []*types.Document) ([][]*types
 
 // evaluatePartitionKey evaluates the partitionBy expression for a document.
 func (s *setWindowFields) evaluatePartitionKey(doc *types.Document) (any, error) {
-	switch pb := s.partitionBy.(type) {
-	case string:
-		expr, err := aggregations.NewExpression(pb, nil)
-		if err != nil {
-			return types.Null, nil
-		}
-
-		val, err := expr.Evaluate(doc)
-		if err != nil {
-			return types.Null, nil
-		}
-
-		return val, nil
-	case *types.Document, *types.Array, float64, bool, int32, int64, types.NullType:
-		return pb, nil
-	default:
+	val, missing, err := operators.EvalOperand(s.partitionBy, doc)
+	if err != nil {
+		return nil, err
+	}
+	if missing {
 		return types.Null, nil
 	}
+	if _, isArray := val.(*types.Array); isArray {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrTypeMismatch,
+			"An expression used to partition cannot evaluate to value of type array", "$setWindowFields (stage)")
+	}
+	return val, nil
 }
 
 // applyWindowFunctions applies all window output fields to each document in a partition.
