@@ -40,6 +40,17 @@ func (db *dbState) mergeBases(ctx context.Context, ours, theirs hash.Hash) ([]ha
 	return merge.MergeBases(ctx, oursCommit, theirsCommit)
 }
 
+// docFlag marks a document of a virtual merge base whose value its merge bases did not agree on: the whole document,
+// or the field paths they conflicted on. id is the document's _id.
+type docFlag struct {
+	id    any
+	whole bool
+	paths [][]string
+}
+
+// virtualBaseFlags holds the flagged documents of a virtual merge base, by collection and by document key.
+type virtualBaseFlags map[string]map[string]docFlag
+
 const (
 	virtualMergeBaseName        = "dumbodb"
 	virtualMergeBaseEmail       = "virtual-merge-base@dolthub.com"
@@ -60,29 +71,31 @@ func (db *dbState) mergeBase(ctx context.Context, ours, theirs hash.Hash) (hash.
 	if len(bases) == 1 {
 		return bases[0], true, nil
 	}
-	virtualBase, err := db.virtualMergeBase(ctx, bases)
+	virtualBase, _, err := db.virtualMergeBase(ctx, bases)
 	if err != nil {
 		return hash.Hash{}, false, fmt.Errorf("building the virtual merge base: %w", err)
 	}
 	return virtualBase, true, nil
 }
 
-// virtualMergeBase merges |bases|, which are newest first, oldest first into a dangling commit and returns its hash.
-func (db *dbState) virtualMergeBase(ctx context.Context, bases []hash.Hash) (hash.Hash, error) {
+// virtualMergeBase merges |bases|, which are newest first, oldest first into a dangling commit and returns its hash
+// and flags.
+func (db *dbState) virtualMergeBase(ctx context.Context, bases []hash.Hash) (hash.Hash, virtualBaseFlags, error) {
 	merged, err := db.doltCommit(ctx, bases[len(bases)-1])
 	if err != nil {
-		return hash.Hash{}, err
+		return hash.Hash{}, nil, err
 	}
 	for i := len(bases) - 2; i >= 0; i-- {
 		next, err := db.doltCommit(ctx, bases[i])
 		if err != nil {
-			return hash.Hash{}, err
+			return hash.Hash{}, nil, err
 		}
 		if merged, err = db.mergeIntoVirtualBase(ctx, merged, next); err != nil {
-			return hash.Hash{}, err
+			return hash.Hash{}, nil, err
 		}
 	}
-	return merged.HashOf()
+	h, err := merged.HashOf()
+	return h, nil, err
 }
 
 // mergeIntoVirtualBase merges |x| and |y| against their own merge base into a dangling commit. Its metadata is fixed
