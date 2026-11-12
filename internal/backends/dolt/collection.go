@@ -3412,6 +3412,9 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 		return nil, fmt.Errorf("resolving branch index state: %w", err)
 	}
 	hasUnique := false
+	// batchClaims holds, per unique index, the keys documents earlier in
+	// this batch took, which the stored index does not hold yet.
+	batchClaims := make(map[string]map[string]struct{})
 	for _, idx := range idxInfos {
 		if idx.Unique {
 			hasUnique = true
@@ -3498,7 +3501,7 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 			}
 
 			if hasUnique {
-				if err := c.validateUniqueOnUpdate(ctx, state, m, idxInfos, idxMaps, newDoc, h); err != nil {
+				if err := c.validateUniqueOnUpdate(ctx, state, m, idxInfos, idxMaps, newDoc, h, batchClaims); err != nil {
 					return nil, err
 				}
 			}
@@ -4859,7 +4862,7 @@ func (c *collection) scanCollatedIDConflict(ctx context.Context, state *dbState,
 
 // validateUniqueOnUpdate rejects an update whose new version collides
 // with a different document on any unique index.
-func (c *collection) validateUniqueOnUpdate(ctx context.Context, state *dbState, m prolly.Map, infos []backends.IndexInfo, idxMaps map[string]prolly.Map, newDoc *types.Document, selfKey []byte) error {
+func (c *collection) validateUniqueOnUpdate(ctx context.Context, state *dbState, m prolly.Map, infos []backends.IndexInfo, idxMaps map[string]prolly.Map, newDoc *types.Document, selfKey []byte, claims map[string]map[string]struct{}) error { //nolint:lll // for readability
 	for _, idx := range infos {
 		if !idx.Unique {
 			continue
@@ -4881,6 +4884,18 @@ func (c *collection) validateUniqueOnUpdate(ctx context.Context, state *dbState,
 			}
 			continue
 		}
+		// A doc's own duplicate rows ([5,5]) must not self-conflict.
+		prefixes := make(map[string]struct{}, len(rows))
+		for _, row := range rows {
+			start, _ := idxpkg.EqualityProbeBounds(row)
+			prefixes[string(start)] = struct{}{}
+		}
+		claimed := claims[idx.Name]
+		for prefix := range prefixes {
+			if _, taken := claimed[prefix]; taken {
+				return backends.NewDuplicateKeyError(idx.Name, indexDupKey(newDoc, idx))
+			}
+		}
 		for _, row := range rows {
 			conflict, err := idxpkg.UniqueConflict(ctx, idxMaps[idx.Name], row, selfKey)
 			if err != nil {
@@ -4889,6 +4904,13 @@ func (c *collection) validateUniqueOnUpdate(ctx context.Context, state *dbState,
 			if conflict {
 				return backends.NewDuplicateKeyError(idx.Name, indexDupKey(newDoc, idx))
 			}
+		}
+		if claimed == nil {
+			claimed = make(map[string]struct{})
+			claims[idx.Name] = claimed
+		}
+		for prefix := range prefixes {
+			claimed[prefix] = struct{}{}
 		}
 	}
 	return nil
