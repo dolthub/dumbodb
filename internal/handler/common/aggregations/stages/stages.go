@@ -31,10 +31,11 @@ var Stages = map[string]newStageFunc{
 	// sorted alphabetically
 	"$addFields":         newAddFields,
 	"$bucket":            newBucket,
-	"$changeStream":      newChangeStream,
 	"$bucketAuto":        newBucketAuto,
+	"$changeStream":      newChangeStream,
 	"$collStats":         newCollStats,
 	"$count":             newCount,
+	"$currentOp":         newCurrentOp,
 	"$densify":           newDensify,
 	"$documents":         newDocumentsOnCollection,
 	"$facet":             newFacet,
@@ -42,46 +43,44 @@ var Stages = map[string]newStageFunc{
 	"$geoNear":           newGeoNear,
 	"$group":             newGroup,
 	"$limit":             newLimit,
+	"$listLocalSessions": newListLocalSessions,
+	"$listSearchIndexes": newListSearchIndexes,
+	"$listSessions":      newListSessions,
 	"$match":             newMatch,
 	"$project":           newProject,
 	"$redact":            newRedact,
 	"$replaceRoot":       newReplaceRoot,
 	"$replaceWith":       newReplaceWith,
-	"$listSearchIndexes": newListSearchIndexes,
-	"$search":            newSearch,
-	"$set":               newSet,
 	"$sample":            newSample,
+	"$search":            newSearch,
+	"$searchMeta":        newSearch,
+	"$set":               newSet,
 	"$setWindowFields":   newSetWindowFields,
 	"$skip":              newSkip,
 	"$sort":              newSort,
 	"$sortByCount":       newSortByCount,
 	"$unset":             newUnset,
 	"$unwind":            newUnwind,
+	"$vectorSearch":      newSearch,
 	// please keep sorted alphabetically
 }
 
-// unsupportedStages maps all unsupported yet stages.
-var unsupportedStages = map[string]struct{}{
-	// sorted alphabetically
-	// $changeStream is handled in Stages above (returns ChangeStreamNotSupported error)
-	"$currentOp": {},
-	// $densify is handled in Stages above (validates required fields before returning error)
-	// $fill is handled in Stages above (validates required fields before returning error)
-	// $geoNear is now implemented in stages.go
-	// $graphLookup is handled specially in msg_aggregate.go via NewGraphLookupStage
-	// $indexStats is handled specially in msg_aggregate.go via NewIndexStatsStage
-	"$listLocalSessions": {},
-	"$listSessions":      {},
-	"$lookup":            {}, // handled specially in msg_aggregate.go via NewLookupStage
-	// $merge and $out handled specially in msg_aggregate.go via NewMergeStage/NewOutStage
-	// $planCacheStats is handled specially in msg_aggregate.go via NewPlanCacheStatsStage
-	// $search is handled in Stages above (returns SearchNotEnabled error)
-	"$searchMeta": {},
-	// "$setWindowFields" is now implemented above
+// IsKnownStage reports whether name is a pipeline stage mongod recognizes.
+func IsKnownStage(name string) bool {
+	_, ok := Stages[name]
+	return ok || specialStages[name]
+}
 
-	"$sharedDataDistribution": {},
-	"$unionWith":              {},
-	// please keep sorted alphabetically
+// specialStages are built by msg_aggregate.go, which gives them access to
+// the database, rather than by NewStage.
+var specialStages = map[string]bool{
+	"$graphLookup":    true,
+	"$indexStats":     true,
+	"$lookup":         true,
+	"$merge":          true,
+	"$out":            true,
+	"$planCacheStats": true,
+	"$unionWith":      true,
 }
 
 func NewStage(stage *types.Document) (aggregations.Stage, error) {
@@ -95,32 +94,15 @@ func NewStage(stage *types.Document) (aggregations.Stage, error) {
 
 	name := stage.Command()
 
-	f, supported := Stages[name]
-	_, unsupported := unsupportedStages[name]
-
-	switch {
-	case supported && unsupported:
-		panic(fmt.Sprintf("stage %q is in both `stages` and `unsupportedStages`", name))
-
-	case supported && !unsupported:
+	if f, supported := Stages[name]; supported {
 		return f(stage)
-
-	case !supported && unsupported:
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrNotImplemented,
-			fmt.Sprintf("`aggregate` stage %q is not implemented yet", name),
-			name+" (stage)", // to differentiate update operator $set from aggregation stage $set, etc
-		)
-
-	case !supported && !unsupported:
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrStageUnrecognized,
-			fmt.Sprintf("Unrecognized pipeline stage name: '%s'", name),
-			name+" (stage)", // to differentiate update operator $set from aggregation stage $set, etc
-		)
 	}
 
-	panic("not reached")
+	return nil, handlererrors.NewCommandErrorMsgWithArgument(
+		handlererrors.ErrStageUnrecognized,
+		fmt.Sprintf("Unrecognized pipeline stage name: '%s'", name),
+		name+" (stage)", // to differentiate update operator $set from aggregation stage $set, etc
+	)
 }
 
 // newDocumentsOnCollection is mongod's error for $documents where a

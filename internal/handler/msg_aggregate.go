@@ -696,6 +696,13 @@ func (h *Handler) aggregateDatabase(connCtx context.Context, document *types.Doc
 	}
 
 	stageName := firstStage.Command()
+	if !stages.IsKnownStage(stageName) {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrStageUnrecognized,
+			fmt.Sprintf("Unrecognized pipeline stage name: '%s'", stageName),
+			document.Command(),
+		)
+	}
 	if _, dbOK := dbLevelSourceStages[stageName]; !dbOK {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrInvalidNamespace,

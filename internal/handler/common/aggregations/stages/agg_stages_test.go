@@ -431,7 +431,9 @@ func TestAggStage_unsupportedErrors_search(t *testing.T) {
 	if got, want := cmdErr.Code(), handlererrors.ErrSearchNotEnabled; got != want {
 		t.Errorf("error code = %d, want %d (ErrSearchNotEnabled)", got, want)
 	}
-	const wantMsg = "$search is not supported by DumboDB."
+	const wantMsg = "Using $search and $vectorSearch aggregation stages requires additional configuration. " +
+		"Please connect to Atlas or an AtlasCLI local deployment to enable.For more information on how to connect, " +
+		"see https://dochub.mongodb.org/core/atlas-cli-deploy-local-reqs."
 	if got := cmdErr.Err().Error(); got != wantMsg {
 		t.Errorf("error message = %q, want %q", got, wantMsg)
 	}
@@ -454,7 +456,9 @@ func TestAggStage_unsupportedErrors_listSearchIndexes(t *testing.T) {
 	if got, want := cmdErr.Code(), handlererrors.ErrSearchNotEnabled; got != want {
 		t.Errorf("error code = %d, want %d (ErrSearchNotEnabled)", got, want)
 	}
-	const wantMsg = "$listSearchIndexes is not supported by DumboDB."
+	const wantMsg = "Using Atlas Search Database Commands and the $listSearchIndexes aggregation stage requires additional " +
+		"configuration. Please connect to Atlas or an AtlasCLI local deployment to enable. For more information on how to " +
+		"connect, see https://dochub.mongodb.org/core/atlas-cli-deploy-local-reqs."
 	if got := cmdErr.Err().Error(); got != wantMsg {
 		t.Errorf("error message = %q, want %q", got, wantMsg)
 	}
