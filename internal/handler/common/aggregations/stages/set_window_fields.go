@@ -27,6 +27,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators/accumulators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
@@ -193,6 +194,14 @@ func newSetWindowFields(stage *types.Document) (aggregations.Stage, error) {
 					"$setWindowFields (stage)",
 				)
 			}
+		}
+
+		if wof.operator == "$linearFill" && (swf.sortBy == nil || swf.sortBy.Len() != 1) {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrLinearFillSortBy,
+				"$linearFill must be specified with a top level sortBy expression with exactly one element",
+				"$setWindowFields (stage)",
+			)
 		}
 
 		swf.outputs = append(swf.outputs, wof)
@@ -588,6 +597,15 @@ func (s *setWindowFields) applyWindowFunctions(partition []*types.Document) ([]*
 		result[i] = clone
 	}
 
+	// mongod checks each document's $linearFill inputs before it interpolates.
+	for _, wof := range s.outputs {
+		if wof.operator == "$linearFill" {
+			if _, _, err := linearFillValues(wof.expression, partition); err != nil {
+				return nil, err
+			}
+		}
+	}
+
 	for _, wof := range s.outputs {
 		vals, err := s.computeWindowValues(partition, wof)
 		if err != nil {
@@ -754,7 +772,7 @@ func (s *setWindowFields) computeWindowValues(partition []*types.Document, wof w
 			return nil, err
 		}
 		var err error
-		if vals, err = computeLinearFill(wof.expression, partition); err != nil {
+		if vals, err = s.computeLinearFill(wof.expression, partition); err != nil {
 			return nil, err
 		}
 
@@ -936,6 +954,8 @@ func (s *setWindowFields) validateSortByFieldIsDate(partition []*types.Document)
 // bsonTypeName returns the MongoDB type name for a value (used in error messages).
 func bsonTypeName(v any) string {
 	switch v.(type) {
+	case nil:
+		return "missing"
 	case string:
 		return "string"
 	case float64:
@@ -1639,78 +1659,88 @@ func computeIntegral(spec derivativeSpec, window []*types.Document) (any, error)
 	return total, nil
 }
 
-// computeLinearFill fills null values using linear interpolation.
-func computeLinearFill(expr any, partition []*types.Document) ([]any, error) {
-	n := len(partition)
-	vals := make([]any, n)
+// computeLinearFill fills null and missing values by interpolating linearly,
+// by the sortBy value, between the nearest values on either side; a value
+// with none on one side stays null.
+func (s *setWindowFields) computeLinearFill(expr any, partition []*types.Document) ([]any, error) {
+	if err := s.validateSortByFieldIsNumericOrDate(partition); err != nil {
+		return nil, err
+	}
+	sortKey := s.sortBy.Keys()[0]
+	xs := make([]float64, len(partition))
+	for i, doc := range partition {
+		switch x := sortByValue(doc, sortKey).(type) {
+		case time.Time:
+			xs[i] = float64(x.UnixMilli())
+		default:
+			xs[i], _ = toFloat64(x)
+		}
+		if i > 0 && xs[i] == xs[i-1] {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrLinearFillRepeatedSortValue,
+				"There can be no repeated values in the sort field in the same partition",
+				"$setWindowFields (stage)",
+			)
+		}
+	}
 
-	// First pass: collect raw values.
+	vals, known, err := linearFillValues(expr, partition)
+	if err != nil {
+		return nil, err
+	}
+
+	prev := -1
+	for i := range vals {
+		if known[i] {
+			prev = i
+			continue
+		}
+		next := i + 1
+		for next < len(vals) && !known[next] {
+			next++
+		}
+		if prev < 0 || next == len(vals) {
+			continue
+		}
+		y0, _ := numberAsFloat64(vals[prev])
+		y1, _ := numberAsFloat64(vals[next])
+		vals[i] = y0 + (xs[i]-xs[prev])*(y1-y0)/(xs[next]-xs[prev])
+	}
+	return vals, nil
+}
+
+// linearFillValues evaluates a $linearFill input for each document,
+// reporting which values are known numbers.
+func linearFillValues(expr any, partition []*types.Document) ([]any, []bool, error) {
+	vals := make([]any, len(partition))
+	known := make([]bool, len(partition))
 	for i, doc := range partition {
 		v, err := evaluateExpr(expr, doc)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		if _, isNull := v.(types.NullType); isNull {
-			vals[i] = nil // sentinel for "needs fill"
-		} else {
-			vals[i] = v
-		}
-	}
-
-	// Second pass: interpolate gaps.
-	for i := range n {
-		if vals[i] != nil {
-			continue
-		}
-
-		// Find previous non-null.
-		prevIdx := -1
-
-		for j := i - 1; j >= 0; j-- {
-			if vals[j] != nil {
-				prevIdx = j
-				break
-			}
-		}
-
-		// Find next non-null.
-		nextIdx := -1
-
-		for j := i + 1; j < n; j++ {
-			if vals[j] != nil {
-				nextIdx = j
-				break
-			}
-		}
-
-		if prevIdx < 0 && nextIdx < 0 {
+		switch v.(type) {
+		case types.NullType:
 			vals[i] = types.Null
-		} else if prevIdx < 0 {
-			vals[i] = vals[nextIdx]
-		} else if nextIdx < 0 {
-			vals[i] = vals[prevIdx]
-		} else {
-			// Linear interpolation.
-			pf, ok1 := toFloat64(vals[prevIdx])
-			nf, ok2 := toFloat64(vals[nextIdx])
-
-			if !ok1 || !ok2 {
-				vals[i] = vals[prevIdx]
-			} else {
-				t := float64(i-prevIdx) / float64(nextIdx-prevIdx)
-				vals[i] = pf + t*(nf-pf)
-			}
+		case int32, int64, float64, types.Decimal128:
+			vals[i], known[i] = v, true
+		default:
+			return nil, nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrTypeMismatch,
+				"Value to be filled must be numeric or nullish, but found "+handlerparams.AliasFromType(v),
+				"$setWindowFields (stage)",
+			)
 		}
 	}
+	return vals, known, nil
+}
 
-	// Replace remaining nils with Null.
-	for i := range n {
-		if vals[i] == nil {
-			vals[i] = types.Null
-		}
+func numberAsFloat64(v any) (float64, bool) {
+	if d, ok := v.(types.Decimal128); ok {
+		f, err := aggregations.DecimalToAPD(d).Float64()
+		return f, err == nil
 	}
-
-	return vals, nil
+	return toFloat64(v)
 }
 
 // computeLocf fills null values using last observation carried forward.
