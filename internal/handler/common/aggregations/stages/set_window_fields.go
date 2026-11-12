@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	stdsort "sort"
 	"strings"
 	"time"
 
@@ -87,12 +86,6 @@ type derivativeSpec struct {
 type covPairSpec struct {
 	expr1 any
 	expr2 any
-}
-
-// topSpec holds $top/$bottom operator configuration.
-type topSpec struct {
-	sortBy     *types.Document
-	outputExpr any // field path string or projection document
 }
 
 // setWindowFields represents $setWindowFields aggregation stage.
@@ -305,26 +298,12 @@ func parseWindowOutputField(field string, spec *types.Document) (windowOutputFie
 				return wof, parseErr
 			}
 			wof.opSpec = spec
-		case "$firstN", "$lastN", "$minN", "$maxN", "$topN", "$bottomN", "$median", "$percentile":
+		case "$firstN", "$lastN", "$minN", "$maxN", "$top", "$bottom", "$topN", "$bottomN", "$median", "$percentile":
 			acc, accErr := accumulators.NewAccumulator("$setWindowFields", field, must.NotFail(types.NewDocument(k, v)))
 			if accErr != nil {
 				return wof, accErr
 			}
 			wof.opSpec = acc
-		case "$top", "$bottom":
-			topDoc, ok := v.(*types.Document)
-			if !ok {
-				return wof, handlererrors.NewCommandErrorMsgWithArgument(
-					handlererrors.ErrTypeMismatch,
-					fmt.Sprintf("%s requires an object argument", k),
-					"$setWindowFields (stage)",
-				)
-			}
-			spec, parseErr := parseTopSpec(topDoc)
-			if parseErr != nil {
-				return wof, parseErr
-			}
-			wof.opSpec = spec
 		default:
 			return wof, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrNotImplemented,
@@ -757,7 +736,7 @@ func (s *setWindowFields) computeWindowValues(partition []*types.Document, wof w
 			vals[i] = windowCount(len(window))
 		}
 
-	case "$firstN", "$lastN", "$minN", "$maxN", "$topN", "$bottomN", "$median", "$percentile":
+	case "$firstN", "$lastN", "$minN", "$maxN", "$top", "$bottom", "$topN", "$bottomN", "$median", "$percentile":
 		acc := wof.opSpec.(accumulators.Accumulator)
 		for i := range partition {
 			window := s.windowDocs(wof.frame, i, partition)
@@ -859,18 +838,6 @@ func (s *setWindowFields) computeWindowValues(partition []*types.Document, wof w
 		var err error
 		if vals, err = computeLocf(wof.expression, partition); err != nil {
 			return nil, err
-		}
-
-	case "$top", "$bottom":
-		spec := wof.opSpec.(topSpec)
-		for i := range partition {
-			lo, hi := s.windowBounds(wof.frame, i, n)
-			window := partition[lo:hi]
-			val, err := computeTopBottom(wof.operator, spec, window)
-			if err != nil {
-				return nil, err
-			}
-			vals[i] = val
 		}
 
 	default:
@@ -1507,44 +1474,6 @@ func parseDerivativeSpec(doc *types.Document) (derivativeSpec, error) {
 	return spec, nil
 }
 
-// parseTopSpec parses the $top/$bottom operator configuration.
-func parseTopSpec(doc *types.Document) (topSpec, error) {
-	spec := topSpec{}
-
-	sortByVal, err := doc.Get("sortBy")
-	if err != nil {
-		return spec, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrBadValue,
-			"$top/$bottom requires 'sortBy' field",
-			"$setWindowFields (stage)",
-		)
-	}
-
-	sortByDoc, ok := sortByVal.(*types.Document)
-	if !ok {
-		return spec, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrTypeMismatch,
-			"$top/$bottom 'sortBy' must be an object",
-			"$setWindowFields (stage)",
-		)
-	}
-
-	spec.sortBy = sortByDoc
-
-	outputVal, err := doc.Get("output")
-	if err != nil {
-		return spec, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrBadValue,
-			"$top/$bottom requires 'output' field",
-			"$setWindowFields (stage)",
-		)
-	}
-
-	spec.outputExpr = outputVal
-
-	return spec, nil
-}
-
 // evaluateExpr evaluates an expression against a document; a missing value
 // is null.
 func evaluateExpr(expr any, doc *types.Document) (any, error) {
@@ -1847,86 +1776,6 @@ func computeLocf(expr any, partition []*types.Document) ([]any, error) {
 	}
 
 	return vals, nil
-}
-
-// computeTopBottom computes $top or $bottom  -- returns the output projection of the
-// first document after sorting window by spec.sortBy.
-// For $top: sort descending (highest first); but we respect whatever spec.sortBy says.
-// For $bottom: sort ascending (lowest first); same  -- respect spec.sortBy.
-// Both return the first element of the sorted window's output projection.
-func computeTopBottom(op string, spec topSpec, window []*types.Document) (any, error) {
-	if len(window) == 0 {
-		return types.Null, nil
-	}
-
-	// Copy window so we can sort it.
-	sorted := make([]*types.Document, len(window))
-	copy(sorted, window)
-
-	stdsort.SliceStable(sorted, func(i, j int) bool {
-		a := sorted[i]
-		b := sorted[j]
-
-		if spec.sortBy == nil {
-			return false
-		}
-
-		for _, key := range spec.sortBy.Keys() {
-			order, _ := spec.sortBy.Get(key)
-
-			aVal, _ := a.Get(key)
-			bVal, _ := b.Get(key)
-
-			if aVal == nil {
-				aVal = types.Null
-			}
-
-			if bVal == nil {
-				bVal = types.Null
-			}
-
-			cmp := types.CompareForAggregation(aVal, bVal)
-
-			var ascending bool
-
-			switch ov := order.(type) {
-			case int32:
-				ascending = ov >= 0
-			case int64:
-				ascending = ov >= 0
-			case float64:
-				ascending = ov >= 0
-			default:
-				ascending = true
-			}
-
-			if cmp == types.Equal {
-				continue
-			}
-
-			if ascending {
-				return cmp == types.Less
-			}
-
-			return cmp == types.Greater
-		}
-
-		return false
-	})
-
-	// $top returns the first document after sorting; $bottom returns the last.
-	var selected *types.Document
-	if op == "$bottom" {
-		selected = sorted[len(sorted)-1]
-	} else {
-		selected = sorted[0]
-	}
-
-	if spec.outputExpr == nil {
-		return new(types.Document), nil
-	}
-
-	return evaluateExpr(spec.outputExpr, selected)
 }
 
 var (

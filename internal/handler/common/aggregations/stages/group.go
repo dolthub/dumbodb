@@ -251,6 +251,16 @@ func (it *groupResultsIterator) Close() {
 	it.gm = nil
 }
 
+// useSBE implements sbeAware.
+func (g *group) useSBE() error {
+	for _, spec := range g.groupBy {
+		if err := accumulators.UseSBE(spec.accumulator); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // evalGroupKey computes the _id group key for one document. It mirrors the type
 // handling of the group expression: documents are evaluated recursively,
 // "$field" strings resolve via the precompiled expression (missing -> null),
