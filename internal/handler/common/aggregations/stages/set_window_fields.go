@@ -663,7 +663,10 @@ func (s *setWindowFields) computeWindowValues(partition []*types.Document, wof w
 		spec := wof.opSpec.(covPairSpec)
 		for i := range partition {
 			window := s.windowDocs(wof.frame, i, partition)
-			val := computeCovariance(wof.operator, spec, window)
+			val, err := computeCovariance(wof.operator, spec, window)
+			if err != nil {
+				return nil, err
+			}
 			vals[i] = val
 		}
 
@@ -674,13 +677,23 @@ func (s *setWindowFields) computeWindowValues(partition []*types.Document, wof w
 			if idx < 0 || idx >= n {
 				vals[i] = spec.defaultVal
 			} else {
-				vals[i] = evaluateExpr(spec.outputExpr, partition[idx])
+				val, missing, err := operators.EvalOperand(spec.outputExpr, partition[idx])
+				if err != nil {
+					return nil, err
+				}
+				if missing {
+					val = spec.defaultVal
+				}
+				vals[i] = val
 			}
 		}
 
 	case "$expMovingAvg":
 		spec := wof.opSpec.(emaSpec)
-		vals = computeEMA(spec, partition)
+		var err error
+		if vals, err = computeEMA(spec, partition); err != nil {
+			return nil, err
+		}
 
 	case "$derivative":
 		spec := wof.opSpec.(derivativeSpec)
@@ -696,7 +709,11 @@ func (s *setWindowFields) computeWindowValues(partition []*types.Document, wof w
 		for i := range partition {
 			lo, hi := s.windowBounds(wof.frame, i, n)
 			window := partition[lo:hi]
-			vals[i] = computeDerivative(spec, window)
+			val, err := computeDerivative(spec, window)
+			if err != nil {
+				return nil, err
+			}
+			vals[i] = val
 		}
 
 	case "$integral":
@@ -713,17 +730,27 @@ func (s *setWindowFields) computeWindowValues(partition []*types.Document, wof w
 		for i := range partition {
 			lo, hi := s.windowBounds(wof.frame, i, n)
 			window := partition[lo:hi]
-			vals[i] = computeIntegral(spec, window)
+			val, err := computeIntegral(spec, window)
+			if err != nil {
+				return nil, err
+			}
+			vals[i] = val
 		}
 
 	case "$linearFill":
 		if err := s.validateSortByFieldIsNumericOrDate(partition); err != nil {
 			return nil, err
 		}
-		vals = computeLinearFill(wof.expression, partition)
+		var err error
+		if vals, err = computeLinearFill(wof.expression, partition); err != nil {
+			return nil, err
+		}
 
 	case "$locf":
-		vals = computeLocf(wof.expression, partition)
+		var err error
+		if vals, err = computeLocf(wof.expression, partition); err != nil {
+			return nil, err
+		}
 
 	case "$top", "$bottom":
 		spec := wof.opSpec.(topSpec)
@@ -1091,43 +1118,24 @@ func applyAccumulator(op string, expression any, window []*types.Document) (any,
 	}
 }
 
-// collectWindowValues evaluates an expression against each document in the window.
+// collectWindowValues evaluates an expression against each document in the
+// window, leaving out missing values.
 func collectWindowValues(expression any, window []*types.Document) ([]any, error) {
-	var values []any
-
-	switch expr := expression.(type) {
-	case string:
-		aggExpr, err := aggregations.NewExpression(expr, nil)
-		if err != nil {
-			// Not a field path; treat as a literal.
-			for range window {
-				values = append(values, expression)
-			}
-
-			return values, nil
-		}
-
-		for _, doc := range window {
-			val, err := aggExpr.Evaluate(doc)
-			if err == nil {
-				values = append(values, val)
-			}
-		}
-	case float64, int32, int64:
-		for range window {
-			values = append(values, expr)
-		}
-	case nil:
-		// No expression; treat as 1 for $sum compatibility.
-		for range window {
+	values := make([]any, 0, len(window))
+	for _, doc := range window {
+		if expression == nil {
+			// No expression; treat as 1 for $sum compatibility.
 			values = append(values, int32(1))
+			continue
 		}
-	default:
-		for range window {
-			values = append(values, expression)
+		val, missing, err := operators.EvalOperand(expression, doc)
+		if err != nil {
+			return nil, err
+		}
+		if !missing {
+			values = append(values, val)
 		}
 	}
-
 	return values, nil
 }
 
@@ -1426,24 +1434,17 @@ func parseTopSpec(doc *types.Document) (topSpec, error) {
 	return spec, nil
 }
 
-// evaluateExpr evaluates an expression against a document.
-func evaluateExpr(expr any, doc *types.Document) any {
-	switch e := expr.(type) {
-	case string:
-		aggExpr, err := aggregations.NewExpression(e, nil)
-		if err != nil {
-			return expr
-		}
-
-		val, err := aggExpr.Evaluate(doc)
-		if err != nil {
-			return types.Null
-		}
-
-		return val
-	default:
-		return expr
+// evaluateExpr evaluates an expression against a document; a missing value
+// is null.
+func evaluateExpr(expr any, doc *types.Document) (any, error) {
+	val, missing, err := operators.EvalOperand(expr, doc)
+	if err != nil {
+		return nil, err
 	}
+	if missing {
+		return types.Null, nil
+	}
+	return val, nil
 }
 
 // toFloat64 converts a numeric value to float64, returns (val, true) or (0, false).
@@ -1461,12 +1462,18 @@ func toFloat64(v any) (float64, bool) {
 }
 
 // computeCovariance computes population or sample covariance.
-func computeCovariance(op string, spec covPairSpec, window []*types.Document) any {
+func computeCovariance(op string, spec covPairSpec, window []*types.Document) (any, error) {
 	var xs, ys []float64
 
 	for _, doc := range window {
-		xv := evaluateExpr(spec.expr1, doc)
-		yv := evaluateExpr(spec.expr2, doc)
+		xv, err := evaluateExpr(spec.expr1, doc)
+		if err != nil {
+			return nil, err
+		}
+		yv, err := evaluateExpr(spec.expr2, doc)
+		if err != nil {
+			return nil, err
+		}
 
 		xf, xok := toFloat64(xv)
 		yf, yok := toFloat64(yv)
@@ -1479,11 +1486,11 @@ func computeCovariance(op string, spec covPairSpec, window []*types.Document) an
 
 	n := len(xs)
 	if n == 0 {
-		return types.Null
+		return types.Null, nil
 	}
 
 	if op == "$covarianceSamp" && n < 2 {
-		return types.Null
+		return types.Null, nil
 	}
 
 	var sumX, sumY float64
@@ -1508,11 +1515,11 @@ func computeCovariance(op string, spec covPairSpec, window []*types.Document) an
 		cov = cov * float64(n) / float64(n-1)
 	}
 
-	return cov
+	return cov, nil
 }
 
 // computeEMA computes exponential moving average over a partition.
-func computeEMA(spec emaSpec, partition []*types.Document) []any {
+func computeEMA(spec emaSpec, partition []*types.Document) ([]any, error) {
 	n := len(partition)
 	vals := make([]any, n)
 
@@ -1520,7 +1527,10 @@ func computeEMA(spec emaSpec, partition []*types.Document) []any {
 	hasPrev := false
 
 	for i, doc := range partition {
-		v := evaluateExpr(spec.inputExpr, doc)
+		v, err := evaluateExpr(spec.inputExpr, doc)
+		if err != nil {
+			return nil, err
+		}
 		f, ok := toFloat64(v)
 
 		if !ok {
@@ -1545,27 +1555,33 @@ func computeEMA(spec emaSpec, partition []*types.Document) []any {
 		}
 	}
 
-	return vals
+	return vals, nil
 }
 
 // computeDerivative computes $derivative over a window.
 // Returns null when less than 2 docs in window.
-func computeDerivative(spec derivativeSpec, window []*types.Document) any {
+func computeDerivative(spec derivativeSpec, window []*types.Document) (any, error) {
 	if len(window) < 2 {
-		return types.Null
+		return types.Null, nil
 	}
 
 	first := window[0]
 	last := window[len(window)-1]
 
-	y1 := evaluateExpr(spec.inputExpr, first)
-	y2 := evaluateExpr(spec.inputExpr, last)
+	y1, err := evaluateExpr(spec.inputExpr, first)
+	if err != nil {
+		return nil, err
+	}
+	y2, err := evaluateExpr(spec.inputExpr, last)
+	if err != nil {
+		return nil, err
+	}
 
 	yf1, ok1 := toFloat64(y1)
 	yf2, ok2 := toFloat64(y2)
 
 	if !ok1 || !ok2 {
-		return types.Null
+		return types.Null, nil
 	}
 
 	// For numeric sort fields, use x values from the sort field.
@@ -1573,23 +1589,29 @@ func computeDerivative(spec derivativeSpec, window []*types.Document) any {
 	dx := float64(len(window) - 1)
 
 	if dx == 0 {
-		return types.Null
+		return types.Null, nil
 	}
 
-	return (yf2 - yf1) / dx
+	return (yf2 - yf1) / dx, nil
 }
 
 // computeIntegral computes $integral (trapezoidal) over a window.
-func computeIntegral(spec derivativeSpec, window []*types.Document) any {
+func computeIntegral(spec derivativeSpec, window []*types.Document) (any, error) {
 	if len(window) < 2 {
-		return float64(0)
+		return float64(0), nil
 	}
 
 	var total float64
 
 	for i := 1; i < len(window); i++ {
-		y1 := evaluateExpr(spec.inputExpr, window[i-1])
-		y2 := evaluateExpr(spec.inputExpr, window[i])
+		y1, err := evaluateExpr(spec.inputExpr, window[i-1])
+		if err != nil {
+			return nil, err
+		}
+		y2, err := evaluateExpr(spec.inputExpr, window[i])
+		if err != nil {
+			return nil, err
+		}
 
 		yf1, ok1 := toFloat64(y1)
 		yf2, ok2 := toFloat64(y2)
@@ -1602,17 +1624,20 @@ func computeIntegral(spec derivativeSpec, window []*types.Document) any {
 		total += (yf1 + yf2) / 2.0
 	}
 
-	return total
+	return total, nil
 }
 
 // computeLinearFill fills null values using linear interpolation.
-func computeLinearFill(expr any, partition []*types.Document) []any {
+func computeLinearFill(expr any, partition []*types.Document) ([]any, error) {
 	n := len(partition)
 	vals := make([]any, n)
 
 	// First pass: collect raw values.
 	for i, doc := range partition {
-		v := evaluateExpr(expr, doc)
+		v, err := evaluateExpr(expr, doc)
+		if err != nil {
+			return nil, err
+		}
 		if _, isNull := v.(types.NullType); isNull {
 			vals[i] = nil // sentinel for "needs fill"
 		} else {
@@ -1673,18 +1698,21 @@ func computeLinearFill(expr any, partition []*types.Document) []any {
 		}
 	}
 
-	return vals
+	return vals, nil
 }
 
 // computeLocf fills null values using last observation carried forward.
-func computeLocf(expr any, partition []*types.Document) []any {
+func computeLocf(expr any, partition []*types.Document) ([]any, error) {
 	n := len(partition)
 	vals := make([]any, n)
 
 	var lastObserved any
 
 	for i, doc := range partition {
-		v := evaluateExpr(expr, doc)
+		v, err := evaluateExpr(expr, doc)
+		if err != nil {
+			return nil, err
+		}
 		if _, isNull := v.(types.NullType); isNull {
 			if lastObserved != nil {
 				vals[i] = lastObserved
@@ -1697,7 +1725,7 @@ func computeLocf(expr any, partition []*types.Document) []any {
 		}
 	}
 
-	return vals
+	return vals, nil
 }
 
 // computeTopBottom computes $top or $bottom  -- returns the output projection of the
@@ -1777,37 +1805,7 @@ func computeTopBottom(op string, spec topSpec, window []*types.Document) (any, e
 		return new(types.Document), nil
 	}
 
-	// If output is a string (field path), evaluate and return the value directly.
-	if _, ok := spec.outputExpr.(string); ok {
-		return evaluateExpr(spec.outputExpr, selected), nil
-	}
-
-	// If output is a document, project each field.
-	outputDoc, ok := spec.outputExpr.(*types.Document)
-	if !ok {
-		return evaluateExpr(spec.outputExpr, selected), nil
-	}
-
-	result := new(types.Document)
-
-	iter := outputDoc.Iterator()
-	defer iter.Close()
-
-	for {
-		k, v, err := iter.Next()
-		if errors.Is(err, iterator.ErrIteratorDone) {
-			break
-		}
-
-		if err != nil {
-			return nil, lazyerrors.Error(err)
-		}
-
-		projected := evaluateExpr(v, selected)
-		result.Set(k, projected)
-	}
-
-	return result, nil
+	return evaluateExpr(spec.outputExpr, selected)
 }
 
 var (
