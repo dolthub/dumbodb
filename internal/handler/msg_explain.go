@@ -421,6 +421,7 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 		return nil, lazyerrors.Error(err)
 	}
 
+	hintCollection := params.Collection
 	coll, err := db.Collection(params.Collection)
 	if err != nil {
 		if backends.ErrorCodeIs(err, backends.ErrorCodeCollectionNameIsInvalid) {
@@ -443,6 +444,7 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 			return nil, rerr
 		}
 
+		hintCollection = baseName
 		if coll, err = db.Collection(baseName); err != nil {
 			return nil, lazyerrors.Error(err)
 		}
@@ -482,7 +484,7 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 
 	// A hint naming an index that does not exist is an error, matching MongoDB.
 	params.Hint = clusteredHint(params.Hint, recordedClusteredName(connCtx, db, params.Collection))
-	if err = validateHintExists(connCtx, coll, params.Hint, document.Command()); err != nil {
+	if err = validateHintExists(connCtx, db, hintCollection, coll, params.Hint, document.Command()); err != nil {
 		return nil, err
 	}
 

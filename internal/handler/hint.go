@@ -40,8 +40,8 @@ func checkHintType(hint any) error {
 }
 
 // validateHintExists is validateHint for a read without a sort or upsert.
-func validateHintExists(ctx context.Context, coll backends.Collection, hint any, command string) error {
-	return validateHint(ctx, coll, hint, command, nil, false)
+func validateHintExists(ctx context.Context, db backends.Database, collName string, coll backends.Collection, hint any, command string) error { //nolint:lll // for readability
+	return validateHint(ctx, db, collName, coll, hint, command, nil, false)
 }
 
 // validateHint returns mongod's error for a hint the command cannot use: a
@@ -49,8 +49,9 @@ func validateHintExists(ctx context.Context, coll backends.Collection, hint any,
 // $natural sort; or a name or key pattern of no index on the collection. An
 // empty name is no index's. A missing collection has no indexes, which mongod
 // overlooks, even for an empty name, for a read but not for an upsert, which
-// would create it.
-func validateHint(ctx context.Context, coll backends.Collection, hint any, command string, sort *types.Document, upsert bool) error {
+// would create it. A time-series collection's hidden _id index answers a hint
+// by name, as the buckets' _id index does in mongod, but not by key pattern.
+func validateHint(ctx context.Context, db backends.Database, collName string, coll backends.Collection, hint any, command string, sort *types.Document, upsert bool) error { //nolint:lll // for readability
 	if d, ok := hint.(*types.Document); ok && d.Len() > 1 && d.Has("$natural") {
 		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
 			"$natural hint cannot be set to a value other than -1 or 1.", command)
@@ -89,7 +90,11 @@ func validateHint(ctx context.Context, coll backends.Collection, hint any, comma
 		return lazyerrors.Error(err)
 	}
 
-	if hint == "" || backends.MatchHintedIndex(hint, idxRes.Indexes) == "" {
+	indexes := idxRes.Indexes
+	if _, byName := hint.(string); !byName {
+		indexes = clientVisibleIndexes(ctx, db, collName, indexes)
+	}
+	if hint == "" || backends.MatchHintedIndex(hint, indexes) == "" {
 		return notIndexed
 	}
 
@@ -142,7 +147,7 @@ func validateViewHint(ctx context.Context, db backends.Database, view *backends.
 	if err != nil {
 		return nil
 	}
-	return validateHintExists(ctx, coll, hint, command)
+	return validateHintExists(ctx, db, base, coll, hint, command)
 }
 
 // collectionMissing reports whether coll does not exist.
