@@ -324,8 +324,12 @@ func validateGroupKeyDocument(groupKey any, topLevel bool) error {
 			return processGroupStageError(err)
 		}
 
+		// Only shape errors matter against an empty document; data errors
+		// surface when documents are grouped, as in mongod.
 		_, err = op.Process(types.MakeDocument(0))
-		if err != nil && !errors.Is(err, operators.ErrMissingValue) {
+		var opErr operators.OperatorError
+		var exErr *aggregations.ExpressionError
+		if err != nil && !errors.Is(err, operators.ErrMissingValue) && (errors.As(err, &opErr) || errors.As(err, &exErr)) {
 			return processGroupStageError(err)
 		}
 
