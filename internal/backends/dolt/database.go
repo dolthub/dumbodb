@@ -523,6 +523,19 @@ func (db *database) CollMod(ctx context.Context, params *backends.CollModParams)
 	if params.ValidationAction != "" {
 		meta.ValidationAction = params.ValidationAction
 	}
+	// mongod stores the validation level and action once collMod sets any
+	// validation option, and drops an emptied validator.
+	if params.SetValidator || params.ValidationLevel != "" || params.ValidationAction != "" {
+		if meta.Validator.Len() == 0 {
+			meta.Validator = nil
+		}
+		if meta.ValidationLevel == "" {
+			meta.ValidationLevel = "strict"
+		}
+		if meta.ValidationAction == "" {
+			meta.ValidationAction = "error"
+		}
+	}
 	if params.MergeMode != "" {
 		meta.MergeMode = params.MergeMode
 	}
