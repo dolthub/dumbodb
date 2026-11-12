@@ -20,43 +20,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// newDensify validates the $densify stage spec and returns an appropriate error.
-// $densify is not implemented; this handler ensures the correct error code and message
-// are returned when the required 'field' field is absent, matching MongoDB's behavior.
-func newDensify(stage *types.Document) (aggregations.Stage, error) {
-	v, err := stage.Get("$densify")
-	if err != nil {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrMissingField,
-			"BSON field '$densify.field' is missing but a required field",
-			"$densify (stage)",
-		)
-	}
-
-	spec, ok := v.(*types.Document)
-	if !ok || spec == nil {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrMissingField,
-			"BSON field '$densify.field' is missing but a required field",
-			"$densify (stage)",
-		)
-	}
-
-	if _, err := spec.Get("field"); err != nil {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrMissingField,
-			"BSON field '$densify.field' is missing but a required field",
-			"$densify (stage)",
-		)
-	}
-
-	return nil, handlererrors.NewCommandErrorMsgWithArgument(
-		handlererrors.ErrNotImplemented,
-		"`aggregate` stage \"$densify\" is not implemented yet",
-		"$densify (stage)",
-	)
-}
-
 // newFill validates the $fill stage spec and returns an appropriate error.
 // $fill is not implemented; this handler ensures the correct error code and message
 // are returned when the required 'output' field is absent, matching MongoDB's behavior.

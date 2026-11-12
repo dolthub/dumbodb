@@ -335,32 +335,6 @@ func TestAggStage_unsupportedErrors_changeStream(t *testing.T) {
 	}
 }
 
-// TestAggStage_unsupportedErrors_densify verifies that $densify with the required
-// 'field' field returns ErrNotImplemented (238)  -- $densify is not yet implemented.
-func TestAggStage_unsupportedErrors_densify(t *testing.T) {
-	t.Parallel()
-
-	spec := must.NotFail(types.NewDocument(
-		"field", "price",
-		"range", must.NotFail(types.NewDocument("step", int32(1), "bounds", "full")),
-	))
-	stageDoc := must.NotFail(types.NewDocument("$densify", spec))
-	_, err := stages.NewStage(stageDoc)
-	if err == nil {
-		t.Fatal("expected error for $densify, got nil")
-	}
-
-	var cmdErr *handlererrors.CommandError
-	if !errors.As(err, &cmdErr) {
-		t.Fatalf("expected *handlererrors.CommandError, got %T: %v", err, err)
-	}
-
-	const wantCode = handlererrors.ErrNotImplemented
-	if cmdErr.Code() != wantCode {
-		t.Errorf("error code = %d, want %d (ErrNotImplemented)", cmdErr.Code(), wantCode)
-	}
-}
-
 // TestAggStage_unsupportedErrors_fill verifies that $fill with the required 'output'
 // field returns ErrNotImplemented (238)  -- $fill is not yet implemented.
 func TestAggStage_unsupportedErrors_fill(t *testing.T) {

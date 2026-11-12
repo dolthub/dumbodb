@@ -770,6 +770,22 @@ const (
 	ErrPercentileNotNumber           = ErrorCode(7750302) // Location7750302
 	ErrPercentileOutOfRange          = ErrorCode(7750303) // Location7750303
 
+	// $densify errors.
+	ErrDensifyFieldType                    = ErrorCode(5733201) // Location5733201
+	ErrDensifyStepNotPositive              = ErrorCode(5733401) // Location5733401
+	ErrDensifyBoundsOrder                  = ErrorCode(5733402) // Location5733402
+	ErrDensifyBoundsLength                 = ErrorCode(5733403) // Location5733403
+	ErrDensifyBoundsInvalid                = ErrorCode(5733404) // Location5733404
+	ErrDensifyPartitionBoundsWithoutFields = ErrorCode(5733408) // Location5733408
+	ErrDensifyDateBoundsWithoutUnit        = ErrorCode(5733410) // Location5733410
+	ErrDensifyBoundsStepType               = ErrorCode(5876900) // Location5876900
+	ErrDensifyTooManyDocs                  = ErrorCode(5897900) // Location5897900
+	ErrDensifyBoundsType                   = ErrorCode(5946800) // Location5946800
+	ErrDensifyBoundsString                 = ErrorCode(5946802) // Location5946802
+	ErrDensifyValueUnitMismatch            = ErrorCode(6053600) // Location6053600
+	ErrDensifyDateStepNotWhole             = ErrorCode(6586400) // Location6586400
+	ErrDensifyPartitionIncludesField       = ErrorCode(8993000) // Location8993000
+
 	// ErrStageIndexedStringVectorDuplicate indicates that input to IndexedStringVector contained duplicate values.
 	ErrStageIndexedStringVectorDuplicate = ErrorCode(7582300) // Location7582300
 
