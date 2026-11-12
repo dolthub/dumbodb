@@ -210,15 +210,15 @@ func hintedIndexOrder(ctx context.Context, coll backends.Collection, hint any, f
 // typeOrRegexCondition reports whether filter tests field with $type or
 // $regex, matches it against a regular expression, compares it more than
 // once, a bound a multikey walk takes from one comparison alone, or tests it
-// with an $in holding null or a regular expression, which the backend scans
-// unbounded.
+// for null or with an $in holding null or a regular expression, which the
+// backend scans unbounded.
 func typeOrRegexCondition(filter *types.Document, field string) bool {
 	v, err := filter.Get(field)
 	if err != nil {
 		return false
 	}
 	switch v := v.(type) {
-	case types.Regex:
+	case types.Regex, types.NullType:
 		return true
 	case *types.Document:
 		ranges := 0
@@ -227,7 +227,18 @@ func typeOrRegexCondition(filter *types.Document, field string) bool {
 				ranges++
 			}
 		}
-		return v.Has("$type") || v.Has("$regex") || ranges > 1 || inHoldsNullOrRegex(v)
+		return v.Has("$type") || v.Has("$regex") || ranges > 1 || inHoldsNullOrRegex(v) || comparesNull(v)
+	}
+	return false
+}
+
+// comparesNull reports whether ops holds $eq, $lte or $gte of null, which the
+// backend scans unbounded.
+func comparesNull(ops *types.Document) bool {
+	for _, op := range []string{"$eq", "$lte", "$gte"} {
+		if v, err := ops.Get(op); err == nil && v == types.Null {
+			return true
+		}
 	}
 	return false
 }
