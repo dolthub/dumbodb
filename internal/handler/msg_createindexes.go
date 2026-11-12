@@ -189,10 +189,10 @@ func (h *Handler) MsgCreateIndexes(connCtx context.Context, msg *wire.OpMsg) (*w
 		}
 	}
 
-	numIndexesBefore := len(beforeCreate.Indexes)
+	numIndexesBefore := len(clientVisibleIndexes(connCtx, db, collection, beforeCreate.Indexes))
 
-	// for compatibility
-	if numIndexesBefore == 0 {
+	// A collection created here counts its _id index as already present.
+	if createCollection {
 		numIndexesBefore = 1
 	}
 

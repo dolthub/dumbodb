@@ -369,6 +369,9 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		err = backends.NewError(backends.ErrorCodeCollectionAlreadyExists, nil)
 	} else {
 		err = db.CreateCollection(connCtx, &params)
+		if err == nil {
+			err = createTimeSeriesMetaTimeIndex(connCtx, db, &params)
+		}
 	}
 
 	switch {

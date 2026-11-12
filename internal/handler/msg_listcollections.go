@@ -100,7 +100,6 @@ func (h *Handler) MsgListCollections(connCtx context.Context, msg *wire.OpMsg) (
 		info := must.NotFail(types.NewDocument("readOnly", false))
 
 		collType := "collection"
-		var d *types.Document
 
 		if collection.IsView {
 			collType = "view"
@@ -116,14 +115,10 @@ func (h *Handler) MsgListCollections(connCtx context.Context, msg *wire.OpMsg) (
 			info.Set("readOnly", true)
 		} else if collection.IsTimeSeries {
 			collType = "timeseries"
-			tsOpts := must.NotFail(types.NewDocument("timeField", collection.TimeField))
-			if collection.MetaField != "" {
-				tsOpts.Set("metaField", collection.MetaField)
+			if resolved := collation.Parse(collection.Collation).Resolve(); resolved != nil {
+				options.Set("collation", resolved)
 			}
-			if collection.Granularity != "" {
-				tsOpts.Set("granularity", collection.Granularity)
-			}
-			options.Set("timeseries", tsOpts)
+			options.Set("timeseries", timeSeriesOptions(&collection))
 		} else {
 			options.Set("clusteredIndex", clusteredIndexSpec(collection.ClusteredIndexName))
 
@@ -169,7 +164,8 @@ func (h *Handler) MsgListCollections(connCtx context.Context, msg *wire.OpMsg) (
 			}
 		}
 
-		if collection.UUID != "" {
+		// mongod reports no uuid or idIndex for a time-series view of its buckets.
+		if collection.UUID != "" && !collection.IsTimeSeries {
 			collUUID, err := uuid.Parse(collection.UUID)
 			if err != nil {
 				return nil, lazyerrors.Error(err)
@@ -183,28 +179,14 @@ func (h *Handler) MsgListCollections(connCtx context.Context, msg *wire.OpMsg) (
 			info.Set("uuid", uuidBinary)
 		}
 
-		if collection.IsView || !collection.IsTimeSeries {
-			// Views have no _id index, and a clustered collection reports its
-			// _id index as options.clusteredIndex instead of idIndex.
-			d = must.NotFail(types.NewDocument(
-				"name", collection.Name,
-				"type", collType,
-				"options", options,
-				"info", info,
-			))
-		} else {
-			d = must.NotFail(types.NewDocument(
-				"name", collection.Name,
-				"type", collType,
-				"options", options,
-				"info", info,
-				"idIndex", must.NotFail(types.NewDocument(
-					"v", int32(2),
-					"key", must.NotFail(types.NewDocument("_id", int32(1))),
-					"name", "_id_",
-				)),
-			))
-		}
+		// Views and time-series collections have no _id index, and a clustered
+		// collection reports its _id index as options.clusteredIndex instead.
+		d := must.NotFail(types.NewDocument(
+			"name", collection.Name,
+			"type", collType,
+			"options", options,
+			"info", info,
+		))
 
 		matches, err := common.FilterDocument(d, filter)
 		if err != nil {
@@ -234,4 +216,27 @@ func (h *Handler) MsgListCollections(connCtx context.Context, msg *wire.OpMsg) (
 			"ok", float64(1),
 		)),
 	)
+}
+
+// timeSeriesBucketMaxSpanSeconds is mongod's bucket span for each granularity.
+var timeSeriesBucketMaxSpanSeconds = map[string]int32{
+	"seconds": 3600,
+	"minutes": 86400,
+	"hours":   2592000,
+}
+
+// timeSeriesOptions returns a time-series collection's options as mongod
+// reports them, with the default granularity and its bucket span filled in.
+func timeSeriesOptions(collection *backends.CollectionInfo) *types.Document {
+	opts := must.NotFail(types.NewDocument("timeField", collection.TimeField))
+	if collection.MetaField != "" {
+		opts.Set("metaField", collection.MetaField)
+	}
+	granularity := collection.Granularity
+	if granularity == "" {
+		granularity = "seconds"
+	}
+	opts.Set("granularity", granularity)
+	opts.Set("bucketMaxSpanSeconds", timeSeriesBucketMaxSpanSeconds[granularity])
+	return opts
 }
