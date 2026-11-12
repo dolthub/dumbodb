@@ -702,6 +702,9 @@ const (
 	// ErrTsIncrementNotTimestamp indicates a $tsIncrement argument that is not a timestamp.
 	ErrTsIncrementNotTimestamp = ErrorCode(5687302) // Location5687302
 
+	// ErrRangeSortByNotNumeric indicates a range window over a sortBy value that is not a number.
+	ErrRangeSortByNotNumeric = ErrorCode(5429414) // Location5429414
+
 	// $arrayToObject input errors.
 	ErrArrayToObjectInput           = ErrorCode(40386) // Location40386
 	ErrArrayToObjectObjectsExpected = ErrorCode(40391) // Location40391
