@@ -162,6 +162,12 @@ func validateShape(projection *types.Document, ctx context) (*types.Document, bo
 		}
 
 		var inclusionField bool
+		computed := isComputedValue(value, ctx)
+		if computed {
+			if err = operators.CheckFieldPaths(value); err != nil {
+				return nil, false, err
+			}
+		}
 
 		switch value := value.(type) {
 		case *types.Document:
@@ -201,9 +207,19 @@ func validateShape(projection *types.Document, ctx context) (*types.Document, bo
 				"positional projection cannot be used with exclusion")
 		}
 
+		// A computed _id makes the projection an inclusion; an _id flag does
+		// not decide the mode.
+		if key == "_id" && computed && inclusion != nil && !*inclusion {
+			return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrProjectionIDExpressionInExclusion,
+				ctx.prefix()+fmt.Sprintf("Cannot use an expression _id: %s in an exclusion projection", types.FormatAnyValue(value)),
+				"projection",
+			)
+		}
+
 		// if inclusion is nil we are processing the first field
 		if inclusion == nil {
-			if key == "_id" {
+			if key == "_id" && !computed {
 				continue
 			}
 			inclusion = &inclusionField
@@ -242,6 +258,25 @@ func validateShape(projection *types.Document, ctx context) (*types.Document, bo
 	}
 
 	return validated, *inclusion, nil
+}
+
+// isComputedValue reports whether a projection value is an expression
+// rather than an inclusion or exclusion flag.
+func isComputedValue(value any, ctx context) bool {
+	switch value := value.(type) {
+	case *types.Array, string, types.Binary, types.ObjectID,
+		time.Time, types.NullType, types.Regex, types.Timestamp:
+		return true
+	case *types.Document:
+		if ctx == findContext && value.Len() == 1 {
+			switch value.Keys()[0] {
+			case "$elemMatch", "$slice", "$meta":
+				return false
+			}
+		}
+		return operators.IsOperator(value)
+	}
+	return false
 }
 
 // validatePath reports mongod's errors for a projection key.
