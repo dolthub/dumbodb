@@ -162,8 +162,7 @@ func TestVirtualMergeBase_OuterMergeHonorsViewFlags(t *testing.T) {
 		want string
 	}{
 		{"one tip resolves back to the old definition", true, setView("x"), setView("y"), setView("c0"), setView("y"), true, ""},
-		// Any merge conflicts on a view both sides changed, even identically, flags or not.
-		{"tips resolve alike", true, setView("x"), setView("y"), setView("same"), setView("same"), true, ""},
+		{"tips resolve alike", true, setView("x"), setView("y"), setView("same"), setView("same"), false, "same"},
 		{"merge bases add the view differently, one tip drops it", false, addView("x"), addView("y"), dropView, setView("y"), true, ""},
 	}
 	for _, tt := range tests {

@@ -340,3 +340,25 @@ func must1(doc *types.Document, err error) *types.Document {
 	}
 	return doc
 }
+
+// Validators merge only when identical, so merge bases whose validators require different fields conflict on the
+// whole validator, which keeps c0's and is flagged at its path.
+func TestVirtualMergeBase_FoldsValidatorsWhole(t *testing.T) {
+	for _, mode := range mergeModes {
+		t.Run(mode, func(t *testing.T) {
+			b := newTestBackend(t)
+			virtualBase, flags := foldWithEdits(t, b,
+				func(t *testing.T, b *Backend, branch string) {
+					createItems(t, b, mode)
+					insertDoc(t, b, "testdb", "items", rDoc(t, "seed"))
+					setValidator(minU(0))(t, b, "main")
+				},
+				setValidator(validatorWith("a")),
+				setValidator(validatorWith("b")))
+			meta := virtualCatalog(t, b, virtualBase, "items")
+			require.NotNil(t, meta)
+			require.True(t, documentsEqual(minU(0)(t), meta.Validator), "want c0's validator, got %v", meta.Validator)
+			require.Equal(t, [][]string{{"validator"}}, catalogFlagPaths(t, flags, "items"))
+		})
+	}
+}
