@@ -182,9 +182,9 @@ func (ba *bucketAuto) Process(ctx context.Context, iter types.DocumentsIterator,
 	keyed := make([]docWithKey, 0, len(docs))
 
 	for _, doc := range docs {
-		val, evalErr := evaluateGroupExpr(ba.groupBy, doc)
-		if evalErr != nil {
-			val = types.Null
+		val, err := evaluateGroupExpr(ba.groupBy, doc)
+		if err != nil {
+			return nil, err
 		}
 
 		keyed = append(keyed, docWithKey{doc: doc, key: val})
@@ -238,7 +238,9 @@ func (ba *bucketAuto) Process(ctx context.Context, iter types.DocumentsIterator,
 			rawDocs[j] = kd.doc
 		}
 
-		appendBucketOutput(doc, ba.output, rawDocs)
+		if err := appendBucketOutput(doc, ba.output, rawDocs); err != nil {
+			return nil, err
+		}
 		res = append(res, doc)
 	}
 

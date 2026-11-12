@@ -193,9 +193,9 @@ func (b *bucket) Process(ctx context.Context, iter types.DocumentsIterator, clos
 	groups := make([][]*types.Document, numBuckets+1)
 
 	for _, doc := range docs {
-		val, evalErr := evaluateGroupExpr(b.groupBy, doc)
-		if evalErr != nil {
-			val = types.Null
+		val, err := evaluateGroupExpr(b.groupBy, doc)
+		if err != nil {
+			return nil, err
 		}
 
 		bucketIdx := b.findBucket(val)
@@ -228,14 +228,18 @@ func (b *bucket) Process(ctx context.Context, iter types.DocumentsIterator, clos
 		}
 
 		doc := must.NotFail(types.NewDocument("_id", b.boundaries[i]))
-		appendBucketOutput(doc, b.output, groups[i])
+		if err = appendBucketOutput(doc, b.output, groups[i]); err != nil {
+			return nil, err
+		}
 		res = append(res, doc)
 	}
 
 	// Default bucket.
 	if b.hasDefault && len(groups[numBuckets]) > 0 {
 		doc := must.NotFail(types.NewDocument("_id", b.defaultValue))
-		appendBucketOutput(doc, b.output, groups[numBuckets])
+		if err = appendBucketOutput(doc, b.output, groups[numBuckets]); err != nil {
+			return nil, err
+		}
 		res = append(res, doc)
 	}
 
@@ -280,22 +284,22 @@ func (b *bucket) findBucket(val any) int {
 
 // appendBucketOutput applies optional output accumulators to a bucket document.
 // If no output is defined, adds a default "count" field with the document count.
-func appendBucketOutput(doc *types.Document, output []bucketOutput, groupDocs []*types.Document) {
+func appendBucketOutput(doc *types.Document, output []bucketOutput, groupDocs []*types.Document) error {
 	if len(output) == 0 {
 		doc.Set("count", int32(len(groupDocs)))
-		return
+		return nil
 	}
 
 	for _, out := range output {
 		iter := iterator.Values(iterator.ForSlice(groupDocs))
 		val, err := accumulators.Accumulate(out.accumulator, iter)
-
 		if err != nil {
-			val = types.Null
+			return processGroupStageError(err)
 		}
 
 		doc.Set(out.field, val)
 	}
+	return nil
 }
 
 var (

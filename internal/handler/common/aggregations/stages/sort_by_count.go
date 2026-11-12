@@ -77,7 +77,7 @@ func (s *sortByCount) Process(ctx context.Context, iter types.DocumentsIterator,
 	for _, doc := range docs {
 		id, err := evaluateGroupExpr(s.groupExpression, doc)
 		if err != nil {
-			id = types.Null
+			return nil, err
 		}
 
 		m.increment(id)
@@ -121,7 +121,14 @@ func evaluateGroupExpr(groupExpr any, doc *types.Document) (any, error) {
 				return nil, lazyerrors.Error(err)
 			}
 
-			return op.Process(doc)
+			val, err := op.Process(doc)
+			if errors.Is(err, operators.ErrMissingValue) {
+				return types.Null, nil
+			}
+			if err != nil {
+				return nil, processGroupStageError(err)
+			}
+			return val, nil
 		}
 
 		return evaluateDocument(expr, doc, false)
