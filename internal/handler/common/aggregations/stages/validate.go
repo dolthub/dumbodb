@@ -19,10 +19,12 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // validateExpression recursively validates expressions in document and array
@@ -124,4 +126,61 @@ func checkFieldPath(stage, field string) error {
 	}
 
 	return nil
+}
+
+// pathCollision returns the first path of paths that equals, or lies within
+// or around, an earlier one, and that earlier path.
+func pathCollision(paths []string) (string, string, bool) {
+	full := map[string]bool{}
+	prefixes := map[string]string{}
+	for _, p := range paths {
+		if full[p] {
+			return p, p, true
+		}
+		if other, ok := prefixes[p]; ok {
+			return p, other, true
+		}
+		for i := range len(p) {
+			if p[i] == '.' && full[p[:i]] {
+				return p, p[:i], true
+			}
+		}
+		full[p] = true
+		for i := range len(p) {
+			if p[i] == '.' {
+				if _, ok := prefixes[p[:i]]; !ok {
+					prefixes[p[:i]] = p
+				}
+			}
+		}
+	}
+	return "", "", false
+}
+
+// checkAddFieldsCollisions returns mongod's error for a $set or $addFields
+// specification that writes one path within another.
+func checkAddFieldsCollisions(stage string, spec *types.Document) error {
+	path, other, ok := pathCollision(addFieldsPaths("", spec))
+	if !ok {
+		return nil
+	}
+	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrAddFieldsPathCollision,
+		fmt.Sprintf("Invalid %s :: caused by :: specification contains two conflicting paths. Cannot specify both '%s' and '%s': %s",
+			stage, path, other, types.FormatAnyValue(spec)), stage+" (stage)")
+}
+
+// addFieldsPaths returns the paths a $set or $addFields specification
+// writes, with the fields of nested object literals expanded; an empty
+// object writes none.
+func addFieldsPaths(prefix string, spec *types.Document) []string {
+	var paths []string
+	for _, k := range spec.Keys() {
+		path := prefix + k
+		if d, ok := must.NotFail(spec.Get(k)).(*types.Document); ok && !operators.IsOperator(d) {
+			paths = append(paths, addFieldsPaths(path+".", d)...)
+			continue
+		}
+		paths = append(paths, path)
+	}
+	return paths
 }
