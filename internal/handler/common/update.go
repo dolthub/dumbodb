@@ -255,6 +255,11 @@ func processFilterEqualityCondition(doc, filter *types.Document) error {
 			continue
 		}
 
+		// A regex matches strings rather than naming a value to insert.
+		if _, isRegex := val.(types.Regex); isRegex {
+			continue
+		}
+
 		if valDoc, ok := val.(*types.Document); ok {
 			if valDoc.Len() == 1 {
 				innerKey := valDoc.Keys()[0]
