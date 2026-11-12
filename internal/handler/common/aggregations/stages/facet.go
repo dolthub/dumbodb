@@ -59,6 +59,7 @@ var notAllowedInFacet = map[string]bool{
 	"$merge":             true,
 	"$out":               true,
 	"$planCacheStats":    true,
+	"$queryStats":        true,
 	"$changeStream":      true,
 	"$listSessions":      true,
 	"$currentOp":         true,
@@ -131,7 +132,12 @@ func newFacet(stage *types.Document) (aggregations.Stage, error) {
 					"$facet (stage)",
 				)
 			}
-			if err := CheckParseFailingStages(must.NotFail(types.NewArray(stage))); err != nil {
+			if stage.Command() == "$queryStats" {
+				// Its specification is parsed, then its place refused.
+				if err := CheckQueryStatsSpec(stage); err != nil {
+					return nil, err
+				}
+			} else if err := CheckParseFailingStages(must.NotFail(types.NewArray(stage))); err != nil {
 				return nil, err
 			}
 			if cmd := stage.Command(); notAllowedInFacet[cmd] {
@@ -282,5 +288,10 @@ func NewFacetStage(stage *types.Document, fetcher CollectionFetcher) (aggregatio
 	}
 	f := s.(*facet)
 	f.fetcher = fetcher
+	for _, p := range f.pipelines {
+		if err := checkSubPipelineParses(p.pipelineArr, fetcher); err != nil {
+			return nil, err
+		}
+	}
 	return f, nil
 }

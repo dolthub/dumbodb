@@ -99,6 +99,31 @@ func validateViewPipeline(dbName, viewName string, pipeline *types.Array) error 
 		}
 		return err
 	}
+	// Every stage parses, sub-pipelines included, before any is refused
+	// for the view.
+	noFetch := stages.FetcherFunc(func(context.Context, string, *types.Document) ([]*types.Document, error) { return nil, nil })
+	for i := range pipeline.Len() {
+		stage, ok := must.NotFail(pipeline.Get(i)).(*types.Document)
+		if !ok || stage.Len() != 1 {
+			continue
+		}
+		var err error
+		switch stage.Command() {
+		case "$lookup":
+			_, err = stages.NewLookupStage(stage, noFetch)
+		case "$unionWith":
+			_, err = stages.NewUnionWithStage(stage, noFetch)
+		case "$facet":
+			_, err = stages.NewFacetStage(stage, noFetch)
+		default:
+			if stages.FailsParsing(stage) {
+				_, err = stages.NewStage(stage)
+			}
+		}
+		if err != nil {
+			return err
+		}
+	}
 	for i := range pipeline.Len() {
 		stage, ok := must.NotFail(pipeline.Get(i)).(*types.Document)
 		if !ok || stage.Len() != 1 {

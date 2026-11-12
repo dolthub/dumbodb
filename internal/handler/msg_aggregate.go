@@ -664,6 +664,8 @@ var dbLevelSourceStages = map[string]struct{}{
 	"$listLocalSessions": {},
 	"$listSessions":      {},
 	"$changeStream":      {},
+	"$queryStats":        {},
+	"$listCatalog":       {},
 }
 
 // checkDatabasePipelineStages returns the error mongod reports while it parses
@@ -677,22 +679,33 @@ func checkDatabasePipelineStages(pipeline *types.Array, dbName string) error {
 		}
 		switch name := stage.Command(); name {
 		case "$queryStats", "$listCatalog":
-			if dbName == "admin" && i == 0 {
-				return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrNotImplemented,
-					name+" is not implemented", name+" (stage)")
-			}
+			check := stages.CheckQueryStatsSpec
 			if name == "$listCatalog" {
-				return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace,
-					"Collectionless $listCatalog must be run against the 'admin' database with {aggregate: 1}", "$listCatalog (stage)")
+				check = stages.CheckListCatalogSpec
 			}
-			_, err := stages.NewStage(stage)
-			return err
+			if err := check(stage); err != nil {
+				return err
+			}
+			if dbName != "admin" {
+				if name == "$listCatalog" {
+					return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace,
+						"Collectionless $listCatalog must be run against the 'admin' database with {aggregate: 1}", "$listCatalog (stage)")
+				}
+				_, err := stages.NewStage(stage)
+				return err
+			}
+			if i != 0 {
+				return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCollStatsIsNotFirstStage,
+					name+" is only valid as the first stage in a pipeline", name+" (stage)")
+			}
+		case "$facet":
+			if _, err := stages.NewStage(stage); err != nil {
+				return err
+			}
 		case "$documents", "$currentOp", "$listLocalSessions":
 		default:
-			if _, known := stages.Stages[name]; !known {
-				continue
-			}
-			if _, err := stages.NewStage(stage); err != nil {
+			if stages.FailsParsing(stage) {
+				_, err := stages.NewStage(stage)
 				return err
 			}
 		}
@@ -774,8 +787,15 @@ func (h *Handler) aggregateDatabase(connCtx context.Context, document *types.Doc
 		)
 	}
 
-	if stageName == "$documents" {
+	switch stageName {
+	case "$documents":
 		return h.aggregateDocuments(connCtx, document, firstStage, pipeline, dbName)
+	case "$queryStats":
+		// DumboDB records no query statistics.
+		return h.aggregateDocuments(connCtx, document, must.NotFail(types.NewDocument("$documents", types.MakeArray(0))), pipeline, dbName)
+	case "$listCatalog":
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrNotImplemented,
+			"$listCatalog is not implemented", "$listCatalog (stage)")
 	}
 
 	if stageName == "$listLocalSessions" {
