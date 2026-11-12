@@ -2634,10 +2634,11 @@ func wrapScanPlan(params *backends.ExplainParams, scan *explainStage, sorted boo
 			projStage = "PROJECTION_COVERED"
 		}
 	}
-	// The skip drops index keys before their documents are fetched.
+	// The skip drops index keys before their documents are fetched, when the
+	// FETCH has no filter left to apply.
 	skipped := false
 	if params.Skip > 0 && !sortPresent && node == scan && scan.stage == "FETCH" && scan.input != nil && scan.input.stage == "IXSCAN" &&
-		indexAnswersFilter(scan.input.index, params.Filter) {
+		(params.Filter.Len() == 0 || indexAnswersFilter(scan.input.index, params.Filter)) {
 		fetch := *scan
 		fetch.input = &explainStage{stage: "SKIP", input: scan.input, amount: params.Skip}
 		node, skipped = &fetch, true
