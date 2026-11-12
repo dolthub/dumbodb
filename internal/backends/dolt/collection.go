@@ -2460,6 +2460,12 @@ func (plan *indexLookupPlan) stage() *explainStage {
 	return fetch
 }
 
+// indexAnswersFilter reports whether info's bounds alone decide filter, so a
+// scan of it fetches no document that does not match.
+func indexAnswersFilter(info backends.IndexInfo, filter *types.Document) bool {
+	return !info.Multikey && filter.Len() > 0 && boundedKeyFields(info, filter) == filter.Len() && filterFieldsAreIndexKeys(filter, info)
+}
+
 // countingScan is the scan under a counting GROUP, which reads no document
 // when its index bounds every filtered field: a COUNT_SCAN of a single
 // interval, or an IXSCAN of several.
@@ -2468,7 +2474,7 @@ func countingScan(filter *types.Document, scan *explainStage) *explainStage {
 		return scan
 	}
 	info := scan.input.index
-	if info.Multikey || filter == nil || boundedKeyFields(info, filter) != filter.Len() || !filterFieldsAreIndexKeys(filter, info) {
+	if !indexAnswersFilter(info, filter) {
 		return scan
 	}
 	for _, f := range filter.Keys() {
@@ -2589,7 +2595,14 @@ func wrapScanPlan(params *backends.ExplainParams, scan *explainStage, sorted boo
 	if sortPresent {
 		node = &explainStage{stage: "SORT", input: node}
 	}
-	if params.Skip > 0 {
+	switch {
+	case params.Skip == 0:
+	case node == scan && scan.stage == "FETCH" && scan.input != nil && scan.input.stage == "IXSCAN" && indexAnswersFilter(scan.input.index, params.Filter):
+		// The skip drops index keys before their documents are fetched.
+		fetch := *scan
+		fetch.input = &explainStage{stage: "SKIP", input: scan.input, amount: params.Skip}
+		node = &fetch
+	default:
 		node = &explainStage{stage: "SKIP", input: node, amount: params.Skip}
 	}
 	// A scan that sorts its index keys also absorbs the limit.

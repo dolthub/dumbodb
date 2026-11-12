@@ -222,6 +222,20 @@ func buildExecutionStages(plan *types.Document, rootStage string, run explainRun
 	return cloneExecutionStage(plan, run, true, true)
 }
 
+// examinedDocs is the documents run examined, or for a plan that skips keys
+// under its FETCH, only those it fetched past the skip.
+func examinedDocs(plan *types.Document, run explainRun) int32 {
+	for node := plan; node != nil; {
+		child, _ := node.Get("inputStage")
+		childDoc, _ := child.(*types.Document)
+		if childDoc != nil && must.NotFail(node.Get("stage")) == "FETCH" && must.NotFail(childDoc.Get("stage")) == "SKIP" {
+			return run.returned
+		}
+		node = childDoc
+	}
+	return int32(run.docs)
+}
+
 // cloneExecutionStage copies node with the counts run measured. root marks
 // the plan's top stage; aboveMatch marks a stage above the one that fetches or
 // scans documents, which returns what the command returns.
@@ -236,9 +250,14 @@ func cloneExecutionStage(node *types.Document, run explainRun, root, aboveMatch 
 	children, _ := node.Get("inputStages")
 	childArr, _ := children.(*types.Array)
 
+	// A SKIP under a FETCH drops keys before their documents are fetched, so
+	// both pass up only what the stages above take.
+	skipUnderFetch := stage == "FETCH" && childDoc != nil && must.NotFail(childDoc.Get("stage")) == "SKIP"
 	var nReturned int32
 	switch {
 	case root:
+		nReturned = run.returned
+	case skipUnderFetch || stage == "SKIP" && !aboveMatch:
 		nReturned = run.returned
 	case childArr != nil:
 		// An OR or SORT_MERGE returns each document its branches found once,
@@ -264,7 +283,11 @@ func cloneExecutionStage(node *types.Document, run explainRun, root, aboveMatch 
 	case "IXSCAN", "COUNT_SCAN", "DISTINCT_SCAN":
 		d.Set("keysExamined", int32(run.keys))
 	case "FETCH", "COLLSCAN", "CLUSTERED_IXSCAN":
-		d.Set("docsExamined", int32(run.outerDocs()))
+		if skipUnderFetch {
+			d.Set("docsExamined", run.returned)
+		} else {
+			d.Set("docsExamined", int32(run.outerDocs()))
+		}
 	case "EXPRESS_CLUSTERED_IXSCAN", "EXPRESS_UPDATE", "EXPRESS_DELETE":
 		d.Set("keysExamined", int32(run.keys))
 		d.Set("docsExamined", int32(run.docs))
@@ -596,7 +619,7 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 			"nReturned", run.returned,
 			"executionTimeMillis", int64(0),
 			"totalKeysExamined", int32(run.keys),
-			"totalDocsExamined", int32(run.docs),
+			"totalDocsExamined", examinedDocs(winningPlanDoc, run),
 			"executionStages", executionStages,
 		))
 		response.Set("executionStats", executionStats)
