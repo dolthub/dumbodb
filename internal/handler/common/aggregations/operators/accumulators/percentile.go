@@ -15,21 +15,16 @@
 package accumulators
 
 import (
-	"fmt"
 	"math"
 	"slices"
 
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
-	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
-	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// percentileAccumulator implements $percentile and $median with mongod's
-// only method, "approximate": the percentile p of n numeric values is the
-// value at rank ceil(p*n).
+// percentileAccumulator implements $percentile and $median.
 type percentileAccumulator struct {
 	input  operand
 	ps     []float64
@@ -42,103 +37,16 @@ func newPercentileFunc(name string, median bool) newAccumulatorFunc {
 		notObject = handlererrors.ErrMedianSpecNotObject
 	}
 	return func(args ...any) (Accumulator, error) {
-		spec, ok := args[0].(*types.Document)
-		if !ok {
-			return nil, specNotObjectError(notObject, name, args[0])
-		}
-		var input, p, method any
-		for _, key := range spec.Keys() {
-			v := must.NotFail(spec.Get(key))
-			switch {
-			case key == "input":
-				input = v
-			case key == "p" && !median:
-				p = v
-			case key == "method":
-				method = v
-			default:
-				return nil, handlererrors.NewCommandErrorMsgWithArgument(
-					handlererrors.ErrIDLUnknownField, fmt.Sprintf("BSON field '%s.%s' is an unknown field.", name, key), name,
-				)
-			}
-		}
-		missing := func(field string) error {
-			return handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrMissingField, fmt.Sprintf("BSON field '%s.%s' is missing but a required field", name, field), name,
-			)
-		}
-		switch {
-		case input == nil:
-			return nil, missing("input")
-		case p == nil && !median:
-			return nil, missing("p")
-		case method == nil:
-			return nil, missing("method")
-		}
-		if _, ok := method.(string); !ok {
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrTypeMismatch,
-				fmt.Sprintf("BSON field '%s.method' is the wrong type '%s', expected type 'string'", name, handlerparams.AliasFromType(method)),
-				name,
-			)
-		}
-		if method != "approximate" {
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrBadValue, "Currently only 'approximate' can be used as percentile 'method'.", name,
-			)
-		}
-
-		acc := &percentileAccumulator{median: median, ps: []float64{0.5}}
-		var err error
-		if acc.input, err = newOperand(input); err != nil {
+		spec, err := operators.ParsePercentileSpec(name, median, args[0], notObject)
+		if err != nil {
 			return nil, err
 		}
-		if !median {
-			if acc.ps, err = parsePercentiles(p); err != nil {
-				return nil, err
-			}
+		acc := &percentileAccumulator{median: median, ps: spec.Ps}
+		if acc.input, err = newOperand(spec.Input); err != nil {
+			return nil, err
 		}
 		return acc, nil
 	}
-}
-
-// parsePercentiles returns the constant percentiles of p.
-func parsePercentiles(p any) ([]float64, error) {
-	if !operators.IsConstantExpression(p) {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrPercentileNotConstant,
-			"The $percentile 'p' field must be an array of constant values, but found value: "+types.FormatAnyValue(p)+".",
-			"$percentile",
-		)
-	}
-	v, _, err := operators.EvalOperand(p, types.MakeDocument(0))
-	if err != nil {
-		return nil, err
-	}
-	invalid := func(code handlererrors.ErrorCode, found any) error {
-		return handlererrors.NewCommandErrorMsgWithArgument(
-			code,
-			"The $percentile 'p' field must be an array of numbers from [0.0, 1.0], but found: "+types.FormatAnyValue(found),
-			"$percentile",
-		)
-	}
-	arr, ok := v.(*types.Array)
-	if !ok || arr.Len() == 0 {
-		return nil, invalid(handlererrors.ErrPercentileNotArray, v)
-	}
-	ps := make([]float64, 0, arr.Len())
-	for i := range arr.Len() {
-		elem := must.NotFail(arr.Get(i))
-		f, ok := numberAsFloat(elem)
-		if !ok {
-			return nil, invalid(handlererrors.ErrPercentileNotNumber, elem)
-		}
-		if f < 0 || f > 1 || math.IsNaN(f) {
-			return nil, invalid(handlererrors.ErrPercentileOutOfRange, elem)
-		}
-		ps = append(ps, f)
-	}
-	return ps, nil
 }
 
 func numberAsFloat(v any) (float64, bool) {
@@ -178,19 +86,12 @@ func (s *percentileState) Accumulate(doc *types.Document) error {
 
 func (s *percentileState) Result() (any, error) {
 	slices.Sort(s.nums)
-	at := func(p float64) any {
-		if len(s.nums) == 0 {
-			return types.Null
-		}
-		i := int(math.Ceil(p*float64(len(s.nums)))) - 1
-		return s.nums[max(0, min(i, len(s.nums)-1))]
-	}
 	if s.spec.median {
-		return at(0.5), nil
+		return operators.Percentile(s.nums, 0.5), nil
 	}
 	out := types.MakeArray(len(s.spec.ps))
 	for _, p := range s.spec.ps {
-		out.Append(at(p))
+		out.Append(operators.Percentile(s.nums, p))
 	}
 	return out, nil
 }

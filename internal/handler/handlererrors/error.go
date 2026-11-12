@@ -765,6 +765,8 @@ const (
 	ErrTopMissingSortBy              = ErrorCode(5788005) // Location5788005
 	ErrPercentileSpecNotObject       = ErrorCode(7429703) // Location7429703
 	ErrMedianSpecNotObject           = ErrorCode(7436100) // Location7436100
+	ErrPercentileExprNotObject       = ErrorCode(7436200) // Location7436200
+	ErrMedianExprNotObject           = ErrorCode(7436201) // Location7436201
 	ErrPercentileNotConstant         = ErrorCode(7750300) // Location7750300
 	ErrPercentileNotArray            = ErrorCode(7750301) // Location7750301
 	ErrPercentileNotNumber           = ErrorCode(7750302) // Location7750302

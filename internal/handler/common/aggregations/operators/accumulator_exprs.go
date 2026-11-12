@@ -291,101 +291,49 @@ func integralN(v any, name string) (int64, error) {
 // percentileOp represents { $percentile: { input, p, method } } and
 // { $median: { input, method } }.
 type percentileOp struct {
-	name   string
-	input  any
-	p      any
+	spec   *PercentileSpec
 	median bool
 }
 
 func newPercentileFunc(name string, median bool) newOperatorFunc {
+	notObject := handlererrors.ErrPercentileExprNotObject
+	if median {
+		notObject = handlererrors.ErrMedianExprNotObject
+	}
 	return func(args ...any) (Operator, error) {
-		spec, ok := singleDocumentArg(args)
-		if !ok {
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrFailedToParse,
-				fmt.Sprintf("specification must be an object; found %v", argsForMessage(args)),
-				name,
-			)
-		}
-		op := &percentileOp{name: name, median: median}
-		var method any
-		for _, key := range spec.Keys() {
-			v := must.NotFail(spec.Get(key))
-			switch {
-			case key == "input":
-				op.input = v
-			case key == "p" && !median:
-				op.p = v
-			case key == "method":
-				method = v
-			default:
-				return nil, handlererrors.NewCommandErrorMsgWithArgument(
-					handlererrors.ErrFailedToParse,
-					fmt.Sprintf("BSON field '%s.%s' is an unknown field.", name, key),
-					name,
-				)
+		var arg any = types.MakeArray(0)
+		if len(args) == 1 {
+			arg = args[0]
+		} else if len(args) > 1 {
+			arr := types.MakeArray(len(args))
+			for _, a := range args {
+				arr.Append(a)
 			}
+			arg = arr
 		}
-		if method != "approximate" {
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrBadValue,
-				"Currently only 'approximate' can be used as percentile 'method'.",
-				name,
-			)
+		spec, err := ParsePercentileSpec(name, median, arg, notObject)
+		if err != nil {
+			return nil, err
 		}
-		if op.input == nil || (!median && op.p == nil) {
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrFailedToParse,
-				fmt.Sprintf("BSON field '%s' is missing a required field", name),
-				name,
-			)
-		}
-		return op, nil
+		return &percentileOp{spec: spec, median: median}, nil
 	}
 }
 
 // Process returns the percentiles of the numeric input values, as doubles, or
-// null when there are none. A percentile p is the value at rank ceil(p*n).
+// null when there are none.
 func (op *percentileOp) Process(doc *types.Document) (any, error) {
-	values, err := accumulatorValues([]any{op.input}, doc)
+	values, err := accumulatorValues([]any{op.spec.Input}, doc)
 	if err != nil {
 		return nil, err
 	}
 	nums := numericValues(values)
 	slices.Sort(nums)
-	at := func(p float64) any {
-		if len(nums) == 0 {
-			return types.Null
-		}
-		i := int(math.Ceil(p*float64(len(nums)))) - 1
-		return nums[max(0, min(i, len(nums)-1))]
-	}
 	if op.median {
-		return at(0.5), nil
+		return Percentile(nums, 0.5), nil
 	}
-	pv, err := evalArgValue(op.p, doc)
-	if err != nil {
-		return nil, err
-	}
-	ps, ok := pv.(*types.Array)
-	if !ok || ps.Len() == 0 {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrBadValue,
-			fmt.Sprintf("The 'p' field must be an array of numbers, but found %s", types.FormatAnyValue(pv)),
-			op.name,
-		)
-	}
-	out := types.MakeArray(ps.Len())
-	for i := 0; i < ps.Len(); i++ {
-		p, ok := numericValue(must.NotFail(ps.Get(i)))
-		if !ok || p < 0 || p > 1 {
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrBadValue,
-				"The 'p' field must be an array of numbers in [0.0, 1.0]",
-				op.name,
-			)
-		}
-		out.Append(at(p))
+	out := types.MakeArray(len(op.spec.Ps))
+	for _, p := range op.spec.Ps {
+		out.Append(Percentile(nums, p))
 	}
 	return out, nil
 }
