@@ -1,3 +1,5 @@
+//go:build mongod
+
 // Copyright 2026 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -36,7 +38,7 @@ func liveMongod(t *testing.T, clientOpts *options.ClientOptions, extraArgs ...st
 	t.Helper()
 	mongodBinary := os.Getenv("MONGOD_BIN")
 	if mongodBinary == "" {
-		t.Skip("set MONGOD_BIN to run live replication tests")
+		t.Fatal("MONGOD_BIN must name a mongod binary to run live replication tests; these tests build only with -tags mongod")
 	}
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")

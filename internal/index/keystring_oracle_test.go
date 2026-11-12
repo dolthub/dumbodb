@@ -1,3 +1,5 @@
+//go:build mongod
+
 // Copyright 2026 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -52,7 +54,7 @@ var randomValues = 3000
 func TestKeyStringMatchesMongod(t *testing.T) {
 	mongod := os.Getenv("MONGOD_BIN")
 	if mongod == "" {
-		t.Skip("set MONGOD_BIN to compare KeyString encoding with mongod")
+		t.Fatal("MONGOD_BIN must name a mongod binary to compare KeyString encoding with mongod; these tests build only with -tags mongod")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()

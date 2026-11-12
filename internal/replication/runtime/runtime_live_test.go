@@ -1,3 +1,5 @@
+//go:build mongod
+
 // Copyright 2026 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -38,7 +40,7 @@ import (
 func TestLiveRuntimeInitialSyncSteadyApplyAndRestart(t *testing.T) {
 	mongodBinary := os.Getenv("MONGOD_BIN")
 	if mongodBinary == "" {
-		t.Skip("set MONGOD_BIN to run the live replication runtime test")
+		t.Fatal("MONGOD_BIN must name a mongod binary to run the live replication runtime test; these tests build only with -tags mongod")
 	}
 	mongoAddress := freeRuntimeAddress(t)
 	_, mongoPort, err := net.SplitHostPort(mongoAddress)
