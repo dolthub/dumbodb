@@ -54,15 +54,20 @@ jobs:
       # Tests that need a live mongod build only with -tags mongod and fail
       # when MONGOD_BIN is missing: the KeyString oracle against a clustered
       # mongod's RecordIds, and the live replication heartbeat, oplog fetch,
-      # runtime and replica-set tests.
+      # runtime and replica-set tests. The step runs every test in a file
+      # tagged mongod, and fails unless each one passed.
       - name: Tests against mongod
         env:
           MONGOD_BIN: /usr/bin/mongod
-        run: >-
-          go test -tags mongod -count=1 -timeout 20m
-          ./internal/index/ ./internal/replication/topology/ ./internal/replication/oplog/
-          ./internal/replication/runtime/ ./tests/
-          -run 'TestKeyStringMatchesMongod|TestLive'
+        shell: bash
+        run: |
+          files=$(grep -rl --include='*_test.go' '^//go:build mongod' internal tests)
+          tests=$(grep -ho '^func Test[A-Za-z0-9_]*' $files | sed 's/^func //' | sort -u)
+          pkgs=$(for f in $files; do echo "./$(dirname "$f")/"; done | sort -u)
+          go test -tags mongod -count=1 -timeout 20m -v $pkgs -run "^($(echo $tests | tr ' ' '|'))\$" | tee mongod-tests.log
+          for t in $tests; do
+            grep -q -- "^--- PASS: $t " mongod-tests.log || { echo "$t did not pass"; exit 1; }
+          done
 
       # --fork returns only once mongod is accepting connections, and fails the
       # step if it cannot start. The port check below is a second, explicit
