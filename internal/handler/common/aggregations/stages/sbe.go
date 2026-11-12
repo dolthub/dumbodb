@@ -445,6 +445,29 @@ var sbeOperatorErrors = map[sbeOperatorError]struct {
 	msg  string
 }{
 	{"$switch", 40066}:                                   {handlererrors.ErrSBEBucketNoBranch, "$switch could not find a matching branch for an input, and no default was specified."},
+	{"$dateAdd", 5166405}:                                {handlererrors.ErrSBEInput7157907, "$dateAdd expects integer amount of time units"},
+	{"$dateSubtract", 5166405}:                           {handlererrors.ErrSBEInput7157907, "$dateSubtract expects integer amount of time units"},
+	{"$dateAdd", 5439013}:                                {handlererrors.ErrSBEInput7157905, "$dateAdd expects string defining the time unit"},
+	{"$dateSubtract", 5439013}:                           {handlererrors.ErrSBEInput7157905, "$dateSubtract expects string defining the time unit"},
+	{"$dateAdd", 9}:                                      {handlererrors.ErrSBEInput7157906, "$dateAdd parameter 'unit' must be a valid time unit"},
+	{"$dateSubtract", 9}:                                 {handlererrors.ErrSBEInput7157906, "$dateSubtract parameter 'unit' must be a valid time unit"},
+	{"$dateDiff", 9}:                                     {handlererrors.ErrSBEInput7157924, "$dateDiff parameter 'unit' value cannot be recognized as a time unit"},
+	{"$dateTrunc", 9}:                                    {handlererrors.ErrSBEInput7157936, "$dateTrunc parameter 'unit' value cannot be recognized as a time unit"},
+	{"$dateToString", 18533}:                             {handlererrors.ErrSBEInput4997903, "$dateToString parameter 'format' must be a string"},
+	{"$dateToString", 40485}:                             {handlererrors.ErrSBEInput4997908, "$dateToString parameter 'timezone' must be a valid timezone"},
+	{"$dateToParts", 40485}:                              {handlererrors.ErrSBEInput7157913, "$dateToParts timezone must be a valid timezone"},
+	{"$indexOfBytes", 40092}:                             {handlererrors.ErrSBEInput7158009, "$indexOfBytes substring must resolve to a string"},
+	{"$indexOfCP", 40094}:                                {handlererrors.ErrSBEInput7158009, "$indexOfCP substring must resolve to a string"},
+	{"$indexOfBytes", 40096}:                             {handlererrors.ErrSBEInput7158003, "$indexOfBytes starting index must be numeric type"},
+	{"$indexOfCP", 40096}:                                {handlererrors.ErrSBEInput7158003, "$indexOfCP starting index must be numeric type"},
+	{"$range", 34443}:                                    {handlererrors.ErrSBEInput7157711, "$range only supports numeric types for start"},
+	{"$range", 34447}:                                    {handlererrors.ErrSBEInput7157713, "$range only supports numeric types for step"},
+	{"$range", 34449}:                                    {handlererrors.ErrSBEInput7157717, "$range requires a non-zero step value"},
+	{"$regexMatch", 51105}:                               {handlererrors.ErrSBEInput5126601, "$regexMatch: regex must be of type string or BSON RegEx"},
+	{"$regexFind", 51105}:                                {handlererrors.ErrSBEInput5126601, "$regexFind: regex must be of type string or BSON RegEx"},
+	{"$regexFindAll", 51105}:                             {handlererrors.ErrSBEInput5126601, "$regexFindAll: regex must be of type string or BSON RegEx"},
+	{"$replaceOne", 51745}:                               {handlererrors.ErrSBEInput7158302, "$replaceOne requires that 'find' be a string"},
+	{"$arrayToObject", 40397}:                            {handlererrors.ErrSBEInput5153205, "$arrayToObject requires an array of size 2 arrays"},
 	{"$concat", 16702}:                                   {handlererrors.ErrSBEInput7158201, "$concat supports only strings"},
 	{"$strLenBytes", 34473}:                              {handlererrors.ErrSBEInput5155800, "$strLenBytes requires a string argument"},
 	{"$dateToString", 16006}:                             {handlererrors.ErrSBEInput4997901, "$dateToString parameter 'date' must be coercible to date"},
@@ -500,6 +523,9 @@ var sbeDatePartOperators = map[string]bool{
 
 func sbeEquivalent(code handlererrors.ErrorCode, op, msg string) (handlererrors.ErrorCode, string, bool) {
 	if e, ok := sbeOperatorErrors[sbeOperatorError{op, code}]; ok {
+		if e.code == handlererrors.ErrSBEInput7157921 && strings.Contains(msg, "'endDate'") {
+			return handlererrors.ErrSBEInput7157922, "$dateDiff parameter 'endDate' must be coercible to date", true
+		}
 		return e.code, e.msg, true
 	}
 	if code == handlererrors.ErrBucketNoBranch {
