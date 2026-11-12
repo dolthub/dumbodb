@@ -26,6 +26,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators/accumulators"
+	"github.com/dolthub/dumbodb/internal/handler/commonpath"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -52,6 +53,9 @@ type windowFrame struct {
 	frameType windowFrameType
 	lower     windowBound
 	upper     windowBound
+	// numericRange is set for a range without a unit, whose sortBy values
+	// must be numbers.
+	numericRange bool
 }
 
 // windowOutputField describes one output field in $setWindowFields.
@@ -407,6 +411,7 @@ func parseWindowFrame(doc *types.Document) (*windowFrame, error) {
 
 	if doc.Has("range") {
 		frame.frameType = windowFrameRange
+		frame.numericRange = !doc.Has("unit")
 
 		arr, err := common.GetRequiredParam[*types.Array](doc, "range")
 		if err != nil {
@@ -720,6 +725,12 @@ func cloneDocument(doc *types.Document) (*types.Document, error) {
 func (s *setWindowFields) computeWindowValues(partition []*types.Document, wof windowOutputField) ([]any, error) {
 	n := len(partition)
 	vals := make([]any, n)
+
+	if wof.frame != nil && wof.frame.numericRange {
+		if err := s.checkNumericRangeSortBy(partition); err != nil {
+			return nil, err
+		}
+	}
 
 	switch wof.operator {
 	case "$documentNumber":
@@ -1041,6 +1052,29 @@ func bsonTypeName(v any) string {
 	}
 }
 
+// checkNumericRangeSortBy returns mongod's error for a document whose sortBy
+// value is not a number, which a range window without a unit requires.
+func (s *setWindowFields) checkNumericRangeSortBy(partition []*types.Document) error {
+	if s.sortBy == nil || s.sortBy.Len() == 0 {
+		return nil
+	}
+	key := s.sortBy.Keys()[0]
+	for _, doc := range partition {
+		val := sortByValue(doc, key)
+		typeName := "missing"
+		switch val.(type) {
+		case float64, int32, int64, types.Decimal128:
+			continue
+		case nil:
+		default:
+			typeName = handlerparams.AliasFromType(val)
+		}
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrRangeSortByNotNumeric,
+			"Invalid range: Expected the sortBy field to be a number, but it was "+typeName, "$setWindowFields (stage)")
+	}
+	return nil
+}
+
 // validateSortByFieldIsNumericOrDate checks that the sort-by field values are numeric or Date.
 // Returns an error matching MongoDB's TypeMismatch error if they are not.
 func (s *setWindowFields) validateSortByFieldIsNumericOrDate(partition []*types.Document) error {
@@ -1130,19 +1164,18 @@ func isTied(a, b *types.Document, sortBy *types.Document) bool {
 		return true
 	}
 
+	// Documents tie when $sort would not order them: an array compares by
+	// its least or greatest element, as sortBy directs.
 	for _, key := range sortBy.Keys() {
-		aVal := sortByValue(a, key)
-		bVal := sortByValue(b, key)
-
-		if aVal == nil {
-			aVal = types.Null
+		path, err := types.NewPathFromString(key)
+		if err != nil {
+			return false
 		}
-
-		if bVal == nil {
-			bVal = types.Null
+		order := types.Ascending
+		if dir, ok := toFloat64(must.NotFail(sortBy.Get(key))); ok && dir < 0 {
+			order = types.Descending
 		}
-
-		if types.CompareForAggregation(aVal, bVal) != types.Equal {
+		if common.CompareSortKeys(commonpath.SortKeyValue(a, path), commonpath.SortKeyValue(b, path), order) != types.Equal {
 			return false
 		}
 	}
