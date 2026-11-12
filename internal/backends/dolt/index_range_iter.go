@@ -244,6 +244,9 @@ type indexIDStream struct {
 	// gapKeys are keys examined outside the ranges, carried by the next
 	// entry read.
 	gapKeys int
+	// noGapKeys leaves keys outside the ranges uncounted, as mongod's SBE
+	// scan of an aggregate's count does.
+	noGapKeys bool
 }
 
 func newIndexIDStream(ctx context.Context, idxMap prolly.Map, ranges [][2][]byte, reverse, multikey bool) *indexIDStream {
@@ -282,7 +285,9 @@ func (s *indexIDStream) next() (indexEntry, error) {
 				return indexEntry{}, err
 			}
 		}
-		s.examined.keys(s.ctx, e.gapKeys)
+		if !s.noGapKeys {
+			s.examined.keys(s.ctx, e.gapKeys)
+		}
 		if e.id == nil {
 			return e, nil
 		}

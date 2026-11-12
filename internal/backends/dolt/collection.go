@@ -3823,7 +3823,9 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 				ranges[i][0], ranges[i][1] = compoundLeadingBounds(r[0], r[1])
 			}
 		}
-		return streamedIndexCount(ctx, newIndexIDStream(ctx, idxMap, ranges, false, true), stop)
+		ids := newIndexIDStream(ctx, idxMap, ranges, false, true)
+		ids.noGapKeys = !backends.IsCountScan(ctx)
+		return streamedIndexCount(ctx, ids, stop)
 	}
 
 	// On a multikey field each side of a range may be met by a different
