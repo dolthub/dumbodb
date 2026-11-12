@@ -367,7 +367,29 @@ func projectID(doc, projection *types.Document) (*types.Document, error) {
 
 			set = true
 
-		case string, types.Binary, types.ObjectID,
+		case string:
+			if !strings.HasPrefix(idValue, "$") {
+				projected.Set("_id", idValue)
+				set = true
+
+				break
+			}
+
+			var expr *aggregations.Expression
+			if expr, err = aggregations.NewExpression(idValue, nil); err != nil {
+				return nil, processOperatorError(err)
+			}
+
+			var value any
+			if value, err = expr.Evaluate(doc); err != nil {
+				break
+			}
+
+			projected.Set("_id", value)
+
+			set = true
+
+		case types.Binary, types.ObjectID,
 			time.Time, types.NullType, types.Regex, types.Timestamp: // all this types are treated as new fields value
 			projected.Set("_id", idValue)
 
