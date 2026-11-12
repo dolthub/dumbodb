@@ -79,7 +79,11 @@ func (iter *addFieldsIterator) Next() (struct{}, *types.Document, error) {
 		return unused, doc, nil
 	}
 
-	for _, key := range iter.newField.Keys() {
+	// Every field is evaluated against the input document before any is set.
+	keys := iter.newField.Keys()
+	values := make([]any, len(keys))
+	missing := make([]bool, len(keys))
+	for i, key := range keys {
 		val := must.NotFail(iter.newField.Get(key))
 
 		switch v := val.(type) {
@@ -95,33 +99,37 @@ func (iter *addFieldsIterator) Next() (struct{}, *types.Document, error) {
 
 			val, err = op.Process(doc)
 			if errors.Is(err, operators.ErrMissingValue) {
-				// A missing value removes the field, as in MongoDB.
-				doc.Remove(key)
+				missing[i] = true
 				continue
 			}
 			if err = processAddFieldsError(err); err != nil {
 				return unused, nil, err
 			}
 		case string:
-			// Evaluate field reference expressions like "$fieldName".
 			// Non-expression strings (no "$" prefix) are used as literals.
 			if strings.HasPrefix(v, "$") {
 				expr, exprErr := aggregations.NewExpression(v, nil)
 				if exprErr == nil {
 					evaluated, evalErr := expr.Evaluate(doc)
-					if evalErr == nil {
-						val = evaluated
-					} else {
-						// A missing value removes the field, as in MongoDB.
-						doc.Remove(key)
+					if evalErr != nil {
+						missing[i] = true
 						continue
 					}
+					val = evaluated
 				}
-				// If NewExpression fails (e.g. invalid syntax), fall through and set literal.
 			}
 		}
 
-		doc.Set(key, val)
+		values[i] = val
+	}
+
+	for i, key := range keys {
+		// A missing value removes the field, as in MongoDB.
+		if missing[i] {
+			doc.Remove(key)
+		} else {
+			doc.Set(key, values[i])
+		}
 	}
 
 	return unused, doc, nil

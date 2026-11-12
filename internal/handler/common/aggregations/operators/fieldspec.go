@@ -296,19 +296,22 @@ func AddFieldsTree(doc, spec *types.Document) (*types.Document, error) {
 	return res, nil
 }
 
+// addFields evaluates every child against root before changing v, so a field
+// that v and root share is read as it was in the input document.
 func (n *fieldSpecNode) addFields(v, root *types.Document) (*types.Document, error) {
-	for _, key := range n.keys {
+	type computedField struct {
+		value   any
+		missing bool
+	}
+	computed := make([]computedField, len(n.keys))
+	for i, key := range n.keys {
 		child := n.children[key]
 		if child.leaf == fieldSpecExpr {
 			res, missing, err := evalComputed(child.expr, root)
 			if err != nil {
 				return nil, err
 			}
-			if missing {
-				v.Remove(key)
-			} else {
-				v.Set(key, res)
-			}
+			computed[i] = computedField{value: res, missing: missing}
 			continue
 		}
 		cur, err := v.Get(key)
@@ -316,7 +319,14 @@ func (n *fieldSpecNode) addFields(v, root *types.Document) (*types.Document, err
 		if err != nil {
 			return nil, err
 		}
-		v.Set(key, res)
+		computed[i] = computedField{value: res}
+	}
+	for i, key := range n.keys {
+		if computed[i].missing {
+			v.Remove(key)
+		} else {
+			v.Set(key, computed[i].value)
+		}
 	}
 	return v, nil
 }
