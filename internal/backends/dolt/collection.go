@@ -142,7 +142,9 @@ func (c *collection) query(ctx context.Context, params *backends.QueryParams) (*
 	// An _id equality is one primary-key read, cheaper than any index range,
 	// so without a hint it is tried first, as MongoDB prefers _id_.
 	if !naturalHint && params != nil && params.Hint == nil && !params.Collated && params.Filter != nil {
-		if idVal, ok := simpleIDEquality(params.Filter); ok {
+		// mongod reads {_id: {$eq: null}} as a range of the clustered index,
+		// not an express point lookup.
+		if idVal, ok := simpleIDEquality(params.Filter); ok && idVal != types.Null {
 			if params.Filter.Len() == 1 {
 				if iter, err := pointLookupByID(ctx, state.ns, m, idVal, params.OnlyRecordIDs); err == nil {
 					return &backends.QueryResult{Iter: iter}, idPointStage(), nil
@@ -329,7 +331,7 @@ func (c *collection) query(ctx context.Context, params *backends.QueryParams) (*
 	onlyRecordIDs := params != nil && params.OnlyRecordIDs
 
 	if !naturalHint && params != nil && !params.Collated && params.Filter != nil {
-		if idVal, ok := simpleIDEquality(params.Filter); ok && params.Filter.Len() == 1 {
+		if idVal, ok := simpleIDEquality(params.Filter); ok && params.Filter.Len() == 1 && idVal != types.Null {
 			iter, err := pointLookupByID(ctx, state.ns, m, idVal, onlyRecordIDs)
 			if err == nil {
 				return &backends.QueryResult{Iter: iter}, idPointStage(), nil
