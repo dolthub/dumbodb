@@ -17,6 +17,7 @@ package handler
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/FerretDB/wire"
@@ -252,7 +253,6 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 	}
 
 	if collationVal, _ := document.Get("collation"); collationVal != nil {
-		hasExplicitOptions = true
 		collationDoc, ok := collationVal.(*types.Document)
 		if !ok {
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(
@@ -384,47 +384,18 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace, msg, "create")
 
 	case backends.ErrorCodeIs(err, backends.ErrorCodeCollectionAlreadyExists):
-		// MongoDB 8.0: idempotent OK for a no-options plain-collection create
-		// over an existing plain collection outside a txn; NamespaceExists (48)
-		// inside a txn, with explicit options, or when a view is involved on
-		// either side (creating a collection over a view, or vice versa).
+		// MongoDB 8.0: a create over an existing namespace succeeds outside a
+		// transaction when it asks for the options the namespace was created
+		// with; otherwise it is NamespaceExists (48), naming what differs.
 		ci := conninfo.Get(connCtx)
-		existingIsView := false
-		existingUUID := ""
-		existingClusteredName := ""
-		if info, verr := lookupCollectionInfo(connCtx, db, collectionName); verr == nil && info != nil {
-			existingIsView = info.IsView
-			existingUUID = info.UUID
-			existingClusteredName = info.ClusteredIndexName
+		existing, verr := lookupCollectionInfo(connCtx, db, collectionName)
+		if verr != nil || existing == nil {
+			existing = &backends.CollectionInfo{}
 		}
-		clusteredDiffers := !existingIsView && params.ViewOn == "" &&
-			(params.ClusteredIndexName != existingClusteredName || clusteredErr != nil)
-		var existingValidator *types.Document
-		if !existingIsView {
-			existingValidator, _, _ = collectionValidator(connCtx, db, collectionName)
-		}
-		validatorDiffers := !sameValidator(params.Validator, existingValidator)
-		if hasExplicitOptions || ci.InTransaction() || existingIsView || clusteredDiffers || validatorDiffers {
+		if msg, differs := createConflict(dbName, collectionName, &params, existing, hasExplicitOptions, clusteredErr != nil); differs || ci.InTransaction() {
 			if ci.InTransaction() {
 				h.AbortPendingTransaction(connCtx)
-			}
-			// Creating a view over an existing collection reports the existing
-			// collection's UUID, matching MongoDB's message (only the UUID value
-			// differs). Other collisions keep the plain message.
-			msg := fmt.Sprintf("Collection %s.%s already exists.", dbName, collectionName)
-			switch {
-			case params.ViewOn != "" && !existingIsView && existingUUID != "":
-				msg = fmt.Sprintf("namespace %s.%s already exists, but with different options: { uuid: UUID(\"%s\") }", dbName, collectionName, existingUUID)
-			case (clusteredDiffers || validatorDiffers || hasExplicitOptions) && !existingIsView && existingUUID != "" && !ci.InTransaction():
-				// mongod lists the existing collection's options.
-				existing := fmt.Sprintf("uuid: UUID(\"%s\")", existingUUID)
-				if existingClusteredName != "" {
-					existing += fmt.Sprintf(", clusteredIndex: { v: 2, key: { _id: 1 }, name: \"%s\", unique: true }", existingClusteredName)
-				}
-				if existingValidator.Len() > 0 {
-					existing += ", validator: " + types.FormatAnyValue(existingValidator)
-				}
-				msg = fmt.Sprintf("namespace %s.%s already exists, but with different options: { %s }", dbName, collectionName, existing)
+				msg = fmt.Sprintf("Collection %s.%s already exists.", dbName, collectionName)
 			}
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrNamespaceExists, msg, "create")
 		}
@@ -450,44 +421,119 @@ func (h *Handler) collectionExists(ctx context.Context, dbName, collectionName s
 	return err == nil && info != nil
 }
 
-// sameValidator reports whether validators a and b, either nil for none, are
-// the same expression, whatever their key order.
-func sameValidator(a, b *types.Document) bool {
-	if a.Len() == 0 || b.Len() == 0 {
-		return a.Len() == b.Len()
+// createConflict returns mongod's NamespaceExists message for a create of
+// params over existing, and whether the two differ. A view must name the same
+// source and pipeline; a collection the same options, compared as stored:
+// an option given only at one create differs even when it is the default.
+func createConflict(dbName, collName string, params *backends.CreateCollectionParams, existing *backends.CollectionInfo,
+	otherOptions, clusteredInvalid bool,
+) (string, bool) {
+	ns := dbName + "." + collName
+	switch {
+	case existing.IsView:
+		requested := dbName
+		if params.ViewOn != "" {
+			requested = dbName + "." + params.ViewOn
+		}
+		if params.ViewOn != existing.ViewOn {
+			return fmt.Sprintf("namespace %s already exists, but is a view on %s.%s rather than %s", ns, dbName, existing.ViewOn, requested), true
+		}
+		if !sameBSON(viewPipeline(params.ViewPipeline), viewPipeline(existing.ViewPipeline)) {
+			return fmt.Sprintf("namespace %s already exists, but with pipeline %s rather than %s", ns,
+				formatPipeline(existing.ViewPipeline), formatPipeline(params.ViewPipeline)), true
+		}
+		return "", false
+	case params.ViewOn != "":
+		return fmt.Sprintf("namespace %s already exists, but with different options: { uuid: UUID(\"%s\") }", ns, existing.UUID), true
 	}
-	return sameIgnoringKeyOrder(a, b)
+
+	differs := otherOptions || clusteredInvalid || params.ClusteredIndexName != existing.ClusteredIndexName ||
+		!sameBSON(params.Validator, existing.Validator) ||
+		params.ValidationLevel != existing.ValidationLevel || params.ValidationAction != existing.ValidationAction ||
+		(params.Collation == nil) != (existing.Collation == nil) ||
+		params.Collation != nil && !sameCollation(params.Collation, existing.Collation)
+	if !differs {
+		return "", false
+	}
+	options := fmt.Sprintf("uuid: UUID(\"%s\")", existing.UUID)
+	if existing.ClusteredIndexName != "" {
+		options += fmt.Sprintf(", clusteredIndex: { v: 2, key: { _id: 1 }, name: \"%s\", unique: true }", existing.ClusteredIndexName)
+	}
+	if existing.Validator.Len() > 0 {
+		options += ", validator: " + types.FormatAnyValue(existing.Validator)
+	}
+	if existing.ValidationLevel != "" {
+		options += fmt.Sprintf(", validationLevel: %q", existing.ValidationLevel)
+	}
+	if existing.ValidationAction != "" {
+		options += fmt.Sprintf(", validationAction: %q", existing.ValidationAction)
+	}
+	if existing.Collation != nil {
+		options += ", collation: " + resolvedCollationString(existing.Collation)
+	}
+	return fmt.Sprintf("namespace %s already exists, but with different options: { %s }", ns, options), true
 }
 
-// sameIgnoringKeyOrder reports whether a and b are equal, comparing
-// documents at every level by their fields regardless of order.
-func sameIgnoringKeyOrder(a, b any) bool {
-	switch a := a.(type) {
-	case *types.Document:
-		b, ok := b.(*types.Document)
-		if !ok || a.Len() != b.Len() {
+// viewPipeline is a view's pipeline, an empty one for none.
+func viewPipeline(p *types.Array) *types.Array {
+	if p == nil {
+		return types.MakeArray(0)
+	}
+	return p
+}
+
+// formatPipeline prints a view pipeline as mongod does in a create conflict:
+// as a document keyed by stage index.
+func formatPipeline(p *types.Array) string {
+	p = viewPipeline(p)
+	if p.Len() == 0 {
+		return "{}"
+	}
+	var b strings.Builder
+	b.WriteString("{ ")
+	for i := 0; i < p.Len(); i++ {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		fmt.Fprintf(&b, "%d: %s", i, types.FormatAnyValue(must.NotFail(p.Get(i))))
+	}
+	b.WriteString(" }")
+	return b.String()
+}
+
+// sameBSON reports whether a and b, either nil for none, are equal as mongod
+// compares stored options: fields in order, numbers by value.
+func sameBSON(a, b any) bool {
+	ad, aDoc := a.(*types.Document)
+	bd, bDoc := b.(*types.Document)
+	if aDoc || bDoc {
+		if ad.Len() == 0 || bd.Len() == 0 {
+			return ad.Len() == bd.Len()
+		}
+		if !aDoc || !bDoc || !slices.Equal(ad.Keys(), bd.Keys()) {
 			return false
 		}
-		for _, k := range a.Keys() {
-			bv, err := b.Get(k)
-			if err != nil || !sameIgnoringKeyOrder(must.NotFail(a.Get(k)), bv) {
-				return false
-			}
-		}
-		return true
-	case *types.Array:
-		b, ok := b.(*types.Array)
-		if !ok || a.Len() != b.Len() {
-			return false
-		}
-		for i := 0; i < a.Len(); i++ {
-			if !sameIgnoringKeyOrder(must.NotFail(a.Get(i)), must.NotFail(b.Get(i))) {
+		for _, k := range ad.Keys() {
+			if !sameBSON(must.NotFail(ad.Get(k)), must.NotFail(bd.Get(k))) {
 				return false
 			}
 		}
 		return true
 	}
-	return fmt.Sprintf("%T", a) == fmt.Sprintf("%T", b) && types.Compare(a, b) == types.Equal
+	aa, aArr := a.(*types.Array)
+	ba, bArr := b.(*types.Array)
+	if aArr || bArr {
+		if !aArr || !bArr || aa.Len() != ba.Len() {
+			return false
+		}
+		for i := 0; i < aa.Len(); i++ {
+			if !sameBSON(must.NotFail(aa.Get(i)), must.NotFail(ba.Get(i))) {
+				return false
+			}
+		}
+		return true
+	}
+	return types.Compare(a, b) == types.Equal
 }
 
 // invalidDatabaseNameMsg returns the MongoDB-compatible error message for an invalid database name.
