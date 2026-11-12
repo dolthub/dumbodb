@@ -820,24 +820,14 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 		}
 	}
 
-	newCollCount, countErr := newCollMap.Count()
-	if countErr != nil {
-		return nil, fmt.Errorf("DumboDBResolveConflict: counting new collection map for %q: %w", params.Collection, countErr)
-	}
-
+	// A resolution that leaves the collection empty keeps it, as deleting its last document does.
 	amEditor := updatedAM.Editor()
-	if newCollCount == 0 {
-		if err := amEditor.Delete(ctx, params.Collection); err != nil {
-			return nil, fmt.Errorf("DumboDBResolveConflict: deleting collection %q from AM: %w", params.Collection, err)
-		}
-	} else {
-		newCollHash, hashErr := db.dtblHashForCollection(ctx, params.Collection, newCollMap, newIdxAM, newArtHash)
-		if hashErr != nil {
-			return nil, fmt.Errorf("DumboDBResolveConflict: getting DTBL hash for %q: %w", params.Collection, hashErr)
-		}
-		if err := amEditor.Update(ctx, params.Collection, newCollHash); err != nil {
-			return nil, fmt.Errorf("DumboDBResolveConflict: updating AM for collection %q: %w", params.Collection, err)
-		}
+	newCollHash, hashErr := db.dtblHashForCollection(ctx, params.Collection, newCollMap, newIdxAM, newArtHash)
+	if hashErr != nil {
+		return nil, fmt.Errorf("DumboDBResolveConflict: getting DTBL hash for %q: %w", params.Collection, hashErr)
+	}
+	if err := amEditor.Update(ctx, params.Collection, newCollHash); err != nil {
+		return nil, fmt.Errorf("DumboDBResolveConflict: updating AM for collection %q: %w", params.Collection, err)
 	}
 
 	finalAM, err := amEditor.Flush(ctx)

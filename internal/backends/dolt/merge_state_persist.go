@@ -892,19 +892,9 @@ func clearConflictArtifacts(ctx context.Context, state *dbState, ms *mergeInProg
 			return fmt.Errorf("building clean DTBL for %q: %w", collName, err)
 		}
 
-		cnt, countErr := collMap.Count()
-		if countErr != nil {
-			return fmt.Errorf("counting collection %q: %w", collName, countErr)
-		}
-
-		if cnt == 0 {
-			if err := amEditor.Delete(ctx, collName); err != nil {
-				return fmt.Errorf("deleting empty collection %q from AM: %w", collName, err)
-			}
-		} else {
-			if err := amEditor.Update(ctx, collName, newDTBLHash); err != nil {
-				return fmt.Errorf("updating AM for %q: %w", collName, err)
-			}
+		// A collection the resolutions left empty is kept, as deleting its last document keeps it.
+		if err := amEditor.Update(ctx, collName, newDTBLHash); err != nil {
+			return fmt.Errorf("updating AM for %q: %w", collName, err)
 		}
 	}
 
