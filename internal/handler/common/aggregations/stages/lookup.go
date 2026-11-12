@@ -159,6 +159,10 @@ type lookup struct {
 	pipeline     *types.Array   // pipeline form (may be nil)
 	as           string
 	fetcher      CollectionFetcher
+	// unlimitedMatches lifts the size limit on one document's matches: for
+	// $unionWith, and when an $unwind of as directly follows (see
+	// MarkLookupsUnwound).
+	unlimitedMatches bool
 }
 
 // NewLookupStage creates a new $lookup stage with a collection fetcher.
@@ -482,64 +486,142 @@ func (l *lookup) Process(ctx context.Context, iter types.DocumentsIterator, clos
 		eqIdx = newEqualityIndex(fromDocs, l.foreignField)
 	}
 
-	out := make([]*types.Document, 0, len(docs))
+	res := &lookupIterator{
+		ctx:              ctx,
+		l:                l,
+		fetcher:          fetcher,
+		docs:             docs,
+		fromDocs:         fromDocs,
+		eqIdx:            eqIdx,
+		perDocField:      perDocField,
+		validatedMatches: map[int]bool{},
+	}
+	closer.Add(res)
 
-	if l.pipeline != nil {
-		// Pipeline form: run the pipeline against the from collection for each input doc.
-		validatedMatches := map[int]bool{}
-		for _, doc := range docs {
-			candidates := fromDocs
-			if perDocField != "" {
-				if candidates, err = l.perDocCandidates(ctx, fetcher, doc, perDocField); err != nil {
-					return nil, lazyerrors.Error(err)
-				}
-			}
-			if eqIdx != nil {
-				candidates = l.equalityMatches(doc, eqIdx)
-			}
+	return res, nil
+}
 
-			matched, pErr := l.runPipeline(ctx, fetcher, candidates, doc, validatedMatches)
-			if pErr != nil {
-				return nil, pErr
-			}
+// lookupMaxMatchBytes is mongod's internalLookupStageIntermediateDocumentMaxSizeBytes:
+// the most one input document's matches may total.
+const lookupMaxMatchBytes = 100 * 1024 * 1024
 
-			newDoc := doc.DeepCopy()
-			arr := types.MakeArray(len(matched))
+// lookupArrayElementOverhead is what mongod's array accumulator adds to each
+// matched document's BSON size when it reports an equality $lookup's size.
+const lookupArrayElementOverhead = 9
 
-			for _, m := range matched {
-				arr.Append(m)
-			}
+// lookupIterator joins one input document per Next, so the stage holds only
+// its inputs and the document being joined.
+type lookupIterator struct {
+	ctx              context.Context
+	l                *lookup
+	fetcher          *cachingFetcher
+	docs             []*types.Document
+	fromDocs         []*types.Document
+	eqIdx            *equalityIndex
+	perDocField      string
+	validatedMatches map[int]bool
+	next             int
+}
 
-			newDoc.Set(l.as, arr)
-			out = append(out, newDoc)
-		}
-	} else {
-		// Simple equality join form.
-		// MongoDB equality semantics: a foreign doc matches if any element of
-		// localField (treated as a singleton when scalar) equals any element of
-		// foreignField (treated as a singleton when scalar).
-		for _, doc := range docs {
-			matched := l.equalityMatches(doc, eqIdx)
-			for i, m := range matched {
-				matched[i] = m.DeepCopy()
-			}
+func (it *lookupIterator) Next() (struct{}, *types.Document, error) {
+	var unused struct{}
+	if it.next >= len(it.docs) {
+		return unused, nil, iterator.ErrIteratorDone
+	}
+	doc := it.docs[it.next]
+	it.docs[it.next] = nil
+	it.next++
 
-			newDoc := doc.DeepCopy()
-			arr := types.MakeArray(len(matched))
-
-			for _, m := range matched {
-				arr.Append(m)
-			}
-
-			newDoc.Set(l.as, arr)
-			out = append(out, newDoc)
-		}
+	matched, err := it.matches(doc)
+	if err != nil {
+		return unused, nil, err
 	}
 
-	result := iterator.Values(iterator.ForSlice(out))
-	closer.Add(result)
+	newDoc := doc.DeepCopy()
+	arr := types.MakeArray(len(matched))
+	for _, m := range matched {
+		arr.Append(m)
+	}
+	newDoc.Set(it.l.as, arr)
+	return unused, newDoc, nil
+}
 
-	return result, nil
+func (it *lookupIterator) Close() {
+	it.docs = nil
+}
+
+// matches returns the foreign documents joined to doc.
+func (it *lookupIterator) matches(doc *types.Document) ([]*types.Document, error) {
+	l := it.l
+	if l.pipeline == nil {
+		// MongoDB equality semantics: a foreign doc matches if any element of
+		// localField (treated as a singleton when scalar) equals any element of
+		// foreignField (treated as a singleton when scalar). Unless an $unwind
+		// is absorbed, mongod refuses a match that would take the matches past
+		// lookupMaxMatchBytes.
+		matched := l.equalityMatches(doc, it.eqIdx)
+		total := 0
+		for i, m := range matched {
+			size := m.BSONSize() + lookupArrayElementOverhead
+			if !l.unlimitedMatches && total+size > lookupMaxMatchBytes {
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrExceededMemoryLimit,
+					fmt.Sprintf("Used too much memory for a single array. Memory limit: %d bytes. "+
+						"The array contains %d elements and is of size %d bytes. The element being added has size %d bytes.",
+						lookupMaxMatchBytes, i, total, size),
+					"$lookup",
+				)
+			}
+			total += size
+			matched[i] = m.DeepCopy()
+		}
+		return matched, nil
+	}
+
+	candidates := it.fromDocs
+	if it.perDocField != "" {
+		var err error
+		if candidates, err = l.perDocCandidates(it.ctx, it.fetcher, doc, it.perDocField); err != nil {
+			return nil, lazyerrors.Error(err)
+		}
+	}
+	if it.eqIdx != nil {
+		candidates = l.equalityMatches(doc, it.eqIdx)
+	}
+
+	return l.runPipeline(it.ctx, it.fetcher, candidates, doc, it.validatedMatches)
+}
+
+// MarkLookupsUnwound sets each $lookup in pipeline that an $unwind of its "as"
+// field directly follows to skip the size limit on one document's matches, as
+// mongod absorbs that $unwind and streams the matches.
+func MarkLookupsUnwound(pipeline []aggregations.Stage, specs []*types.Document) {
+	for i := 0; i+1 < len(pipeline) && i+1 < len(specs); i++ {
+		l, ok := pipeline[i].(*lookup)
+		if !ok {
+			continue
+		}
+		if unwindPath(specs[i+1]) == "$"+l.as {
+			l.unlimitedMatches = true
+		}
+	}
+}
+
+// unwindPath returns the field path of an $unwind stage spec, or "".
+func unwindPath(spec *types.Document) string {
+	if spec == nil || spec.Command() != "$unwind" {
+		return ""
+	}
+	v, _ := spec.Get("$unwind")
+	switch v := v.(type) {
+	case string:
+		return v
+	case *types.Document:
+		p, _ := v.Get("path")
+		s, _ := p.(string)
+		return s
+	}
+	return ""
 }
 
 // runPipeline runs the $lookup pipeline form against a set of documents.
@@ -595,22 +677,15 @@ func (l *lookup) runPipeline(ctx context.Context, fetcher CollectionFetcher, fro
 	}
 
 	// fromDocs may be shared: run leading $match stages on them directly (they
-	// do not modify documents) and copy only the survivors.
-	current := fromDocs
+	// do not modify documents) and copy only the survivors. Stages are
+	// chained, so the sub-pipeline streams as it does in mongod.
+	var current types.DocumentsIterator = iterator.Values(iterator.ForSlice(fromDocs))
 	copied := false
-	// The copies keep their stored documents' RecordIds, which the
-	// sub-pipeline sees until a stage other than $match reshapes them.
-	copyCurrent := func() {
-		copies := make([]*types.Document, len(current))
-		for i, d := range current {
-			copies[i] = d.DeepCopy()
-			copies[i].SetRecordKey(d.RecordKey())
-		}
-		current = copies
-		copied = true
-	}
 
-	// Execute each pipeline stage.
+	closer := iterator.NewMultiCloser()
+	defer closer.Close()
+	closer.Add(current)
+
 	subStages := must.NotFail(iterator.ConsumeValues(l.pipeline.Iterator()))
 	pipeIter := l.pipeline.Iterator()
 	defer pipeIter.Close()
@@ -638,9 +713,12 @@ func (l *lookup) runPipeline(ctx context.Context, fetcher CollectionFetcher, fro
 		substituted := substituteVarsInStage(stageDoc, vars)
 
 		if stageIndex == 0 && l.from == "" {
-			if current, err = evalDocuments(substituted); err != nil {
+			docs, err := evalDocuments(substituted)
+			if err != nil {
 				return nil, err
 			}
+			current = iterator.Values(iterator.ForSlice(docs))
+			closer.Add(current)
 			copied = true
 			continue
 		}
@@ -659,36 +737,81 @@ func (l *lookup) runPipeline(ctx context.Context, fetcher CollectionFetcher, fro
 		}
 
 		if !copied && substituted.Command() != "$match" {
-			copyCurrent()
+			current = newDeepCopyIterator(current)
+			closer.Add(current)
+			copied = true
 		}
 
-		// Run the stage against the current set of documents.
-		stageInput := iterator.Values(iterator.ForSlice(current))
-		stageCloser := iterator.NewMultiCloser()
-
-		stageOutput, sErr := stage.Process(ctx, stageInput, stageCloser)
-		if sErr != nil {
-			stageCloser.Close()
-			return nil, sErr
-		}
-
-		current, err = common.ConsumeDocuments(stageOutput, "$lookup")
-		stageCloser.Close()
-
-		if err != nil {
-			return nil, lazyerrors.Error(err)
+		if current, err = stage.Process(ctx, current, closer); err != nil {
+			return nil, err
 		}
 		if substituted.Command() != "$match" {
-			for _, d := range current {
+			// The copies keep their stored documents' RecordIds, which the
+			// sub-pipeline sees until a stage other than $match reshapes them.
+			current = newMapIterator(current, closer, func(d *types.Document) (*types.Document, error) {
 				d.SetRecordKey(nil)
-			}
+				return d, nil
+			})
 		}
 	}
 
 	if !copied {
-		copyCurrent()
+		current = newDeepCopyIterator(current)
+		closer.Add(current)
 	}
-	return current, nil
+	return l.collectMatches(current)
+}
+
+// collectMatches drains a sub-pipeline's output. Unless an $unwind is
+// absorbed, mongod refuses a further match once the matches so far total more
+// than lookupMaxMatchBytes.
+func (l *lookup) collectMatches(iter types.DocumentsIterator) ([]*types.Document, error) {
+	var matched []*types.Document
+	total := 0
+	for {
+		_, doc, err := iter.Next()
+		if errors.Is(err, iterator.ErrIteratorDone) {
+			return matched, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		if !l.unlimitedMatches {
+			if total > lookupMaxMatchBytes {
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrLookupMatchesTooLarge,
+					fmt.Sprintf("Total size of documents in %s matching pipeline's $lookup stage exceeds %d bytes",
+						l.from, lookupMaxMatchBytes),
+					"$lookup",
+				)
+			}
+			total += doc.BSONSize()
+		}
+		matched = append(matched, doc)
+	}
+}
+
+// deepCopyIterator yields a deep copy of each document of iter.
+type deepCopyIterator struct {
+	iter types.DocumentsIterator
+}
+
+func newDeepCopyIterator(iter types.DocumentsIterator) *deepCopyIterator {
+	return &deepCopyIterator{iter: iter}
+}
+
+func (it *deepCopyIterator) Next() (struct{}, *types.Document, error) {
+	_, doc, err := it.iter.Next()
+	if err != nil {
+		return struct{}{}, nil, err
+	}
+	copied := doc.DeepCopy()
+	copied.SetRecordKey(doc.RecordKey())
+	return struct{}{}, copied, nil
+}
+
+func (it *deepCopyIterator) Close() {
+	it.iter.Close()
 }
 
 // LookupJoinField returns the field of a $lookup's foreign collection whose

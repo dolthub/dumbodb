@@ -154,6 +154,10 @@ const (
 
 	ErrExceededMemoryLimit = ErrorCode(146) // ExceededMemoryLimit
 
+	// ErrLookupMatchesTooLarge indicates a $lookup's matches for one document
+	// passed internalLookupStageIntermediateDocumentMaxSizeBytes.
+	ErrLookupMatchesTooLarge = ErrorCode(4568) // Location4568
+
 	ErrDurationOverflow = ErrorCode(159) // DurationOverflow
 
 	// ErrQueryExceededMemoryLimitNoDiskUseAllowed indicates a blocking
