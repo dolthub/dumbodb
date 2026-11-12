@@ -16,7 +16,6 @@ package handler
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -100,15 +99,11 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 	// If an already-existing collection is created with explicit options, it's an error.
 	var hasExplicitOptions bool
 
-	// mongod reports an existing collection before an invalid clusteredIndex
-	// version, so that error waits for the create to find no collection.
-	var clusteredVersionErr error
-	if err := validateClusteredIndex(document); err != nil {
-		var ce *handlererrors.CommandError
-		if !errors.As(err, &ce) || ce.Code() != handlererrors.ErrClusteredIndexVersion {
-			return nil, err
-		}
-		clusteredVersionErr = err
+	// mongod reports an existing collection before an invalid clusteredIndex,
+	// so that error waits for the create to find no collection.
+	clusteredErr := validateClusteredIndex(document)
+	if clusteredErr != nil && !h.collectionExists(connCtx, dbName, collectionName) {
+		return nil, clusteredErr
 	}
 	// The clusteredIndex a collection was created with, or none, which a
 	// create over it must give again.
@@ -239,8 +234,9 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		}
 	}
 
+	// A validator differs from the existing collection's only if it is not
+	// the same one, which the existing-collection check compares.
 	if validatorVal, _ := document.Get("validator"); validatorVal != nil {
-		hasExplicitOptions = true
 		validatorDoc, ok := validatorVal.(*types.Document)
 		if !ok {
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(
@@ -366,9 +362,9 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		}
 	}
 
-	if clusteredVersionErr != nil {
+	if clusteredErr != nil {
 		if info, ierr := lookupCollectionInfo(connCtx, db, collectionName); ierr != nil || info == nil {
-			return nil, clusteredVersionErr
+			return nil, clusteredErr
 		}
 		err = backends.NewError(backends.ErrorCodeCollectionAlreadyExists, nil)
 	} else {
@@ -402,8 +398,13 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 			existingClusteredName = info.ClusteredIndexName
 		}
 		clusteredDiffers := !existingIsView && params.ViewOn == "" &&
-			(params.ClusteredIndexName != existingClusteredName || clusteredVersionErr != nil)
-		if hasExplicitOptions || ci.InTransaction() || existingIsView || clusteredDiffers {
+			(params.ClusteredIndexName != existingClusteredName || clusteredErr != nil)
+		var existingValidator *types.Document
+		if !existingIsView {
+			existingValidator, _, _ = collectionValidator(connCtx, db, collectionName)
+		}
+		validatorDiffers := !sameValidator(params.Validator, existingValidator)
+		if hasExplicitOptions || ci.InTransaction() || existingIsView || clusteredDiffers || validatorDiffers {
 			if ci.InTransaction() {
 				h.AbortPendingTransaction(connCtx)
 			}
@@ -414,11 +415,14 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 			switch {
 			case params.ViewOn != "" && !existingIsView && existingUUID != "":
 				msg = fmt.Sprintf("namespace %s.%s already exists, but with different options: { uuid: UUID(\"%s\") }", dbName, collectionName, existingUUID)
-			case (clusteredDiffers || hasExplicitOptions) && !existingIsView && existingUUID != "" && !ci.InTransaction():
+			case (clusteredDiffers || validatorDiffers || hasExplicitOptions) && !existingIsView && existingUUID != "" && !ci.InTransaction():
 				// mongod lists the existing collection's options.
 				existing := fmt.Sprintf("uuid: UUID(\"%s\")", existingUUID)
 				if existingClusteredName != "" {
 					existing += fmt.Sprintf(", clusteredIndex: { v: 2, key: { _id: 1 }, name: \"%s\", unique: true }", existingClusteredName)
+				}
+				if existingValidator.Len() > 0 {
+					existing += ", validator: " + types.FormatAnyValue(existingValidator)
 				}
 				msg = fmt.Sprintf("namespace %s.%s already exists, but with different options: { %s }", dbName, collectionName, existing)
 			}
@@ -434,6 +438,56 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 	default:
 		return nil, common.TranslateBackendWriteError(connCtx, err)
 	}
+}
+
+// collectionExists reports whether dbName holds collectionName.
+func (h *Handler) collectionExists(ctx context.Context, dbName, collectionName string) bool {
+	db, err := h.b.Database(dbName)
+	if err != nil {
+		return false
+	}
+	info, err := lookupCollectionInfo(ctx, db, collectionName)
+	return err == nil && info != nil
+}
+
+// sameValidator reports whether validators a and b, either nil for none, are
+// the same expression, whatever their key order.
+func sameValidator(a, b *types.Document) bool {
+	if a.Len() == 0 || b.Len() == 0 {
+		return a.Len() == b.Len()
+	}
+	return sameIgnoringKeyOrder(a, b)
+}
+
+// sameIgnoringKeyOrder reports whether a and b are equal, comparing
+// documents at every level by their fields regardless of order.
+func sameIgnoringKeyOrder(a, b any) bool {
+	switch a := a.(type) {
+	case *types.Document:
+		b, ok := b.(*types.Document)
+		if !ok || a.Len() != b.Len() {
+			return false
+		}
+		for _, k := range a.Keys() {
+			bv, err := b.Get(k)
+			if err != nil || !sameIgnoringKeyOrder(must.NotFail(a.Get(k)), bv) {
+				return false
+			}
+		}
+		return true
+	case *types.Array:
+		b, ok := b.(*types.Array)
+		if !ok || a.Len() != b.Len() {
+			return false
+		}
+		for i := 0; i < a.Len(); i++ {
+			if !sameIgnoringKeyOrder(must.NotFail(a.Get(i)), must.NotFail(b.Get(i))) {
+				return false
+			}
+		}
+		return true
+	}
+	return fmt.Sprintf("%T", a) == fmt.Sprintf("%T", b) && types.Compare(a, b) == types.Equal
 }
 
 // invalidDatabaseNameMsg returns the MongoDB-compatible error message for an invalid database name.
