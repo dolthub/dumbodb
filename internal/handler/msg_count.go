@@ -96,6 +96,9 @@ func (h *Handler) MsgCount(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMs
 		if err = checkHintType(params.Hint); err == nil && !isView {
 			err = validateHintExists(connCtx, c, params.Hint, "count")
 		}
+		if err == nil && isView {
+			err = validateViewHint(connCtx, db, &cList.Collections[0], params.Hint, "count", params.Filter.Len() > 0)
+		}
 		if err != nil {
 			return nil, err
 		}

@@ -105,6 +105,43 @@ func checkCompoundNaturalHint(hint any, command string) error {
 		"Cannot include '$natural' in compound hint: "+formatDupKey(d), command)
 }
 
+// validateViewHint returns mongod's error for a hint on a read of a view,
+// which mongod runs as an aggregate of the view's stages and the command's on
+// the view's base collection, checking the hint there. commandLedByMatch
+// reports whether the command's own stages start with a $match.
+func validateViewHint(ctx context.Context, db backends.Database, view *backends.CollectionInfo, hint any, command string, commandLedByMatch bool) error {
+	if hint == nil {
+		return nil
+	}
+	if err := checkHintType(hint); err != nil {
+		return err
+	}
+	base, _, rawStages, err := resolveViewChain(ctx, db, view.Name, view.ViewOn, view.ViewPipeline, nil)
+	if err != nil {
+		return nil
+	}
+	// find keeps its own rules for a hint, whatever the stages.
+	ledByMatch := commandLedByMatch && len(rawStages) == 0
+	if len(rawStages) > 0 {
+		first, _ := rawStages[0].(*types.Document)
+		ledByMatch = first != nil && first.Command() == "$match"
+	}
+	ledByMatch = ledByMatch && command != "find"
+	if ledByMatch || command == "distinct" {
+		if err = checkCompoundNaturalHint(hint, command); err != nil {
+			return err
+		}
+	}
+	if ledByMatch && backends.HintIsNatural(hint) {
+		return nil
+	}
+	coll, err := db.Collection(base)
+	if err != nil {
+		return nil
+	}
+	return validateHintExists(ctx, coll, hint, command)
+}
+
 // collectionMissing reports whether coll does not exist.
 func collectionMissing(ctx context.Context, coll backends.Collection) bool {
 	_, err := coll.ListIndexes(ctx, nil)

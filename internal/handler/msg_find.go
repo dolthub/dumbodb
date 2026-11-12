@@ -116,6 +116,9 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 		viewOn = cInfo.ViewOn
 		viewPipeline = cInfo.ViewPipeline
 		viewCollation = cInfo.Collation
+		if err = validateViewHint(connCtx, db, &cInfo, params.Hint, "find", params.Filter.Len() > 0); err != nil {
+			return nil, err
+		}
 
 		params.Collection = cInfo.ViewOn
 		viewSourceParam := backends.ListCollectionsParams{Name: cInfo.ViewOn}

@@ -388,6 +388,9 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			if err == nil && !cInfo.IsView && !(ledByMatch && backends.HintIsNatural(hint)) {
 				err = validateHintExists(ctx, c, hint, "aggregate")
 			}
+			if err == nil && cInfo.IsView {
+				err = validateViewHint(ctx, db, &cInfo, hint, "aggregate", ledByMatch)
+			}
 			if err != nil {
 				closer.Close()
 				return nil, err

@@ -70,6 +70,9 @@ func (h *Handler) MsgDistinct(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 		return nil, lazyerrors.Error(err)
 	}
 	if viewInfo != nil && viewInfo.IsView {
+		if err = validateViewHint(connCtx, db, viewInfo, params.Hint, "distinct", params.Filter.Len() > 0); err != nil {
+			return nil, err
+		}
 		if params.Collation, err = viewReadCollation(params.Collation, viewInfo.Collation); err != nil {
 			return nil, err
 		}
