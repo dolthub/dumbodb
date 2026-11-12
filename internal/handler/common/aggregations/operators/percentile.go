@@ -105,14 +105,14 @@ func init() {
 
 // parsePercentiles returns the constant percentiles of p.
 func parsePercentiles(p any) ([]float64, error) {
-	if !isConstantExpression(p) || hasUnfoldedOperator(p) {
+	if !isConstantExpression(withoutRemove(p)) || hasUnfoldedOperator(p) {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrPercentileNotConstant,
 			"The $percentile 'p' field must be an array of constant values, but found value: "+types.FormatAnyValue(p)+".",
 			"$percentile",
 		)
 	}
-	v, err := evalConstant(p)
+	v, err := evalConstant(withoutRemove(p))
 	if err != nil {
 		return nil, err
 	}
@@ -140,6 +140,30 @@ func parsePercentiles(p any) ([]float64, error) {
 		ps = append(ps, f)
 	}
 	return ps, nil
+}
+
+// withoutRemove replaces $$REMOVE, which mongod treats as a constant, with
+// null.
+func withoutRemove(v any) any {
+	switch v := v.(type) {
+	case string:
+		if v == "$$REMOVE" {
+			return types.Null
+		}
+	case *types.Array:
+		out := types.MakeArray(v.Len())
+		for i := range v.Len() {
+			out.Append(withoutRemove(must.NotFail(v.Get(i))))
+		}
+		return out
+	case *types.Document:
+		out := types.MakeDocument(v.Len())
+		for _, k := range v.Keys() {
+			out.Set(k, withoutRemove(must.NotFail(v.Get(k))))
+		}
+		return out
+	}
+	return v
 }
 
 // hasUnfoldedOperator reports whether v uses an operator that mongod does not
