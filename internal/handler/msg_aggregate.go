@@ -1026,9 +1026,6 @@ func sortLimitBound(aggregationStages []any, i int) int64 {
 	return 0
 }
 
-// pushdownLimit returns the $limit that directly follows the stages
-// aggregations.GetPushdownQuery pushes down (at most one $match and one $sort
-// leading the pipeline), else 0. The query layer applies it like a find limit.
 // runsInSBE reports whether mongod runs a pipeline in SBE: one with a stage
 // SBE executes, such as $group or $lookup.
 func runsInSBE(stages []any) bool {
@@ -1040,6 +1037,9 @@ func runsInSBE(stages []any) bool {
 	return false
 }
 
+// pushdownLimit returns the $limit that directly follows the stages
+// aggregations.GetPushdownQuery pushes down (at most one $match and one $sort
+// leading the pipeline), else 0. The query layer applies it like a find limit.
 func pushdownLimit(aggregationStages []any) int64 {
 	seen := map[string]bool{}
 	for i := 0; i < len(aggregationStages); i++ {
