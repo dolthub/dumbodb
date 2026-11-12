@@ -794,9 +794,9 @@ func explainMaxTimeMS(document *types.Document) (int64, error) {
 	return handlerparams.CommandMaxTimeMS(v)
 }
 
-// pushdownWindow returns the $skip and $limit the query plan absorbs from
-// stages: those directly after its leading $match and $sort, a $skip before
-// a $limit.
+// pushdownWindow returns the skip and limit the query plan absorbs from the
+// run of $skip and $limit stages directly after its leading $match and
+// $sort, combined as mongod combines them: a skip after a limit shortens it.
 func pushdownWindow(stages []any) (skip, limit int64) {
 	i := 0
 	for seen := map[string]bool{}; i < 2; i++ {
@@ -806,12 +806,25 @@ func pushdownWindow(stages []any) (skip, limit int64) {
 		}
 		seen[d.Command()] = true
 	}
-	if d := stageDocAt(stages, i); d != nil && d.Command() == "$skip" {
-		skip, _ = stageInt64(d, "$skip", common.GetSkipStageParam)
-		i++
+	for ; ; i++ {
+		d := stageDocAt(stages, i)
+		if d == nil {
+			return skip, limit
+		}
+		switch d.Command() {
+		case "$skip":
+			n, _ := stageInt64(d, "$skip", common.GetSkipStageParam)
+			skip += n
+			if limit > 0 {
+				limit = max(limit-n, 0)
+			}
+		case "$limit":
+			n, _ := stageInt64(d, "$limit", common.GetLimitStageParam)
+			if limit == 0 || n < limit {
+				limit = n
+			}
+		default:
+			return skip, limit
+		}
 	}
-	if d := stageDocAt(stages, i); d != nil && d.Command() == "$limit" {
-		limit, _ = stageInt64(d, "$limit", common.GetLimitStageParam)
-	}
-	return skip, limit
 }

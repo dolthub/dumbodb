@@ -107,7 +107,7 @@ func explainLookups(ctx context.Context, db backends.Database, coll backends.Col
 	}
 	for i := 0; i < len(rest); i++ {
 		stage := rest[i]
-		entry := stage.DeepCopy()
+		entry := reportedStage(stage)
 		// A classic $lookup absorbs the $unwind of its join array.
 		if spec, _ := must.NotFail(entry.Get(entry.Command())).(*types.Document); entry.Command() == "$lookup" && spec != nil &&
 			i+1 < len(rest) && unwindsJoin(spec, rest[i+1]) {

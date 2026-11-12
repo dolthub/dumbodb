@@ -112,8 +112,18 @@ func explainClassicStages(ctx context.Context, coll backends.Collection, qp *bac
 }
 
 // reportedStage is stage as mongod's explain shows it: a $unset as the
-// $project that excludes its fields.
+// $project that excludes its fields, and a $limit or $skip as a long.
 func reportedStage(stage *types.Document) *types.Document {
+	switch stage.Command() {
+	case "$limit":
+		if n, ok := stageInt64(stage, "$limit", common.GetLimitStageParam); ok {
+			return must.NotFail(types.NewDocument("$limit", n))
+		}
+	case "$skip":
+		if n, ok := stageInt64(stage, "$skip", common.GetSkipStageParam); ok {
+			return must.NotFail(types.NewDocument("$skip", n))
+		}
+	}
 	if stage.Command() != "$unset" {
 		return stage.DeepCopy()
 	}
@@ -219,7 +229,64 @@ func stageReturns(ctx context.Context, coll backends.Collection, qp *backends.Ex
 	for i, c := range counters {
 		returned[i] = c.n
 	}
+	if pulled, ok := pulledBeforeLimit(ctx, coll, query, docs[absorbed:], built[absorbed:]); ok {
+		returned[0] = pulled
+	}
 	return returned
+}
+
+// perDocumentStages map each input document to outputs of its own, so a
+// $limit after them stops the query once enough have come out.
+var perDocumentStages = map[string]bool{
+	"$lookup": true, "$unwind": true, "$set": true, "$addFields": true, "$project": true, "$unset": true,
+	"$match": true, "$replaceRoot": true, "$replaceWith": true,
+}
+
+// pulledBeforeLimit returns how many documents the query yields before a
+// $limit reached through only per-document stages has its documents, as
+// mongod's lazy pipeline pulls them, or false when the stages do not end in
+// such a $limit.
+func pulledBeforeLimit(ctx context.Context, coll backends.Collection, query *backends.QueryParams, docs []*types.Document, built []aggregations.Stage) (int32, bool) {
+	l := 0
+	for ; l < len(docs) && docs[l].Command() != "$limit"; l++ {
+		if !perDocumentStages[docs[l].Command()] {
+			return 0, false
+		}
+	}
+	if l == len(docs) {
+		return 0, false
+	}
+	limit, _ := stageInt64(docs[l], "$limit", common.GetLimitStageParam)
+	qres, err := coll.Query(ctx, query)
+	if err != nil || qres == nil || qres.Iter == nil {
+		return 0, false
+	}
+	defer qres.Iter.Close()
+	var pulled int32
+	var out int64
+	for out < limit {
+		_, doc, err := qres.Iter.Next()
+		if err != nil {
+			break
+		}
+		pulled++
+		closer := iterator.NewMultiCloser()
+		var iter types.DocumentsIterator = iterator.Values(iterator.ForSlice([]*types.Document{doc}))
+		for _, stage := range built[:l] {
+			if iter, err = stage.Process(ctx, iter, closer); err != nil {
+				closer.Close()
+				return 0, false
+			}
+		}
+		for out < limit {
+			if _, _, err = iter.Next(); err != nil {
+				break
+			}
+			out++
+		}
+		closer.Close()
+	}
+	return pulled, true
 }
 
 // cursorStage moves response's query explain under a $cursor stage, the first
