@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/dolthub/dolt/go/store/datas"
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/prolly"
 	"github.com/dolthub/dolt/go/store/val"
@@ -166,15 +165,7 @@ func (b *Backend) recheckCrossValidation(ctx context.Context, db *dbState, ms *m
 }
 
 func (b *Backend) mergeBaseAM(ctx context.Context, db *dbState, ms *mergeInProgress) (prolly.AddressMap, error) {
-	intoCommit, err := datas.LoadCommitAddr(ctx, db.vs, ms.intoHash)
-	if err != nil {
-		return prolly.AddressMap{}, fmt.Errorf("mergeBaseAM: loading into commit: %w", err)
-	}
-	fromCommit, err := datas.LoadCommitAddr(ctx, db.vs, ms.fromHash)
-	if err != nil {
-		return prolly.AddressMap{}, fmt.Errorf("mergeBaseAM: loading from commit: %w", err)
-	}
-	baseHash, hasBase, err := datas.FindCommonAncestor(ctx, intoCommit, fromCommit, db.vs, db.vs, db.ns, db.ns)
+	baseHash, hasBase, err := db.mergeBase(ctx, ms.intoHash, ms.fromHash)
 	if err != nil {
 		return prolly.AddressMap{}, fmt.Errorf("mergeBaseAM: finding common ancestor: %w", err)
 	}
@@ -232,6 +223,24 @@ func (b *Backend) mergedCollValidator(ctx context.Context, db *dbState, ms *merg
 		return nil, err
 	}
 	return readCollMetaFromCatalog(ctx, db, catMap, coll)
+}
+
+// oursKeepsItsValidator reports whether |coll|'s validation after the merge is the one ours had before it.
+func (b *Backend) oursKeepsItsValidator(ctx context.Context, db *dbState, ms *mergeInProgress, coll string) (bool, error) {
+	merged, err := b.mergedCollValidator(ctx, db, ms, coll)
+	if err != nil {
+		return false, err
+	}
+	catMap, err := catalogMapFromAM(ctx, db, ms.premergeAM)
+	if err != nil {
+		return false, err
+	}
+	ours, err := readCollMetaFromCatalog(ctx, db, catMap, coll)
+	if err != nil || merged == nil || ours == nil {
+		return false, err
+	}
+	return documentsEqual(merged.Validator, ours.Validator) && merged.ValidationLevel == ours.ValidationLevel &&
+		merged.ValidationAction == ours.ValidationAction, nil
 }
 
 // resolveValidationChoice computes the chosen value for a typ:"validation"

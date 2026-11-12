@@ -403,7 +403,7 @@ func mergeStateFromWS(ctx context.Context, state *dbState, branch string, ws *do
 
 	oursDesc, theirsDesc := ms.sideDescriptions()
 
-	ms.conflicts, err = loadDocumentConflicts(ctx, state, resolvedAM, oursDesc, theirsDesc)
+	ms.conflicts, err = loadDocumentConflicts(ctx, state, ms, oursDesc, theirsDesc)
 	if err != nil {
 		return nil, err
 	}
@@ -477,15 +477,21 @@ func restoreRebasePlan(ctx context.Context, state *dbState, ms *mergeInProgress)
 }
 
 // loadDocumentConflicts rebuilds the per-collection conflict entries from the
-// ArtifactMaps embedded in the working root's DTBLs.
-func loadDocumentConflicts(ctx context.Context, state *dbState, workingAM prolly.AddressMap, oursDesc, theirsDesc string) (map[string][]*conflictEntry, error) {
+// ArtifactMaps embedded in the working root's DTBLs. Base values come from the
+// recomputed operation base rather than the commit the artifacts name: a
+// virtual merge base is a dangling commit GC may have deleted.
+func loadDocumentConflicts(ctx context.Context, state *dbState, ms *mergeInProgress, oursDesc, theirsDesc string) (map[string][]*conflictEntry, error) {
 	conflicts := make(map[string][]*conflictEntry)
-	names, err := collectionsWithArtifacts(ctx, state, workingAM)
+	names, err := collectionsWithArtifacts(ctx, state, ms.resolvedAM)
+	if err != nil || len(names) == 0 {
+		return conflicts, err
+	}
+	baseHash, err := operationBaseHash(ctx, state, ms)
 	if err != nil {
 		return nil, err
 	}
 	for _, name := range names {
-		entries, entryErr := loadConflictEntriesFromArtifacts(ctx, state, workingAM, name, oursDesc, theirsDesc)
+		entries, entryErr := loadConflictEntriesFromArtifacts(ctx, state, ms.resolvedAM, baseHash, name, oursDesc, theirsDesc)
 		if entryErr != nil {
 			return nil, fmt.Errorf("loading conflicts for %q from artifacts: %w", name, entryErr)
 		}
@@ -651,18 +657,8 @@ func operationSides(ctx context.Context, state *dbState, ms *mergeInProgress) (i
 	default:
 		oursHash = ms.intoHash
 		theirsHash = ms.fromHash
-		oursCommit, cErr := datas.LoadCommitAddr(ctx, state.vs, oursHash)
-		if cErr != nil {
-			err = fmt.Errorf("loading ours commit: %w", cErr)
-			return
-		}
-		theirsCommit, cErr := datas.LoadCommitAddr(ctx, state.vs, theirsHash)
-		if cErr != nil {
-			err = fmt.Errorf("loading theirs commit: %w", cErr)
-			return
-		}
 		var hasBase bool
-		baseHash, hasBase, err = datas.FindCommonAncestor(ctx, oursCommit, theirsCommit, state.vs, state.vs, state.ns, state.ns)
+		baseHash, hasBase, err = state.mergeBase(ctx, oursHash, theirsHash)
 		if err != nil {
 			err = fmt.Errorf("finding common ancestor: %w", err)
 			return
@@ -749,9 +745,9 @@ func buildMetaConflict(ctx context.Context, state *dbState, coll string, intoAM,
 }
 
 // loadConflictEntriesFromArtifacts reads collName's ArtifactMap from am and
-// rebuilds its conflict entries, looking base and theirs values up in the
-// commits the artifacts name.
-func loadConflictEntriesFromArtifacts(ctx context.Context, state *dbState, am prolly.AddressMap, collName, oursDesc, theirsDesc string) ([]*conflictEntry, error) {
+// rebuilds its conflict entries, looking theirs values up in the commits the
+// artifacts name and base values up in baseH.
+func loadConflictEntriesFromArtifacts(ctx context.Context, state *dbState, am prolly.AddressMap, baseH hash.Hash, collName, oursDesc, theirsDesc string) ([]*conflictEntry, error) {
 	artMap, err := openCollectionArtifacts(ctx, state, am, collName)
 	if err != nil {
 		return nil, fmt.Errorf("opening artifacts for %q: %w", collName, err)
@@ -783,7 +779,6 @@ func loadConflictEntriesFromArtifacts(ctx context.Context, state *dbState, am pr
 		}
 
 		theirH := ca.TheirRootIsh
-		baseH := ca.Metadata.BaseRootIsh
 		rawKey := val.Tuple(ca.Key)
 
 		var oursVal val.Tuple
@@ -897,19 +892,9 @@ func clearConflictArtifacts(ctx context.Context, state *dbState, ms *mergeInProg
 			return fmt.Errorf("building clean DTBL for %q: %w", collName, err)
 		}
 
-		cnt, countErr := collMap.Count()
-		if countErr != nil {
-			return fmt.Errorf("counting collection %q: %w", collName, countErr)
-		}
-
-		if cnt == 0 {
-			if err := amEditor.Delete(ctx, collName); err != nil {
-				return fmt.Errorf("deleting empty collection %q from AM: %w", collName, err)
-			}
-		} else {
-			if err := amEditor.Update(ctx, collName, newDTBLHash); err != nil {
-				return fmt.Errorf("updating AM for %q: %w", collName, err)
-			}
+		// A collection the resolutions left empty is kept, as deleting its last document keeps it.
+		if err := amEditor.Update(ctx, collName, newDTBLHash); err != nil {
+			return fmt.Errorf("updating AM for %q: %w", collName, err)
 		}
 	}
 

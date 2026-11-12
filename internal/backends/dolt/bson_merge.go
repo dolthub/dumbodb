@@ -82,6 +82,26 @@ func mergeBSONDoc(base, left, right *types.Document) (*types.Document, bool) {
 	return out, false
 }
 
+// definitionFields are the catalog fields that hold a definition. Whether two different definitions combine correctly
+// depends on the application, so a definition both sides changed merges only when theirs are identical.
+var definitionFields = []string{"validator", "collation"}
+
+// mergeCatalogDoc merges catalog documents as mergeBSONDoc does, except that a definition both sides changed
+// differently is a conflict rather than merged field by field.
+func mergeCatalogDoc(base, left, right *types.Document) (*types.Document, bool) {
+	for _, key := range definitionFields {
+		baseValue, basePresent := getOrNil(base, key)
+		leftValue, leftPresent := getOrNil(left, key)
+		rightValue, rightPresent := getOrNil(right, key)
+		leftChanged := basePresent != leftPresent || !reflect.DeepEqual(baseValue, leftValue)
+		rightChanged := basePresent != rightPresent || !reflect.DeepEqual(baseValue, rightValue)
+		if leftChanged && rightChanged && !fieldsEqual(left, right, key) {
+			return nil, true
+		}
+	}
+	return mergeBSONDoc(base, left, right)
+}
+
 func getOrNil(doc *types.Document, key string) (any, bool) {
 	if doc == nil || !doc.Has(key) {
 		return nil, false

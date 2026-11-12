@@ -131,7 +131,7 @@ func txnVisibleWS(ctx context.Context, state *dbState, branch string) (*doltdb.W
 	sqlCtx := sqlctx.Wrap(ctx, sess)
 	sessState, ok, err := sess.LookupDbState(sqlCtx, qualified)
 	if err == nil && ok {
-		if ws := sessState.WorkingSet(); ws != nil {
+		if ws, err := sessState.WorkingSet(sqlCtx); err == nil && ws != nil {
 			return ws, true
 		}
 	}

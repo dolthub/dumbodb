@@ -551,3 +551,41 @@ func TestIndexRedefinitionByCollationOrHiddenWinsMerge(t *testing.T) {
 func sameIndexCollation(a, b *types.Document) bool {
 	return collation.Parse(a).Identity() == collation.Parse(b).Identity()
 }
+
+// Changes only ours made must leave no stale entries in an index seeded from theirs, which every index neither side
+// redefined is:
+//
+//	c0 -- main1    main
+//	  \-- feat1    feat
+//
+// main1 changes document 1's u from 1 to 5 and deletes document 3; feat1 changes document 2's u.
+func TestMergedIndexDropsEntriesOursChanged(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	b := newTestBackend(t)
+	createItems(t, b, "")
+	createIndex(t, ctx, collAt(t, b, "testdb", "main", "items"), "by_u", "u")
+	for id := int32(1); id <= 3; id++ {
+		insertDoc(t, b, "testdb", "items", uDoc(t, id, id))
+	}
+	commitDB(t, b, "testdb", "c0")
+	branchFrom(t, b, "testdb", "main", "feat")
+
+	updateDocOnBranch(t, b, "testdb", "main", "items", uDoc(t, 1, 5))
+	deleteID(t, b, "testdb", "main", "items", int32(3))
+	commitBranch(t, b, "testdb", "main", "main1")
+	updateDocOnBranch(t, b, "testdb", "feat", "items", uDoc(t, 2, 6))
+	commitBranch(t, b, "testdb", "feat", "feat1")
+
+	mergeBranches(t, b, "testdb", "main", "feat")
+
+	requireIndexesMatchItems(t, b, branchHash(t, b, "main"))
+	merged := collAt(t, b, "testdb", "main", "items")
+	if got := equalityLookupIDs(t, ctx, merged, "u", int32(1)); len(got) != 0 {
+		t.Errorf("lookup by u = 1 = %v, want empty", got)
+	}
+	if got := equalityLookupIDs(t, ctx, merged, "u", int32(3)); len(got) != 0 {
+		t.Errorf("lookup by u = 3 = %v, want empty", got)
+	}
+}

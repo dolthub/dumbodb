@@ -1363,13 +1363,17 @@ Every entry carries these three fields; the rest depend on `type`:
 | `base` | document or null | `{ _id, doc }` (common ancestor); null if absent. No `diffType`. |
 | `ours` / `theirs` | document or null | `{ _id, doc, diffType }` with `diffType` `"added"`/`"modified"`/`"deleted"`; null if that side deleted it. A `uniqueKeyCollision` carries different `_id`s for `ours` and `theirs`. |
 
-**`type: "view"`** -- both branches changed the same view definition:
+**`type: "view"`** -- both branches changed the same view definition, to different definitions. A view merges
+automatically only when both branches' full definitions are identical: whether two different definitions combine
+correctly depends on the application.
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `base` / `ours` / `theirs` | document or null | `{ viewOn, pipeline, diffType? }`; null if the view was absent/deleted on that side |
 
-**`type: "metadata"`** -- both branches changed the same collection's validator/options:
+**`type: "metadata"`** -- both branches changed the same collection's validator/options differently. Like a view, a
+validator or collation merges automatically only when both branches' are identical; it is never merged field by
+field.
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -1487,9 +1491,13 @@ conflicts.
 | `"custom"` | Use the document provided in `value` | Use the document provided in `value` (rejected if it collides with a different document on a unique index) |
 
 If a validator is active on the collection after the merge (with
-`validationAction` other than `"warn"`), the resolved document must satisfy it:
-resolving to a side whose value violates the validator is **rejected** -- supply
-a conforming `"custom"` document instead.
+`validationAction` other than `"warn"`), a `"theirs"` or `"custom"` document must
+satisfy it: resolving to one that violates the validator is **rejected** --
+supply a conforming `"custom"` document instead. `"ours"` is validated too,
+unless the merge leaves the collection with the validator the branch already
+had: then it keeps a document the branch already holds under that validator,
+and a document that already fails it, such as one that predates it, stays as it
+is.
 
 **`view`** -- both branches changed the same view definition:
 

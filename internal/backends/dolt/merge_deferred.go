@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/dolthub/dolt/go/store/datas"
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/prolly"
 )
@@ -95,16 +94,7 @@ func operationBaseHash(ctx context.Context, state *dbState, ms *mergeInProgress)
 	case ms.isRevert:
 		return ms.pickHash, nil
 	default:
-		oursCommit, err := datas.LoadCommitAddr(ctx, state.vs, ms.intoHash)
-		if err != nil {
-			return hash.Hash{}, fmt.Errorf("loading ours commit: %w", err)
-		}
-		theirsCommit, err := datas.LoadCommitAddr(ctx, state.vs, ms.fromHash)
-		if err != nil {
-			return hash.Hash{}, fmt.Errorf("loading theirs commit: %w", err)
-		}
-		baseHash, hasBase, err := datas.FindCommonAncestor(ctx, oursCommit, theirsCommit,
-			state.vs, state.vs, state.ns, state.ns)
+		baseHash, hasBase, err := state.mergeBase(ctx, ms.intoHash, ms.fromHash)
 		if err != nil {
 			return hash.Hash{}, fmt.Errorf("finding common ancestor: %w", err)
 		}
@@ -113,6 +103,16 @@ func operationBaseHash(ctx context.Context, state *dbState, ms *mergeInProgress)
 		}
 		return baseHash, nil
 	}
+}
+
+// operationBaseFlags returns the flags of a merge's base when it is a virtual merge base. Other operations replay a
+// commit against its parent, which is never virtual.
+func operationBaseFlags(ctx context.Context, state *dbState, ms *mergeInProgress) (virtualBaseFlags, error) {
+	if ms.isRebase || ms.isCherryPick || ms.isRevert {
+		return virtualBaseFlags{}, nil
+	}
+	_, flags, _, err := state.mergeBaseWithFlags(ctx, ms.intoHash, ms.fromHash)
+	return flags, err
 }
 
 func mergeDeferredCollections(ctx context.Context, state *dbState, ms *mergeInProgress) (bool, error) {
@@ -124,6 +124,10 @@ func mergeDeferredCollections(ctx context.Context, state *dbState, ms *mergeInPr
 		return false, err
 	}
 	baseHash, err := operationBaseHash(ctx, state, ms)
+	if err != nil {
+		return false, err
+	}
+	baseFlags, err := operationBaseFlags(ctx, state, ms)
 	if err != nil {
 		return false, err
 	}
@@ -161,7 +165,7 @@ func mergeDeferredCollections(ctx context.Context, state *dbState, ms *mergeInPr
 			continue
 		}
 		mergedH, conflicts, mergeErr := mergeCollectionDTBL(ctx, state, name, intoH, fromH, baseH,
-			ms.theirHash(), baseHash, oursDesc, theirsDesc, mergeModeOrDefault(resolvedMeta.MergeMode))
+			ms.theirHash(), baseHash, oursDesc, theirsDesc, mergeModeOrDefault(resolvedMeta.MergeMode), nil, baseFlags.docs[name])
 		if mergeErr != nil {
 			return false, mergeErr
 		}

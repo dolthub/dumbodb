@@ -82,9 +82,8 @@ func TestSession_InsertVisibleToVisitGCRoots(t *testing.T) {
 	require.NoError(t, err)
 
 	visited := map[hash.Hash]struct{}{}
-	err = sess.VisitGCRoots(context.Background(), dbName, func(h hash.Hash) bool {
+	err = sess.VisitGCRoots(context.Background(), dbName, func(h hash.Hash) {
 		visited[h] = struct{}{}
-		return false
 	})
 	require.NoError(t, err)
 	assert.NotEmpty(t, visited, "VisitGCRoots must surface at least one chunk hash from the in-flight working root")
