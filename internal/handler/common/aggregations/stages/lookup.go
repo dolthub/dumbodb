@@ -321,7 +321,19 @@ func NewLookupStage(stage *types.Document, fetcher CollectionFetcher) (aggregati
 				)
 			}
 
+			if err := operators.CheckFieldPaths(letDoc); err != nil {
+				return nil, err
+			}
+			for _, name := range letDoc.Keys() {
+				if err := operators.CheckUserVariableName(name); err != nil {
+					return nil, err
+				}
+			}
 			l.letVars = letDoc
+		}
+
+		if err := l.checkSubPipeline(); err != nil {
+			return nil, err
 		}
 	}
 
@@ -1335,6 +1347,36 @@ func substituteVarsInDoc(doc *types.Document, vars map[string]any, inExpr bool) 
 	return result
 }
 
+// checkSubPipeline parses the sub-pipeline once, with null for each let
+// variable, so its errors surface before any document is read, as in mongod.
+func (l *lookup) checkSubPipeline() error {
+	vars := map[string]any{}
+	if l.letVars != nil {
+		for _, name := range l.letVars.Keys() {
+			vars[name] = types.Null
+		}
+	}
+	for i := range l.pipeline.Len() {
+		stageDoc, ok := must.NotFail(l.pipeline.Get(i)).(*types.Document)
+		if !ok {
+			return nil
+		}
+		substituted := substituteVarsInStage(stageDoc, vars)
+		if i == 0 && l.from == "" {
+			continue
+		}
+		switch substituted.Command() {
+		case "$out", "$merge":
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrLookupSubPipelineWrites,
+				substituted.Command()+" is not allowed within a $lookup's sub-pipeline", "$lookup (stage)")
+		}
+		if _, err := newSubPipelineStage(substituted, l.fetcher, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // literalOperand returns an operand that evaluates to v. Inside $expr a bare
 // scalar other than a "$" string means itself, and skipping the $literal
 // saves an evaluation per document; elsewhere, such as in $project where 0
@@ -1359,8 +1401,14 @@ func substituteVarsInValue(val any, vars map[string]any, inExpr bool) any {
 	switch v := val.(type) {
 	case string:
 		if strings.HasPrefix(v, "$$") {
-			varName := strings.TrimPrefix(v, "$$")
+			varName, _, dotted := strings.Cut(strings.TrimPrefix(v, "$$"), ".")
 			if resolved, ok := vars[varName]; ok {
+				if dotted {
+					return must.NotFail(types.NewDocument("$let", must.NotFail(types.NewDocument(
+						"vars", must.NotFail(types.NewDocument(varName, must.NotFail(types.NewDocument("$literal", resolved)))),
+						"in", v,
+					))))
+				}
 				return literalOperand(resolved, inExpr)
 			}
 		}

@@ -57,6 +57,9 @@ func ParseExpr(exprValue *types.Document, errArgument string) (Operator, error) 
 		errArgument: errArgument,
 	}
 
+	if err := CheckFieldPaths(v); err != nil {
+		return nil, err
+	}
 	if err := e.validateExpr(v); err != nil {
 		return nil, err
 	}

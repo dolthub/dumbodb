@@ -151,6 +151,9 @@ func newBucket(stage *types.Document) (aggregations.Stage, error) {
 		}
 	}
 
+	if err := operators.CheckFieldPaths(groupByVal); err != nil {
+		return nil, err
+	}
 	if err := operators.CheckConstantSubexpressions(groupByVal); err != nil {
 		return nil, err
 	}
@@ -183,6 +186,10 @@ func newBucket(stage *types.Document) (aggregations.Stage, error) {
 				"$bucket 'output' field must be a document",
 				"$bucket (stage)",
 			)
+		}
+
+		if err := operators.CheckFieldPaths(outputDoc); err != nil {
+			return nil, err
 		}
 
 		outputIter := outputDoc.Iterator()

@@ -107,13 +107,11 @@ func NewGroupStage(stage *types.Document, cmp *collation.Comparator) (aggregatio
 		}
 
 		if field == "_id" {
-			if err = validateGroupKey(v); err != nil {
+			if err = operators.CheckFieldPaths(v); err != nil {
 				return nil, err
 			}
-			if s, ok := v.(string); ok && strings.HasPrefix(s, "$$") {
-				if err = operators.CheckFieldPaths(s); err != nil {
-					return nil, err
-				}
+			if err = validateGroupKey(v); err != nil {
+				return nil, err
 			}
 			if err = operators.CheckConstantSubexpressions(v); err != nil {
 				return nil, err
@@ -123,6 +121,9 @@ func NewGroupStage(stage *types.Document, cmp *collation.Comparator) (aggregatio
 			continue
 		}
 
+		if err = operators.CheckFieldPaths(v); err != nil {
+			return nil, err
+		}
 		accumulator, err := accumulators.NewAccumulator("$group", field, v)
 		if err != nil {
 			return nil, processGroupStageError(err)

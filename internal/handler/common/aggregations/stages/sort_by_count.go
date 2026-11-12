@@ -67,6 +67,9 @@ func newSortByCount(stage *types.Document) (aggregations.Stage, error) {
 			"the sortByCount field must be specified as a string or as an object", "$sortByCount (stage)")
 	}
 
+	if err := operators.CheckFieldPaths(v); err != nil {
+		return nil, err
+	}
 	if err := operators.CheckConstantSubexpressions(v); err != nil {
 		return nil, err
 	}

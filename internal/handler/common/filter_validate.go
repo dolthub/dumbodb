@@ -52,6 +52,9 @@ func validateFilter(filter *types.Document, cmp *collation.Comparator, foldExpr 
 				}
 			}
 		case "$expr":
+			if err := operators.CheckFieldPaths(value); err != nil {
+				return err
+			}
 			if !foldExpr {
 				continue
 			}

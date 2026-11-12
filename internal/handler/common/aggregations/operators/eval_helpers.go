@@ -328,6 +328,11 @@ func evalArgValue(arg any, doc *types.Document) (any, error) {
 				// Missing rather than null, so a $cond selecting $$REMOVE drops
 				// the field instead of writing an explicit null.
 				return nil, aggregations.ErrMissingValue
+			case "IS_MR", "CLUSTER_TIME":
+				return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrBuiltinVariableUnavailable,
+					"Builtin variable '$$"+varName+"' is not available")
+			case "USER_ROLES":
+				base = types.MakeArray(0)
 			case "PRUNE", "KEEP", "DESCEND":
 				// $redact reads these as literal strings to decide its action.
 				base = v
@@ -431,82 +436,6 @@ func coerceToBool(v any) bool {
 	default:
 		return convertToBool(v)
 	}
-}
-
-// systemVariables are the variables defined everywhere.
-var systemVariables = map[string]bool{
-	"ROOT": true, "CURRENT": true, "REMOVE": true, "NOW": true, "CLUSTER_TIME": true,
-	"DESCEND": true, "PRUNE": true, "KEEP": true, "SEARCH_META": true, "USER_ROLES": true,
-}
-
-// checkVariableReference returns mongod's parse error for a "$$name" value
-// outside any operator, where only system variables are defined.
-func checkVariableReference(v string) error {
-	name, _, _ := strings.Cut(v[2:], ".")
-	switch {
-	case name == "":
-		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFailedToParse,
-			"empty variable names are not allowed", v)
-	case !systemVariables[name]:
-		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrGroupUndefinedVariable,
-			"Use of undefined variable: "+name, v)
-	}
-	return nil
-}
-
-// CheckFieldPaths returns mongod's parse error for the first malformed field
-// path in the expression expr: an empty component, a component that starts
-// with '$', or '$' alone. Outside operators, which bind and check their own
-// variables, it also rejects a reference to an undefined variable.
-func CheckFieldPaths(expr any) error {
-	return checkFieldPaths(expr, false)
-}
-
-func checkFieldPaths(expr any, inOperator bool) error {
-	switch v := expr.(type) {
-	case string:
-		if strings.HasPrefix(v, "$$") {
-			if inOperator {
-				return nil
-			}
-			return checkVariableReference(v)
-		}
-		if !strings.HasPrefix(v, "$") {
-			return nil
-		}
-		const advice = "Consider using $getField or $setField for a field path with '.' or '$'. :: caused by :: "
-		if v == "$" {
-			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrGroupInvalidFieldPath,
-				"'$' by itself is not a valid FieldPath", "$")
-		}
-		for _, part := range strings.Split(v[1:], ".") {
-			switch {
-			case part == "":
-				return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrPathContainsEmptyElement,
-					advice+"FieldPath field names may not be empty strings.", v)
-			case strings.HasPrefix(part, "$"):
-				return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFieldPathInvalidName,
-					advice+"FieldPath field names may not start with '$', given '"+part+"'.", v)
-			}
-		}
-	case *types.Array:
-		for i := range v.Len() {
-			if err := checkFieldPaths(must.NotFail(v.Get(i)), inOperator); err != nil {
-				return err
-			}
-		}
-	case *types.Document:
-		if v.Command() == "$literal" {
-			return nil
-		}
-		op := inOperator || IsOperator(v)
-		for _, k := range v.Keys() {
-			if err := checkFieldPaths(must.NotFail(v.Get(k)), op); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
 }
 
 // OperatorContextError records the innermost operator an evaluation error
