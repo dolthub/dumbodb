@@ -436,7 +436,7 @@ func (op *indexOfArrayOp) Process(doc *types.Document) (any, error) {
 	}
 
 	for i := start; i < end; i++ {
-		if types.Compare(items[i], search) == 0 {
+		if types.CompareForAggregation(items[i], search) == types.Equal {
 			return int32(i), nil
 		}
 	}
@@ -639,7 +639,7 @@ func (op *inArrayOp) Process(doc *types.Document) (any, error) {
 	}
 
 	for _, item := range items {
-		if types.Compare(item, val) == 0 {
+		if types.CompareForAggregation(item, val) == types.Equal {
 			return true, nil
 		}
 	}
