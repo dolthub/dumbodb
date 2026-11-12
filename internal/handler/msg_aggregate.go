@@ -716,7 +716,7 @@ func checkDatabasePipelineStages(pipeline *types.Array, dbName string) error {
 					return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace,
 						"Collectionless $listCatalog must be run against the 'admin' database with {aggregate: 1}", "$listCatalog (stage)")
 				}
-				_, err := stages.NewStage(stage)
+				_, err := stages.NewStage(stage.DeepCopy())
 				return err
 			}
 			if i != 0 {
@@ -724,13 +724,13 @@ func checkDatabasePipelineStages(pipeline *types.Array, dbName string) error {
 					name+" is only valid as the first stage in a pipeline", name+" (stage)")
 			}
 		case "$facet":
-			if _, err := stages.NewStage(stage); err != nil {
+			if _, err := stages.NewStage(stage.DeepCopy()); err != nil {
 				return err
 			}
 		case "$documents", "$currentOp", "$listLocalSessions":
 		default:
 			if stages.FailsParsing(stage) {
-				_, err := stages.NewStage(stage)
+				_, err := stages.NewStage(stage.DeepCopy())
 				return err
 			}
 		}

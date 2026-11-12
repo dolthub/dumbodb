@@ -110,14 +110,14 @@ func validateViewPipeline(dbName, viewName string, pipeline *types.Array) error 
 		var err error
 		switch stage.Command() {
 		case "$lookup":
-			_, err = stages.NewLookupStage(stage, noFetch)
+			_, err = stages.NewLookupStage(stage.DeepCopy(), noFetch)
 		case "$unionWith":
-			_, err = stages.NewUnionWithStage(stage, noFetch)
+			_, err = stages.NewUnionWithStage(stage.DeepCopy(), noFetch)
 		case "$facet":
-			_, err = stages.NewFacetStage(stage, noFetch)
+			_, err = stages.NewFacetStage(stage.DeepCopy(), noFetch)
 		default:
 			if stages.FailsParsing(stage) {
-				_, err = stages.NewStage(stage)
+				_, err = stages.NewStage(stage.DeepCopy())
 			}
 		}
 		if err != nil {
