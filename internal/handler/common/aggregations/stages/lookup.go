@@ -399,8 +399,9 @@ type equalityIndex struct {
 
 func newEqualityIndex(docs []*types.Document, foreignField string) *equalityIndex {
 	idx := &equalityIndex{docs: docs, byKey: make(map[string][]int)}
+	parts := splitLookupPath(foreignField)
 	for pos, d := range docs {
-		values, missing := lookupForeignValues(d, foreignField)
+		values, missing := lookupForeignPathValues(d, parts)
 		var keys []string
 		ok := !missing
 		for _, v := range values {
@@ -455,6 +456,9 @@ func (idx *equalityIndex) candidatesFor(cands []any) []*types.Document {
 // strings, booleans, and numbers, and integers too large to compare with a
 // double exactly.
 func equalityKeys(v any) ([]string, bool) {
+	if _, ok := v.(indexedArray); ok {
+		return nil, false
+	}
 	arr, isArr := v.(*types.Array)
 	if !isArr {
 		key, ok := equalityKey(v)
@@ -538,6 +542,10 @@ func lookupLocalCandidates(doc *types.Document, field string) []any {
 				walk(next, parts[1:])
 			}
 		case *types.Array:
+			if elem, ok := arrayIndexElement(v, parts[0]); ok {
+				walk(elem, parts[1:])
+				return
+			}
 			for i := range v.Len() {
 				if elem, ok := must.NotFail(v.Get(i)).(*types.Document); ok {
 					walk(elem, parts)
@@ -545,16 +553,56 @@ func lookupLocalCandidates(doc *types.Document, field string) []any {
 			}
 		}
 	}
-	walk(doc, strings.Split(field, "."))
+	walk(doc, splitLookupPath(field))
 	if len(out) == 0 {
 		return []any{nil}
 	}
 	return out
 }
 
+// splitLookupPath splits a dotted path, without allocating for a dotless one
+// beyond its one-element slice.
+func splitLookupPath(field string) []string {
+	if !strings.Contains(field, ".") {
+		return []string{field}
+	}
+	return strings.Split(field, ".")
+}
+
+// arrayIndexElement returns arr's element at the index a path component
+// names, when the component is all digits and the index is in range.
+func arrayIndexElement(arr *types.Array, part string) (any, bool) {
+	if part == "" || len(part) > 9 {
+		return nil, false
+	}
+	n := 0
+	for i := range len(part) {
+		c := part[i]
+		if c < '0' || c > '9' {
+			return nil, false
+		}
+		n = n*10 + int(c-'0')
+	}
+	if n >= arr.Len() {
+		return nil, false
+	}
+	return must.NotFail(arr.Get(n)), true
+}
+
 // lookupForeignValues returns the values a query on field reaches in doc,
 // traversing arrays along the path, and whether some branch lacks the field.
 func lookupForeignValues(doc *types.Document, field string) ([]any, bool) {
+	return lookupForeignPathValues(doc, splitLookupPath(field))
+}
+
+func lookupForeignPathValues(doc *types.Document, parts []string) ([]any, bool) {
+	if len(parts) == 1 {
+		v, err := doc.Get(parts[0])
+		if err != nil {
+			return nil, true
+		}
+		return []any{v}, false
+	}
 	var out []any
 	missing := false
 	var walk func(v any, parts []string)
@@ -572,6 +620,13 @@ func lookupForeignValues(doc *types.Document, field string) ([]any, bool) {
 			}
 			walk(next, parts[1:])
 		case *types.Array:
+			if elem, ok := arrayIndexElement(v, parts[0]); ok {
+				if arr, isArr := elem.(*types.Array); isArr && len(parts) == 1 {
+					out = append(out, indexedArray{arr})
+				} else {
+					walk(elem, parts[1:])
+				}
+			}
 			for i := range v.Len() {
 				if elem, ok := must.NotFail(v.Get(i)).(*types.Document); ok {
 					walk(elem, parts)
@@ -581,7 +636,7 @@ func lookupForeignValues(doc *types.Document, field string) ([]any, bool) {
 			missing = true
 		}
 	}
-	walk(doc, strings.Split(field, "."))
+	walk(doc, parts)
 	return out, missing || len(out) == 0
 }
 
@@ -1495,7 +1550,16 @@ func lookupValuesMatch(localVal, foreignVal any) bool {
 // equality {foreignField: candidate}: it equals candidate, or it is an array
 // with a top-level element that does. A null candidate matches a null or
 // missing foreignVal.
+// indexedArray is an array a query path reaches by an index, such as k.0 of
+// {k: [[5]]}; a query compares it whole, without matching its elements.
+type indexedArray struct {
+	arr *types.Array
+}
+
 func foreignMatchesCandidate(foreignVal, candidate any) bool {
+	if indexed, ok := foreignVal.(indexedArray); ok {
+		return valuesEqual(indexed.arr, candidate)
+	}
 	if valuesEqual(foreignVal, candidate) {
 		return true
 	}
