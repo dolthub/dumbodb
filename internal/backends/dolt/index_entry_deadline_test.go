@@ -40,43 +40,56 @@ func slowDecimalArray(n int) *types.Array {
 
 // TestIndexEntriesStopAtDeadline: building the index entries of a large array
 // of slow-to-encode values stops at the context's deadline, on insert and on
-// update.
+// update, in under a quarter of the time the same write takes without one. A relative
+// bound holds under -race, which slows both.
 func TestIndexEntriesStopAtDeadline(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
 	b := newTestBackend(t)
 	insertDoc(t, b, "testdb", "items", mustDoc(t, "_id", int32(1), "a", int32(0)))
+	insertDoc(t, b, "testdb", "items", mustDoc(t, "_id", int32(3), "a", int32(0)))
 	createIndex(t, ctx, collAt(t, b, "testdb", "main", "items"), "by_a", "a")
 	coll := collAt(t, b, "testdb", "main", "items")
 
-	const elements = 200_000
+	const elements = 50_000
 	const deadline = 100 * time.Millisecond
-	const prompt = 2 * time.Second
 
-	run := func(name string, write func(context.Context) error) {
+	run := func(name string, unbounded, bounded func(context.Context) error) {
 		t.Run(name, func(t *testing.T) {
+			start := time.Now()
+			if err := unbounded(ctx); err != nil {
+				t.Fatal(err)
+			}
+			full := time.Since(start)
+
 			wctx, cancel := context.WithTimeout(ctx, deadline)
 			defer cancel()
-			start := time.Now()
-			err := write(wctx)
-			if !errors.Is(err, context.DeadlineExceeded) {
+			start = time.Now()
+			if err := bounded(wctx); !errors.Is(err, context.DeadlineExceeded) {
 				t.Fatalf("got %v, want context.DeadlineExceeded", err)
 			}
-			if elapsed := time.Since(start); elapsed > prompt {
-				t.Fatalf("stopped after %v, want under %v", elapsed, prompt)
+			if elapsed := time.Since(start); elapsed > full/4 {
+				t.Fatalf("stopped after %v, want under a quarter of the unbounded %v", elapsed, full)
 			}
 		})
 	}
 
-	inserted := must.NotFail(types.NewDocument("_id", int32(2), "a", slowDecimalArray(elements)))
-	updated := must.NotFail(types.NewDocument("_id", int32(1), "a", slowDecimalArray(elements)))
+	doc := func(id int32) *types.Document {
+		return must.NotFail(types.NewDocument("_id", id, "a", slowDecimalArray(elements)))
+	}
 	run("insert", func(wctx context.Context) error {
-		_, err := coll.InsertAll(wctx, &backends.InsertAllParams{Docs: []*types.Document{inserted}})
+		_, err := coll.InsertAll(wctx, &backends.InsertAllParams{Docs: []*types.Document{doc(4)}})
+		return err
+	}, func(wctx context.Context) error {
+		_, err := coll.InsertAll(wctx, &backends.InsertAllParams{Docs: []*types.Document{doc(2)}})
 		return err
 	})
 	run("update", func(wctx context.Context) error {
-		_, err := coll.UpdateAll(wctx, &backends.UpdateAllParams{Docs: []*types.Document{updated}})
+		_, err := coll.UpdateAll(wctx, &backends.UpdateAllParams{Docs: []*types.Document{doc(3)}})
+		return err
+	}, func(wctx context.Context) error {
+		_, err := coll.UpdateAll(wctx, &backends.UpdateAllParams{Docs: []*types.Document{doc(1)}})
 		return err
 	})
 }
