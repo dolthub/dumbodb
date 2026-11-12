@@ -91,6 +91,9 @@ func NewUnionWithStage(stage *types.Document, fetcher CollectionFetcher) (aggreg
 	if err := CheckParseFailingStages(sub.pipeline); err != nil {
 		return nil, err
 	}
+	if err := checkFirstOnlyStages(sub.pipeline); err != nil {
+		return nil, err
+	}
 	for i := range sub.pipeline.Len() {
 		d, ok := must.NotFail(sub.pipeline.Get(i)).(*types.Document)
 		if !ok || d.Len() == 0 {

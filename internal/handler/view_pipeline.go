@@ -116,6 +116,21 @@ func validateViewPipeline(dbName, viewName string, pipeline *types.Array) error 
 
 type foreignViewDepthKey struct{}
 
+// aggregateDBNameKey holds the database an aggregate command runs on.
+type aggregateDBNameKey struct{}
+
+// CollStats implements stages.StatsFetcher.
+func (f *foreignFetcher) CollStats(ctx context.Context, collName string, pipeline []aggregations.Stage, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
+	c, err := f.db.Collection(collName)
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+	dbName, _ := ctx.Value(aggregateDBNameKey{}).(string)
+	return processStagesStats(ctx, closer, &stagesStatsParams{
+		c: c, db: f.db, dbName: dbName, cName: collName, statistics: stages.GetStatistics(pipeline), stages: pipeline,
+	})
+}
+
 // newForeignCollectionStage builds a $lookup, $graphLookup, $unionWith or
 // $facet stage that reads other collections of db.
 func newForeignCollectionStage(stage *types.Document, db backends.Database) (aggregations.Stage, error) {

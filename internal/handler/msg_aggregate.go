@@ -85,6 +85,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 	if dbName, err = common.GetRequiredParam[string](document, "$db"); err != nil {
 		return nil, err
 	}
+	connCtx = context.WithValue(connCtx, aggregateDBNameKey{}, dbName)
 
 	collectionParam, err := document.Get(document.Command())
 	if err != nil {
