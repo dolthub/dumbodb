@@ -696,6 +696,12 @@ const (
 	// ErrBucketAutoBucketsNotPositive indicates a $bucketAuto buckets value that is not positive.
 	ErrBucketAutoBucketsNotPositive = ErrorCode(40243) // Location40243
 
+	// ErrTsSecondNotTimestamp indicates a $tsSecond argument that is not a timestamp.
+	ErrTsSecondNotTimestamp = ErrorCode(5687301) // Location5687301
+
+	// ErrTsIncrementNotTimestamp indicates a $tsIncrement argument that is not a timestamp.
+	ErrTsIncrementNotTimestamp = ErrorCode(5687302) // Location5687302
+
 	// $arrayToObject input errors.
 	ErrArrayToObjectInput           = ErrorCode(40386) // Location40386
 	ErrArrayToObjectObjectsExpected = ErrorCode(40391) // Location40391
