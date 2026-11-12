@@ -191,14 +191,7 @@ func (h *Handler) findAndModifyDocument(ctx context.Context, params *common.Find
 		iter, err = common.SortIteratorWithCollation(iter, closer, params.Sort, cmp)
 	} else {
 		// The first match is in the hinted index's order.
-		var order *types.Document
-		var sortFilter *types.Document
-		if order, sortFilter, err = hintedIndexOrder(ctx, c, params.Hint, params.Query, params.Collation); err != nil {
-			return nil, err
-		}
-		if order != nil {
-			iter, err = common.SortIteratorInIndexOrder(iter, closer, order, sortFilter, cmp)
-		}
+		iter, err = hintedFirstMatches(ctx, c, params.Hint, params.Query, params.Collation, iter, closer, cmp)
 	}
 	if err != nil {
 		var pathErr *types.PathError

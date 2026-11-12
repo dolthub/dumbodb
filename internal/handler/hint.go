@@ -16,7 +16,6 @@ package handler
 
 import (
 	"context"
-	"errors"
 	"strings"
 
 	"github.com/dolthub/dumbodb/internal/backends"
@@ -179,13 +178,15 @@ func naturalDirection(v any) (int, bool) {
 // reaches an array by its least element rather than its first one in bounds. An unsorted hinted read returns
 // index order, so such a read sorts by the pattern (SortIteratorInIndexOrder)
 // and sortFilter, which is filter, or marks it read in one scan of the index.
-func hintedIndexOrder(ctx context.Context, coll backends.Collection, hint any, filter, queryCollation *types.Document) (order, sortFilter *types.Document, err error) {
+// streamFilter, when set, is a filter a hinted backend read returns in index
+// order without the sort (hintedStreamFilter).
+func hintedIndexOrder(ctx context.Context, coll backends.Collection, hint any, filter, queryCollation *types.Document) (order, sortFilter, streamFilter *types.Document, err error) {
 	if !backends.HintRequiresExistingIndex(hint) {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	idxRes, err := coll.ListIndexes(ctx, nil)
 	if err != nil {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	name := backends.MatchHintedIndex(hint, idxRes.Indexes)
 	for _, idx := range idxRes.Indexes {
@@ -196,7 +197,7 @@ func hintedIndexOrder(ctx context.Context, coll backends.Collection, hint any, f
 		order := types.MakeDocument(len(idx.Key))
 		for _, k := range idx.Key {
 			if k.Text || k.Geo2D || k.Geo2DSphere || k.Hashed {
-				return nil, nil, nil
+				return nil, nil, nil, nil
 			}
 			dir := int32(1)
 			if k.Descending {
@@ -209,60 +210,100 @@ func hintedIndexOrder(ctx context.Context, coll backends.Collection, hint any, f
 		unbounded = unbounded || idx.Sparse || idx.PartialFilterExpression != nil
 		if descending || unbounded || topLevelOperator(filter) {
 			if (idx.Sparse || idx.PartialFilterExpression != nil) && orBranchMatchesMissing(filter) {
-				return order, common.AsOneIndexScan(filter), nil
+				return order, common.AsOneIndexScan(filter), nil, nil
 			}
 			sortFilter = filter
 			cmp := collation.Parse(queryCollation).Comparator()
+			maxWorks := 0
 			for i, k := range idx.Key {
 				if !idx.KeyMultikey(i) {
 					continue
 				}
-				rangeDocs := func(cond *types.Document) ([]*types.Document, error) {
-					return indexRangeDocs(ctx, coll, idx, hint, k.Field, cond, queryCollation)
+				if maxWorks == 0 {
+					countRes, cerr := coll.Count(ctx, new(backends.CountParams))
+					if cerr != nil {
+						return nil, nil, nil, cerr
+					}
+					maxWorks = common.TrialWorks(countRes.Count)
 				}
-				if sortFilter, err = common.BoundedByFewerKeys(sortFilter, k.Field, rangeDocs, cmp); err != nil {
-					return nil, nil, err
+				rangeIter := func(cond *types.Document) (types.DocumentsIterator, error) {
+					return indexRangeIter(ctx, coll, idx, hint, k.Field, cond, queryCollation, cmp)
+				}
+				if sortFilter, err = common.BoundedByTrial(sortFilter, k.Field, rangeIter, maxWorks, cmp); err != nil {
+					return nil, nil, nil, err
 				}
 			}
-			return order, sortFilter, nil
+			return order, sortFilter, hintedStreamFilter(idx, filter, sortFilter), nil
 		}
 	}
-	return nil, nil, nil
+	return nil, nil, nil, nil
 }
 
-// indexRangeDocs returns the documents idx holds with a key on field that
-// cond admits, read through the hinted index.
-func indexRangeDocs(ctx context.Context, coll backends.Collection, idx backends.IndexInfo, hint any, field string, cond, queryCollation *types.Document) ([]*types.Document, error) {
-	filter := must.NotFail(types.NewDocument(field, cond))
+// hintedStreamFilter returns sortFilter when a hinted backend read of it
+// returns filter's matches in index order: a walk of one ascending top-level
+// key, in an index that is neither sparse nor partial, over the one bound of
+// a multikey range the plan trial kept, reaches each document at its first key
+// in that bound, as mongod's scan does. filter must test that field alone.
+func hintedStreamFilter(idx backends.IndexInfo, filter, sortFilter *types.Document) *types.Document {
+	if len(idx.Key) != 1 || idx.Key[0].Descending || strings.Contains(idx.Key[0].Field, ".") ||
+		idx.Sparse || idx.PartialFilterExpression != nil || !idx.KeyMultikey(0) ||
+		filter.Len() != 1 || filter.Keys()[0] != idx.Key[0].Field || sortFilter == filter {
+		return nil
+	}
+	ops, ok := must.NotFail(sortFilter.Get(idx.Key[0].Field)).(*types.Document)
+	if !ok || ops.Len() != 1 {
+		return nil
+	}
+	switch ops.Keys()[0] {
+	case "$gt", "$gte", "$lt", "$lte":
+		return sortFilter
+	}
+	return nil
+}
+
+// hintedFirstMatches returns iter's matches of filter, a hinted single-document
+// write's candidates, in the hinted index's order: by a fresh hinted read of
+// the stream filter when there is one, else sorted.
+func hintedFirstMatches(ctx context.Context, coll backends.Collection, hint any, filter, queryCollation *types.Document, iter types.DocumentsIterator, closer *iterator.MultiCloser, cmp *collation.Comparator) (types.DocumentsIterator, error) {
+	order, sortFilter, streamFilter, err := hintedIndexOrder(ctx, coll, hint, filter, queryCollation)
+	switch {
+	case err != nil:
+		return nil, err
+	case streamFilter != nil:
+		res, err := coll.Query(ctx, &backends.QueryParams{
+			Filter: streamFilter, Hint: hint, Collation: queryCollation, Collated: cmp != nil,
+		})
+		if err != nil {
+			return nil, err
+		}
+		closer.Add(res.Iter)
+		return common.FilterIteratorColl(iterator.WithContext(ctx, res.Iter), closer, filter, cmp), nil
+	case order != nil:
+		return common.SortIteratorInIndexOrder(iter, closer, order, sortFilter, cmp)
+	}
+	return iter, nil
+}
+
+// indexRangeIter returns, in the hinted index's order, the documents idx
+// holds that match cond on field.
+func indexRangeIter(ctx context.Context, coll backends.Collection, idx backends.IndexInfo, hint any, field string, cond, queryCollation *types.Document, cmp *collation.Comparator) (types.DocumentsIterator, error) {
+	inRange := must.NotFail(types.NewDocument(field, cond))
 	res, err := coll.Query(ctx, &backends.QueryParams{
-		Filter: filter, Hint: hint, Collation: queryCollation, Collated: !collation.Parse(queryCollation).IsSimple(),
+		Filter: inRange, Hint: hint, Collation: queryCollation, Collated: !collation.Parse(queryCollation).IsSimple(),
 	})
 	if err != nil {
 		return nil, err
 	}
-	defer res.Iter.Close()
-	var docs []*types.Document
-	for {
-		_, doc, err := res.Iter.Next()
-		if errors.Is(err, iterator.ErrIteratorDone) {
-			return docs, nil
-		}
-		if err != nil {
-			return nil, err
-		}
-		if idx.PartialFilterExpression != nil {
-			if in, ferr := common.FilterDocument(doc, idx.PartialFilterExpression); ferr != nil || !in {
-				continue
-			}
-		}
-		if idx.Sparse {
-			if in, ferr := common.FilterDocument(doc, must.NotFail(types.NewDocument(field,
-				must.NotFail(types.NewDocument("$exists", true))))); ferr != nil || !in {
-				continue
-			}
-		}
-		docs = append(docs, doc)
+	member := types.MakeArray(3)
+	member.Append(inRange)
+	if idx.PartialFilterExpression != nil {
+		member.Append(idx.PartialFilterExpression)
 	}
+	if idx.Sparse {
+		member.Append(must.NotFail(types.NewDocument(field, must.NotFail(types.NewDocument("$exists", true)))))
+	}
+	closer := iterator.NewMultiCloser(res.Iter)
+	return common.FilterIteratorColl(res.Iter, closer, must.NotFail(types.NewDocument("$and", member)), cmp), nil
 }
 
 // orBranchMatchesMissing reports whether filter is a lone $or with a branch
