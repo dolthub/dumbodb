@@ -705,6 +705,9 @@ const (
 	// ErrRangeSortByNotNumeric indicates a range window over a sortBy value that is not a number.
 	ErrRangeSortByNotNumeric = ErrorCode(5429414) // Location5429414
 
+	// ErrNAccumulatorRootState indicates SBE reading $$ROOT as the n of an N accumulator.
+	ErrNAccumulatorRootState = ErrorCode(7548600) // Location7548600
+
 	// $arrayToObject input errors.
 	ErrArrayToObjectInput           = ErrorCode(40386) // Location40386
 	ErrArrayToObjectObjectsExpected = ErrorCode(40391) // Location40391

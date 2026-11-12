@@ -102,7 +102,7 @@ func newTopBottomFunc(name string) newAccumulatorFunc {
 		if single {
 			n = int32(1)
 		}
-		acc.n = newNArg(n)
+		acc.n = newNArg(n, name)
 		return acc, nil
 	}
 }

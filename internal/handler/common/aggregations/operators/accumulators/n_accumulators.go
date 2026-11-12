@@ -33,6 +33,7 @@ type nArg struct {
 	expr any
 	kind nKind
 	sbe  bool
+	op   string
 }
 
 type nKind int
@@ -43,8 +44,8 @@ const (
 	nRoot
 )
 
-func newNArg(expr any) nArg {
-	return nArg{expr: expr, kind: classifyN(expr)}
+func newNArg(expr any, op string) nArg {
+	return nArg{expr: expr, kind: classifyN(expr), op: op}
 }
 
 // classifyN reports what n reads: nothing that varies by document, a field,
@@ -56,9 +57,10 @@ func classifyN(expr any) nKind {
 		switch v := v.(type) {
 		case string:
 			switch {
-			case v == "$$ROOT" || v == "$$CURRENT" || strings.HasPrefix(v, "$$ROOT.") || strings.HasPrefix(v, "$$CURRENT."):
+			case v == "$$ROOT" || v == "$$CURRENT":
 				kind = nRoot
-			case strings.HasPrefix(v, "$") && !strings.HasPrefix(v, "$$") && kind == nConstant:
+			case kind == nConstant && (strings.HasPrefix(v, "$$ROOT.") || strings.HasPrefix(v, "$$CURRENT.") ||
+				strings.HasPrefix(v, "$") && !strings.HasPrefix(v, "$$")):
 				kind = nFieldPath
 			}
 		case *types.Array:
@@ -106,9 +108,13 @@ func (a *nArg) resolve() (int64, error) {
 	}
 	switch a.kind {
 	case nRoot:
-		return 0, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrNAccumulatorStateNotArray, "The accumulator state should be an array", "n",
-		)
+		// SBE reads the whole document as $firstN's state, and checks it
+		// earlier for the others.
+		code := handlererrors.ErrNAccumulatorRootState
+		if a.op == "$firstN" {
+			code = handlererrors.ErrNAccumulatorStateNotArray
+		}
+		return 0, handlererrors.NewCommandErrorMsgWithArgument(code, "The accumulator state should be an array", "n")
 	case nFieldPath:
 		return 0, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrNAccumulatorNInvalidAtRuntime, "parameter 'n' must be coercible to a positive 64-bit integer", "n",
@@ -166,7 +172,7 @@ func newNAccumulatorFunc(name string) newAccumulatorFunc {
 		if err != nil {
 			return nil, err
 		}
-		return &nAccumulator{name: name, input: inputOperand, n: newNArg(n)}, nil
+		return &nAccumulator{name: name, input: inputOperand, n: newNArg(n, name)}, nil
 	}
 }
 
