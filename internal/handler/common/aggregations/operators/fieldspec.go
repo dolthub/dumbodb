@@ -75,7 +75,7 @@ func (n *fieldSpecNode) add(spec *types.Document, projection bool) {
 				if v {
 					node.leaf = fieldSpecInclude
 				}
-			case int32, int64, float64:
+			case int32, int64, float64, types.Decimal128:
 				node.leaf = fieldSpecExclude
 				if types.Compare(v, int32(0)) != types.Equal {
 					node.leaf = fieldSpecInclude
