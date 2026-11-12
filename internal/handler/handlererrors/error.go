@@ -315,6 +315,34 @@ const (
 	ErrNumericFirstArgument    = ErrorCode(51044)   // Location51044
 	ErrNumericSecondArgument   = ErrorCode(51045)   // Location51045
 
+	// Math expression errors as mongod's SBE engine reports them.
+	ErrSBEDivideByZero          = ErrorCode(4848401) // Location4848401
+	ErrSBEModByZero             = ErrorCode(4848403) // Location4848403
+	ErrSBEAbsNonNumeric         = ErrorCode(7157700) // Location7157700
+	ErrSBEAbsOfLongMin          = ErrorCode(7157701) // Location7157701
+	ErrSBECeilNonNumeric        = ErrorCode(7157702) // Location7157702
+	ErrSBEFloorNonNumeric       = ErrorCode(7157703) // Location7157703
+	ErrSBEExpNonNumeric         = ErrorCode(7157704) // Location7157704
+	ErrSBELnNonNumeric          = ErrorCode(7157705) // Location7157705
+	ErrSBELnNonPositive         = ErrorCode(7157706) // Location7157706
+	ErrSBELog10NonNumeric       = ErrorCode(7157707) // Location7157707
+	ErrSBELog10NonPositive      = ErrorCode(7157708) // Location7157708
+	ErrSBESqrtNonNumeric        = ErrorCode(7157709) // Location7157709
+	ErrSBESqrtNegative          = ErrorCode(7157710) // Location7157710
+	ErrSBEModNonNumeric         = ErrorCode(7157718) // Location7157718
+	ErrSBEDivideNonNumeric      = ErrorCode(7157719) // Location7157719
+	ErrSBESubtractNonNumeric    = ErrorCode(7157720) // Location7157720
+	ErrSBEMultiplyNonNumeric    = ErrorCode(7157721) // Location7157721
+	ErrSBEAddNonNumeric         = ErrorCode(7157723) // Location7157723
+	ErrSBEPowNonNumeric         = ErrorCode(5154200) // Location5154200
+	ErrSBEPowZeroNegative       = ErrorCode(5154201) // Location5154201
+	ErrSBERoundNonNumeric       = ErrorCode(5155300) // Location5155300
+	ErrSBERoundPlace            = ErrorCode(5155301) // Location5155301
+	ErrSBETrigNonNumeric        = ErrorCode(7157800) // Location7157800
+	ErrSBEAtan2NonNumeric       = ErrorCode(7157801) // Location7157801
+	ErrSBEBoundedTrigNonNumeric = ErrorCode(7157802) // Location7157802
+	ErrSBETrigOutOfBounds       = ErrorCode(7157803) // Location7157803
+
 	// Date expression errors, named for MongoDB's checks.
 	ErrUnrecognizedTimeZone      = ErrorCode(40485)   // Location40485
 	ErrTimeZoneNotString         = ErrorCode(40517)   // Location40517

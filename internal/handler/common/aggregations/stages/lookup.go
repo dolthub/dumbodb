@@ -163,6 +163,9 @@ type lookup struct {
 	// $unionWith, and when an $unwind of as directly follows (see
 	// MarkLookupsUnwound).
 	unlimitedMatches bool
+	// sbePrefix is how many leading sub-pipeline stages report errors as
+	// mongod's SBE engine does; see SBEPrefixLen.
+	sbePrefix int
 }
 
 // NewLookupStage creates a new $lookup stage with a collection fetcher.
@@ -734,6 +737,10 @@ func (l *lookup) runPipeline(ctx context.Context, fetcher CollectionFetcher, fro
 			if validatedMatches != nil && substituted.Command() == "$match" {
 				validatedMatches[stageIndex] = true
 			}
+		}
+
+		if stageIndex < l.sbePrefix {
+			stage = &sbeStage{inner: stage}
 		}
 
 		if !copied && substituted.Command() != "$match" {
