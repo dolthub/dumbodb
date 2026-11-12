@@ -1219,6 +1219,14 @@ func captureConflictsForCollection(
 		}
 		return readDocFromValue(ctx, ns, tup)
 	}
+	// The three-way diff carries no base document for a change only ours made, so it is read from the base map.
+	baseDocOf := func(key val.Tuple) (*types.Document, error) {
+		value, err := mapValue(ctx, baseMap, key)
+		if err != nil {
+			return nil, err
+		}
+		return docOf(value)
+	}
 
 	// applyIndexEdit runs the unique-collision eviction protocol: the
 	// loser leaves the merged primary and becomes a document conflict.
@@ -1373,7 +1381,7 @@ func captureConflictsForCollection(
 				return prolly.Map{}, nil, fmt.Errorf("applying left change: %w", err)
 			}
 			if indexing {
-				baseDoc, derr := docOf(val.Tuple(diff.Base))
+				baseDoc, derr := baseDocOf(diff.Key)
 				if derr != nil {
 					return prolly.Map{}, nil, derr
 				}
@@ -1390,7 +1398,7 @@ func captureConflictsForCollection(
 				return prolly.Map{}, nil, fmt.Errorf("applying left delete: %w", err)
 			}
 			if indexing {
-				baseDoc, derr := docOf(val.Tuple(diff.Base))
+				baseDoc, derr := baseDocOf(diff.Key)
 				if derr != nil {
 					return prolly.Map{}, nil, derr
 				}
