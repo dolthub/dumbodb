@@ -25,6 +25,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // sort represents $sort stage. limit is the top-K bound when a $limit (or
@@ -34,6 +35,10 @@ type sort struct {
 	limit  int64
 	cmp    *collation.Comparator
 }
+
+// wholeIDKey holds [_id] while a sort on _id runs, so the sort takes the
+// array's one element, _id itself. No client field name has a NUL byte.
+const wholeIDKey = "\x00_id"
 
 func newSort(stage *types.Document) (aggregations.Stage, error) {
 	return NewSortStage(stage, 0, nil)
@@ -71,7 +76,43 @@ func NewSortStage(stage *types.Document, limit int64, cmp *collation.Comparator)
 //
 // If sort path is invalid, it returns a possibly wrapped types.PathError.
 func (s *sort) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
-	iter, err := common.TopKIteratorColl(iter, closer, s.fields, s.limit, s.cmp)
+	// mongod assumes _id is never an array, as in stored documents, so a
+	// sort on _id alone compares whole values, arrays included.
+	fields := s.fields
+	wholeID := fields.Len() == 1 && fields.Has("_id")
+	if wholeID {
+		fields = types.MakeDocument(s.fields.Len())
+		for _, k := range s.fields.Keys() {
+			name := k
+			if k == "_id" {
+				name = wholeIDKey
+			}
+			fields.Set(name, must.NotFail(s.fields.Get(k)))
+		}
+		iter = newMapIterator(iter, closer, func(doc *types.Document) (*types.Document, error) {
+			id, err := doc.Get("_id")
+			if err != nil {
+				id = types.Null
+			}
+			// A shallow copy, as another stage, such as a $facet branch,
+			// may share doc.
+			keyed := types.MakeDocument(doc.Len() + 1)
+			keys, values := doc.Keys(), doc.Values()
+			for i, k := range keys {
+				keyed.AppendDecoded(k, values[i])
+			}
+			keyed.SetRecordID(doc.RecordID())
+			keyed.Set(wholeIDKey, must.NotFail(types.NewArray(id)))
+			return keyed, nil
+		})
+	}
+	iter, err := common.TopKIteratorColl(iter, closer, fields, s.limit, s.cmp)
+	if err == nil && wholeID {
+		iter = newMapIterator(iter, closer, func(doc *types.Document) (*types.Document, error) {
+			doc.Remove(wholeIDKey)
+			return doc, nil
+		})
+	}
 	if err != nil {
 		var pathErr *types.PathError
 		if errors.As(err, &pathErr) && pathErr.Code() == types.ErrPathElementEmpty {
