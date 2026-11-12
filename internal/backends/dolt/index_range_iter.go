@@ -250,7 +250,8 @@ type indexIDStream struct {
 }
 
 func newIndexIDStream(ctx context.Context, idxMap prolly.Map, ranges [][2][]byte, reverse, multikey bool) *indexIDStream {
-	s := &indexIDStream{ctx: ctx, idxMap: idxMap, ranges: ranges, reverse: reverse, gaps: newIntervalGaps(ctx, idxMap, ranges, reverse)}
+	s := &indexIDStream{ctx: ctx, idxMap: idxMap, ranges: ranges, reverse: reverse, gaps: newIntervalGaps(ctx, idxMap, ranges, reverse),
+		noGapKeys: backends.IsSBEScan(ctx)}
 	if multikey || len(ranges) > 1 {
 		s.seen = make(map[string]struct{})
 	}

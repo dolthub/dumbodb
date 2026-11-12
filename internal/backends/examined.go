@@ -179,3 +179,17 @@ func IsCountScan(ctx context.Context) bool {
 	is, _ := ctx.Value(countScanKey{}).(bool)
 	return is
 }
+
+type sbeScanKey struct{}
+
+// WithSBEScan marks ctx as reading for a pipeline mongod runs in SBE, whose
+// index scans count no key outside their ranges.
+func WithSBEScan(ctx context.Context) context.Context {
+	return context.WithValue(ctx, sbeScanKey{}, true)
+}
+
+// IsSBEScan reports whether ctx is from WithSBEScan.
+func IsSBEScan(ctx context.Context) bool {
+	is, _ := ctx.Value(sbeScanKey{}).(bool)
+	return is
+}
