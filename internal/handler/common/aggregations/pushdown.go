@@ -313,7 +313,8 @@ func rewriteFilterFields(filter *types.Document, sources fieldSources) (*types.D
 
 // rewriteExprFields rewrites the field paths of an aggregation expression to
 // the input paths sources gives, or returns false when it reads a field the
-// stage computes or drops, or a variable other than $$CURRENT and $$ROOT.
+// stage computes or drops, a variable other than $$CURRENT and $$ROOT, or a
+// field named by $getField, $setField or $unsetField.
 func rewriteExprFields(expr any, sources fieldSources) (any, bool) {
 	switch v := expr.(type) {
 	case string:
@@ -342,6 +343,12 @@ func rewriteExprFields(expr any, sources fieldSources) (any, bool) {
 		out := types.MakeDocument(v.Len())
 		for _, k := range v.Keys() {
 			field := must.NotFail(v.Get(k))
+			switch k {
+			case "$getField", "$setField", "$unsetField":
+				// These name a field as a plain string and read
+				// $$CURRENT by default, out of reach of a rewrite.
+				return nil, false
+			}
 			if k == "$literal" {
 				out.Set(k, field)
 				continue
