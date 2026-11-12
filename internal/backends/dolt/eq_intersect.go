@@ -25,10 +25,11 @@ import (
 // equalityIntersection intersects a field condition holding $eq beside other
 // comparisons, as mongod intersects their index bounds: on a field holding no
 // array it matches the equality's value alone, or nothing. ok is false for
-// any other condition.
-func equalityIntersection(v any) (reduced any, empty, ok bool) {
+// any other condition, and under a non-simple collation for one comparing
+// strings, which this binary comparison would misjudge.
+func equalityIntersection(v any, simpleCollation bool) (reduced any, empty, ok bool) {
 	ops, isDoc := v.(*types.Document)
-	if !isDoc || ops.Len() < 2 || !ops.Has("$eq") {
+	if !isDoc || ops.Len() < 2 || !ops.Has("$eq") || !simpleCollation && !backends.CollationFree(ops) {
 		return nil, false, false
 	}
 	eq, isEq := indexEqualityValue(must.NotFail(types.NewDocument("$eq", must.NotFail(ops.Get("$eq")))))
@@ -114,7 +115,7 @@ func filterNeverMatches(filter *types.Document) bool {
 // reducedForIndex returns filter with each condition on a key field of idx
 // that holds no array intersected (equalityIntersection), and whether one of
 // them matches nothing.
-func reducedForIndex(filter *types.Document, idx backends.IndexInfo) (*types.Document, bool) {
+func reducedForIndex(filter *types.Document, idx backends.IndexInfo, simpleCollation bool) (*types.Document, bool) {
 	var out *types.Document
 	for i, kp := range idx.Key {
 		if idx.KeyMultikey(i) {
@@ -124,7 +125,7 @@ func reducedForIndex(filter *types.Document, idx backends.IndexInfo) (*types.Doc
 		if err != nil {
 			continue
 		}
-		reduced, empty, ok := equalityIntersection(v)
+		reduced, empty, ok := equalityIntersection(v, simpleCollation)
 		if !ok {
 			continue
 		}
@@ -156,14 +157,14 @@ func comparable(a, b any) bool {
 // equalitiesAlone returns filter with each condition equalityIntersection
 // can intersect replaced by its equality, which picks the index the
 // intersected bounds read.
-func equalitiesAlone(filter *types.Document) *types.Document {
+func equalitiesAlone(filter *types.Document, simpleCollation bool) *types.Document {
 	var out *types.Document
 	for _, k := range filter.Keys() {
 		ops, ok := must.NotFail(filter.Get(k)).(*types.Document)
 		if !ok {
 			continue
 		}
-		if _, _, ok = equalityIntersection(ops); !ok {
+		if _, _, ok = equalityIntersection(ops, simpleCollation); !ok {
 			continue
 		}
 		if out == nil {

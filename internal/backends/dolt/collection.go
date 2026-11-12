@@ -979,7 +979,7 @@ func chooseIndexRange(idxInfos []backends.IndexInfo, filter *types.Document, hin
 		}
 		// An equality beside other comparisons reads only its value, or
 		// nothing, on a field that holds no array.
-		rf, empty := reducedForIndex(filter, idxInfos[entry.mapIdx])
+		rf, empty := reducedForIndex(filter, idxInfos[entry.mapIdx], queryColl.IsSimple())
 		if empty {
 			return indexRangeChoice{mapIdx: entry.mapIdx, pointRanges: [][2][]byte{}}, true
 		}
@@ -2520,7 +2520,7 @@ func buildCountOrDistinctPlan(ctx context.Context, params *backends.ExplainParam
 			}
 		}
 		if !indexPicked {
-			picked, indexPicked = pickIndexForFilter(equalitiesAlone(params.Filter), idxInfos, params.Collation, params.Command == "count")
+			picked, indexPicked = pickIndexForFilter(equalitiesAlone(params.Filter, collation.Parse(params.Collation).IsSimple()), idxInfos, params.Collation, params.Command == "count")
 		}
 	}
 	if params.Command == "count" {
@@ -2530,7 +2530,7 @@ func buildCountOrDistinctPlan(ctx context.Context, params *backends.ExplainParam
 		leaf := collscanStage()
 		reduced, empty := params.Filter, false
 		if indexPicked {
-			reduced, empty = reducedForIndex(params.Filter, picked)
+			reduced, empty = reducedForIndex(params.Filter, picked, collation.Parse(params.Collation).IsSimple())
 		}
 		switch {
 		case indexPicked && empty:
@@ -3869,7 +3869,7 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 		return countIndexRange(ctx, idxMap, nil, nil, chosen.KeyMultikey(0), stop)
 	}
 	if !chosen.KeyMultikey(0) {
-		if reduced, empty, ok := equalityIntersection(v0(filter, field)); ok {
+		if reduced, empty, ok := equalityIntersection(v0(filter, field), queryColl.IsSimple()); ok {
 			if empty {
 				return 0, true, nil
 			}
@@ -3953,7 +3953,7 @@ func (c *collection) tryExactIndexedCount(ctx context.Context, state *dbState, f
 			backends.HintRequiresExistingIndex(hint) && backends.MatchHintedIndex(hint, []backends.IndexInfo{idx}) != idx.Name {
 			continue
 		}
-		rf, empty := reducedForIndex(filter, idx)
+		rf, empty := reducedForIndex(filter, idx, queryColl.IsSimple())
 		if empty {
 			if _, _, ok := exactCompoundCountBounds(idx, rf, queryColl.Comparator()); ok || indexBindsFilter(idx, filter) {
 				return 0, true, nil
