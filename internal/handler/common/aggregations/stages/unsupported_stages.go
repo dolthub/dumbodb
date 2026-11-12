@@ -295,10 +295,10 @@ func checkSubPipelineParses(pipeline *types.Array, fetcher CollectionFetcher) er
 		var err error
 		switch name := stage.Command(); {
 		case fetcher != nil && (name == "$lookup" || name == "$unionWith" || name == "$facet"):
-			_, err = newSubPipelineStage(stage, fetcher, false)
+			_, err = newSubPipelineStage(stage.DeepCopy(), fetcher, false)
 		case FailsParsing(stage):
 			if newStage, known := stageConstructors[name]; known {
-				_, err = newStage(stage)
+				_, err = newStage(stage.DeepCopy())
 			} else {
 				err = handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrStageUnrecognized,
 					fmt.Sprintf("Unrecognized pipeline stage name: '%s'", name), name+" (stage)")
@@ -336,6 +336,6 @@ func FailsParsing(stage *types.Document) bool {
 		"$querySettings", "$listClusterCatalog", "$changeStreamSplitLargeEvent":
 		return false
 	}
-	_, err := newStage(stage)
+	_, err := newStage(stage.DeepCopy())
 	return err != nil
 }

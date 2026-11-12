@@ -58,7 +58,7 @@ func newUpdatePipeline(pipeline *types.Array) ([]aggregations.Stage, error) {
 			if known && !isAllowed {
 				// mongod parses the stage before it refuses it here.
 				if _, alwaysFails := parseFailingStages[name]; !alwaysFails && FailsParsing(stage) {
-					if _, err := stageConstructors[name](stage); err != nil {
+					if _, err := stageConstructors[name](stage.DeepCopy()); err != nil {
 						return nil, err
 					}
 				}
