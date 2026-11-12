@@ -194,8 +194,11 @@ func elementAdmitter(filter *types.Document, field string, cmp *collation.Compar
 // trial keeps the one whose range holds fewer keys, the upper on a tie.
 func boundedByFewerKeys(docs []*types.Document, filter *types.Document, field string, path types.Path, cmp *collation.Comparator) *types.Document {
 	v, err := filter.Get(field)
+	if err != nil {
+		return boundedByFewerKeysUnderAnd(docs, filter, field, path, cmp)
+	}
 	ops, ok := v.(*types.Document)
-	if err != nil || !ok {
+	if !ok {
 		return filter
 	}
 	lower, upper := firstOf(ops, "$gt", "$gte"), firstOf(ops, "$lt", "$lte")
@@ -232,6 +235,56 @@ func boundedByFewerKeys(docs []*types.Document, filter *types.Document, field st
 		return lowerOnly
 	}
 	return upperOnly
+}
+
+// boundedByFewerKeysUnderAnd applies boundedByFewerKeys to the one $and
+// branch that holds field's condition.
+func boundedByFewerKeysUnderAnd(docs []*types.Document, filter *types.Document, field string, path types.Path, cmp *collation.Comparator) *types.Document {
+	and, err := filter.Get("$and")
+	branches := filterBranches(and)
+	if err != nil || branches == nil {
+		return filter
+	}
+	holder := -1
+	for i, b := range branches {
+		if andHolds(b, field) {
+			if holder >= 0 {
+				return filter
+			}
+			holder = i
+		}
+	}
+	if holder < 0 {
+		return filter
+	}
+	reduced := boundedByFewerKeys(docs, branches[holder], field, path, cmp)
+	if reduced == branches[holder] {
+		return filter
+	}
+	arr := types.MakeArray(len(branches))
+	for i, b := range branches {
+		if i == holder {
+			b = reduced
+		}
+		arr.Append(b)
+	}
+	f := filter.DeepCopy()
+	f.Set("$and", arr)
+	return f
+}
+
+// andHolds reports whether filter holds field at its top level or under $and.
+func andHolds(filter *types.Document, field string) bool {
+	if filter.Has(field) {
+		return true
+	}
+	and, _ := filter.Get("$and")
+	for _, b := range filterBranches(and) {
+		if andHolds(b, field) {
+			return true
+		}
+	}
+	return false
 }
 
 // firstOf returns the first of names that ops holds, or "".
