@@ -20,43 +20,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// newFill validates the $fill stage spec and returns an appropriate error.
-// $fill is not implemented; this handler ensures the correct error code and message
-// are returned when the required 'output' field is absent, matching MongoDB's behavior.
-func newFill(stage *types.Document) (aggregations.Stage, error) {
-	v, err := stage.Get("$fill")
-	if err != nil {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrMissingField,
-			"BSON field '$fill.output' is missing but a required field",
-			"$fill (stage)",
-		)
-	}
-
-	spec, ok := v.(*types.Document)
-	if !ok || spec == nil {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrMissingField,
-			"BSON field '$fill.output' is missing but a required field",
-			"$fill (stage)",
-		)
-	}
-
-	if _, err := spec.Get("output"); err != nil {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrMissingField,
-			"BSON field '$fill.output' is missing but a required field",
-			"$fill (stage)",
-		)
-	}
-
-	return nil, handlererrors.NewCommandErrorMsgWithArgument(
-		handlererrors.ErrNotImplemented,
-		"`aggregate` stage \"$fill\" is not implemented yet",
-		"$fill (stage)",
-	)
-}
-
 // searchNotEnabledMessage is mongod's error for an Atlas Search stage on a
 // server without mongot.
 const searchNotEnabledMessage = "Using $search and $vectorSearch aggregation stages requires additional configuration. " +
