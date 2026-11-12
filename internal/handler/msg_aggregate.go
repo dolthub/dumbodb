@@ -201,6 +201,9 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 
 		switch d.Command() {
 		case "$lookup", "$graphLookup", "$unionWith", "$facet":
+			if err = checkJoinedViewLength(connCtx, db, d); err != nil {
+				return nil, err
+			}
 			s, err = newForeignCollectionStage(d, db)
 
 		case "$out":

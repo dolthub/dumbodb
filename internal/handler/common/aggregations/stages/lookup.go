@@ -34,6 +34,30 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
+type joinStagesKey struct{}
+
+// JoinStages describes, for fetches of a join's foreign view, the stages
+// mongod runs the view as besides the view's own, and refuses as it executes
+// when that is over the limit.
+type JoinStages struct {
+	// N is the join's own stages; 0 means no check.
+	N int
+	// ViewLimit reports that mongod refuses with ViewPipelineTooLong, as for a
+	// $lookup with only a pipeline, rather than PipelineTooLong.
+	ViewLimit bool
+}
+
+// WithJoinStages records js for fetches under ctx.
+func WithJoinStages(ctx context.Context, js JoinStages) context.Context {
+	return context.WithValue(ctx, joinStagesKey{}, js)
+}
+
+// JoinStagesOf returns the JoinStages WithJoinStages recorded.
+func JoinStagesOf(ctx context.Context) JoinStages {
+	js, _ := ctx.Value(joinStagesKey{}).(JoinStages)
+	return js
+}
+
 // CollectionFetcher reads the foreign side of $lookup and $graphLookup.
 type CollectionFetcher interface {
 	// Fetch returns the documents of collectionName that match filter (all of
@@ -419,6 +443,11 @@ func (l *lookup) Process(ctx context.Context, iter types.DocumentsIterator, clos
 	}
 
 	fetcher := withFetchCache(l.fetcher)
+	pipelineLen := 0
+	if l.pipeline != nil {
+		pipelineLen = l.pipeline.Len()
+	}
+	ctx = WithJoinStages(ctx, JoinStages{N: pipelineLen + 1, ViewLimit: l.localField == ""})
 
 	// With an index on the joined field, ask the backend for just the matching
 	// documents; without one, load the collection once and join in memory.

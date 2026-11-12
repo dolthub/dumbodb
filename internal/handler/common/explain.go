@@ -249,6 +249,10 @@ func GetExplainParams(document *types.Document, l *slog.Logger) (*ExplainParams,
 		remove, _ = v.(bool)
 	}
 
+	if err := checkExplainedUpdatePipeline(explain, commandName); err != nil {
+		return nil, err
+	}
+
 	CanonicalizeFilter(filter)
 
 	return &ExplainParams{
@@ -271,6 +275,24 @@ func GetExplainParams(document *types.Document, l *slog.Logger) (*ExplainParams,
 
 		StatementCollation: statementCollation,
 	}, nil
+}
+
+// checkExplainedUpdatePipeline returns mongod's error for an explained update
+// or findAndModify whose pipeline-style update is over the stage limit.
+func checkExplainedUpdatePipeline(explain *types.Document, commandName string) error {
+	var update any
+	switch commandName {
+	case "update":
+		if first := firstWriteStatement(explain, commandName); first != nil {
+			update, _ = first.Get("u")
+		}
+	case "findAndModify":
+		update, _ = explain.Get("update")
+	}
+	if pipeline, ok := update.(*types.Array); ok {
+		return aggregations.CheckPipelineLength(pipeline.Len())
+	}
+	return nil
 }
 
 // firstWriteStatement returns the first statement of an update's updates or

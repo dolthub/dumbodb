@@ -116,6 +116,7 @@ func (u *unionWith) Process(ctx context.Context, iter types.DocumentsIterator, c
 	}
 
 	fetcher := withFetchCache(u.fetcher)
+	ctx = WithJoinStages(ctx, JoinStages{})
 	var fromDocs []*types.Document
 	if u.sub.from != "" {
 		if fromDocs, err = fetcher.Fetch(ctx, u.sub.from, nil); err != nil {

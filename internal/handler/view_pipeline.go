@@ -139,10 +139,15 @@ func (f *foreignFetcher) Fetch(ctx context.Context, collName string, filter *typ
 		defer closer.Close()
 
 		cmp := collation.Parse(info.Collation).Comparator()
-		// mongod runs a join on a view as the view's stages and a $match,
-		// and refuses one too long as it executes.
-		iter, err := viewSourceIterator(ctx, db, info.Name, info.ViewOn, info.ViewPipeline, cmp, closer, false,
-			func(n int) error { return wrapAggregateExecutorError(aggregations.CheckPipelineLength(n + 1)) })
+		// A $unionWith over a view was checked as the stage was parsed
+		// (checkJoinedViewLength); a $lookup also is as it executes.
+		js := stages.JoinStagesOf(ctx)
+		ctx = stages.WithJoinStages(ctx, stages.JoinStages{})
+		check := func(n int) error { return wrapAggregateExecutorError(aggregations.CheckPipelineLength(n + js.N)) }
+		if js.ViewLimit {
+			check = func(n int) error { return wrapAggregateExecutorError(viewPipelineLength(js.N)(n)) }
+		}
+		iter, err := viewSourceIterator(ctx, db, info.Name, info.ViewOn, info.ViewPipeline, cmp, closer, false, check)
 		if err != nil {
 			return nil, err
 		}
@@ -237,6 +242,56 @@ func lookupCollectionInfo(ctx context.Context, db backends.Database, name string
 		return nil, nil
 	}
 	return &res.Collections[0], nil
+}
+
+// checkJoinedViewLength returns mongod's error for a $unionWith, or a $lookup
+// with only a pipeline, over a view whose stages and the stage's sub-pipeline
+// are together over the limit, which mongod refuses as it parses the stage.
+func checkJoinedViewLength(ctx context.Context, db backends.Database, stage *types.Document) error {
+	spec, _ := stage.Get(stage.Command())
+	var from string
+	var pipeline *types.Array
+	switch stage.Command() {
+	case "$unionWith":
+		switch spec := spec.(type) {
+		case string:
+			from = spec
+		case *types.Document:
+			from, pipeline = joinSpecFields(spec, "coll")
+		}
+	case "$lookup":
+		specDoc, ok := spec.(*types.Document)
+		if !ok || specDoc.Has("localField") {
+			return nil
+		}
+		from, pipeline = joinSpecFields(specDoc, "from")
+	}
+	if from == "" {
+		return nil
+	}
+	info, err := lookupCollectionInfo(ctx, db, from)
+	if err != nil || info == nil || !info.IsView {
+		return nil
+	}
+	_, _, rawStages, err := resolveViewChain(ctx, db, info.Name, info.ViewOn, info.ViewPipeline, nil)
+	if err != nil {
+		return nil
+	}
+	pipelineLen := 0
+	if pipeline != nil {
+		pipelineLen = pipeline.Len()
+	}
+	return aggregations.CheckPipelineLength(len(rawStages) + pipelineLen)
+}
+
+// joinSpecFields returns a join spec's namespace, under fromField, and
+// pipeline, each zero when absent or of the wrong type.
+func joinSpecFields(spec *types.Document, fromField string) (string, *types.Array) {
+	v, _ := spec.Get(fromField)
+	from, _ := v.(string)
+	v, _ = spec.Get("pipeline")
+	pipeline, _ := v.(*types.Array)
+	return from, pipeline
 }
 
 // viewPipelineLength returns a check of a resolved view's stages for a
