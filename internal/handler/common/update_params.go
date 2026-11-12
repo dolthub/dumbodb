@@ -18,6 +18,7 @@ import (
 	"log/slog"
 
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -115,8 +116,10 @@ func GetUpdateParams(document *types.Document, l *slog.Logger) (*UpdateParams, e
 	}
 
 	if len(params.Updates) > 0 {
+		now := operators.CommandNow()
 		for i := range params.Updates {
 			update := &params.Updates[i]
+			update.Filter = operators.BindNowInFilter(update.Filter, now)
 
 			if update.UpdateRaw == nil {
 				continue
@@ -144,7 +147,7 @@ func GetUpdateParams(document *types.Document, l *slog.Logger) (*UpdateParams, e
 
 			case *types.Array:
 				update.IsPipeline = true
-				update.Pipeline = u
+				update.Pipeline = operators.BindNowInPipeline(u, now)
 
 			default:
 				return nil, handlererrors.NewWriteErrorMsg(

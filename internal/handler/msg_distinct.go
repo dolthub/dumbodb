@@ -24,6 +24,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
@@ -44,6 +45,7 @@ func (h *Handler) MsgDistinct(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 	if err != nil {
 		return nil, err
 	}
+	params.Filter = operators.BindNowInFilter(params.Filter, operators.CommandNow())
 
 	connCtx, cancel := withMaxTimeMS(connCtx, params.MaxTimeMS)
 	defer cancel()

@@ -37,6 +37,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/stages"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
@@ -178,6 +179,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 	if err = aggregations.CheckPipelineLength(pipeline.Len()); err != nil {
 		return nil, err
 	}
+	pipeline = operators.BindNowInPipeline(pipeline, operators.CommandNow())
 
 	aggregationStages := aggregations.MoveMatchesAhead(must.NotFail(iterator.ConsumeValues(pipeline.Iterator())))
 	if err = aggregations.CheckExpandedPipelineLength(aggregations.ExpandedLength(aggregationStages)); err != nil {
@@ -726,6 +728,7 @@ func (h *Handler) aggregateDatabase(connCtx context.Context, document *types.Doc
 	if err = aggregations.CheckPipelineLength(pipeline.Len()); err != nil {
 		return nil, err
 	}
+	pipeline = operators.BindNowInPipeline(pipeline, operators.CommandNow())
 
 	if pipeline.Len() == 0 {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
