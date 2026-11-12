@@ -151,7 +151,9 @@ func compareArgs(left, right any, doc *types.Document) (types.CompareResult, err
 			return types.Less, nil
 		}
 	}
-	return types.Compare(lv, rv), nil
+	// Aggregation compares whole values in BSON order; an array is not
+	// matched element by element as in a query.
+	return types.CompareForAggregation(lv, rv), nil
 }
 
 // evalArgValueOrMissing is evalArgValue, also reporting whether arg is a
