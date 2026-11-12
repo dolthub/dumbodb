@@ -206,6 +206,9 @@ type lookup struct {
 	inClassic bool
 	// viewIsView reports which collections are views, for MarkSBELookups.
 	viewIsView func(string) bool
+	// before are the stages between this stage and its absorbed $unwind,
+	// which run on the input, as mongod moves them ahead of the $lookup.
+	before []aggregations.Stage
 }
 
 // NewLookupStage creates a new $lookup stage with a collection fetcher.
@@ -657,6 +660,12 @@ func foreignMatches(doc *types.Document, field string, candidates []any) bool {
 }
 
 func (l *lookup) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
+	for _, s := range l.before {
+		var err error
+		if iter, err = s.Process(ctx, iter, closer); err != nil {
+			return nil, err
+		}
+	}
 	docs, err := common.ConsumeDocuments(iter, "$lookup")
 	if err != nil {
 		return nil, lazyerrors.Error(err)
@@ -941,17 +950,57 @@ func MarkLookupsUnwound(pipeline []aggregations.Stage, specs []*types.Document) 
 		if !ok || l.unwind != nil {
 			continue
 		}
+		var crossed []int
 		for j := i + 1; j < len(pipeline) && j < len(specs); j++ {
-			if specs[j].Command() == "$match" && !matchReadsField(specs[j], l.as) {
+			if movesBeforeLookup(specs[j], l.as) {
+				crossed = append(crossed, j)
 				continue
 			}
 			if u, ok := pipeline[j].(*unwind); ok && unwindPath(specs[j]) == "$"+l.as {
 				l.unwind = u
 				u.absorbed = true
+				for _, k := range crossed {
+					l.before = append(l.before, pipeline[k])
+					pipeline[k] = passThroughStage{}
+				}
 			}
 			break
 		}
 	}
+}
+
+// movesBeforeLookup reports whether mongod moves the stage spec ahead of a
+// $lookup into field: a $limit or $skip, and a $match or $sort that does
+// not read field.
+func movesBeforeLookup(spec *types.Document, field string) bool {
+	switch spec.Command() {
+	case "$limit", "$skip":
+		return true
+	case "$match":
+		return !matchReadsField(spec, field)
+	case "$sort":
+		keys, ok := must.NotFail(spec.Get("$sort")).(*types.Document)
+		if !ok {
+			return false
+		}
+		for _, k := range keys.Keys() {
+			if k == field || strings.HasPrefix(k, field+".") || strings.HasPrefix(field, k+".") {
+				return false
+			}
+			if _, isMeta := must.NotFail(keys.Get(k)).(*types.Document); isMeta {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// passThroughStage replaces a stage another stage has taken over.
+type passThroughStage struct{}
+
+func (passThroughStage) Process(_ context.Context, iter types.DocumentsIterator, _ *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
+	return iter, nil
 }
 
 // matchReadsField reports whether a $match stage may read field. It answers
@@ -976,9 +1025,45 @@ func filterReadsField(filter *types.Document, field string) bool {
 				}
 			}
 		case "$comment":
+		case "$expr":
+			if exprReadsField(must.NotFail(filter.Get(key)), field) {
+				return true
+			}
 		default:
 			if strings.HasPrefix(key, "$") || key == field ||
 				strings.HasPrefix(key, field+".") || strings.HasPrefix(field, key+".") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// exprReadsField reports whether an expression may read field: through a
+// path on it, or through $$ROOT or $$CURRENT.
+func exprReadsField(expr any, field string) bool {
+	switch v := expr.(type) {
+	case string:
+		switch {
+		case strings.HasPrefix(v, "$$"):
+			name, _, _ := strings.Cut(v[2:], ".")
+			return name == "ROOT" || name == "CURRENT"
+		case strings.HasPrefix(v, "$"):
+			p := v[1:]
+			return p == field || strings.HasPrefix(p, field+".") || strings.HasPrefix(field, p+".")
+		}
+	case *types.Array:
+		for i := range v.Len() {
+			if exprReadsField(must.NotFail(v.Get(i)), field) {
+				return true
+			}
+		}
+	case *types.Document:
+		if v.Command() == "$literal" {
+			return false
+		}
+		for _, k := range v.Keys() {
+			if exprReadsField(must.NotFail(v.Get(k)), field) {
 				return true
 			}
 		}
