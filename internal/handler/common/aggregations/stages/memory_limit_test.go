@@ -63,16 +63,22 @@ func TestBlockingStagesHaveMemoryLimit(t *testing.T) {
 	doc := func(pairs ...any) *types.Document { return must.NotFail(types.NewDocument(pairs...)) }
 
 	for name, spec := range map[string]*types.Document{
-		"$sort":        doc("$sort", doc("k", int32(1))),
-		"$group $push": doc("$group", doc("_id", types.Null, "all", doc("$push", "$$ROOT"))),
-		"$bucketAuto":  doc("$bucketAuto", doc("groupBy", "$k", "buckets", int32(2))),
-		"$facet":       doc("$facet", doc("a", must.NotFail(types.NewArray(doc("$sort", doc("k", int32(1))))))),
+		"$sort":       doc("$sort", doc("k", int32(1))),
+		"$bucketAuto": doc("$bucketAuto", doc("groupBy", "$k", "buckets", int32(2))),
+		"$facet":      doc("$facet", doc("a", must.NotFail(types.NewArray(doc("$sort", doc("k", int32(1))))))),
 	} {
 		err := runStage(t, spec)
 		var cmdErr *handlererrors.CommandError
 		require.True(t, errors.As(err, &cmdErr), "%s: want CommandError, got %v", name, err)
 		require.Equal(t, handlererrors.ErrQueryExceededMemoryLimitNoDiskUseAllowed, cmdErr.Code(), "%s: %v", name, err)
 	}
+
+	// An accumulator's own 100MB limit on the values it keeps is reached
+	// first, as in mongod, which can spill the stage but not the array.
+	err := runStage(t, doc("$group", doc("_id", types.Null, "all", doc("$push", "$$ROOT"))))
+	var cmdErr *handlererrors.CommandError
+	require.True(t, errors.As(err, &cmdErr), "want CommandError, got %v", err)
+	require.Equal(t, handlererrors.ErrExceededMemoryLimit, cmdErr.Code(), "%v", err)
 
 	require.NoError(t, runStage(t, doc("$group", doc("_id", "$k", "n", doc("$sum", int32(1))))),
 		"$group without retaining accumulators streams and stays within the limit")

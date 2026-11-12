@@ -47,6 +47,7 @@ func (m *mergeObjectsAccumulator) New() Accumulation {
 type mergeObjectsState struct {
 	spec   *mergeObjectsAccumulator
 	result *types.Document
+	mem    keptMemory
 }
 
 // Accumulate merges the operand's fields into the result. Missing and null
@@ -63,7 +64,14 @@ func (s *mergeObjectsState) Accumulate(doc *types.Document) error {
 		return nil
 	case *types.Document:
 		for _, k := range src.Keys() {
-			s.result.Set(k, must.NotFail(src.Get(k)))
+			if old, err := s.result.Get(k); err == nil {
+				s.mem.release(old)
+			}
+			v := must.NotFail(src.Get(k))
+			s.result.Set(k, v)
+			if err := s.mem.keep(v, "$mergeObjects"); err != nil {
+				return err
+			}
 		}
 		return nil
 	default:

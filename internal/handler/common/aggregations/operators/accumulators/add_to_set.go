@@ -62,6 +62,7 @@ type addToSetState struct {
 	// cmp, when set, dedups by collation; keys holds result's collation keys.
 	cmp  *collation.Comparator
 	keys *types.Array
+	mem  keptMemory
 }
 
 func (s *addToSetState) Accumulate(doc *types.Document) error {
@@ -73,12 +74,14 @@ func (s *addToSetState) Accumulate(doc *types.Document) error {
 	if s.cmp == nil {
 		if !containsValue(s.result, val) {
 			s.result.Append(val)
+			return s.mem.keep(val, "$addToSet")
 		}
 		return nil
 	}
 	if key := s.cmp.KeyValue(val); !containsValue(s.keys, key) {
 		s.keys.Append(key)
 		s.result.Append(val)
+		return s.mem.keep(val, "$addToSet")
 	}
 
 	return nil

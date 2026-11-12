@@ -49,6 +49,7 @@ func (p *pushAccumulator) New() Accumulation {
 type pushState struct {
 	spec   *pushAccumulator
 	result *types.Array
+	mem    keptMemory
 }
 
 // Accumulate appends the operand's value; MongoDB's $push skips a missing one.
@@ -60,7 +61,7 @@ func (s *pushState) Accumulate(doc *types.Document) error {
 
 	s.result.Append(val)
 
-	return nil
+	return s.mem.keep(val, "$push")
 }
 
 func (s *pushState) Result() (any, error) {
