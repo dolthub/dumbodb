@@ -90,7 +90,7 @@ func newDensify(stage *types.Document) (aggregations.Stage, error) {
 
 	d := new(densify)
 	var err error
-	if d.field, err = densifyPath(fieldVal, "$densify.field"); err != nil {
+	if d.field, err = stagePath(fieldVal, "$densify.field", "$densify (stage)"); err != nil {
 		return nil, err
 	}
 
@@ -102,7 +102,7 @@ func newDensify(stage *types.Document) (aggregations.Stage, error) {
 					"', expected type 'array'", "$densify (stage)")
 		}
 		for i := range arr.Len() {
-			p, err := densifyPath(must.NotFail(arr.Get(i)), "$densify.partitionByFields")
+			p, err := stagePath(must.NotFail(arr.Get(i)), "$densify.partitionByFields", "$densify (stage)")
 			if err != nil {
 				return nil, err
 			}
@@ -240,24 +240,25 @@ func (d *densify) parseExplicitBounds(b *types.Array) error {
 	return nil
 }
 
-func densifyPath(v any, field string) (types.Path, error) {
+// stagePath parses the field path v of the option field of a stage.
+func stagePath(v any, field, stage string) (types.Path, error) {
 	s, ok := v.(string)
 	if !ok {
 		return types.Path{}, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrTypeMismatch,
 			"BSON field '"+field+"' is the wrong type '"+handlerparams.AliasFromType(v)+"', expected type 'string'",
-			"$densify (stage)")
+			stage)
 	}
 	for _, part := range strings.Split(s, ".") {
 		if strings.HasPrefix(part, "$") {
 			return types.Path{}, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFieldPathInvalidName,
 				"Consider using $getField or $setField for a field path with '.' or '$'. :: caused by :: "+
-					"FieldPath field names may not start with '$', given '"+s+"'.", "$densify (stage)")
+					"FieldPath field names may not start with '$', given '"+s+"'.", stage)
 		}
 	}
 	p, err := types.NewPathFromString(s)
 	if err != nil {
 		return types.Path{}, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFailedToParse,
-			"Invalid field path "+s, "$densify (stage)")
+			"Invalid field path "+s, stage)
 	}
 	return p, nil
 }
