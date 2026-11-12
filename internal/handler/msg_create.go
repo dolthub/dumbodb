@@ -442,6 +442,10 @@ func createConflict(dbName, collName string, params *backends.CreateCollectionPa
 			return fmt.Sprintf("namespace %s already exists, but with pipeline %s rather than %s", ns,
 				formatPipeline(existing.ViewPipeline), formatPipeline(params.ViewPipeline)), true
 		}
+		if !sameOptionalCollation(params.Collation, existing.Collation) {
+			return fmt.Sprintf("namespace %s already exists, but with collation: %s rather than %s", ns,
+				conflictCollation(existing.Collation, true), conflictCollation(params.Collation, false)), true
+		}
 		return "", false
 	case params.ViewOn != "":
 		return fmt.Sprintf("namespace %s already exists, but with different options: { uuid: UUID(\"%s\") }", ns, existing.UUID), true
@@ -450,8 +454,7 @@ func createConflict(dbName, collName string, params *backends.CreateCollectionPa
 	differs := otherOptions || clusteredInvalid || params.ClusteredIndexName != existing.ClusteredIndexName ||
 		!sameBSON(params.Validator, existing.Validator) ||
 		params.ValidationLevel != existing.ValidationLevel || params.ValidationAction != existing.ValidationAction ||
-		(params.Collation == nil) != (existing.Collation == nil) ||
-		params.Collation != nil && !sameCollation(params.Collation, existing.Collation)
+		!sameOptionalCollation(params.Collation, existing.Collation)
 	if !differs {
 		return "", false
 	}
@@ -468,10 +471,37 @@ func createConflict(dbName, collName string, params *backends.CreateCollectionPa
 	if existing.ValidationAction != "" {
 		options += fmt.Sprintf(", validationAction: %q", existing.ValidationAction)
 	}
-	if existing.Collation != nil {
+	if !collation.Parse(existing.Collation).IsSimple() {
 		options += ", collation: " + resolvedCollationString(existing.Collation)
 	}
 	return fmt.Sprintf("namespace %s already exists, but with different options: { %s }", ns, options), true
+}
+
+// sameOptionalCollation reports whether two create collations, either nil
+// for none, are the same; the simple collation is none.
+func sameOptionalCollation(a, b *types.Document) bool {
+	aSimple, bSimple := collation.Parse(a).IsSimple(), collation.Parse(b).IsSimple()
+	if aSimple || bSimple {
+		return aSimple == bSimple
+	}
+	return sameCollation(a, b)
+}
+
+// conflictCollation prints a collation in a view conflict as mongod does:
+// {} for none, the stored one in full, the requested one without its
+// backwards and version fields.
+func conflictCollation(c *types.Document, stored bool) string {
+	if collation.Parse(c).IsSimple() {
+		return "{}"
+	}
+	full := resolvedCollationString(c)
+	if stored {
+		return full
+	}
+	if i := strings.Index(full, ", backwards:"); i >= 0 {
+		return full[:i] + " }"
+	}
+	return full
 }
 
 // viewPipeline is a view's pipeline, an empty one for none.
