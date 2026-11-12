@@ -40,7 +40,9 @@ func validateFilter(filter *types.Document, cmp *collation.Comparator, foldExpr 
 		value := must.NotFail(filter.Get(key))
 		switch key {
 		case "$and", "$or", "$nor":
-			if _, err := FilterDocumentColl(empty, must.NotFail(types.NewDocument(key, value)), cmp); err != nil {
+			// $expr is checked below, not evaluated: its errors depend on
+			// the documents, as in mongod.
+			if _, err := FilterDocumentColl(empty, must.NotFail(types.NewDocument(key, withoutExpr(value))), cmp); err != nil {
 				return err
 			}
 			branches, _ := value.(*types.Array)
@@ -69,6 +71,34 @@ func validateFilter(filter *types.Document, cmp *collation.Comparator, foldExpr 
 		}
 	}
 	return nil
+}
+
+// withoutExpr returns the clauses of a logical operator with their $expr
+// conditions removed.
+func withoutExpr(v any) any {
+	clauses, ok := v.(*types.Array)
+	if !ok {
+		return v
+	}
+	out := types.MakeArray(clauses.Len())
+	for i := range clauses.Len() {
+		clause := must.NotFail(clauses.Get(i))
+		if d, ok := clause.(*types.Document); ok {
+			stripped := types.MakeDocument(d.Len())
+			for _, k := range d.Keys() {
+				switch k {
+				case "$expr":
+				case "$and", "$or", "$nor":
+					stripped.Set(k, withoutExpr(must.NotFail(d.Get(k))))
+				default:
+					stripped.Set(k, must.NotFail(d.Get(k)))
+				}
+			}
+			clause = stripped
+		}
+		out.Append(clause)
+	}
+	return out
 }
 
 func validateFieldPredicate(empty *types.Document, key string, value any, cmp *collation.Comparator) error {

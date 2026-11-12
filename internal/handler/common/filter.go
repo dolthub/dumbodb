@@ -55,28 +55,69 @@ func FilterDocument(doc, filter *types.Document) (bool, error) {
 // FilterDocumentColl is FilterDocument with an optional collation comparator.
 // When cmp is nil, string comparison is binary (identical to FilterDocument).
 func FilterDocumentColl(doc, filter *types.Document, cmp *collation.Comparator) (bool, error) {
-	iter := filter.Iterator()
-	defer iter.Close()
-
-	for {
-		filterKey, filterValue, err := iter.Next()
-		if err != nil {
-			if errors.Is(err, iterator.ErrIteratorDone) {
-				return true, nil
+	// Top-level filters are ANDed together. Like mongod, which orders a
+	// query's predicates by cost, it checks $expr last, so a predicate that
+	// fails first spares the expression's evaluation and its errors.
+	keys, values := filter.Keys(), filter.Values()
+	for pass := range 2 {
+		for i, filterKey := range keys {
+			if (pass == 1) != (filterKey == "$expr" || clausesUseExpr(filterKey, values[i])) {
+				continue
 			}
-
-			return false, lazyerrors.Error(err)
-		}
-
-		// top-level filters are ANDed together
-		matches, err := filterDocumentPair(doc, filterKey, filterValue, cmp)
-		if err != nil {
-			return false, lazyerrors.Error(err)
-		}
-		if !matches {
-			return false, nil
+			matches, err := filterDocumentPair(doc, filterKey, values[i], cmp)
+			if err != nil {
+				return false, lazyerrors.Error(err)
+			}
+			if !matches {
+				return false, nil
+			}
 		}
 	}
+	return true, nil
+}
+
+// clausesUseExpr reports whether a logical operator's clauses use $expr.
+func clausesUseExpr(key string, value any) bool {
+	switch key {
+	case "$and", "$or", "$nor":
+	default:
+		return false
+	}
+	clauses, ok := value.(*types.Array)
+	if !ok {
+		return false
+	}
+	for i := range clauses.Len() {
+		if clause, ok := must.NotFail(clauses.Get(i)).(*types.Document); ok && filterUsesExpr(clause) {
+			return true
+		}
+	}
+	return false
+}
+
+func filterUsesExpr(filter *types.Document) bool {
+	keys, values := filter.Keys(), filter.Values()
+	for i, k := range keys {
+		if k == "$expr" || clausesUseExpr(k, values[i]) {
+			return true
+		}
+	}
+	return false
+}
+
+// exprClausesLast returns the indexes of exprs with the clauses that use
+// $expr last.
+func exprClausesLast(exprs *types.Array) []int {
+	order := make([]int, 0, exprs.Len())
+	var withExpr []int
+	for i := range exprs.Len() {
+		if filterUsesExpr(must.NotFail(exprs.Get(i)).(*types.Document)) {
+			withExpr = append(withExpr, i)
+			continue
+		}
+		order = append(order, i)
+	}
+	return append(order, withExpr...)
 }
 
 // filterDocumentPair handles a single filter element key/value pair {filterKey: filterValue}.
@@ -369,7 +410,7 @@ func filterOperator(doc *types.Document, operator string, filterValue any, cmp *
 			}
 		}
 
-		for i := 0; i < exprs.Len(); i++ {
+		for _, i := range exprClausesLast(exprs) {
 			expr := must.NotFail(exprs.Get(i)).(*types.Document)
 
 			matches, err := FilterDocumentColl(doc, expr, cmp)
@@ -413,7 +454,7 @@ func filterOperator(doc *types.Document, operator string, filterValue any, cmp *
 			}
 		}
 
-		for i := 0; i < exprs.Len(); i++ {
+		for _, i := range exprClausesLast(exprs) {
 			expr := must.NotFail(exprs.Get(i)).(*types.Document)
 
 			matches, err := FilterDocumentColl(doc, expr, cmp)
@@ -457,7 +498,7 @@ func filterOperator(doc *types.Document, operator string, filterValue any, cmp *
 			}
 		}
 
-		for i := 0; i < exprs.Len(); i++ {
+		for _, i := range exprClausesLast(exprs) {
 			expr := must.NotFail(exprs.Get(i)).(*types.Document)
 
 			matches, err := FilterDocumentColl(doc, expr, cmp)
