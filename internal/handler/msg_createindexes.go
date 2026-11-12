@@ -191,6 +191,12 @@ func (h *Handler) MsgCreateIndexes(connCtx context.Context, msg *wire.OpMsg) (*w
 		numIndexesBefore = 1
 	}
 
+	// A clustered collection's clustered index is not counted, in the reply
+	// or toward the limit.
+	if !createCollection && recordedClusteredName(connCtx, db, collection) != "" {
+		numIndexesBefore--
+	}
+
 	requested := len(toCreate)
 	// A request that cannot fit, whatever already exists, is refused before
 	// its specs are compared pairwise.
