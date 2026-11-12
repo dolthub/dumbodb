@@ -44,9 +44,12 @@ func newFill(stage *types.Document) (aggregations.Stage, error) {
 	var output, sortBy, partitionBy, partitionByFields any
 	for _, key := range spec.Keys() {
 		val := must.NotFail(spec.Get(key))
-		if _, isNull := val.(types.NullType); isNull {
-			// mongod's IDL parser treats a null field as absent.
-			continue
+		if _, isNull := val.(types.NullType); isNull && key != "partitionBy" {
+			switch key {
+			case "output", "sortBy", "partitionByFields":
+				// mongod's IDL parser treats a null field as absent.
+				continue
+			}
 		}
 		switch key {
 		case "output":
@@ -60,6 +63,9 @@ func newFill(stage *types.Document) (aggregations.Stage, error) {
 		default:
 			return nil, fillError(handlererrors.ErrIDLUnknownField, "BSON field '$fill."+key+"' is an unknown field.")
 		}
+	}
+	if _, isNull := partitionBy.(types.NullType); isNull {
+		return nil, fillWrongType("partitionBy", partitionBy, "object")
 	}
 	if output == nil {
 		return nil, fillError(handlererrors.ErrMissingField, "BSON field '$fill.output' is missing but a required field")
@@ -86,7 +92,7 @@ func newFill(stage *types.Document) (aggregations.Stage, error) {
 		}
 		key := types.MakeDocument(arr.Len())
 		for i := range arr.Len() {
-			path, err := densifyPath(must.NotFail(arr.Get(i)), "$fill.partitionByFields")
+			path, err := stagePath(must.NotFail(arr.Get(i)), fmt.Sprintf("$fill.partitionByFields.%d", i), "$fill (stage)")
 			if err != nil {
 				return nil, err
 			}
@@ -108,15 +114,31 @@ func newFill(stage *types.Document) (aggregations.Stage, error) {
 			return nil, fillError(handlererrors.ErrFillOutputSpec,
 				"Each fill output specification must be an object with exactly one field")
 		}
-		method, methodErr := fieldSpec.Get("method")
-		value, valueErr := fieldSpec.Get("value")
+		var method, value any
+		for _, key := range fieldSpec.Keys() {
+			switch v := must.NotFail(fieldSpec.Get(key)); key {
+			case "method":
+				if _, isNull := v.(types.NullType); !isNull {
+					method = v
+				}
+			case "value":
+				value = v
+			default:
+				return nil, fillError(handlererrors.ErrIDLUnknownField, "BSON field '$fill."+key+"' is an unknown field.")
+			}
+		}
+		if method != nil {
+			if _, ok := method.(string); !ok {
+				return nil, fillWrongType("method", method, "string")
+			}
+		}
 		switch {
-		case methodErr == nil && valueErr == nil:
+		case method != nil && value != nil:
 			return nil, fillError(handlererrors.ErrFillMethodAndValue,
 				"Each fill output specification must have exactly one of 'method' or 'value' fields, not both")
-		case valueErr == nil:
+		case value != nil:
 			values.Set(field, must.NotFail(types.NewDocument("$ifNull", must.NotFail(types.NewArray("$"+field, value)))))
-		case methodErr == nil:
+		case method != nil:
 			var op string
 			switch method {
 			case "locf":

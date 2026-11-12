@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math"
 	stdsort "sort"
+	"strings"
 	"time"
 
 	"github.com/dolthub/dumbodb/internal/handler/common"
@@ -546,7 +547,9 @@ func (it *windowPartitionsIterator) Next() (struct{}, *types.Document, error) {
 		if err != nil {
 			return unused, nil, err
 		}
-		doc.Set(wof.outputField, val)
+		if doc, err = setWindowOutput(doc, wof.outputField, val); err != nil {
+			return unused, nil, err
+		}
 	}
 	return unused, doc, nil
 }
@@ -662,8 +665,11 @@ func (s *setWindowFields) applyWindowFunctions(partition []*types.Document) ([]*
 
 	for _, wof := range s.outputs {
 		if deferredWindowOutput(wof.operator) {
-			for _, doc := range result {
-				doc.Set(wof.outputField, types.Null)
+			for i := range result {
+				var err error
+				if result[i], err = setWindowOutput(result[i], wof.outputField, types.Null); err != nil {
+					return nil, err
+				}
 			}
 			continue
 		}
@@ -673,11 +679,24 @@ func (s *setWindowFields) applyWindowFunctions(partition []*types.Document) ([]*
 		}
 
 		for i, val := range vals {
-			result[i].Set(wof.outputField, val)
+			if result[i], err = setWindowOutput(result[i], wof.outputField, val); err != nil {
+				return nil, err
+			}
 		}
 	}
 
 	return result, nil
+}
+
+// setWindowOutput sets the output field of doc to val, a dotted field as
+// $addFields would set it.
+func setWindowOutput(doc *types.Document, field string, val any) (*types.Document, error) {
+	if !strings.Contains(field, ".") {
+		doc.Set(field, val)
+		return doc, nil
+	}
+	spec := must.NotFail(types.NewDocument(field, must.NotFail(types.NewDocument("$literal", val))))
+	return operators.AddFieldsTree(doc, spec)
 }
 
 // cloneDocument creates a shallow clone of a document.
@@ -1052,7 +1071,7 @@ func (s *setWindowFields) validateSortByFieldIsNumericOrDate(partition []*types.
 		val := sortByValue(doc, sortKey)
 
 		switch val.(type) {
-		case float64, int32, int64, time.Time:
+		case float64, int32, int64, types.Decimal128, time.Time:
 			// valid
 		default:
 			typeName := bsonTypeName(val)
@@ -1727,15 +1746,10 @@ func (s *setWindowFields) computeLinearFill(expr any, partition []*types.Documen
 		return nil, err
 	}
 	sortKey := s.sortBy.Keys()[0]
-	xs := make([]float64, len(partition))
+	xs := make([]any, len(partition))
 	for i, doc := range partition {
-		switch x := sortByValue(doc, sortKey).(type) {
-		case time.Time:
-			xs[i] = float64(x.UnixMilli())
-		default:
-			xs[i], _ = toFloat64(x)
-		}
-		if i > 0 && xs[i] == xs[i-1] {
+		xs[i] = sortByValue(doc, sortKey)
+		if i > 0 && types.CompareForAggregation(xs[i], xs[i-1]) == types.Equal {
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrLinearFillRepeatedSortValue,
 				"There can be no repeated values in the sort field in the same partition",
@@ -1762,11 +1776,24 @@ func (s *setWindowFields) computeLinearFill(expr any, partition []*types.Documen
 		if prev < 0 || next == len(vals) {
 			continue
 		}
-		y0, _ := numberAsFloat64(vals[prev])
-		y1, _ := numberAsFloat64(vals[next])
-		vals[i] = y0 + (xs[i]-xs[prev])*(y1-y0)/(xs[next]-xs[prev])
+		if vals[i], err = interpolate(xs[prev], vals[prev], xs[next], vals[next], xs[i]); err != nil {
+			return nil, err
+		}
 	}
 	return vals, nil
+}
+
+// interpolate returns y1 + (y2-y1)/(x2-x1) * (x-x1), computed with mongod's
+// expression arithmetic so the result has the type mongod gives it.
+func interpolate(x1, y1, x2, y2, x any) (any, error) {
+	lit := func(v any) *types.Document { return must.NotFail(types.NewDocument("$literal", v)) }
+	op := func(name string, args ...any) *types.Document {
+		return must.NotFail(types.NewDocument(name, must.NotFail(types.NewArray(args...))))
+	}
+	slope := op("$divide", op("$subtract", lit(y2), lit(y1)), op("$subtract", lit(x2), lit(x1)))
+	expr := op("$add", lit(y1), op("$multiply", slope, op("$subtract", lit(x), lit(x1))))
+	v, _, err := operators.EvalOperand(expr, types.MakeDocument(0))
+	return v, err
 }
 
 // linearFillValues evaluates a $linearFill input for each document,
@@ -1793,14 +1820,6 @@ func linearFillValues(expr any, partition []*types.Document) ([]any, []bool, err
 		}
 	}
 	return vals, known, nil
-}
-
-func numberAsFloat64(v any) (float64, bool) {
-	if d, ok := v.(types.Decimal128); ok {
-		f, err := aggregations.DecimalToAPD(d).Float64()
-		return f, err == nil
-	}
-	return toFloat64(v)
 }
 
 // computeLocf fills null values using last observation carried forward.
