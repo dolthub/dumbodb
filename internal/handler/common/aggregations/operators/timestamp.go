@@ -17,8 +17,8 @@ package operators
 import (
 	"fmt"
 
-	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
@@ -68,87 +68,28 @@ type tsResult struct {
 // field, result.missing is true and the caller should return nil without error.
 // Returns an error only when the argument is definitively not a Timestamp.
 func evaluateTimestampParam(opName string, param any, doc *types.Document) (tsResult, error) {
-	switch p := param.(type) {
-	case string:
-		if len(p) > 0 && p[0] == '$' {
-			expr, err := aggregations.NewExpression(p, nil)
-			if err != nil {
-				return tsResult{}, err
-			}
-
-			val, err := expr.Evaluate(doc)
-			if err != nil {
-				// Field is absent  -- return null without error (matches MongoDB behaviour).
-				return tsResult{missing: true}, nil
-			}
-
-			ts, ok := val.(types.Timestamp)
-			if !ok {
-				return tsResult{}, handlererrors.NewCommandErrorMsgWithArgument(
-					handlererrors.ErrBadValue,
-					fmt.Sprintf("%s requires a timestamp argument, got %T", opName, val),
-					opName,
-				)
-			}
-
-			return tsResult{ts: ts}, nil
-		}
-
-		return tsResult{}, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrBadValue,
-			fmt.Sprintf("%s requires a timestamp argument, got string %q", opName, p),
-			opName,
-		)
-
-	case types.Timestamp:
-		return tsResult{ts: p}, nil
-
-	case *types.Document:
-		if !IsOperator(p) {
-			return tsResult{}, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrBadValue,
-				fmt.Sprintf("%s requires a timestamp argument, got object", opName),
-				opName,
-			)
-		}
-
-		op, err := NewOperator(p)
-		if err != nil {
-			return tsResult{}, err
-		}
-
-		val, err := op.Process(doc)
-		if err != nil {
-			return tsResult{}, err
-		}
-
-		if val == nil {
-			return tsResult{missing: true}, nil
-		}
-
-		ts, ok := val.(types.Timestamp)
-		if !ok {
-			return tsResult{}, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrBadValue,
-				fmt.Sprintf("%s requires a timestamp argument, got %T", opName, val),
-				opName,
-			)
-		}
-
-		return tsResult{ts: ts}, nil
-
-	default:
-		return tsResult{}, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrBadValue,
-			fmt.Sprintf("%s requires a timestamp argument, got %T", opName, param),
-			opName,
-		)
+	val, missing, err := EvalOperand(param, doc)
+	if err != nil {
+		return tsResult{}, err
 	}
+	if missing || isNullish(val) {
+		return tsResult{missing: true}, nil
+	}
+	ts, ok := val.(types.Timestamp)
+	if !ok {
+		code := handlererrors.ErrTsSecondNotTimestamp
+		if opName == "$tsIncrement" {
+			code = handlererrors.ErrTsIncrementNotTimestamp
+		}
+		return tsResult{}, handlererrors.NewCommandErrorMsgWithArgument(code,
+			fmt.Sprintf(" Argument to %s must be a timestamp, but is %s", opName, handlerparams.AliasFromType(val)), opName)
+	}
+	return tsResult{ts: ts}, nil
 }
 
 // Process implements Operator for $tsSecond.
 // Returns the seconds component (high 32 bits) of the Timestamp as int64,
-// or nil when the input field is absent.
+// or null when the input is missing or null.
 func (t *tsSecondOp) Process(doc *types.Document) (any, error) {
 	res, err := evaluateTimestampParam("$tsSecond", t.param, doc)
 	if err != nil {
@@ -156,7 +97,7 @@ func (t *tsSecondOp) Process(doc *types.Document) (any, error) {
 	}
 
 	if res.missing {
-		return nil, nil
+		return types.Null, nil
 	}
 
 	// Timestamp stores seconds in the high 32 bits.
@@ -165,7 +106,7 @@ func (t *tsSecondOp) Process(doc *types.Document) (any, error) {
 
 // Process implements Operator for $tsIncrement.
 // Returns the increment/ordinal component (low 32 bits) of the Timestamp as int64,
-// or nil when the input field is absent.
+// or null when the input is missing or null.
 func (t *tsIncrementOp) Process(doc *types.Document) (any, error) {
 	res, err := evaluateTimestampParam("$tsIncrement", t.param, doc)
 	if err != nil {
@@ -173,7 +114,7 @@ func (t *tsIncrementOp) Process(doc *types.Document) (any, error) {
 	}
 
 	if res.missing {
-		return nil, nil
+		return types.Null, nil
 	}
 
 	// Timestamp stores the ordinal/increment in the low 32 bits.
