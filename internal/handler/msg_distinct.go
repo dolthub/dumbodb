@@ -121,7 +121,7 @@ func (h *Handler) MsgDistinct(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 		}
 		// mongod overlooks a bad $natural value on a missing collection.
 		if err == nil && !(backends.HintIsNatural(params.Hint) && collectionMissing(connCtx, c)) {
-			err = validateHintExists(connCtx, c, params.Hint, "distinct")
+			err = validateHintExists(connCtx, db, params.Collection, c, params.Hint, "distinct")
 		}
 		if err != nil {
 			return nil, err

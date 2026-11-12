@@ -217,7 +217,7 @@ statements:
 			return 0, 0, nil, nil, err
 		}
 
-		if err = validateHint(ctx, c, u.Hint, "update", nil, u.Upsert); err != nil {
+		if err = validateHint(ctx, db, params.Collection, c, u.Hint, "update", nil, u.Upsert); err != nil {
 			// mongod reports an unusable hint as the statement's write error.
 			var ce *handlererrors.CommandError
 			if errors.As(err, &ce) {

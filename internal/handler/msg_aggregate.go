@@ -402,7 +402,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 				err = checkCompoundNaturalHint(hint, "aggregate")
 			}
 			if err == nil && !cInfo.IsView && !(ledByMatch && backends.HintIsNatural(hint)) {
-				err = validateHintExists(ctx, c, hint, "aggregate")
+				err = validateHintExists(ctx, db, cName, c, hint, "aggregate")
 			}
 			if err == nil && cInfo.IsView {
 				err = validateViewHint(ctx, db, &cInfo, hint, "aggregate", ledByMatch)

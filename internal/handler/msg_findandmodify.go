@@ -168,7 +168,7 @@ func (h *Handler) findAndModifyDocument(ctx context.Context, params *common.Find
 	if err = checkHintType(params.Hint); err != nil {
 		return nil, err
 	}
-	if err = validateHint(ctx, c, params.Hint, "findAndModify", params.Sort, params.Upsert); err != nil {
+	if err = validateHint(ctx, db, params.Collection, c, params.Hint, "findAndModify", params.Sort, params.Upsert); err != nil {
 		return nil, err
 	}
 

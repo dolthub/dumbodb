@@ -182,7 +182,7 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 		if err = checkHintType(params.Hint); err != nil {
 			return nil, err
 		}
-		if err = validateHint(connCtx, coll, params.Hint, "find", params.Sort, false); err != nil {
+		if err = validateHint(connCtx, db, params.Collection, coll, params.Hint, "find", params.Sort, false); err != nil {
 			return nil, err
 		}
 		if params.Sort.Len() == 0 {
