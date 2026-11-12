@@ -761,6 +761,9 @@ const (
 	// ErrMergeOnFieldArray indicates a $merge 'on' field holding an array.
 	ErrMergeOnFieldArray = ErrorCode(51185) // Location51185
 
+	// ErrMergeOnFieldMissing indicates a $merge 'on' field that is missing or null.
+	ErrMergeOnFieldMissing = ErrorCode(51132) // Location51132
+
 	// ErrDropClusteredIndex indicates dropping a clustered collection's _id
 	// index.
 	ErrDropClusteredIndex = ErrorCode(5979800) // Location5979800
@@ -900,6 +903,15 @@ const (
 
 	// ErrGranularityNotFinite indicates a $bucketAuto granularity rounder given an infinity.
 	ErrGranularityNotFinite = ErrorCode(11785400) // Location11785400
+
+	// ErrArrayToObjectPairKeyNul indicates an $arrayToObject pair key with a null byte.
+	ErrArrayToObjectPairKeyNul = ErrorCode(4940400) // Location4940400
+
+	// ErrArrayToObjectObjectKeyNul indicates an $arrayToObject k value with a null byte.
+	ErrArrayToObjectObjectKeyNul = ErrorCode(4940401) // Location4940401
+
+	// ErrSetFieldNulByte indicates a $setField field name with a null byte.
+	ErrSetFieldNulByte = ErrorCode(9534700) // Location9534700
 
 	// ErrStageIndexedStringVectorDuplicate indicates that input to IndexedStringVector contained duplicate values.
 	ErrStageIndexedStringVectorDuplicate = ErrorCode(7582300) // Location7582300

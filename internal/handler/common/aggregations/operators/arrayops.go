@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
@@ -1123,6 +1124,10 @@ func (op *arrayToObjectOp) Process(doc *types.Document) (any, error) {
 					"$arrayToObject requires an array of key-value pairs, where the key must be of type string. Found key type: "+
 						handlerparams.AliasFromType(key))
 			}
+			if strings.IndexByte(key.(string), 0) >= 0 {
+				return nil, arrayToObjectError(handlererrors.ErrArrayToObjectPairKeyNul,
+					"Key field cannot contain an embedded null byte")
+			}
 		case *types.Document:
 			if pairs {
 				return nil, arrayToObjectError(handlererrors.ErrArrayToObjectArraysExpected,
@@ -1146,9 +1151,24 @@ func (op *arrayToObjectOp) Process(doc *types.Document) (any, error) {
 					"$arrayToObject requires an object with keys 'k' and 'v', where the value of 'k' must be of type string. Found type: "+
 						handlerparams.AliasFromType(key))
 			}
+			if strings.IndexByte(key.(string), 0) >= 0 {
+				return nil, arrayToObjectError(handlererrors.ErrArrayToObjectObjectKeyNul,
+					"Key field cannot contain an embedded null byte")
+			}
 		default:
-			return nil, arrayToObjectError(handlererrors.ErrArrayToObjectElementType,
-				"Unrecognised input type format for $arrayToObject: "+handlerparams.AliasFromType(elem))
+			switch {
+			case i == 0:
+				return nil, arrayToObjectError(handlererrors.ErrArrayToObjectElementType,
+					"Unrecognised input type format for $arrayToObject: "+handlerparams.AliasFromType(elem))
+			case pairs:
+				return nil, arrayToObjectError(handlererrors.ErrArrayToObjectArraysExpected,
+					"$arrayToObject requires a consistent input format. Elements must all be arrays or all be objects. "+
+						"Array was detected, now found: "+handlerparams.AliasFromType(elem))
+			default:
+				return nil, arrayToObjectError(handlererrors.ErrArrayToObjectObjectsExpected,
+					"$arrayToObject requires a consistent input format. Elements must all be arrays or all be objects. "+
+						"Object was detected, now found: "+handlerparams.AliasFromType(elem))
+			}
 		}
 		result.Set(key.(string), val)
 	}
