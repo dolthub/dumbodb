@@ -119,6 +119,30 @@ var sbeClassicOperators = map[string]bool{
 // $group in its classic engine.
 var sbeClassicAccumulators = map[string]bool{"$median": true, "$percentile": true}
 
+// groupsByIDKeepingOne reports whether a $group groups by "$_id" and keeps
+// one value per group ($first, $last, $top, $bottom), which mongod rewrites
+// into a stage of its classic engine.
+func groupsByIDKeepingOne(spec *types.Document) bool {
+	if id, _ := spec.Get("_id"); id != "$_id" {
+		return false
+	}
+	for _, field := range spec.Keys() {
+		if field == "_id" {
+			continue
+		}
+		acc, ok := must.NotFail(spec.Get(field)).(*types.Document)
+		if !ok || acc.Len() != 1 {
+			return false
+		}
+		switch acc.Command() {
+		case "$first", "$last", "$top", "$bottom":
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // sbeCompatibleStage reports whether every expression of a stage, and for a
 // grouping stage every accumulator, can run in mongod's SBE engine.
 func sbeCompatibleStage(spec *types.Document) bool {
@@ -129,6 +153,9 @@ func sbeCompatibleStage(spec *types.Document) bool {
 		d, ok := v.(*types.Document)
 		if !ok {
 			return true
+		}
+		if groupsByIDKeepingOne(d) {
+			return false
 		}
 		for _, field := range d.Keys() {
 			val := must.NotFail(d.Get(field))
