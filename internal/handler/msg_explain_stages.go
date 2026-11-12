@@ -270,15 +270,18 @@ func (h *Handler) explainStatsStages(ctx context.Context, db backends.Database, 
 	if len(docs) == 0 || docs[0].Command() != "$collStats" && docs[0].Command() != "$indexStats" {
 		return false
 	}
+	var returned []int32
+	if execStats {
+		var err error
+		if returned, err = h.statsStageReturns(ctx, db, dbName, cName, coll, docs); err != nil {
+			return false
+		}
+	}
 	out := types.MakeArray(len(docs))
 	for i, doc := range docs {
 		entry := reportedStage(doc)
-		if execStats {
-			n, err := h.statsPipelineReturns(ctx, db, dbName, cName, coll, docs[:i+1])
-			if err != nil {
-				return false
-			}
-			setStageReturned(entry, n)
+		if returned != nil {
+			setStageReturned(entry, returned[i])
 		}
 		out.Append(entry)
 	}
@@ -288,9 +291,9 @@ func (h *Handler) explainStatsStages(ctx context.Context, db backends.Database, 
 	return true
 }
 
-// statsPipelineReturns runs docs, a pipeline led by $collStats or
-// $indexStats, and returns how many documents it returns.
-func (h *Handler) statsPipelineReturns(ctx context.Context, db backends.Database, dbName, cName string, coll backends.Collection, docs []*types.Document) (int32, error) {
+// statsStageReturns runs docs, a pipeline led by $collStats or $indexStats,
+// once and returns how many documents each stage returned.
+func (h *Handler) statsStageReturns(ctx context.Context, db backends.Database, dbName, cName string, coll backends.Collection, docs []*types.Document) ([]int32, error) {
 	built := make([]aggregations.Stage, len(docs))
 	for i, doc := range docs {
 		var err error
@@ -301,7 +304,7 @@ func (h *Handler) statsPipelineReturns(ctx context.Context, db backends.Database
 			built[i], err = foreignStageBuilder(db)(doc)
 		}
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
 	}
 	closer := iterator.NewMultiCloser()
@@ -310,29 +313,37 @@ func (h *Handler) statsPipelineReturns(ctx context.Context, db backends.Database
 	var err error
 	if docs[0].Command() == "$collStats" {
 		iter, err = processStagesStats(ctx, closer, &stagesStatsParams{
-			coll, db, dbName, cName, stages.GetStatistics(built), built, h.TCPHost,
+			coll, db, dbName, cName, stages.GetStatistics(built[:1]), built[:1], h.TCPHost,
 		})
 	} else {
-		iter = iterator.Values(iterator.ForSlice([]*types.Document{}))
-		for _, stage := range built {
-			if iter, err = stage.Process(ctx, iter, closer); err != nil {
-				return 0, err
-			}
-		}
+		iter, err = built[0].Process(ctx, iterator.Values(iterator.ForSlice([]*types.Document{})), closer)
 	}
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	counter := &countingIterator{DocumentsIterator: iter}
+	counters := make([]*countingIterator, len(built))
+	counters[0] = &countingIterator{DocumentsIterator: iterator.WithContext(ctx, iter)}
+	iter = counters[0]
+	for i, stage := range built[1:] {
+		if iter, err = stage.Process(ctx, iter, closer); err != nil {
+			return nil, err
+		}
+		counters[i+1] = &countingIterator{DocumentsIterator: iterator.WithContext(ctx, iter)}
+		iter = counters[i+1]
+	}
 	for {
-		if _, _, err = counter.Next(); err != nil {
+		if _, _, err = iter.Next(); err != nil {
 			break
 		}
 	}
 	if !errors.Is(err, iterator.ErrIteratorDone) {
-		return 0, err
+		return nil, err
 	}
-	return counter.n, nil
+	returned := make([]int32, len(counters))
+	for i, c := range counters {
+		returned[i] = c.n
+	}
+	return returned, nil
 }
 
 // reportSorts rewrites each $sort entry of an explain's stages as mongod
