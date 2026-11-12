@@ -2882,6 +2882,9 @@ func hintedOffFilter(params *backends.ExplainParams, idx backends.IndexInfo) boo
 	if params.Hint == nil || hintIsNatural(params.Hint) || params.Filter.Len() == 0 || len(idx.Key) == 0 {
 		return false
 	}
+	if _, _, ok := exactCompoundCountBounds(idx, params.Filter, collation.Parse(params.Collation).Comparator()); ok {
+		return false
+	}
 	return params.Filter.Len() != 1 || params.Filter.Keys()[0] != idx.Key[0].Field
 }
 
@@ -3740,6 +3743,9 @@ func (c *collection) Count(ctx context.Context, params *backends.CountParams) (*
 // Returns (0, false, nil) when the filter shape is unsupported  -- caller
 // falls back to the scan path.
 func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter *types.Document, queryCollation *types.Document, stop int64, hint any) (int64, bool, error) {
+	if filter.Len() > 1 {
+		return c.tryExactIndexedCount(ctx, state, filter, queryCollation, stop, hint)
+	}
 	if filter == nil || filter.Len() != 1 {
 		return 0, false, nil
 	}
@@ -3791,6 +3797,9 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 	}
 	if !found {
 		return 0, false, nil
+	}
+	if sparseExistsCount(chosen, filter) {
+		return countIndexRange(ctx, idxMap, nil, nil, chosen.KeyMultikey(0), stop)
 	}
 	compound := len(chosen.Key) > 1
 	if backends.HintRequiresExistingIndex(hint) && backends.MatchHintedIndex(hint, []backends.IndexInfo{chosen}) != chosen.Name {
@@ -3849,6 +3858,99 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 	_, isOp := v.(*types.Document)
 	dedupe := (isOp && chosen.KeyMultikey(0)) || (compound && trailingKeyMultikey(chosen))
 	return countIndexRange(ctx, idxMap, startKey, stopKey, dedupe, stop)
+}
+
+// tryExactIndexedCount counts a filter of several fields from an index whose
+// bounds hold exactly its matches, without fetching a document.
+func (c *collection) tryExactIndexedCount(ctx context.Context, state *dbState, filter *types.Document, queryCollation *types.Document, stop int64, hint any) (int64, bool, error) {
+	queryColl := collation.Parse(queryCollation)
+	idxInfos, idxMaps, err := resolveIndexesLocked(ctx, c, state)
+	if err != nil {
+		return 0, false, err
+	}
+	found := -1
+	var start, end []byte
+	for i, idx := range idxInfos {
+		if idx.Lossy || collation.Parse(idx.Collation).Identity() != queryColl.Identity() ||
+			idx.PartialFilterExpression != nil && !filterImpliesPartial(filter, idx.PartialFilterExpression, collation.Parse(idx.Collation).IsSimple()) ||
+			backends.HintRequiresExistingIndex(hint) && backends.MatchHintedIndex(hint, []backends.IndexInfo{idx}) != idx.Name {
+			continue
+		}
+		s, e, ok := exactCompoundCountBounds(idx, filter, queryColl.Comparator())
+		if ok && (found < 0 || len(idx.Key) < len(idxInfos[found].Key)) {
+			found, start, end = i, s, e
+		}
+	}
+	if found < 0 {
+		return 0, false, nil
+	}
+	return countIndexRange(ctx, idxMaps[found], start, end, idxInfos[found].Multikey, stop)
+}
+
+// exactCompoundCountBounds returns the range of a compound index holding
+// exactly the documents filter matches: filter binds the index's leading
+// fields, none descending, by equality but for the last, which may be a
+// range, one-sided on a multikey field. A multikey index holds a document
+// more than once, so its count is by id.
+func exactCompoundCountBounds(idx backends.IndexInfo, filter *types.Document, queryCmp *collation.Comparator) (start, end []byte, ok bool) {
+	n := filter.Len()
+	if n < 2 || len(idx.Key) < n {
+		return nil, nil, false
+	}
+	var prefix []byte
+	for i, kp := range idx.Key[:n] {
+		if kp.Descending || kp.Text || kp.Hashed || isGeoKey(kp) || strings.Contains(kp.Field, ".") {
+			return nil, nil, false
+		}
+		v, err := filter.Get(kp.Field)
+		if err != nil {
+			return nil, nil, false
+		}
+		if queryCmp != nil {
+			v = collateFilterValue(v, queryCmp)
+		}
+		if i < n-1 {
+			eq, isEq := indexEqualityValue(v)
+			if !isEq {
+				return nil, nil, false
+			}
+			prefix = append(prefix, idxpkg.EncodeValue(eq)...)
+			continue
+		}
+		if idx.KeyMultikey(i) && isTwoSidedRange(v) {
+			return nil, nil, false
+		}
+		s, e, bok := indexBoundsForFilterValue(v)
+		if !bok {
+			return nil, nil, false
+		}
+		start = append(append([]byte(nil), prefix...), s...)
+		end = append(append([]byte(nil), prefix...), e...)
+		if n < len(idx.Key) {
+			start, end = bracketSuffix(start), bracketSuffix(end)
+		}
+	}
+	return start, end, true
+}
+
+// sparseExistsCount reports whether filter is an $exists: true on the field
+// of idx, a single-field sparse index, whose entries are then exactly the
+// matching documents.
+func sparseExistsCount(idx backends.IndexInfo, filter *types.Document) bool {
+	if !idx.Sparse || len(idx.Key) != 1 || filter.Len() != 1 || filter.Keys()[0] != idx.Key[0].Field {
+		return false
+	}
+	ops, _ := must.NotFail(filter.Get(idx.Key[0].Field)).(*types.Document)
+	if ops == nil || ops.Len() != 1 || !ops.Has("$exists") {
+		return false
+	}
+	switch v := must.NotFail(ops.Get("$exists")).(type) {
+	case bool:
+		return v
+	case int32, int64, float64:
+		return types.Compare(v, int32(0)) != types.Equal
+	}
+	return false
 }
 
 // countIndexRange counts the documents in an index range without fetching
