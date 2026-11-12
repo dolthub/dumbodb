@@ -68,8 +68,6 @@ func (h *Handler) MsgListIndexes(connCtx context.Context, msg *wire.OpMsg) (*wir
 		msg := fmt.Sprintf("Namespace %s.%s is a view, not a collection", dbName, collection)
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCommandNotSupportedOnView, msg, document.Command())
 	}
-	// A time-series collection has no _id index of its own.
-	timeSeries := verr == nil && info != nil && info.IsTimeSeries
 	clusteredName := backends.DefaultIndexName
 	if verr == nil && info != nil {
 		clusteredName = clusteredIndexName(info.ClusteredIndexName)
@@ -95,12 +93,10 @@ func (h *Handler) MsgListIndexes(connCtx context.Context, msg *wire.OpMsg) (*wir
 		return nil, lazyerrors.Error(err)
 	}
 
-	firstBatch := types.MakeArray(len(res.Indexes))
+	indexes := clientVisibleIndexes(connCtx, db, collection, res.Indexes)
+	firstBatch := types.MakeArray(len(indexes))
 
-	for _, index := range res.Indexes {
-		if timeSeries && index.Name == backends.DefaultIndexName {
-			continue
-		}
+	for _, index := range indexes {
 		indexKey := must.NotFail(types.NewDocument())
 
 		for _, key := range index.Key {

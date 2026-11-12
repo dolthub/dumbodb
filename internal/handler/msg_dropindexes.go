@@ -148,7 +148,7 @@ func (h *Handler) MsgDropIndexes(connCtx context.Context, msg *wire.OpMsg) (*wir
 	}
 
 	replyDoc := must.NotFail(types.NewDocument(
-		"nIndexesWas", int32(len(beforeDrop.Indexes)),
+		"nIndexesWas", int32(len(clientVisibleIndexes(connCtx, db, collection, beforeDrop.Indexes))),
 	))
 
 	if dropAll {
