@@ -159,6 +159,15 @@ func newSetWindowFields(stage *types.Document) (aggregations.Stage, error) {
 	if err = operators.CheckFieldPaths(outputDoc); err != nil {
 		return nil, err
 	}
+	for _, field := range outputDoc.Keys() {
+		if err = operators.CheckFieldPaths("$" + field); err != nil {
+			return nil, err
+		}
+	}
+	if _, _, conflict := pathCollision(outputDoc.Keys()); conflict {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrWindowOutputPathCollision,
+			"$setWindowFields 'output' specification contains two conflicting paths", "$setWindowFields (stage)")
+	}
 
 	iter := outputDoc.Iterator()
 	defer iter.Close()

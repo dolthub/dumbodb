@@ -306,6 +306,16 @@ func (n *fieldSpecNode) addFields(v, root *types.Document) (*types.Document, err
 	computed := make([]computedField, len(n.keys))
 	for i, key := range n.keys {
 		child := n.children[key]
+		if empty, ok := child.expr.(*types.Document); ok && child.leaf == fieldSpecExpr && empty.Len() == 0 && len(child.keys) > 0 {
+			// An empty object beside paths within it, as {y: {}, "y.z": 1},
+			// is a new object holding those paths.
+			res, err := child.addFields(types.MakeDocument(0), root)
+			if err != nil {
+				return nil, err
+			}
+			computed[i] = computedField{value: res}
+			continue
+		}
 		if child.leaf == fieldSpecExpr {
 			res, missing, err := evalComputed(child.expr, root)
 			if err != nil {

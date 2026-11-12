@@ -928,6 +928,12 @@ const (
 	// ErrSBEInput5156303 is SBE's error for $trim chars that are not a string.
 	ErrSBEInput5156303 = ErrorCode(5156303) // Location5156303
 
+	// ErrAddFieldsPathCollision indicates a $set or $addFields specification writing one path within another.
+	ErrAddFieldsPathCollision = ErrorCode(40176) // Location40176
+
+	// ErrWindowOutputPathCollision indicates $setWindowFields outputs writing one path within another.
+	ErrWindowOutputPathCollision = ErrorCode(6307900) // Location6307900
+
 	// ErrStageIndexedStringVectorDuplicate indicates that input to IndexedStringVector contained duplicate values.
 	ErrStageIndexedStringVectorDuplicate = ErrorCode(7582300) // Location7582300
 

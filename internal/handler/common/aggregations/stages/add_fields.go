@@ -58,6 +58,10 @@ func newAddFieldsStage(stage *types.Document, fold bool) (aggregations.Stage, er
 		return nil, err
 	}
 
+	if err := checkAddFieldsCollisions("$addFields", fieldsDoc); err != nil {
+		return nil, err
+	}
+
 	if err := validateExpression("$addFields", fieldsDoc); err != nil {
 		return nil, err
 	}
