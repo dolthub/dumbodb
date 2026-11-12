@@ -133,7 +133,7 @@ func isConstantExpression(expr any) bool {
 	case *types.Document:
 		if IsOperator(v) {
 			switch v.Command() {
-			case "$literal":
+			case "$literal", "$const":
 				return true
 			case "$rand", "$sampleRate", "$meta":
 				return false
@@ -210,7 +210,7 @@ func foldDocumentConstants(doc *types.Document) (any, bool, error) {
 		name = doc.Command()
 		// Unknown names are not expressions here, such as $sortArray's
 		// sortBy {"$a": 1}; inside a real expression parsing rejects them.
-		if _, known := Operators[name]; !known || name == "$literal" {
+		if _, known := Operators[name]; !known || name == "$literal" || name == "$const" {
 			return doc, isConstantExpression(doc), nil
 		}
 	}
