@@ -382,7 +382,7 @@ func (h *Handler) statsStageReturns(ctx context.Context, db backends.Database, d
 	var err error
 	if docs[0].Command() == "$collStats" {
 		iter, err = processStagesStats(ctx, closer, &stagesStatsParams{
-			coll, db, dbName, cName, stages.GetStatistics(built[:1]), built[:1], h.TCPHost,
+			coll, db, dbName, cName, stages.GetStatistics(built[:1]), built[:1], h.TCPHost, false,
 		})
 	} else {
 		iter, err = built[0].Process(ctx, iterator.Values(iterator.ForSlice([]*types.Document{})), closer)

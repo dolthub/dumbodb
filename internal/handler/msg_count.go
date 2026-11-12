@@ -121,7 +121,7 @@ func (h *Handler) MsgCount(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMs
 
 		// mongod runs the count as the view's stages, its $match, $skip and
 		// $limit, and a $group and $project that count.
-		iter, verr := viewSourceIterator(connCtx, db, view.Name, view.ViewOn, view.ViewPipeline, cmp, closer, h.DisablePushdown,
+		iter, verr := viewSourceIterator(withDBName(connCtx, params.DB), db, view.Name, view.ViewOn, view.ViewPipeline, cmp, closer, h.DisablePushdown,
 			viewPipelineLength(2+boolInt(params.Filter.Len() > 0)+boolInt(params.Skip > 0)+boolInt(params.Limit != 0)))
 		if verr != nil {
 			return nil, verr

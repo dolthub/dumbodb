@@ -85,7 +85,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 	if dbName, err = common.GetRequiredParam[string](document, "$db"); err != nil {
 		return nil, err
 	}
-	connCtx = context.WithValue(connCtx, aggregateDBNameKey{}, dbName)
+	connCtx = withDBName(connCtx, dbName)
 
 	collectionParam, err := document.Get(document.Command())
 	if err != nil {
@@ -597,7 +597,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		statistics := stages.GetStatistics(collStatsDocuments)
 
 		iter, err = processStagesStats(ctx, closer, &stagesStatsParams{
-			c, db, dbName, cName, statistics, collStatsDocuments, h.TCPHost,
+			c, db, dbName, cName, statistics, collStatsDocuments, h.TCPHost, false,
 		})
 	}
 
@@ -1226,10 +1226,44 @@ type stagesStatsParams struct {
 	statistics map[stages.Statistic]struct{}
 	stages     []aggregations.Stage
 	tcpHost    string
+	// subPipeline is set for $collStats at the start of a sub-pipeline,
+	// which reads through a view to its base collection.
+	subPipeline bool
+}
+
+// resolveStatsView points p at the base collection of a view, as mongod
+// does for a sub-pipeline over a view without stages of its own. A view's
+// stages come before $collStats, which then fails as not first (40602); at
+// the top level mongod refuses a view (CommandNotSupportedOnView).
+func resolveStatsView(ctx context.Context, p *stagesStatsParams) error {
+	info, err := lookupCollectionInfo(ctx, p.db, p.cName)
+	if err != nil || info == nil || !info.IsView {
+		return nil
+	}
+	if !p.subPipeline {
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCommandNotSupportedOnView,
+			fmt.Sprintf("Namespace %s.%s is a view, not a collection", p.dbName, p.cName), "aggregate")
+	}
+	base, viewStages, _, err := resolveViewChain(ctx, p.db, info.Name, info.ViewOn, info.ViewPipeline, nil)
+	if err != nil {
+		return err
+	}
+	if len(viewStages) > 0 {
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCollStatsIsNotFirstStage,
+			"$collStats is only valid as the first stage in a pipeline", "$collStats")
+	}
+	if p.c, err = p.db.Collection(base); err != nil {
+		return lazyerrors.Error(err)
+	}
+	p.cName = base
+	return nil
 }
 
 // processStagesStats retrieves the statistics from the database and then processes them through the stages.
 func processStagesStats(ctx context.Context, closer *iterator.MultiCloser, p *stagesStatsParams) (types.DocumentsIterator, error) { //nolint:lll // for readability
+	if err := resolveStatsView(ctx, p); err != nil {
+		return nil, err
+	}
 	_, hasCount := p.statistics[stages.StatisticCount]
 	_, hasStorage := p.statistics[stages.StatisticStorage]
 

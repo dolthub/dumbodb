@@ -234,7 +234,7 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 	var sorted bool
 	if isView {
 		viewCmp := collation.Parse(params.Collation).Comparator()
-		srcIter, err = viewSourceIterator(ctx, db, viewName, viewOn, viewPipeline, viewCmp, closer, h.DisablePushdown,
+		srcIter, err = viewSourceIterator(withDBName(ctx, params.DB), db, viewName, viewOn, viewPipeline, viewCmp, closer, h.DisablePushdown,
 			viewPipelineLength(findStageCount(params)))
 	} else if near, nerr := geoNearSource(ctx, coll, params.Filter, h.DisablePushdown); nerr != nil || near != nil {
 		if err = nerr; near != nil {
