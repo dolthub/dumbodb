@@ -190,16 +190,9 @@ func processDropIndexOptions(command, ns string, v any, existing []backends.Inde
 		}
 
 		for _, index := range existing {
-			matches := true
-
-			for i, key := range index.Key {
-				if key.Field != spec[i].Field || key.Descending != spec[i].Descending {
-					matches = false
-					break
-				}
-			}
-
-			if matches {
+			if slices.EqualFunc(index.Key, spec, func(a, b backends.IndexKeyPair) bool {
+				return a.Field == b.Field && a.Descending == b.Descending
+			}) {
 				return []string{index.Name}, false, nil
 			}
 		}

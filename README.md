@@ -71,9 +71,9 @@ Parity is verified against a specific MongoDB release: **MongoDB 8.0.28**. This 
   - `_id` equality, ranges and sorts read the collection directly (`CLUSTERED_IXSCAN` in explain).
   - Secondary index entries carry the encoded `_id`, so large `_id`s (long strings, embedded documents) make secondary indexes larger.
   - `mongodump` of a DumboDB database restored into MongoDB creates clustered collections.
-- Key Size: an encoded key may be at most 4096 bytes: an `_id`, or an index entry (its indexed values plus the `_id`). A longer key is refused with a `KeyTooLong` (17280) error. MongoDB accepts much larger keys (up to 8MB for a clustered `_id`). The limit applies to the encoded size, which can exceed the value's own size:
-  - Strings carry a terminator, and each NUL byte inside one takes two bytes, so a 4095-character ASCII `_id` encodes to 4097 bytes.
-  - An index with a collation stores each string's collation sort key, which can be longer than the string; at strength 3, 1500 'e-acute' characters (3000 bytes of UTF-8) become a 4540-byte key.
+- Key Size: an encoded key may be at most 1024 bytes: an `_id`, or an index entry (its indexed values plus the `_id`). A longer key is refused with a `KeyTooLong` (17280) error. MongoDB accepts much larger keys (up to 8MB for a clustered `_id`). The limit applies to the encoded size, which can exceed the value's own size:
+  - Strings carry a terminator, and each NUL byte inside one takes two bytes, so a 1023-character ASCII `_id` encodes to 1025 bytes.
+  - An index with a collation stores each string's collation sort key, which can be longer than the string; at strength 3, each 'e-acute' character (2 bytes of UTF-8) takes about 3 bytes of key.
   - A hashed index stores the value itself rather than a 64-bit hash, so a long string on a hashed field is subject to the limit.
   - A text index stores each word, so a single word longer than the limit is refused.
 - Query Plans: when an `$or` uses several indexes, DumboDB runs their scans in index name order; MongoDB uses index creation order, which DumboDB does not record. Results are the same; only the order of unsorted results and explain output differ.
