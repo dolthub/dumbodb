@@ -110,9 +110,6 @@ const (
 	// ErrImmutableField indicates that _id field is immutable.
 	ErrImmutableField = ErrorCode(66) // ImmutableField
 
-	// ErrNotExactValueField indicates an upsert query matched a sub-path of _id.
-	ErrNotExactValueField = ErrorCode(111) // NotExactValueField
-
 	// ErrCannotCreateIndex indicates that index creation process failed because some data are not valid.
 	ErrCannotCreateIndex = ErrorCode(67) // CannotCreateIndex
 
@@ -133,6 +130,9 @@ const (
 	ErrIndexKeySpecsConflict = ErrorCode(86) // IndexKeySpecsConflict
 
 	ErrOperationFailed = ErrorCode(96) // OperationFailed
+
+	// ErrNotExactValueField indicates an upsert query matched a sub-path of _id.
+	ErrNotExactValueField = ErrorCode(111) // NotExactValueField
 
 	ErrWriteConflict = ErrorCode(112) // WriteConflict
 

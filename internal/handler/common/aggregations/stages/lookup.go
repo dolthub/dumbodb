@@ -1662,16 +1662,16 @@ func getFieldValue(doc *types.Document, field string) any {
 	return v
 }
 
-// foreignMatchesCandidate reports whether foreignVal matches the query
-// equality {foreignField: candidate}: it equals candidate, or it is an array
-// with a top-level element that does. A null candidate matches a null or
-// missing foreignVal.
 // indexedArray is an array a query path reaches by an index, such as k.0 of
 // {k: [[5]]}; a query compares it whole, without matching its elements.
 type indexedArray struct {
 	arr *types.Array
 }
 
+// foreignMatchesCandidate reports whether foreignVal matches the query
+// equality {foreignField: candidate}: it equals candidate, or it is an array
+// with a top-level element that does. A null candidate matches a null or
+// missing foreignVal.
 func foreignMatchesCandidate(foreignVal, candidate any) bool {
 	if indexed, ok := foreignVal.(indexedArray); ok {
 		return valuesEqual(indexed.arr, candidate)
