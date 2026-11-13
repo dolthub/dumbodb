@@ -156,6 +156,13 @@ func bindNowInExpression(v any, now time.Time) any {
 		for _, k := range v.Keys() {
 			out.Set(k, bindNowInExpression(must.NotFail(v.Get(k)), now))
 		}
+		if v.Len() == 1 && v.Command() == "$shift" {
+			// $shift's default must be a constant, which $$NOW is not.
+			if spec, ok := must.NotFail(v.Get("$shift")).(*types.Document); ok && spec.Has("default") {
+				bound := must.NotFail(out.Get("$shift")).(*types.Document)
+				bound.Set("default", must.NotFail(spec.Get("default")))
+			}
+		}
 		return out
 	}
 	return v

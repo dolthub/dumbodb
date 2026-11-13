@@ -711,14 +711,27 @@ func (s *setWindowFields) applyWindowFunctions(partition []*types.Document) ([]*
 	return result, nil
 }
 
+// windowMissingValue is a window output of mongod's missing value, which
+// leaves the output field out.
+type windowMissingValue struct{}
+
 // setWindowOutput sets the output field of doc to val, a dotted field as
 // $addFields would set it.
 func setWindowOutput(doc *types.Document, field string, val any) (*types.Document, error) {
+	_, missing := val.(windowMissingValue)
 	if !strings.Contains(field, ".") {
-		doc.Set(field, val)
+		if missing {
+			doc.Remove(field)
+		} else {
+			doc.Set(field, val)
+		}
 		return doc, nil
 	}
-	spec := must.NotFail(types.NewDocument(field, must.NotFail(types.NewDocument("$literal", val))))
+	var expr any = "$$REMOVE"
+	if !missing {
+		expr = must.NotFail(types.NewDocument("$literal", val))
+	}
+	spec := must.NotFail(types.NewDocument(field, expr))
 	return operators.AddFieldsTree(doc, spec)
 }
 
@@ -1530,11 +1543,24 @@ func parseShiftSpec(doc *types.Document) (shiftSpec, error) {
 		)
 	}
 
+	spec.defaultVal = types.Null
 	if doc.Has("default") {
 		defVal := must.NotFail(doc.Get("default"))
-		spec.defaultVal = defVal
-	} else {
-		spec.defaultVal = types.Null
+		if defVal != "$$REMOVE" && !operators.IsConstantExpression(defVal) {
+			return spec, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrFailedToParse,
+				"'$shift:default' expression must yield a constant value.",
+				"$setWindowFields (stage)",
+			)
+		}
+		v, missing, err := operators.EvalOperand(defVal, types.MakeDocument(0))
+		if err != nil {
+			return spec, err
+		}
+		spec.defaultVal = v
+		if missing {
+			spec.defaultVal = windowMissingValue{}
+		}
 	}
 
 	return spec, nil
