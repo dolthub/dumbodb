@@ -196,6 +196,24 @@ func newFacet(stage *types.Document) (aggregations.Stage, error) {
 	return &facet{pipelines: pipelines}, nil
 }
 
+// readOnlyStages never change the documents they read.
+var readOnlyStages = map[string]bool{
+	"$match": true, "$count": true, "$group": true, "$sortByCount": true, "$bucket": true,
+	"$bucketAuto": true, "$sort": true, "$limit": true, "$skip": true,
+}
+
+// readsOnly reports whether every stage of a $facet branch only reads its
+// input documents, so the branch can share them.
+func readsOnly(pipeline *types.Array) bool {
+	for i := range pipeline.Len() {
+		stage, ok := must.NotFail(pipeline.Get(i)).(*types.Document)
+		if !ok || stage.Len() != 1 || !readOnlyStages[stage.Command()] {
+			return false
+		}
+	}
+	return true
+}
+
 // parsePipelineArray parses an array of stage documents into a list of Stage instances.
 // This is a standalone function that calls NewStage; it must only be called from
 // Process() methods (not from newXxx constructors) to avoid initialization cycles.
@@ -300,7 +318,7 @@ func (f *facet) Process(ctx context.Context, iter types.DocumentsIterator, close
 		// Stages may change documents in place; each branch but the last
 		// works on its own copy so the others see the input unchanged.
 		branchDocs := inputDocs
-		if i < len(f.pipelines)-1 {
+		if i < len(f.pipelines)-1 && !readsOnly(p.pipelineArr) {
 			branchDocs = make([]*types.Document, len(inputDocs))
 			for j, doc := range inputDocs {
 				branchDocs[j] = doc.DeepCopy()
