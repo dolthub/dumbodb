@@ -154,6 +154,8 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			return nil, vErr
 		}
 		collCmp = collation.Parse(viewCollation).Comparator()
+	} else if lookupErr == nil && target != nil && !document.Has("collation") && target.Collation != nil {
+		collCmp = collation.Parse(target.Collation).Comparator()
 	}
 
 	owner := conninfo.Get(connCtx).SessionPrincipal()
