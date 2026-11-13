@@ -1550,6 +1550,11 @@ func (l *lookup) checkSubPipeline() error {
 		}
 		substituted := substituteVarsInStage(stageDoc, vars)
 		if i == 0 && l.from == "" {
+			if substituted.Command() == "$documents" {
+				if err := operators.CheckFieldPaths(must.NotFail(substituted.Get("$documents"))); err != nil {
+					return err
+				}
+			}
 			continue
 		}
 		switch substituted.Command() {
@@ -1782,10 +1787,14 @@ func checkSubPipelineSource(coll string, spec *types.Document, stage string) err
 	return nil
 }
 
-// evalDocuments evaluates a $documents stage as mongod's desugaring does:
+// EvalDocuments evaluates a $documents stage as mongod's desugaring does:
 // the value must be an array (5858203) of documents (40228).
 func EvalDocuments(stage *types.Document) ([]*types.Document, error) {
-	v, _, err := operators.EvalOperand(must.NotFail(stage.Get("$documents")), types.MakeDocument(0))
+	value := must.NotFail(stage.Get("$documents"))
+	if err := operators.CheckFieldPaths(value); err != nil {
+		return nil, err
+	}
+	v, _, err := operators.EvalOperand(value, types.MakeDocument(0))
 	if err != nil {
 		return nil, err
 	}
