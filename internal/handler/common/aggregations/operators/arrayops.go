@@ -689,12 +689,14 @@ func newFilter(args ...any) (Operator, error) {
 
 	inputArg, err := doc.Get("input")
 	if err != nil {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$filter", "Missing 'input' parameter to $filter")
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFilterMissingInput,
+			"Missing 'input' parameter to $filter", "$filter")
 	}
 
 	condArg, err := doc.Get("cond")
 	if err != nil {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$filter", "Missing 'cond' parameter to $filter")
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFilterMissingCond,
+			"Missing 'cond' parameter to $filter", "$filter")
 	}
 
 	asName := "this"
