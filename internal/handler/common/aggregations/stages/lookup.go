@@ -1304,6 +1304,7 @@ func (l *lookup) pipelineIter(ctx context.Context, fetcher CollectionFetcher, fr
 			continue
 		}
 		if stageIndex < l.sbePrefix {
+			operators.MarkSBE(specs[stageIndex])
 			stage = &sbeStage{inner: stage}
 		}
 		if !copied && specs[stageIndex].Command() != "$match" {

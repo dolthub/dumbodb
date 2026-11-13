@@ -22,10 +22,15 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// A command's collation governs every string comparison in its pipeline. It
-// is attached to the stage and operator documents of the command's own copy of
+// An expression's context is state of the command it belongs to: the
+// collation its strings compare under and whether mongod runs it in SBE. It is
+// attached to the stage and operator documents of the command's own copy of
 // the pipeline (see BindNowInPipeline), so the stages and operators built from
 // them find it.
+type exprContext struct {
+	cmp *collation.Comparator
+	sbe bool
+}
 
 // BindCollation attaches cmp to every stage and operator document within v. A
 // nil cmp attaches nothing.
@@ -33,6 +38,16 @@ func BindCollation(v any, cmp *collation.Comparator) {
 	if cmp == nil {
 		return
 	}
+	annotateExpressions(v, func(c *exprContext) { c.cmp = cmp })
+}
+
+// MarkSBE records that mongod runs the stage and operator documents within v
+// in SBE.
+func MarkSBE(v any) {
+	annotateExpressions(v, func(c *exprContext) { c.sbe = true })
+}
+
+func annotateExpressions(v any, set func(*exprContext)) {
 	switch v := v.(type) {
 	case *types.Document:
 		keys := v.Keys()
@@ -40,22 +55,38 @@ func BindCollation(v any, cmp *collation.Comparator) {
 			if keys[0] == "$literal" {
 				return
 			}
-			v.Annotate(cmp)
+			var c exprContext
+			if old, ok := v.Annotation().(*exprContext); ok {
+				c = *old
+			}
+			set(&c)
+			v.Annotate(&c)
 		}
 		for _, k := range keys {
-			BindCollation(must.NotFail(v.Get(k)), cmp)
+			annotateExpressions(must.NotFail(v.Get(k)), set)
 		}
 	case *types.Array:
 		for i := range v.Len() {
-			BindCollation(must.NotFail(v.Get(i)), cmp)
+			annotateExpressions(must.NotFail(v.Get(i)), set)
 		}
 	}
 }
 
+func contextOf(doc *types.Document) exprContext {
+	if c, ok := doc.Annotation().(*exprContext); ok {
+		return *c
+	}
+	return exprContext{}
+}
+
 // CollationOf returns the collation attached to doc, or nil for simple.
 func CollationOf(doc *types.Document) *collation.Comparator {
-	cmp, _ := doc.Annotation().(*collation.Comparator)
-	return cmp
+	return contextOf(doc).cmp
+}
+
+// sbeOperator is an operator that behaves differently in SBE.
+type sbeOperator interface {
+	useSBE()
 }
 
 // collatedOperator is an operator whose result depends on comparing strings.

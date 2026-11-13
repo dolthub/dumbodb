@@ -554,7 +554,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			if !isView {
 				stages.MarkSBELookups(stagesDocuments, stagesSpecs, collectionIsView)
 			}
-			stages.WrapSBEStages(stagesDocuments, stages.SBEPrefixLen(stagesSpecs, collectionIsView))
+			stages.WrapSBEStages(stagesDocuments, stagesSpecs, stages.SBEPrefixLen(stagesSpecs, collectionIsView))
 		}
 
 		switch {
