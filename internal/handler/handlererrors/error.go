@@ -851,6 +851,9 @@ const (
 	// ErrMergeOnFieldMissing indicates a $merge 'on' field that is missing or null.
 	ErrMergeOnFieldMissing = ErrorCode(51132) // Location51132
 
+	// ErrChangeStreamSplitSpec indicates a $changeStreamSplitLargeEvent specification that is not an empty object.
+	ErrChangeStreamSplitSpec = ErrorCode(7182800) // Location7182800
+
 	// ErrQuerySettingsNotObject indicates a $querySettings specification that is not an object.
 	ErrQuerySettingsNotObject = ErrorCode(7746800) // Location7746800
 
