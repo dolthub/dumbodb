@@ -215,6 +215,10 @@ func newSetWindowFields(stage *types.Document) (aggregations.Stage, error) {
 			return nil, parseErr
 		}
 
+		if err = checkWindowSortBy(wof, swf.sortBy); err != nil {
+			return nil, err
+		}
+
 		if wof.frame != nil && wof.frame.frameType == windowFrameRange && swf.sortBy != nil && swf.sortBy.Len() > 0 {
 			if order, _ := toFloat64(must.NotFail(swf.sortBy.Get(swf.sortBy.Keys()[0]))); order < 0 {
 				return nil, handlererrors.NewCommandErrorMsgWithArgument(
@@ -239,9 +243,89 @@ func newSetWindowFields(stage *types.Document) (aggregations.Stage, error) {
 	return swf, nil
 }
 
+// checkWindowSortBy returns mongod's error when a window function or its
+// window needs a sortBy, or a single-field one, that the stage lacks.
+func checkWindowSortBy(wof windowOutputField, sortBy *types.Document) error {
+	keys := 0
+	if sortBy != nil {
+		keys = sortBy.Len()
+	}
+	fail := func(code handlererrors.ErrorCode, msg string) error {
+		return handlererrors.NewCommandErrorMsgWithArgument(code, msg, "$setWindowFields (stage)")
+	}
+	switch wof.operator {
+	case "$rank", "$denseRank", "$documentNumber":
+		if keys != 1 {
+			return fail(handlererrors.ErrRankNeedsSortBy,
+				wof.operator+" must be specified with a top level sortBy expression with exactly one element")
+		}
+	case "$shift":
+		if keys == 0 {
+			return fail(handlererrors.ErrFailedToParse, "'$shift' requires a sortBy")
+		}
+	case "$derivative", "$integral":
+		if keys == 0 {
+			return fail(handlererrors.ErrFailedToParse, wof.operator+" requires a sortBy")
+		}
+		if keys > 1 {
+			return fail(handlererrors.ErrFailedToParse, wof.operator+" requires a non-compound sortBy")
+		}
+	case "$expMovingAvg":
+		if keys == 0 {
+			return fail(handlererrors.ErrFailedToParse, "$expMovingAvg requires an explicit 'sortBy'")
+		}
+	}
+	if f := wof.frame; f != nil {
+		switch {
+		case f.frameType == windowFrameDocuments && !(f.lower.unbounded && f.upper.unbounded) && keys == 0:
+			return fail(handlererrors.ErrDocumentWindowNeedsSortBy, "Document-based bounds require a sortBy")
+		case f.frameType == windowFrameRange && keys != 1:
+			return fail(handlererrors.ErrRangeWindowNeedsSortBy, "Range-based bounds require sortBy a single field")
+		}
+	}
+	return nil
+}
+
+// windowFunctions are mongod's window functions.
+var windowFunctions = map[string]bool{
+	"$addToSet": true, "$avg": true, "$bottom": true, "$bottomN": true, "$count": true,
+	"$covariancePop": true, "$covarianceSamp": true, "$denseRank": true, "$derivative": true,
+	"$documentNumber": true, "$expMovingAvg": true, "$first": true, "$firstN": true, "$integral": true,
+	"$last": true, "$lastN": true, "$linearFill": true, "$locf": true, "$max": true, "$maxN": true,
+	"$median": true, "$min": true, "$minN": true, "$percentile": true, "$push": true, "$rank": true,
+	"$shift": true, "$stdDevPop": true, "$stdDevSamp": true, "$sum": true, "$top": true, "$topN": true,
+}
+
 // parseWindowOutputField parses one output field specification.
 func parseWindowOutputField(field string, spec *types.Document) (windowOutputField, error) {
 	wof := windowOutputField{outputField: field}
+
+	// mongod finds the one $-prefixed window function before any other
+	// field, apart from window, is refused.
+	var function, other string
+	for _, k := range spec.Keys() {
+		switch {
+		case strings.HasPrefix(k, "$"):
+			if function != "" {
+				return wof, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFailedToParse,
+					"Cannot specify two functions in window function spec", "$setWindowFields (stage)")
+			}
+			function = k
+		case k != "window" && other == "":
+			other = k
+		}
+	}
+	switch {
+	case function == "" && spec.Len() == 0:
+		return wof, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFailedToParse,
+			"Expected a $-prefixed window function", "$setWindowFields (stage)")
+	case function == "":
+		return wof, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFailedToParse,
+			"Expected a $-prefixed window function, "+spec.Keys()[0], "$setWindowFields (stage)")
+	case other != "":
+		return wof, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFailedToParse,
+			"Window function found an unknown argument: "+other, "$setWindowFields (stage)")
+	}
 
 	// Extract the window operator and expression (all keys except "window").
 	specIter := spec.Iterator()
@@ -263,6 +347,10 @@ func parseWindowOutputField(field string, spec *types.Document) (windowOutputFie
 
 		// This is the window operator.
 		wof.operator = k
+		if !windowFunctions[k] {
+			return wof, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFailedToParse,
+				"Unrecognized window function, "+k, "$setWindowFields (stage)")
+		}
 		if err = operators.CheckConstantSubexpressions(v); err != nil {
 			return wof, err
 		}
