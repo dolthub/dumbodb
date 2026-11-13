@@ -26,6 +26,13 @@ import (
 
 type addToSetAccumulator struct {
 	arg operand
+	sbe bool
+}
+
+// UseSBE implements SBEAccumulator.
+func (a *addToSetAccumulator) UseSBE() error {
+	a.sbe = true
+	return nil
 }
 
 func newAddToSet(args ...any) (Accumulator, error) {
@@ -48,12 +55,12 @@ func newAddToSet(args ...any) (Accumulator, error) {
 func (a *addToSetAccumulator) New() Accumulation {
 	// $addToSet retains the distinct set of projected values, so its result
 	// grows with the number of distinct values. It retains values, never documents.
-	return &addToSetState{spec: a, result: types.MakeArray(0)}
+	return &addToSetState{spec: a, result: types.MakeArray(0), mem: keptMemory{sbe: a.sbe}}
 }
 
 // NewCollated returns an accumulation whose set compares strings under cmp.
 func (a *addToSetAccumulator) NewCollated(cmp *collation.Comparator) Accumulation {
-	return &addToSetState{spec: a, result: types.MakeArray(0), cmp: cmp, keys: types.MakeArray(0)}
+	return &addToSetState{spec: a, result: types.MakeArray(0), cmp: cmp, keys: types.MakeArray(0), mem: keptMemory{sbe: a.sbe}}
 }
 
 type addToSetState struct {

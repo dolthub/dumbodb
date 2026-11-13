@@ -21,6 +21,13 @@ import (
 
 type pushAccumulator struct {
 	arg operand
+	sbe bool
+}
+
+// UseSBE implements SBEAccumulator.
+func (p *pushAccumulator) UseSBE() error {
+	p.sbe = true
+	return nil
 }
 
 func newPush(args ...any) (Accumulator, error) {
@@ -43,7 +50,7 @@ func newPush(args ...any) (Accumulator, error) {
 func (p *pushAccumulator) New() Accumulation {
 	// $push must retain every projected value, so its result array grows with
 	// the group size. It retains values, never documents.
-	return &pushState{spec: p, result: types.MakeArray(0)}
+	return &pushState{spec: p, result: types.MakeArray(0), mem: keptMemory{sbe: p.sbe}}
 }
 
 type pushState struct {
