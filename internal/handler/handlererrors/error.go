@@ -1101,6 +1101,18 @@ const (
 	// were used in a context that does not sort (e.g. a $match stage or count).
 	ErrGeoNearNotAllowedInContext = ErrorCode(5626500) // Location5626500
 
+	// ErrFilterUnknownArgument indicates an unrecognized $filter parameter.
+	ErrFilterUnknownArgument = ErrorCode(28647) // Location28647
+
+	// ErrFilterInputNotArray indicates a $filter input that is not an array.
+	ErrFilterInputNotArray = ErrorCode(28651) // Location28651
+
+	// ErrFilterLimitNotInt32 indicates a $filter limit that is not a 32-bit integer.
+	ErrFilterLimitNotInt32 = ErrorCode(327391) // Location327391
+
+	// ErrFilterLimitNotPositive indicates a $filter limit below 1.
+	ErrFilterLimitNotPositive = ErrorCode(327392) // Location327392
+
 	ErrInvalidReplicaSetConfig               = ErrorCode(93)    // InvalidReplicaSetConfig
 	ErrNotYetInitialized                     = ErrorCode(94)    // NotYetInitialized
 	ErrTopologyVersionMissingProcessID       = ErrorCode(31368) // Location31368
