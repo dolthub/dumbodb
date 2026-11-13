@@ -1124,6 +1124,21 @@ const (
 	// ErrRankNeedsSortBy indicates a rank function without a one-field sortBy.
 	ErrRankNeedsSortBy = ErrorCode(5371602) // Location5371602
 
+	// ErrFacetSpecNotObject indicates a $facet specification that is not a non-empty object.
+	ErrFacetSpecNotObject = ErrorCode(40169) // Location40169
+
+	// ErrFacetArgumentNotArray indicates a $facet field that is not an array.
+	ErrFacetArgumentNotArray = ErrorCode(40170) // Location40170
+
+	// ErrOutSpecType indicates a $out specification that is neither a string nor an object.
+	ErrOutSpecType = ErrorCode(16990) // Location16990
+
+	// ErrMergeIntoType indicates a $merge into that is neither a string nor an object.
+	ErrMergeIntoType = ErrorCode(51178) // Location51178
+
+	// ErrChangeStreamSpecType indicates a $changeStream specification that is not an object.
+	ErrChangeStreamSpecType = ErrorCode(6188500) // Location6188500
+
 	// ErrFilterUnknownArgument indicates an unrecognized $filter parameter.
 	ErrFilterUnknownArgument = ErrorCode(28647) // Location28647
 

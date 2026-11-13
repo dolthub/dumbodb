@@ -40,6 +40,9 @@ func init() {
 // newUpdatePipeline parses the stages of a pipeline-style update as the
 // aggregation stages they are.
 func newUpdatePipeline(pipeline *types.Array) ([]aggregations.Stage, error) {
+	if err := LiteParsePipeline(pipeline); err != nil {
+		return nil, err
+	}
 	stages := make([]aggregations.Stage, pipeline.Len())
 	for i := range stages {
 		stage, ok := must.NotFail(pipeline.Get(i)).(*types.Document)
