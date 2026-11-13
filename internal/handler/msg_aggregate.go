@@ -695,6 +695,24 @@ var dbLevelSourceStages = map[string]struct{}{
 // checkDatabasePipelineStages returns the error mongod reports while it parses
 // the stages of an {aggregate: 1} pipeline, before it checks that each stage
 // may run without a collection.
+// checkDatabaseStagePositions returns mongod's error for a stage that must
+// come first, which it checks after each stage parses and the first stage is
+// found to run without a collection.
+func checkDatabaseStagePositions(pipeline *types.Array) error {
+	for i := 1; i < pipeline.Len(); i++ {
+		stage, ok := must.NotFail(pipeline.Get(i)).(*types.Document)
+		if !ok || stage.Len() != 1 {
+			return nil
+		}
+		switch name := stage.Command(); name {
+		case "$queryStats", "$listCatalog", "$querySettings":
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCollStatsIsNotFirstStage,
+				name+" is only valid as the first stage in a pipeline", name+" (stage)")
+		}
+	}
+	return nil
+}
+
 func checkDatabasePipelineStages(pipeline *types.Array, dbName string) error {
 	for i := range pipeline.Len() {
 		stage, ok := must.NotFail(pipeline.Get(i)).(*types.Document)
@@ -718,10 +736,6 @@ func checkDatabasePipelineStages(pipeline *types.Array, dbName string) error {
 				_, err := stages.NewStage(stage.DeepCopy())
 				return err
 			}
-			if i != 0 {
-				return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCollStatsIsNotFirstStage,
-					name+" is only valid as the first stage in a pipeline", name+" (stage)")
-			}
 		case "$facet":
 			if dbName == "admin" {
 				if err := stages.CheckFacetQueryStats(stage); err != nil {
@@ -738,10 +752,6 @@ func checkDatabasePipelineStages(pipeline *types.Array, dbName string) error {
 		case "$querySettings":
 			if err := stages.CheckQuerySettingsSpec(stage); err != nil {
 				return err
-			}
-			if i != 0 && dbName == "admin" {
-				return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCollStatsIsNotFirstStage,
-					name+" is only valid as the first stage in a pipeline", name+" (stage)")
 			}
 		case "$documents", "$currentOp", "$listLocalSessions":
 		default:
@@ -824,6 +834,9 @@ func (h *Handler) aggregateDatabase(connCtx context.Context, document *types.Doc
 			fmt.Sprintf("{aggregate: 1} is not valid for '%s'; a collection is required.", stageName),
 			document.Command(),
 		)
+	}
+	if err = checkDatabaseStagePositions(pipeline); err != nil {
+		return nil, err
 	}
 
 	if stageName == "$currentOp" {
