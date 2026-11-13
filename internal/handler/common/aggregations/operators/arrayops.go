@@ -247,13 +247,19 @@ func newReverseArray(args ...any) (Operator, error) {
 }
 
 func (op *reverseArrayOp) Process(doc *types.Document) (any, error) {
-	arr, isNull, err := collectArray(op.arg, doc, "$reverseArray")
+	v, err := evalArgValue(op.arg, doc)
 	if err != nil {
 		return nil, err
 	}
 
-	if isNull {
+	if isNullish(v) {
 		return types.Null, nil
+	}
+
+	arr, ok := v.(*types.Array)
+	if !ok {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrReverseArrayNotArray,
+			"The argument to $reverseArray must be an array, but was of type: "+handlerparams.AliasFromType(v), "$reverseArray")
 	}
 
 	items, err := arrayToSlice(arr)

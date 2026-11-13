@@ -1106,6 +1106,9 @@ const (
 	// no settings was given some.
 	ErrCollStatsExpectedEmptyObject = ErrorCode(31170) // Location31170
 
+	// ErrReverseArrayNotArray indicates a $reverseArray argument that is not an array.
+	ErrReverseArrayNotArray = ErrorCode(34435) // Location34435
+
 	// ErrFilterUnknownArgument indicates an unrecognized $filter parameter.
 	ErrFilterUnknownArgument = ErrorCode(28647) // Location28647
 

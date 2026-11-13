@@ -552,14 +552,14 @@ var sbeOperatorErrors = map[sbeOperatorError]struct {
 	{"$setIsSubset", handlererrors.ErrSetIsSubsetFirstNotArray}:         {handlererrors.ErrSBEInput7158100, "All operands of $setIsSubset must be arrays."},
 	{"$setIsSubset", handlererrors.ErrSetIsSubsetFirstNotArrayVariable}: {handlererrors.ErrSBEInput7158100, "All operands of $setIsSubset must be arrays."},
 	{"$setIsSubset", handlererrors.ErrSetIsSubsetSecondNotArray}:        {handlererrors.ErrSBEInput7158100, "All operands of $setIsSubset must be arrays."},
-	{"$reverseArray", 16020}:                                     {handlererrors.ErrSBEInput7158002, "$reverseArray argument must be an array"},
-	{"$objectToArray", 16020}:                                    {handlererrors.ErrSBEInput5153215, "$objectToArray requires an object input"},
-	{"$arrayToObject", 40386}:                                    {handlererrors.ErrSBEInput5153200, "$arrayToObject requires an array input"},
-	{"$sortArray", 2942504}:                                      {handlererrors.ErrSBEInput7158001, "$sortArray input argument must be an array"},
-	{"$anyElementTrue", handlererrors.ErrAnyElementTrueNotArray}: {handlererrors.ErrSBEInput7158300, "$anyElementTrue's argument must be an array"},
-	{"$tsSecond", handlererrors.ErrTsSecondNotTimestamp}:         {handlererrors.ErrSBEInput7157900, "$tsSecond expects argument of type timestamp"},
-	{"$tsIncrement", handlererrors.ErrTsIncrementNotTimestamp}:   {handlererrors.ErrSBEInput7157901, "$tsIncrement expects argument of type timestamp"},
-	{"$bsonSize", 31393}:                                         {handlererrors.ErrSBEInput7158301, "$bsonSize requires a document input"},
+	{"$reverseArray", handlererrors.ErrReverseArrayNotArray}:            {handlererrors.ErrSBEInput7158002, "$reverseArray argument must be an array"},
+	{"$objectToArray", 16020}:                                           {handlererrors.ErrSBEInput5153215, "$objectToArray requires an object input"},
+	{"$arrayToObject", 40386}:                                           {handlererrors.ErrSBEInput5153200, "$arrayToObject requires an array input"},
+	{"$sortArray", 2942504}:                                             {handlererrors.ErrSBEInput7158001, "$sortArray input argument must be an array"},
+	{"$anyElementTrue", handlererrors.ErrAnyElementTrueNotArray}:        {handlererrors.ErrSBEInput7158300, "$anyElementTrue's argument must be an array"},
+	{"$tsSecond", handlererrors.ErrTsSecondNotTimestamp}:                {handlererrors.ErrSBEInput7157900, "$tsSecond expects argument of type timestamp"},
+	{"$tsIncrement", handlererrors.ErrTsIncrementNotTimestamp}:          {handlererrors.ErrSBEInput7157901, "$tsIncrement expects argument of type timestamp"},
+	{"$bsonSize", 31393}:                                                {handlererrors.ErrSBEInput7158301, "$bsonSize requires a document input"},
 }
 
 type sbeOperatorError struct {
