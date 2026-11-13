@@ -122,7 +122,8 @@ func IsConstantExpression(expr any) bool {
 func isConstantExpression(expr any) bool {
 	switch v := expr.(type) {
 	case string:
-		return !strings.HasPrefix(v, "$")
+		// mongod folds $$REMOVE to the missing value.
+		return !strings.HasPrefix(v, "$") || v == "$$REMOVE"
 	case *types.Array:
 		for i := range v.Len() {
 			if !isConstantExpression(must.NotFail(v.Get(i))) {
@@ -132,6 +133,9 @@ func isConstantExpression(expr any) bool {
 		return true
 	case *types.Document:
 		if IsOperator(v) {
+			if bindsVariables(v) {
+				return false
+			}
 			switch v.Command() {
 			case "$literal", "$const":
 				return true
@@ -152,6 +156,24 @@ func isConstantExpression(expr any) bool {
 	default:
 		return true
 	}
+}
+
+// bindsVariables reports whether an operator binds a variable, which keeps
+// mongod from folding it: $filter, $map, $reduce, and $let with variables.
+func bindsVariables(op *types.Document) bool {
+	switch op.Command() {
+	case "$filter", "$map", "$reduce":
+		return true
+	case "$let":
+		spec, _ := must.NotFail(op.Get("$let")).(*types.Document)
+		if spec == nil {
+			return false
+		}
+		v, _ := spec.Get("vars")
+		vars, _ := v.(*types.Document)
+		return vars != nil && vars.Len() > 0
+	}
+	return false
 }
 
 // getFieldReadsCurrent reports whether a $getField expression has no input,
@@ -194,7 +216,7 @@ func CheckConstantSubexpressions(expr any) error {
 func foldConstants(expr any) (any, bool, error) {
 	switch v := expr.(type) {
 	case string:
-		return v, !strings.HasPrefix(v, "$"), nil
+		return v, isConstantExpression(v), nil
 	case *types.Array:
 		folded := types.MakeArray(v.Len())
 		constant := true
@@ -245,7 +267,7 @@ func foldDocumentConstants(doc *types.Document) (any, bool, error) {
 	switch {
 	case !operator:
 		return folded, constant, nil
-	case name == "$rand" || name == "$sampleRate" || name == "$meta":
+	case name == "$rand" || name == "$sampleRate" || name == "$meta" || bindsVariables(doc):
 		return folded, false, nil
 	case name == "$getField" && getFieldReadsCurrent(doc):
 		return folded, false, nil
@@ -406,9 +428,9 @@ func evalArgValue(arg any, doc *types.Document) (any, error) {
 			case "NOW":
 				base = time.Now().UTC()
 			case "REMOVE":
-				// Missing rather than null, so a $cond selecting $$REMOVE drops
-				// the field instead of writing an explicit null.
-				return nil, aggregations.ErrMissingValue
+				// An operator reads the missing value as null; $cond and the
+				// stages read it with EvalOperand, which keeps it missing.
+				return types.Null, nil
 			case "IS_MR", "CLUSTER_TIME":
 				return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrBuiltinVariableUnavailable,
 					"Builtin variable '$$"+varName+"' is not available")
@@ -419,7 +441,7 @@ func evalArgValue(arg any, doc *types.Document) (any, error) {
 				base = v
 			default:
 				if isMissingVariable(doc, varName) {
-					return nil, aggregations.ErrMissingValue
+					return types.Null, nil
 				}
 				val, err := doc.Get("$$" + varName)
 				if err != nil {

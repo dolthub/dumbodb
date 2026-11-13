@@ -198,6 +198,9 @@ func evalArgValueOrMissing(arg any, doc *types.Document) (any, bool, error) {
 // otherwise. The path follows field path rules from the variable's value.
 func variablePathOrMissing(path string, doc *types.Document) (value any, missing, ok bool) {
 	name, sub, hasSub := strings.Cut(strings.TrimPrefix(path, "$$"), ".")
+	if name == "REMOVE" || isMissingVariable(doc, name) {
+		return types.Null, true, true
+	}
 	if !hasSub || doc == nil {
 		return nil, false, false
 	}
