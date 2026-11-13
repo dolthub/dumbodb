@@ -709,12 +709,25 @@ func checkDatabasePipelineStages(pipeline *types.Array, dbName string) error {
 					name+" is only valid as the first stage in a pipeline", name+" (stage)")
 			}
 		case "$facet":
+			if dbName == "admin" {
+				if err := stages.CheckFacetQueryStats(stage); err != nil {
+					return err
+				}
+			}
 			if _, err := stages.NewStage(stage.DeepCopy()); err != nil {
+				return err
+			}
+		case "$changeStreamSplitLargeEvent":
+			if err := stages.CheckChangeStreamSplitLargeEventSpec(stage); err != nil {
 				return err
 			}
 		case "$querySettings":
 			if err := stages.CheckQuerySettingsSpec(stage); err != nil {
 				return err
+			}
+			if i != 0 && dbName == "admin" {
+				return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCollStatsIsNotFirstStage,
+					name+" is only valid as the first stage in a pipeline", name+" (stage)")
 			}
 		case "$documents", "$currentOp", "$listLocalSessions":
 		default:

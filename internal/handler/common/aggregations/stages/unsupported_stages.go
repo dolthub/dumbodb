@@ -111,7 +111,10 @@ func newListCachedAndActiveUsers(*types.Document) (aggregations.Stage, error) {
 
 // newChangeStreamSplitLargeEvent is mongod's error for the stage outside a
 // $changeStream pipeline, which a standalone server never runs.
-func newChangeStreamSplitLargeEvent(*types.Document) (aggregations.Stage, error) {
+func newChangeStreamSplitLargeEvent(stage *types.Document) (aggregations.Stage, error) {
+	if err := CheckChangeStreamSplitLargeEventSpec(stage); err != nil {
+		return nil, err
+	}
 	return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIllegalOperation,
 		"$changeStreamSplitLargeEvent can only be used in a $changeStream pipeline", "$changeStreamSplitLargeEvent (stage)")
 }
@@ -270,6 +273,16 @@ func binarySubtypeName(subtype types.BinarySubtype) string {
 		return "user"
 	}
 	return fmt.Sprintf("%d", subtype)
+}
+
+// CheckChangeStreamSplitLargeEventSpec returns mongod's error for a
+// $changeStreamSplitLargeEvent specification other than an empty object.
+func CheckChangeStreamSplitLargeEventSpec(stage *types.Document) error {
+	if spec, ok := must.NotFail(stage.Get("$changeStreamSplitLargeEvent")).(*types.Document); ok && spec.Len() == 0 {
+		return nil
+	}
+	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrChangeStreamSplitSpec,
+		"$changeStreamSplitLargeEvent spec should be an empty object", "$changeStreamSplitLargeEvent (stage)")
 }
 
 // CheckQuerySettingsSpec returns mongod's error for a $querySettings

@@ -65,6 +65,36 @@ var notAllowedInFacet = map[string]bool{
 	"$currentOp":         true,
 	"$listLocalSessions": true,
 	"$listCatalog":       true,
+	"$querySettings":     true,
+
+	"$changeStreamSplitLargeEvent": true,
+}
+
+// CheckFacetQueryStats returns mongod's error for a $queryStats in a $facet of
+// {aggregate: 1} on admin, where its namespace is right but its place is not.
+func CheckFacetQueryStats(stage *types.Document) error {
+	spec, ok := must.NotFail(stage.Get("$facet")).(*types.Document)
+	if !ok {
+		return nil
+	}
+	for _, v := range spec.Values() {
+		pipeline, ok := v.(*types.Array)
+		if !ok {
+			return nil
+		}
+		for i := range pipeline.Len() {
+			sub, ok := must.NotFail(pipeline.Get(i)).(*types.Document)
+			if !ok || sub.Command() != "$queryStats" {
+				continue
+			}
+			if err := CheckQueryStatsSpec(sub); err != nil {
+				return err
+			}
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrStageNotAllowedInFacet,
+				"$queryStats is not allowed to be used within a $facet stage", "$facet (stage)")
+		}
+	}
+	return nil
 }
 
 // newFacet creates a new $facet stage.
@@ -132,13 +162,24 @@ func newFacet(stage *types.Document) (aggregations.Stage, error) {
 					"$facet (stage)",
 				)
 			}
-			if stage.Command() == "$queryStats" {
-				// Its specification is parsed, then its place refused.
-				if err := CheckQueryStatsSpec(stage); err != nil {
+			switch stage.Command() {
+			case "$queryStats":
+				// Its specification and namespace are checked before its
+				// place; {aggregate: 1} on admin checks its place itself.
+				_, err := newQueryStats(stage)
+				return nil, err
+			case "$changeStreamSplitLargeEvent":
+				if err := CheckChangeStreamSplitLargeEventSpec(stage); err != nil {
 					return nil, err
 				}
-			} else if err := CheckParseFailingStages(must.NotFail(types.NewArray(stage))); err != nil {
-				return nil, err
+			case "$querySettings":
+				if err := CheckQuerySettingsSpec(stage); err != nil {
+					return nil, err
+				}
+			default:
+				if err := CheckParseFailingStages(must.NotFail(types.NewArray(stage))); err != nil {
+					return nil, err
+				}
 			}
 			if cmd := stage.Command(); notAllowedInFacet[cmd] {
 				return nil, handlererrors.NewCommandErrorMsgWithArgument(
