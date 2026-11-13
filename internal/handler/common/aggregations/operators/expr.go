@@ -245,6 +245,9 @@ func processExprOperatorErrors(err error, argument string) error {
 
 	switch {
 	case errors.As(err, &opErr):
+		if code, ok := FieldOpErrorCode(opErr); ok {
+			return handlererrors.NewCommandErrorMsgWithArgument(code, opErr.Error(), argument)
+		}
 		switch opErr.Code() {
 		case ErrTooManyFields:
 			return handlererrors.NewCommandErrorMsgWithArgument(
