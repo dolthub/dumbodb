@@ -120,7 +120,7 @@ func TestRunUnderGCSafepointKeeper_NilControllerFallsThrough(t *testing.T) {
 // tests. Its VisitGCRoots is never invoked by the test paths.
 type outsideGCRootsProvider struct{}
 
-func (*outsideGCRootsProvider) VisitGCRoots(_ context.Context, _ string, _ func(hash.Hash) bool) error {
+func (*outsideGCRootsProvider) VisitGCRoots(_ context.Context, _ string, _ func(hash.Hash)) error {
 	return nil
 }
 

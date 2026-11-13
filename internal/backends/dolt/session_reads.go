@@ -103,7 +103,11 @@ func workingSetViaSession(ctx context.Context, sess *dsess.DoltSession, fallback
 			return nil, fmt.Errorf("workingSetViaSession: LookupDbState for %q@%q: %w", dbName, branch, err)
 		}
 		if ok {
-			if ws := sessState.WorkingSet(); ws != nil {
+			ws, err := sessState.WorkingSet(sqlCtx)
+			if err != nil {
+				return nil, fmt.Errorf("workingSetViaSession: working set for %q@%q: %w", dbName, branch, err)
+			}
+			if ws != nil {
 				return ws, nil
 			}
 		}
