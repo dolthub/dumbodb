@@ -16,7 +16,6 @@ package stages
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -75,12 +74,52 @@ type bucketOutput struct {
 
 // parseBucketBoundaries returns $bucket's boundaries, which must be at
 // least two sorted values of one type.
+// bucketConstant folds a $bucket boundary or default, as mongod does.
+// constant is false when v is not a constant expression; value is nil when it
+// folds to the missing value.
+func bucketConstant(v any) (value any, constant bool, err error) {
+	if v == "$$REMOVE" {
+		return nil, true, nil
+	}
+	if !operators.IsConstantExpression(v) {
+		return nil, false, nil
+	}
+	folded, missing, err := operators.EvalOperand(v, types.MakeDocument(0))
+	if err != nil || missing {
+		return nil, err == nil, err
+	}
+	return folded, true, nil
+}
+
+// boundaryTypeName names a boundary's type; nil is the missing value.
+func boundaryTypeName(v any) string {
+	if v == nil {
+		return "missing"
+	}
+	return handlerparams.AliasFromType(v)
+}
+
 func parseBucketBoundaries(v any) ([]any, error) {
 	boundariesArr, ok := v.(*types.Array)
 	if !ok {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketBoundariesNotArray,
 			"The $bucket 'boundaries' field must be an array, but found type: "+handlerparams.AliasFromType(v)+".",
 			"$bucket (stage)")
+	}
+
+	boundaries := make([]any, boundariesArr.Len())
+	for i := 0; i < boundariesArr.Len(); i++ {
+		elem := must.NotFail(boundariesArr.Get(i))
+		v, constant, err := bucketConstant(elem)
+		if err != nil {
+			return nil, err
+		}
+		if !constant {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketBoundaryNotConstant,
+				"The $bucket 'boundaries' field must be an array of constant values, but found value: "+
+					types.FormatAnyValue(elem)+".", "$bucket (stage)")
+		}
+		boundaries[i] = v
 	}
 
 	if boundariesArr.Len() < 2 {
@@ -91,17 +130,12 @@ func parseBucketBoundaries(v any) ([]any, error) {
 		)
 	}
 
-	boundaries := make([]any, boundariesArr.Len())
-	for i := 0; i < boundariesArr.Len(); i++ {
-		boundaries[i] = must.NotFail(boundariesArr.Get(i))
-	}
-
 	for i := 1; i < len(boundaries); i++ {
 		prev, cur := boundaries[i-1], boundaries[i]
-		if canonicalType(prev) != canonicalType(cur) {
+		if prev == nil || cur == nil || canonicalType(prev) != canonicalType(cur) {
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketBoundaryTypes,
 				fmt.Sprintf("All values in the the 'boundaries' option to $bucket must have the same type. "+
-					"Found conflicting types %s and %s.", handlerparams.AliasFromType(prev), handlerparams.AliasFromType(cur)),
+					"Found conflicting types %s and %s.", boundaryTypeName(prev), boundaryTypeName(cur)),
 				"$bucket (stage)")
 		}
 		if types.CompareOrder(prev, cur, types.Ascending) != types.Less {
@@ -129,10 +163,12 @@ func newBucket(stage *types.Document) (aggregations.Stage, error) {
 		)
 	}
 
-	// mongod checks groupBy and boundaries in the order the specification
-	// gives them, and only then that both are present.
-	var groupByVal any
+	// mongod checks each field in the order the specification gives them,
+	// and only then that groupBy and boundaries are present.
+	var groupByVal, defaultVal any
 	var boundaries []any
+	var hasDefault bool
+	var output []bucketOutput
 	for _, key := range spec.Keys() {
 		val := must.NotFail(spec.Get(key))
 		switch key {
@@ -147,6 +183,37 @@ func newBucket(stage *types.Document) (aggregations.Stage, error) {
 			if boundaries, err = parseBucketBoundaries(val); err != nil {
 				return nil, err
 			}
+		case "default":
+			var constant bool
+			if defaultVal, constant, err = bucketConstant(val); err != nil {
+				return nil, err
+			}
+			if !constant {
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketDefaultNotConstant,
+					"The $bucket 'default' field must be a constant expression, but found: "+types.FormatAnyValue(val)+".",
+					"$bucket (stage)")
+			}
+			hasDefault = defaultVal != nil
+		case "output":
+			outputDoc, ok := val.(*types.Document)
+			if !ok {
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketOutputNotObject,
+					"The $bucket 'output' field must be an object, but found type: "+handlerparams.AliasFromType(val)+".",
+					"$bucket (stage)")
+			}
+			if err := operators.CheckFieldPaths(outputDoc); err != nil {
+				return nil, err
+			}
+			for _, field := range outputDoc.Keys() {
+				acc, err := accumulators.NewAccumulator("$bucket", field, must.NotFail(outputDoc.Get(field)))
+				if err != nil {
+					return nil, lazyerrors.Error(err)
+				}
+				output = append(output, bucketOutput{field: field, accumulator: acc})
+			}
+		default:
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketUnknownOption,
+				"Unrecognized option to $bucket: "+key+".", "$bucket (stage)")
 		}
 	}
 	if groupByVal == nil || boundaries == nil {
@@ -165,15 +232,15 @@ func newBucket(stage *types.Document) (aggregations.Stage, error) {
 	}
 
 	b := &bucket{
-		groupBy:    groupByVal,
-		boundaries: boundaries,
-		cmp:        operators.CollationOf(stage),
+		groupBy:      groupByVal,
+		boundaries:   boundaries,
+		hasDefault:   hasDefault,
+		defaultValue: defaultVal,
+		output:       output,
+		cmp:          operators.CollationOf(stage),
 	}
 
-	// default is optional.
-	if defaultVal, getErr := spec.Get("default"); getErr == nil {
-		b.hasDefault = true
-		b.defaultValue = defaultVal
+	if hasDefault {
 		lower, upper := boundaries[0], boundaries[len(boundaries)-1]
 		if canonicalType(defaultVal) == canonicalType(lower) &&
 			types.CompareOrder(defaultVal, lower, types.Ascending) != types.Less &&
@@ -181,43 +248,6 @@ func newBucket(stage *types.Document) (aggregations.Stage, error) {
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketDefaultInRange,
 				"The $bucket 'default' field must be less than the lowest boundary or greater than or equal to "+
 					"the highest boundary.", "$bucket (stage)")
-		}
-	}
-
-	// output is optional.
-	if outputVal, getErr := spec.Get("output"); getErr == nil {
-		outputDoc, ok := outputVal.(*types.Document)
-		if !ok {
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrBadValue,
-				"$bucket 'output' field must be a document",
-				"$bucket (stage)",
-			)
-		}
-
-		if err := operators.CheckFieldPaths(outputDoc); err != nil {
-			return nil, err
-		}
-
-		outputIter := outputDoc.Iterator()
-		defer outputIter.Close()
-
-		for {
-			field, accVal, iterErr := outputIter.Next()
-			if errors.Is(iterErr, iterator.ErrIteratorDone) {
-				break
-			}
-
-			if iterErr != nil {
-				return nil, lazyerrors.Error(iterErr)
-			}
-
-			acc, err := accumulators.NewAccumulator("$bucket", field, accVal)
-			if err != nil {
-				return nil, lazyerrors.Error(err)
-			}
-
-			b.output = append(b.output, bucketOutput{field: field, accumulator: acc})
 		}
 	}
 
