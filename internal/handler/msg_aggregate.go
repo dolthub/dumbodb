@@ -1609,13 +1609,19 @@ func mergeWriteError(params *stages.MergeParams, err error) error {
 }
 
 // mergeChangesID reports whether merging incoming into the matched existing
-// document would change its _id.
-func mergeChangesID(existing, incoming *types.Document) bool {
+// document would change its _id. A replacement compares by value, so 1.0 or
+// NumberLong(1) replaces a document whose _id is 1; a merge, as an update
+// does, treats any other encoding as a change.
+func mergeChangesID(existing, incoming *types.Document, byValue bool) bool {
 	id, err := incoming.Get("_id")
 	if err != nil {
 		return false
 	}
-	return !types.Identical(id, must.NotFail(existing.Get("_id")))
+	old := must.NotFail(existing.Get("_id"))
+	if byValue {
+		return types.CompareForAggregation(id, old) != types.Equal
+	}
+	return !types.Identical(id, old)
 }
 
 func mergeImmutableIDError(cause string) error {
@@ -1753,7 +1759,7 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 			if matched {
 				switch params.WhenMatched {
 				case "merge":
-					if mergeChangesID(entry.doc, incoming) {
+					if mergeChangesID(entry.doc, incoming, false) {
 						return mergeImmutableIDError("Performing an update on the path '_id' would modify the immutable field '_id'")
 					}
 
@@ -1767,7 +1773,7 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 					toUpdate = append(toUpdate, merged)
 
 				case "replace":
-					if mergeChangesID(entry.doc, incoming) {
+					if mergeChangesID(entry.doc, incoming, true) {
 						return mergeImmutableIDError(fmt.Sprintf(
 							"After applying the update, the (immutable) field '_id' was found to have been altered to _id: %s",
 							types.FormatAnyValue(must.NotFail(incoming.Get("_id")))))
