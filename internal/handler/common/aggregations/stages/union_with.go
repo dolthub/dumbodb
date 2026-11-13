@@ -137,7 +137,11 @@ func (u *unionWith) Process(ctx context.Context, iter types.DocumentsIterator, c
 		viewSpecs = sbeSpecs(view)
 	}
 	viewInSBE := false
-	if u.sub.inClassic {
+	// A missing collection gives mongod an empty plan and a leading _id
+	// equality its express plan; neither runs in SBE.
+	combinedSpecs := append(append([]*types.Document{}, viewSpecs...), subSpecs...)
+	noSBE := IsExpressMatch(combinedSpecs) || (u.sub.from != "" && !fetcher.SourceExists(ctx, u.sub.from))
+	if u.sub.inClassic || noSBE {
 		u.sub.sbePrefix, u.sub.sbeSubPipeline = 0, false
 	} else {
 		combined := SBEPrefixLen(append(append([]*types.Document{}, viewSpecs...), subSpecs...), isView)

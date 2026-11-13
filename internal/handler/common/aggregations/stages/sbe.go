@@ -135,6 +135,29 @@ var sbeClassicOperators = map[string]bool{
 // $group in its classic engine.
 var sbeClassicAccumulators = map[string]bool{"$median": true, "$percentile": true}
 
+// IsExpressMatch reports whether a pipeline starts with a $match on one
+// non-null _id value, alone, which mongod runs on its express plan rather
+// than in SBE. mongod joins a second leading $match to the first.
+func IsExpressMatch(specs []*types.Document) bool {
+	if len(specs) == 0 || specs[0] == nil || specs[0].Command() != "$match" {
+		return false
+	}
+	if len(specs) > 1 && specs[1] != nil && specs[1].Command() == "$match" {
+		return false
+	}
+	filter, ok := must.NotFail(specs[0].Get("$match")).(*types.Document)
+	if !ok || filter.Len() != 1 || filter.Keys()[0] != "_id" {
+		return false
+	}
+	switch v := must.NotFail(filter.Get("_id")).(type) {
+	case *types.Document:
+		return v.Len() == 0 || !strings.HasPrefix(v.Keys()[0], "$")
+	case *types.Array, types.Regex, types.NullType, types.UndefinedType:
+		return false
+	}
+	return true
+}
+
 // groupsByIDKeepingOne reports whether a $group groups by "$_id" and keeps
 // one value per group ($first, $last, $top, $bottom), which mongod rewrites
 // into a stage of its classic engine.

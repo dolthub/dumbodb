@@ -493,6 +493,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		// The stages the pushed filter and limit are drawn from: the user's,
 		// or for a view, the view's then the user's, as they run on the base.
 		pushdownStages := aggregationStages
+		collectionExists := len(cList.Collections) > 0
 		isView := cInfo.IsView
 		if isView {
 			view := cList.Collections[0]
@@ -512,6 +513,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 				return nil, handleMaxTimeMSError(srcErr, maxTimeMS, "aggregate")
 			}
 			cInfo = backends.CollectionInfo{}
+			collectionExists = srcInfo != nil
 			if srcInfo != nil {
 				cInfo = *srcInfo
 			}
@@ -544,7 +546,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		}
 		// mongod answers a missing collection with an empty plan, and a
 		// leading equality on _id with its express plan; neither runs in SBE.
-		if len(cList.Collections) > 0 && !isExpressMatch(stagesSpecs) {
+		if collectionExists && !stages.IsExpressMatch(stagesSpecs) {
 			stages.WrapSBEStages(stagesDocuments, stages.SBEPrefixLen(stagesSpecs, collectionIsView))
 		}
 
@@ -672,25 +674,6 @@ var dbLevelSourceStages = map[string]struct{}{
 	"$listCatalog":        {},
 	"$querySettings":      {},
 	"$listClusterCatalog": {},
-}
-
-// isExpressMatch reports whether a pipeline starts with a $match on one _id
-// value, which mongod runs on its express plan.
-func isExpressMatch(specs []*types.Document) bool {
-	if len(specs) == 0 || specs[0] == nil || specs[0].Command() != "$match" {
-		return false
-	}
-	filter, ok := must.NotFail(specs[0].Get("$match")).(*types.Document)
-	if !ok || filter.Len() != 1 || filter.Keys()[0] != "_id" {
-		return false
-	}
-	switch v := must.NotFail(filter.Get("_id")).(type) {
-	case *types.Document:
-		return v.Len() == 0 || !strings.HasPrefix(v.Keys()[0], "$")
-	case *types.Array, types.Regex:
-		return false
-	}
-	return true
 }
 
 // checkDatabasePipelineStages returns the error mongod reports while it parses

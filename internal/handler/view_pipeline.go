@@ -149,6 +149,23 @@ func withDBName(ctx context.Context, dbName string) context.Context {
 	return context.WithValue(ctx, dbNameKey{}, dbName)
 }
 
+// SourceExists implements stages.ExistenceChecker.
+func (f *foreignFetcher) SourceExists(ctx context.Context, name string) bool {
+	info, err := lookupCollectionInfo(ctx, f.db, name)
+	if err != nil || info == nil {
+		return false
+	}
+	if !info.IsView {
+		return true
+	}
+	base, _, _, err := resolveViewChain(ctx, f.db, info.Name, info.ViewOn, info.ViewPipeline, nil)
+	if err != nil {
+		return false
+	}
+	baseInfo, err := lookupCollectionInfo(ctx, f.db, base)
+	return err == nil && baseInfo != nil
+}
+
 // ViewPipeline implements stages.ViewResolver: the stages of a view and of
 // the views it reads from.
 func (f *foreignFetcher) ViewPipeline(ctx context.Context, name string) (*types.Array, bool) {
