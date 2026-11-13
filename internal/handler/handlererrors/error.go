@@ -1113,6 +1113,15 @@ const (
 	// ErrReverseArrayNotArray indicates a $reverseArray argument that is not an array.
 	ErrReverseArrayNotArray = ErrorCode(34435) // Location34435
 
+	// ErrDocumentWindowNeedsSortBy indicates a bounded document window without a sortBy.
+	ErrDocumentWindowNeedsSortBy = ErrorCode(5339901) // Location5339901
+
+	// ErrRangeWindowNeedsSortBy indicates a range window without a single-field sortBy.
+	ErrRangeWindowNeedsSortBy = ErrorCode(5339902) // Location5339902
+
+	// ErrRankNeedsSortBy indicates a rank function without a one-field sortBy.
+	ErrRankNeedsSortBy = ErrorCode(5371602) // Location5371602
+
 	// ErrFilterUnknownArgument indicates an unrecognized $filter parameter.
 	ErrFilterUnknownArgument = ErrorCode(28647) // Location28647
 
