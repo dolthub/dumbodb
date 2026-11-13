@@ -234,6 +234,13 @@ func sbeCompatibleStage(spec *types.Document) bool {
 		if !ok {
 			return true
 		}
+		// mongod's $bucket groups by a $switch with a branch per bucket, and
+		// SBE takes a $switch of fewer than 50 branches.
+		if b, _ := d.Get("boundaries"); b != nil {
+			if arr, ok := b.(*types.Array); ok && arr.Len()-1 >= 50 {
+				return false
+			}
+		}
 		if out, _ := d.Get("output"); out != nil {
 			if !sbeCompatibleStage(must.NotFail(types.NewDocument("$group", out))) {
 				return false
