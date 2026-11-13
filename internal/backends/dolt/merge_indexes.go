@@ -427,7 +427,7 @@ func (a *indexMergeApplier) finalize(ctx context.Context) (secondaryIndexes, err
 	infos := make([]backends.IndexInfo, 0, len(a.survivors))
 	maps := make(map[string]prolly.Map, len(a.survivors))
 	for _, s := range a.survivors {
-		m, err := s.mut.Map(ctx)
+		m, err := idxpkg.TreeFlush(ctx, s.mut)
 		if err != nil {
 			return secondaryIndexes{}, fmt.Errorf("flushing merged index %q: %w", s.info.Name, err)
 		}

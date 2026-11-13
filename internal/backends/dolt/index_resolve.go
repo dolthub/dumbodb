@@ -354,7 +354,7 @@ func applyInsertsToIndexes(ctx context.Context, infos []backends.IndexInfo, maps
 				}
 			}
 		}
-		updated, err := mut.Map(ctx)
+		updated, err := idxpkg.TreeFlush(ctx, mut)
 		if err != nil {
 			return nil, nil, fmt.Errorf("applyInsertsToIndexes: flushing map for %q: %w", info.Name, err)
 		}
@@ -456,7 +456,7 @@ func applyUpdatesToIndexes(ctx context.Context, infos []backends.IndexInfo, maps
 		if !edited {
 			continue
 		}
-		updated, err := mut.Map(ctx)
+		updated, err := idxpkg.TreeFlush(ctx, mut)
 		if err != nil {
 			return nil, nil, fmt.Errorf("applyUpdatesToIndexes: flushing map for %q: %w", info.Name, err)
 		}
@@ -505,7 +505,7 @@ func applyDeletesToIndexes(ctx context.Context, infos []backends.IndexInfo, maps
 		if !edited {
 			continue
 		}
-		updated, err := mut.Map(ctx)
+		updated, err := idxpkg.TreeFlush(ctx, mut)
 		if err != nil {
 			return nil, fmt.Errorf("applyDeletesToIndexes: flushing map for %q: %w", info.Name, err)
 		}

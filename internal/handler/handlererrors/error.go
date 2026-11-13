@@ -841,9 +841,10 @@ func ProtocolError(err error) ProtoErr {
 	return NewCommandError(errInternalError, err).(*CommandError)
 }
 
-// IndexKeyError returns the code and message MongoDB reports when err is a
-// value an index cannot hold: index.ErrKeyTooLong or
-// index.ErrCannotExtractGeoKeys. The message drops the internal call chain.
+// IndexKeyError returns the code and message to report when err is a value an
+// index cannot hold: index.ErrKeyTooLong, index.ErrCannotExtractGeoKeys, or
+// index.ErrTreeTooDeep, which MongoDB has no counterpart for. The message
+// drops the internal call chain.
 func IndexKeyError(err error) (ErrorCode, string, bool) {
 	for _, e := range []struct {
 		sentinel error
@@ -851,6 +852,7 @@ func IndexKeyError(err error) (ErrorCode, string, bool) {
 	}{
 		{index.ErrKeyTooLong, ErrKeyTooLong},
 		{index.ErrCannotExtractGeoKeys, ErrCannotExtractGeoKeys},
+		{index.ErrTreeTooDeep, ErrOperationFailed},
 	} {
 		if errors.Is(err, e.sentinel) {
 			msg := err.Error()

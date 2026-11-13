@@ -86,7 +86,7 @@ func InsertEntry(ctx context.Context, mut *prolly.MutableMap, fieldValues []any,
 	if err != nil {
 		return err
 	}
-	return mut.Put(ctx, keyTuple, valTuple)
+	return TreePut(ctx, mut, keyTuple, valTuple)
 }
 
 func DeleteEntry(ctx context.Context, mut *prolly.MutableMap, fieldValues []any, primaryIDBytes []byte) error {
