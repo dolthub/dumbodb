@@ -36,15 +36,15 @@ func newStrLenBytes(args ...any) (Operator, error) {
 }
 
 func (op *strLenBytesOp) Process(doc *types.Document) (any, error) {
-	v, err := evalArgValue(op.arg, doc)
+	v, missing, err := evalArgValueOrMissing(op.arg, doc)
 	if err != nil {
 		return nil, err
 	}
 
 	s, ok := v.(string)
-	if !ok {
+	if !ok || missing {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrStrLenBytesNotString,
-			"$strLenBytes requires a string argument, found: "+handlerparams.AliasFromType(v), "$strLenBytes")
+			"$strLenBytes requires a string argument, found: "+aliasOrMissing(v, !missing), "$strLenBytes")
 	}
 
 	return int32(len(s)), nil
@@ -64,19 +64,15 @@ func newStrLenCP(args ...any) (Operator, error) {
 }
 
 func (op *strLenCPOp) Process(doc *types.Document) (any, error) {
-	v, err := evalArgValue(op.arg, doc)
+	v, missing, err := evalArgValueOrMissing(op.arg, doc)
 	if err != nil {
 		return nil, err
 	}
 
-	if isNullish(v) {
-		return types.Null, nil
-	}
-
 	s, ok := v.(string)
-	if !ok {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$strLenCP",
-			fmt.Sprintf("$strLenCP requires a string, got %T", v))
+	if !ok || missing {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrStrLenCPNotString,
+			"$strLenCP requires a string argument, found: "+aliasOrMissing(v, !missing), "$strLenCP")
 	}
 
 	return int32(utf8.RuneCountInString(s)), nil

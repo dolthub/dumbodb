@@ -1009,6 +1009,9 @@ const (
 	// ErrConcatNotString indicates a classic $concat argument that is not a string.
 	ErrConcatNotString = ErrorCode(16702) // Location16702
 
+	// ErrStrLenCPNotString indicates a $strLenCP argument that is not a string.
+	ErrStrLenCPNotString = ErrorCode(34471) // Location34471
+
 	// ErrStrLenBytesNotString indicates a classic $strLenBytes argument that is not a string.
 	ErrStrLenBytesNotString = ErrorCode(34473) // Location34473
 
