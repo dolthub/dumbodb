@@ -46,6 +46,11 @@ func buildViewPipelineStages(db backends.Database, viewPipeline *types.Array, cm
 		return nil, nil, nil
 	}
 
+	if cmp != nil {
+		// The stored pipeline may serve other commands concurrently; the
+		// collation is attached to this command's copy.
+		viewPipeline = viewPipeline.DeepCopy()
+	}
 	stageDocs := must.NotFail(iterator.ConsumeValues(viewPipeline.Iterator()))
 	result := make([]aggregations.Stage, 0, len(stageDocs))
 	for _, v := range stageDocs {
