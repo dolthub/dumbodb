@@ -17,8 +17,34 @@ package operators
 import (
 	"fmt"
 
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
 )
+
+// evalSetOperand evaluates an operand of a set operator: an array, a nullish
+// value, or another type, named as mongod names it.
+//
+// A nullish operand makes a set operator null before any operand's type is
+// checked, as in mongod's SBE engine. The classic engine checks types first,
+// and fails on a nullish $setEquals or $setIsSubset operand.
+func evalSetOperand(arg any, doc *types.Document) (arr *types.Array, nullish bool, typeName string, err error) {
+	v, missing, err := evalArgValueOrMissing(arg, doc)
+	if err != nil {
+		return nil, false, "", err
+	}
+	if missing {
+		return nil, true, "missing", nil
+	}
+	if arr, ok := v.(*types.Array); ok {
+		return arr, false, "array", nil
+	}
+	return nil, isNullish(v), handlerparams.AliasFromType(v), nil
+}
+
+func setOperandError(code handlererrors.ErrorCode, opName, msg string) error {
+	return handlererrors.NewCommandErrorMsgWithArgument(code, msg, opName)
+}
 
 // toSet converts an array to a deduplicated slice.
 func toSet(arr *types.Array) ([]any, error) {
@@ -33,7 +59,7 @@ func toSet(arr *types.Array) ([]any, error) {
 		found := false
 
 		for _, existing := range result {
-			if types.Compare(item, existing) == 0 {
+			if types.CompareForAggregation(item, existing) == types.Equal {
 				found = true
 				break
 			}
@@ -55,15 +81,25 @@ func newSetUnion(args ...any) (Operator, error) {
 
 func (op *setUnionOp) Process(doc *types.Document) (any, error) {
 	var result []any
+	sawNull := false
+	notArray := ""
 
 	for _, arg := range op.args {
-		arr, isNull, err := collectArray(arg, doc, "$setUnion")
+		arr, nullish, typeName, err := evalSetOperand(arg, doc)
 		if err != nil {
 			return nil, err
 		}
 
-		if isNull {
-			return types.Null, nil
+		if nullish {
+			sawNull = true
+			continue
+		}
+
+		if arr == nil {
+			if notArray == "" {
+				notArray = typeName
+			}
+			continue
 		}
 
 		items, err := arrayToSlice(arr)
@@ -75,7 +111,7 @@ func (op *setUnionOp) Process(doc *types.Document) (any, error) {
 			found := false
 
 			for _, existing := range result {
-				if types.Compare(item, existing) == 0 {
+				if types.CompareForAggregation(item, existing) == types.Equal {
 					found = true
 					break
 				}
@@ -85,6 +121,14 @@ func (op *setUnionOp) Process(doc *types.Document) (any, error) {
 				result = append(result, item)
 			}
 		}
+	}
+
+	switch {
+	case sawNull:
+		return types.Null, nil
+	case notArray != "":
+		return nil, setOperandError(handlererrors.ErrSetUnionNotArray, "$setUnion",
+			"All operands of $setUnion must be arrays. One argument is of type: "+notArray)
 	}
 
 	return sliceToArray(result), nil
@@ -99,32 +143,37 @@ func newSetIntersection(args ...any) (Operator, error) {
 }
 
 func (op *setIntersectionOp) Process(doc *types.Document) (any, error) {
-	if len(op.args) == 0 {
-		return sliceToArray(nil), nil
-	}
+	var candidates []any
+	sawNull := false
+	notArray := ""
 
-	arr0, isNull, err := collectArray(op.args[0], doc, "$setIntersection")
-	if err != nil {
-		return nil, err
-	}
-
-	if isNull {
-		return types.Null, nil
-	}
-
-	candidates, err := toSet(arr0)
-	if err != nil {
-		return nil, err
-	}
-
-	for _, arg := range op.args[1:] {
-		arr, isNull, err := collectArray(arg, doc, "$setIntersection")
+	for i, arg := range op.args {
+		arr, nullish, typeName, err := evalSetOperand(arg, doc)
 		if err != nil {
 			return nil, err
 		}
 
-		if isNull {
-			return types.Null, nil
+		if nullish {
+			sawNull = true
+			continue
+		}
+
+		if arr == nil {
+			if notArray == "" {
+				notArray = typeName
+			}
+			continue
+		}
+
+		if sawNull || notArray != "" {
+			continue
+		}
+
+		if i == 0 {
+			if candidates, err = toSet(arr); err != nil {
+				return nil, err
+			}
+			continue
 		}
 
 		items, err := arrayToSlice(arr)
@@ -136,7 +185,7 @@ func (op *setIntersectionOp) Process(doc *types.Document) (any, error) {
 
 		for _, c := range candidates {
 			for _, item := range items {
-				if types.Compare(c, item) == 0 {
+				if types.CompareForAggregation(c, item) == types.Equal {
 					next = append(next, c)
 					break
 				}
@@ -144,6 +193,14 @@ func (op *setIntersectionOp) Process(doc *types.Document) (any, error) {
 		}
 
 		candidates = next
+	}
+
+	switch {
+	case sawNull:
+		return types.Null, nil
+	case notArray != "":
+		return nil, setOperandError(handlererrors.ErrSetIntersectionNotArray, "$setIntersection",
+			"All operands of $setIntersection must be arrays. One argument is of type: "+notArray)
 	}
 
 	return sliceToArray(candidates), nil
@@ -167,22 +224,25 @@ func newSetDifference(args ...any) (Operator, error) {
 }
 
 func (op *setDifferenceOp) Process(doc *types.Document) (any, error) {
-	arr1, isNull, err := collectArray(op.set1Arg, doc, "$setDifference")
+	arr1, null1, type1, err := evalSetOperand(op.set1Arg, doc)
 	if err != nil {
 		return nil, err
 	}
 
-	if isNull {
-		return types.Null, nil
-	}
-
-	arr2, isNull, err := collectArray(op.set2Arg, doc, "$setDifference")
+	arr2, null2, type2, err := evalSetOperand(op.set2Arg, doc)
 	if err != nil {
 		return nil, err
 	}
 
-	if isNull {
+	switch {
+	case null1 || null2:
 		return types.Null, nil
+	case arr1 == nil:
+		return nil, setOperandError(handlererrors.ErrSetDifferenceFirstNotArray, "$setDifference",
+			"both operands of $setDifference must be arrays. First argument is of type: "+type1)
+	case arr2 == nil:
+		return nil, setOperandError(handlererrors.ErrSetDifferenceSecondNotArray, "$setDifference",
+			"both operands of $setDifference must be arrays. Second argument is of type: "+type2)
 	}
 
 	set1, err := toSet(arr1)
@@ -201,7 +261,7 @@ func (op *setDifferenceOp) Process(doc *types.Document) (any, error) {
 		inSet2 := false
 
 		for _, s2 := range set2items {
-			if types.Compare(item, s2) == 0 {
+			if types.CompareForAggregation(item, s2) == types.Equal {
 				inSet2 = true
 				break
 			}
@@ -221,24 +281,36 @@ type setEqualsOp struct{ args []any }
 
 func newSetEquals(args ...any) (Operator, error) {
 	if len(args) < 2 {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$setEquals",
-			fmt.Sprintf("Expression $setEquals takes at least 2 arguments. %d were passed in.", len(args)))
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSetEqualsTooFewArgs,
+			fmt.Sprintf("$setEquals needs at least two arguments had: %d", len(args)), "$setEquals")
 	}
 
 	return &setEqualsOp{args: args}, nil
 }
 
 func (op *setEqualsOp) Process(doc *types.Document) (any, error) {
-	var sets [][]any
+	arrs := make([]*types.Array, len(op.args))
+	typeNames := make([]string, len(op.args))
 
-	for _, arg := range op.args {
-		arr, isNull, err := collectArray(arg, doc, "$setEquals")
+	for i, arg := range op.args {
+		arr, nullish, typeName, err := evalSetOperand(arg, doc)
 		if err != nil {
 			return nil, err
 		}
 
-		if isNull {
+		if nullish {
 			return types.Null, nil
+		}
+
+		arrs[i], typeNames[i] = arr, typeName
+	}
+
+	var sets [][]any
+
+	for i, arr := range arrs {
+		if arr == nil {
+			return nil, setOperandError(handlererrors.ErrSetEqualsNotArray, "$setEquals",
+				fmt.Sprintf("All operands of $setEquals must be arrays. %d-th argument is of type: %s", i+1, typeNames[i]))
 		}
 
 		set, err := toSet(arr)
@@ -260,7 +332,7 @@ func (op *setEqualsOp) Process(doc *types.Document) (any, error) {
 			found := false
 
 			for _, o := range other {
-				if types.Compare(item, o) == 0 {
+				if types.CompareForAggregation(item, o) == types.Equal {
 					found = true
 					break
 				}
@@ -289,26 +361,41 @@ func newSetIsSubset(args ...any) (Operator, error) {
 			fmt.Sprintf("Expression $setIsSubset takes exactly 2 arguments. %d were passed in.", len(args)))
 	}
 
+	if isConstantExpression(args[1]) {
+		v, _, err := foldConstant(args[1], nil)
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := v.(*types.Array); !ok {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSetIsSubsetConstantNotArray,
+				"both operands of $setIsSubset must be arrays. Second argument is of type: "+handlerparams.AliasFromType(v),
+				"$setIsSubset")
+		}
+	}
+
 	return &setIsSubsetOp{set1Arg: args[0], set2Arg: args[1]}, nil
 }
 
 func (op *setIsSubsetOp) Process(doc *types.Document) (any, error) {
-	arr1, isNull, err := collectArray(op.set1Arg, doc, "$setIsSubset")
+	arr1, null1, type1, err := evalSetOperand(op.set1Arg, doc)
 	if err != nil {
 		return nil, err
 	}
 
-	if isNull {
-		return types.Null, nil
-	}
-
-	arr2, isNull, err := collectArray(op.set2Arg, doc, "$setIsSubset")
+	arr2, null2, type2, err := evalSetOperand(op.set2Arg, doc)
 	if err != nil {
 		return nil, err
 	}
 
-	if isNull {
+	switch {
+	case null1 || null2:
 		return types.Null, nil
+	case arr1 == nil:
+		return nil, setOperandError(handlererrors.ErrSetIsSubsetFirstNotArray, "$setIsSubset",
+			"both operands of $setIsSubset must be arrays. First argument is of type: "+type1)
+	case arr2 == nil:
+		return nil, setOperandError(handlererrors.ErrSetIsSubsetSecondNotArray, "$setIsSubset",
+			"both operands of $setIsSubset must be arrays. Second argument is of type: "+type2)
 	}
 
 	set1, err := toSet(arr1)
@@ -325,7 +412,7 @@ func (op *setIsSubsetOp) Process(doc *types.Document) (any, error) {
 		found := false
 
 		for _, s2 := range set2items {
-			if types.Compare(item, s2) == 0 {
+			if types.CompareForAggregation(item, s2) == types.Equal {
 				found = true
 				break
 			}
@@ -353,13 +440,14 @@ func newAnyElementTrue(args ...any) (Operator, error) {
 }
 
 func (op *anyElementTrueOp) Process(doc *types.Document) (any, error) {
-	arr, isNull, err := collectArray(op.arg, doc, "$anyElementTrue")
+	arr, _, typeName, err := evalSetOperand(op.arg, doc)
 	if err != nil {
 		return nil, err
 	}
 
-	if isNull {
-		return false, nil
+	if arr == nil {
+		return nil, setOperandError(handlererrors.ErrAnyElementTrueNotArray, "$anyElementTrue",
+			"$anyElementTrue's argument must be an array, but is "+typeName)
 	}
 
 	items, err := arrayToSlice(arr)
@@ -390,13 +478,14 @@ func newAllElementsTrue(args ...any) (Operator, error) {
 }
 
 func (op *allElementsTrueOp) Process(doc *types.Document) (any, error) {
-	arr, isNull, err := collectArray(op.arg, doc, "$allElementsTrue")
+	arr, _, typeName, err := evalSetOperand(op.arg, doc)
 	if err != nil {
 		return nil, err
 	}
 
-	if isNull {
-		return false, nil
+	if arr == nil {
+		return nil, setOperandError(handlererrors.ErrAllElementsTrueNotArray, "$allElementsTrue",
+			"$allElementsTrue's argument must be an array, but is "+typeName)
 	}
 
 	items, err := arrayToSlice(arr)
