@@ -200,6 +200,10 @@ func CheckQueryStatsSpec(stage *types.Document) error {
 		algorithm, hasKey, keyLen := "", false, 0
 		for _, k := range ti.Keys() {
 			tv := must.NotFail(ti.Get(k))
+			if tv == types.Null && (k == "algorithm" || k == "hmacKey") {
+				// IDL parsing treats a null field as absent.
+				continue
+			}
 			switch k {
 			case "algorithm":
 				s, ok := tv.(string)
