@@ -290,14 +290,24 @@ func (f *facet) Process(ctx context.Context, iter types.DocumentsIterator, close
 	// Build the output document.
 	outputDoc := new(types.Document)
 
-	for _, p := range f.pipelines {
+	for i, p := range f.pipelines {
 		// Parse stages at process time to avoid initialization cycle.
 		stageList, parseErr := parsePipelineArray(p.pipelineArr, f.fetcher)
 		if parseErr != nil {
 			return nil, parseErr
 		}
 
-		results, err := runSubPipeline(ctx, inputDocs, stageList)
+		// Stages may change documents in place; each branch but the last
+		// works on its own copy so the others see the input unchanged.
+		branchDocs := inputDocs
+		if i < len(f.pipelines)-1 {
+			branchDocs = make([]*types.Document, len(inputDocs))
+			for j, doc := range inputDocs {
+				branchDocs[j] = doc.DeepCopy()
+			}
+		}
+
+		results, err := runSubPipeline(ctx, branchDocs, stageList)
 		if err != nil {
 			return nil, lazyerrors.Error(err)
 		}
