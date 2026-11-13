@@ -19,17 +19,16 @@ import (
 
 	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/types"
-	"github.com/dolthub/dumbodb/internal/util/identitycache"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // A command's collation governs every string comparison in its pipeline. It
-// is bound to the documents of the command's own copy of the pipeline (see
-// BindNowInPipeline), so stages and operators built from them find it.
-var boundCollations identitycache.Cache[types.Document, *collation.Comparator]
+// is attached to the stage and operator documents of the command's own copy of
+// the pipeline (see BindNowInPipeline), so the stages and operators built from
+// them find it.
 
-// BindCollation binds cmp to every stage and operator document within v. A nil cmp binds
-// nothing.
+// BindCollation attaches cmp to every stage and operator document within v. A
+// nil cmp attaches nothing.
 func BindCollation(v any, cmp *collation.Comparator) {
 	if cmp == nil {
 		return
@@ -41,7 +40,7 @@ func BindCollation(v any, cmp *collation.Comparator) {
 			if keys[0] == "$literal" {
 				return
 			}
-			boundCollations.Put(v, cmp)
+			v.Annotate(cmp)
 		}
 		for _, k := range keys {
 			BindCollation(must.NotFail(v.Get(k)), cmp)
@@ -53,12 +52,9 @@ func BindCollation(v any, cmp *collation.Comparator) {
 	}
 }
 
-// CollationOf returns the collation bound to doc, or nil for simple.
+// CollationOf returns the collation attached to doc, or nil for simple.
 func CollationOf(doc *types.Document) *collation.Comparator {
-	if doc == nil || boundCollations.Empty() {
-		return nil
-	}
-	cmp, _ := boundCollations.Get(doc)
+	cmp, _ := doc.Annotation().(*collation.Comparator)
 	return cmp
 }
 

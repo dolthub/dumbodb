@@ -19,7 +19,6 @@ package identitycache
 import (
 	"runtime"
 	"sync"
-	"sync/atomic"
 	"unsafe"
 	"weak"
 )
@@ -28,7 +27,6 @@ import (
 type Cache[K any, V any] struct {
 	mu sync.RWMutex
 	m  map[uintptr]*entry[K, V]
-	n  atomic.Int64
 }
 
 type entry[K any, V any] struct {
@@ -54,9 +52,6 @@ func (c *Cache[K, V]) Put(k *K, v V) {
 	if c.m == nil {
 		c.m = make(map[uintptr]*entry[K, V])
 	}
-	if _, replaced := c.m[addr]; !replaced {
-		c.n.Add(1)
-	}
 	c.m[addr] = e
 	c.mu.Unlock()
 	runtime.AddCleanup(k, c.remove, cleanupArg[K, V]{addr: addr, e: e})
@@ -71,14 +66,8 @@ func (c *Cache[K, V]) remove(a cleanupArg[K, V]) {
 	c.mu.Lock()
 	if c.m[a.addr] == a.e {
 		delete(c.m, a.addr)
-		c.n.Add(-1)
 	}
 	c.mu.Unlock()
-}
-
-// Empty reports, without locking, whether the cache holds no entries.
-func (c *Cache[K, V]) Empty() bool {
-	return c.n.Load() == 0
 }
 
 func (c *Cache[K, V]) len() int {
