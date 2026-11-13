@@ -61,6 +61,11 @@ func newFill(stage *types.Document) (aggregations.Stage, error) {
 			switch val.(type) {
 			case types.NullType, types.UndefinedType:
 				return nil, fillWrongType("partitionBy", val, "object")
+			case string, *types.Document:
+			default:
+				// mongod's message prints its list of allowed types this way.
+				return nil, fillError(handlererrors.ErrTypeMismatch, "BSON field '$fill.partitionBy' is the wrong type '"+
+					handlerparams.AliasFromType(val)+"', expected types '[']")
 			}
 			partitionBy = val
 		case "partitionByFields":
