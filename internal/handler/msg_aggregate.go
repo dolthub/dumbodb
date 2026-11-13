@@ -186,6 +186,9 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 	if err = aggregations.CheckPipelineLength(pipeline.Len()); err != nil {
 		return nil, err
 	}
+	if err = stages.LiteParsePipeline(pipeline); err != nil {
+		return nil, err
+	}
 	pipeline = stages.MoveSkipsBeforeTransforms(operators.BindNowInPipeline(pipeline, operators.CommandNow()))
 
 	aggregationStages := aggregations.MoveMatchesAhead(must.NotFail(iterator.ConsumeValues(pipeline.Iterator())))
@@ -777,6 +780,9 @@ func (h *Handler) aggregateDatabase(connCtx context.Context, document *types.Doc
 		)
 	}
 	if err = aggregations.CheckPipelineLength(pipeline.Len()); err != nil {
+		return nil, err
+	}
+	if err = stages.LiteParsePipeline(pipeline); err != nil {
 		return nil, err
 	}
 	pipeline = stages.MoveSkipsBeforeTransforms(operators.BindNowInPipeline(pipeline, operators.CommandNow()))

@@ -101,7 +101,11 @@ func validateViewPipeline(dbName, viewName string, pipeline *types.Array) error 
 		return nil
 	}
 	prefix := fmt.Sprintf("Invalid pipeline for view %s.%s :: caused by :: ", dbName, viewName)
-	if err := stages.CheckViewPipelineStages(pipeline); err != nil {
+	err := stages.LiteParsePipeline(pipeline)
+	if err == nil {
+		err = stages.CheckViewPipelineStages(pipeline)
+	}
+	if err != nil {
 		var cerr *handlererrors.CommandError
 		if errors.As(err, &cerr) {
 			return cerr.WithMessage(prefix + cerr.Err().Error())
