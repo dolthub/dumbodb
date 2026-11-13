@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
@@ -41,6 +42,7 @@ import (
 //	[{$group: {_id: <expression>, count: {$sum: 1}}}, {$sort: {count: -1, _id: 1}}]
 type sortByCount struct {
 	groupExpression any
+	cmp             *collation.Comparator
 }
 
 func newSortByCount(stage *types.Document) (aggregations.Stage, error) {
@@ -74,7 +76,7 @@ func newSortByCount(stage *types.Document) (aggregations.Stage, error) {
 		return nil, err
 	}
 
-	return &sortByCount{groupExpression: v}, nil
+	return &sortByCount{groupExpression: v, cmp: operators.CollationOf(stage)}, nil
 }
 
 func (s *sortByCount) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
@@ -85,7 +87,7 @@ func (s *sortByCount) Process(ctx context.Context, iter types.DocumentsIterator,
 	}
 
 	// Build a count per group-id.
-	var m sortByCountMap
+	m := sortByCountMap{cmp: s.cmp}
 
 	for _, doc := range docs {
 		id, err := evaluateGroupExpr(s.groupExpression, doc)
@@ -115,7 +117,7 @@ func (s *sortByCount) Process(ctx context.Context, iter types.DocumentsIterator,
 		idi := must.NotFail(res[i].Get("_id"))
 		idj := must.NotFail(res[j].Get("_id"))
 
-		return types.CompareForAggregation(idi, idj) == types.Less
+		return types.CompareForAggregation(s.cmp.KeyValue(idi), s.cmp.KeyValue(idj)) == types.Less
 	})
 
 	result := iterator.Values(iterator.ForSlice(res))
@@ -179,12 +181,13 @@ type sortByCountEntry struct {
 // sortByCountMap accumulates counts per group id.
 type sortByCountMap struct {
 	entries []sortByCountEntry
+	cmp     *collation.Comparator
 }
 
 // increment adds 1 to the count for the given id, creating a new entry if needed.
 func (m *sortByCountMap) increment(id any) {
 	for i, e := range m.entries {
-		if types.CompareForAggregation(id, e.id) == types.Equal {
+		if types.CompareForAggregation(m.cmp.KeyValue(id), m.cmp.KeyValue(e.id)) == types.Equal {
 			m.entries[i].count++
 			return
 		}

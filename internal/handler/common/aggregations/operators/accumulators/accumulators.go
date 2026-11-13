@@ -96,8 +96,17 @@ type Accumulation interface {
 // Accumulation built from acc, then returns the result. It always closes iter.
 // Used by stages that must buffer their input for other reasons ($bucket,
 // $bucketAuto); $group folds incrementally without it.
-func Accumulate(acc Accumulator, iter types.DocumentsIterator) (any, error) {
-	return accumulate(acc.New(), iter)
+func Accumulate(acc Accumulator, iter types.DocumentsIterator, cmp *collation.Comparator) (any, error) {
+	return accumulate(newAccumulation(acc, cmp), iter)
+}
+
+// newAccumulation returns a fresh accumulation of acc that compares strings
+// under cmp when it is set.
+func newAccumulation(acc Accumulator, cmp *collation.Comparator) Accumulation {
+	if collated, ok := acc.(CollatedAccumulator); ok && cmp != nil {
+		return collated.NewCollated(cmp)
+	}
+	return acc.New()
 }
 
 // keepingAll is implemented by the accumulations that keep every value when
@@ -109,8 +118,8 @@ type keepingAll interface {
 // AccumulateWindow is Accumulate over a window whose lower edge is bounded.
 // mongod computes such a window with an accumulator that keeps every value,
 // so ties are chosen from the whole window in its order.
-func AccumulateWindow(acc Accumulator, iter types.DocumentsIterator) (any, error) {
-	state := acc.New()
+func AccumulateWindow(acc Accumulator, iter types.DocumentsIterator, cmp *collation.Comparator) (any, error) {
+	state := newAccumulation(acc, cmp)
 	if k, ok := state.(keepingAll); ok {
 		k.keepAll()
 	}

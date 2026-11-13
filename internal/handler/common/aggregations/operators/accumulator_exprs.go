@@ -20,6 +20,7 @@ import (
 	"slices"
 	"strconv"
 
+	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -57,6 +58,7 @@ func accumulatorValues(args []any, doc *types.Document) ([]any, error) {
 type extremeOp struct {
 	args []any
 	want types.CompareResult
+	collated
 }
 
 func newMaxOp(args ...any) (Operator, error) { return &extremeOp{args: args, want: types.Greater}, nil }
@@ -75,7 +77,7 @@ func (op *extremeOp) Process(doc *types.Document) (any, error) {
 		if isNullish(v) {
 			continue
 		}
-		if best == nil || types.CompareOrder(v, best, types.Ascending) == op.want {
+		if best == nil || types.CompareOrder(op.cmp.KeyValue(v), op.cmp.KeyValue(best), types.Ascending) == op.want {
 			best = v
 		}
 	}
@@ -149,6 +151,7 @@ type nOp struct {
 	name  string
 	n     any
 	input any
+	collated
 }
 
 func newNOpFunc(name string) newOperatorFunc {
@@ -221,10 +224,12 @@ func (op *nOp) Process(doc *types.Document) (any, error) {
 	case "$minN":
 		// The n smallest, of tied values the earliest, as mongod keeps them.
 		values = slices.DeleteFunc(values, isNullish)
-		slices.SortStableFunc(values, func(a, b any) int { return int(types.CompareOrder(a, b, types.Ascending)) })
+		slices.SortStableFunc(values, func(a, b any) int {
+			return int(types.CompareOrder(op.cmp.KeyValue(a), op.cmp.KeyValue(b), types.Ascending))
+		})
 		values = values[:min(int64(len(values)), n)]
 	case "$maxN":
-		values = largestN(slices.DeleteFunc(values, isNullish), n)
+		values = largestN(slices.DeleteFunc(values, isNullish), n, op.cmp)
 	case "$firstN":
 		values = values[:min(int64(len(values)), n)]
 	case "$lastN":
@@ -311,13 +316,13 @@ func formatCoercedDouble(x float64) string {
 // largestN returns the n largest values, greatest first, as mongod's $maxN
 // keeps them: a value that only ties the least kept one is refused, and a
 // greater one evicts the earliest of the least.
-func largestN(values []any, n int64) []any {
+func largestN(values []any, n int64, cmp *collation.Comparator) []any {
 	type entry struct {
 		v   any
 		seq int
 	}
 	order := func(a, b entry) int {
-		if c := types.CompareOrder(a.v, b.v, types.Ascending); c != types.Equal {
+		if c := types.CompareOrder(cmp.KeyValue(a.v), cmp.KeyValue(b.v), types.Ascending); c != types.Equal {
 			return int(c)
 		}
 		return a.seq - b.seq
@@ -349,7 +354,7 @@ func largestN(values []any, n int64) []any {
 			}
 			continue
 		}
-		if types.CompareOrder(v, kept[0].v, types.Ascending) == types.Greater {
+		if types.CompareOrder(cmp.KeyValue(v), cmp.KeyValue(kept[0].v), types.Ascending) == types.Greater {
 			kept[0] = e
 			down(0)
 		}

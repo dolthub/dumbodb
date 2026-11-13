@@ -375,6 +375,7 @@ type indexOfArrayOp struct {
 	searchArg any
 	startArg  any
 	endArg    any
+	collated
 }
 
 func newIndexOfArray(args ...any) (Operator, error) {
@@ -436,7 +437,7 @@ func (op *indexOfArrayOp) Process(doc *types.Document) (any, error) {
 	}
 
 	for i := start; i < end; i++ {
-		if types.CompareForAggregation(items[i], search) == types.Equal {
+		if compareCollated(op.cmp, items[i], search) == types.Equal {
 			return int32(i), nil
 		}
 	}
@@ -607,6 +608,7 @@ var _ Operator = (*rangeOp)(nil)
 type inArrayOp struct {
 	valueArg any
 	arrayArg any
+	collated
 }
 
 func newInArray(args ...any) (Operator, error) {
@@ -639,7 +641,7 @@ func (op *inArrayOp) Process(doc *types.Document) (any, error) {
 	}
 
 	for _, item := range items {
-		if types.CompareForAggregation(item, val) == types.Equal {
+		if compareCollated(op.cmp, item, val) == types.Equal {
 			return true, nil
 		}
 	}

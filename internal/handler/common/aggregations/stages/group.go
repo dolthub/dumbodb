@@ -18,11 +18,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/dolthub/dumbodb/internal/collation"
 	"math"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/dolthub/dumbodb/internal/collation"
 
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
@@ -80,6 +81,9 @@ func newGroup(stage *types.Document) (aggregations.Stage, error) {
 // NewGroupStage creates a $group stage whose keys and set accumulators
 // compare strings under cmp, the aggregate's collation, when it is set.
 func NewGroupStage(stage *types.Document, cmp *collation.Comparator) (aggregations.Stage, error) {
+	if cmp == nil {
+		cmp = operators.CollationOf(stage)
+	}
 	fields, err := common.GetRequiredParam[*types.Document](stage, "$group")
 	if err != nil {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(

@@ -15,6 +15,7 @@
 package accumulators
 
 import (
+	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 )
@@ -48,12 +49,23 @@ func (m *maxAccumulator) New() Accumulation {
 	return &extremeState{arg: m.arg, want: types.Greater}
 }
 
+// NewCollated returns an accumulation that orders strings under cmp.
+func (m *minAccumulator) NewCollated(cmp *collation.Comparator) Accumulation {
+	return &extremeState{arg: m.arg, want: types.Less, cmp: cmp}
+}
+
+// NewCollated returns an accumulation that orders strings under cmp.
+func (m *maxAccumulator) NewCollated(cmp *collation.Comparator) Accumulation {
+	return &extremeState{arg: m.arg, want: types.Greater, cmp: cmp}
+}
+
 // extremeState folds the running $min or $max. want is the comparison result
 // (types.Less for $min, types.Greater for $max) that replaces the running value.
 type extremeState struct {
 	arg    operand
 	want   types.CompareResult
 	result any
+	cmp    *collation.Comparator
 }
 
 func (s *extremeState) Accumulate(doc *types.Document) error {
@@ -72,7 +84,7 @@ func (s *extremeState) Accumulate(doc *types.Document) error {
 		return nil
 	}
 
-	if types.CompareOrder(val, s.result, types.Ascending) == s.want {
+	if types.CompareOrder(s.cmp.KeyValue(val), s.cmp.KeyValue(s.result), types.Ascending) == s.want {
 		s.result = val
 	}
 
@@ -109,7 +121,10 @@ func newMax(args ...any) (Accumulator, error) {
 }
 
 var (
-	_ Accumulator  = (*minAccumulator)(nil)
-	_ Accumulator  = (*maxAccumulator)(nil)
-	_ Accumulation = (*extremeState)(nil)
+	_ Accumulator = (*minAccumulator)(nil)
+	_ Accumulator = (*maxAccumulator)(nil)
+
+	_ CollatedAccumulator = (*minAccumulator)(nil)
+	_ CollatedAccumulator = (*maxAccumulator)(nil)
+	_ Accumulation        = (*extremeState)(nil)
 )

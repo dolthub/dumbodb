@@ -20,6 +20,7 @@ import (
 	"fmt"
 	stdsort "sort"
 
+	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
@@ -48,6 +49,7 @@ import (
 //	    restrictSearchWithMatch: <document>,         // optional
 //	} }
 type graphLookup struct {
+	cmp                     *collation.Comparator
 	from                    string
 	startWith               any // field-path expression ("$field") or literal
 	connectFromField        string
@@ -108,6 +110,7 @@ func NewGraphLookupStage(stage *types.Document, fetcher CollectionFetcher) (aggr
 	}
 
 	gl := &graphLookup{
+		cmp:              operators.CollationOf(stage),
 		from:             from,
 		startWith:        startWithVal,
 		connectFromField: connectFromField,
@@ -203,14 +206,14 @@ func (gl *graphLookup) Process(ctx context.Context, iter types.DocumentsIterator
 	fetcher := withFetchCache(gl.fetcher)
 	ctx = WithJoinStages(ctx, JoinStages{N: 1})
 	var src graphSource
-	if fetcher.IndexedField(ctx, gl.from, gl.connectToField) {
+	if gl.cmp == nil && fetcher.IndexedField(ctx, gl.from, gl.connectToField) {
 		src = &indexedGraphSource{fetcher: fetcher, from: gl.from, connectToField: gl.connectToField}
 	} else {
 		fromDocs, fErr := fetcher.Fetch(ctx, gl.from, nil)
 		if fErr != nil {
 			return nil, lazyerrors.Error(fErr)
 		}
-		src = newGraphIndex(fromDocs, gl.connectToField)
+		src = newGraphIndex(fromDocs, gl.connectToField, gl.cmp)
 	}
 
 	out := make([]*types.Document, 0, len(docs))
@@ -280,7 +283,7 @@ func (gl *graphLookup) traverse(ctx context.Context, doc *types.Document, src gr
 		frontierSet := make(map[string]bool, len(frontier))
 		var frontierValues []any
 		for _, searchVal := range frontier {
-			key := fmt.Sprintf("%v", searchVal)
+			key := graphKey(gl.cmp, searchVal)
 			if !searchedKeys[key] {
 				frontierSet[key] = true
 				searchedKeys[key] = true
@@ -338,7 +341,7 @@ func (gl *graphLookup) traverse(ctx context.Context, doc *types.Document, src gr
 				}
 
 				for _, v := range vals {
-					k := fmt.Sprintf("%v", v)
+					k := graphKey(gl.cmp, v)
 					if !searchedKeys[k] && !nextFrontierSet[k] {
 						nextFrontierSet[k] = true
 						nextFrontier = append(nextFrontier, v)
@@ -392,7 +395,7 @@ func (src *indexedGraphSource) levelMatches(ctx context.Context, keys map[string
 			if err != nil {
 				return nil, err
 			}
-			src.all = newGraphIndex(docs, src.connectToField)
+			src.all = newGraphIndex(docs, src.connectToField, nil)
 		}
 		return src.all.levelMatches(ctx, keys, values)
 	}
@@ -403,12 +406,18 @@ func (src *indexedGraphSource) levelMatches(ctx context.Context, keys map[string
 	}
 	matches := make([]*types.Document, 0, len(fetched))
 	for _, d := range fetched {
-		if keys[fmt.Sprintf("%v", getFieldValue(d, src.connectToField))] {
+		if keys[graphKey(nil, getFieldValue(d, src.connectToField))] {
 			matches = append(matches, d)
 		}
 	}
 	sortByID(matches)
 	return matches, nil
+}
+
+// graphKey is the traversal's key for a connect value, with strings as sort
+// keys under cmp when it is set.
+func graphKey(cmp *collation.Comparator, v any) string {
+	return fmt.Sprintf("%v", cmp.KeyValue(v))
 }
 
 // valuesAsDocs wraps values as {v: value} documents for equalityFetchFilter.
@@ -442,14 +451,14 @@ type graphIndex struct {
 	byKey  map[string][]int
 }
 
-func newGraphIndex(fromDocs []*types.Document, connectToField string) *graphIndex {
+func newGraphIndex(fromDocs []*types.Document, connectToField string, cmp *collation.Comparator) *graphIndex {
 	sorted := make([]*types.Document, len(fromDocs))
 	copy(sorted, fromDocs)
 	sortByID(sorted)
 
 	byKey := make(map[string][]int)
 	for pos, d := range sorted {
-		key := fmt.Sprintf("%v", getFieldValue(d, connectToField))
+		key := graphKey(cmp, getFieldValue(d, connectToField))
 		byKey[key] = append(byKey[key], pos)
 	}
 	return &graphIndex{sorted: sorted, byKey: byKey}

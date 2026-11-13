@@ -24,6 +24,7 @@ import (
 	"strings"
 
 	"github.com/cockroachdb/apd/v3"
+	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
@@ -57,6 +58,7 @@ type bucketAuto struct {
 	buckets int32
 	output  []bucketOutput
 	rounder granularityRounder
+	cmp     *collation.Comparator
 }
 
 func newBucketAuto(stage *types.Document) (aggregations.Stage, error) {
@@ -117,6 +119,7 @@ func newBucketAuto(stage *types.Document) (aggregations.Stage, error) {
 	ba := &bucketAuto{
 		groupBy: groupByVal,
 		buckets: numBuckets,
+		cmp:     operators.CollationOf(stage),
 	}
 
 	if g, getErr := spec.Get("granularity"); getErr == nil {
@@ -214,7 +217,7 @@ func (ba *bucketAuto) Process(ctx context.Context, iter types.DocumentsIterator,
 	}
 
 	stdsort.SliceStable(keyed, func(i, j int) bool {
-		return types.CompareOrder(keyed[i].key, keyed[j].key, types.Ascending) == types.Less
+		return types.CompareOrder(ba.cmp.KeyValue(keyed[i].key), ba.cmp.KeyValue(keyed[j].key), types.Ascending) == types.Less
 	})
 
 	// mongod fills each bucket with about n/buckets documents, keeps equal
@@ -247,7 +250,7 @@ func (ba *bucketAuto) Process(ctx context.Context, iter types.DocumentsIterator,
 			}
 		}
 		maxKey := keyed[i-1].key
-		for i < total && types.CompareForAggregation(keyed[i].key, maxKey) == types.Equal {
+		for i < total && types.CompareForAggregation(ba.cmp.KeyValue(keyed[i].key), ba.cmp.KeyValue(maxKey)) == types.Equal {
 			i++
 		}
 
@@ -278,7 +281,7 @@ func (ba *bucketAuto) Process(ctx context.Context, iter types.DocumentsIterator,
 			rawDocs = append(rawDocs, kd.doc)
 		}
 
-		if err := appendBucketOutput(doc, ba.output, rawDocs); err != nil {
+		if err := appendBucketOutput(doc, ba.output, ba.cmp, rawDocs); err != nil {
 			return nil, err
 		}
 		res = append(res, doc)

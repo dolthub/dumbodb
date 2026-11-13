@@ -17,6 +17,7 @@ package operators
 import (
 	"fmt"
 
+	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -47,7 +48,7 @@ func setOperandError(code handlererrors.ErrorCode, opName, msg string) error {
 }
 
 // toSet converts an array to a deduplicated slice.
-func toSet(arr *types.Array) ([]any, error) {
+func toSet(arr *types.Array, cmp *collation.Comparator) ([]any, error) {
 	items, err := arrayToSlice(arr)
 	if err != nil {
 		return nil, err
@@ -59,7 +60,7 @@ func toSet(arr *types.Array) ([]any, error) {
 		found := false
 
 		for _, existing := range result {
-			if types.CompareForAggregation(item, existing) == types.Equal {
+			if compareCollated(cmp, item, existing) == types.Equal {
 				found = true
 				break
 			}
@@ -73,7 +74,10 @@ func toSet(arr *types.Array) ([]any, error) {
 	return result, nil
 }
 
-type setUnionOp struct{ args []any }
+type setUnionOp struct {
+	args []any
+	collated
+}
 
 func newSetUnion(args ...any) (Operator, error) {
 	return &setUnionOp{args: args}, nil
@@ -111,7 +115,7 @@ func (op *setUnionOp) Process(doc *types.Document) (any, error) {
 			found := false
 
 			for _, existing := range result {
-				if types.CompareForAggregation(item, existing) == types.Equal {
+				if compareCollated(op.cmp, item, existing) == types.Equal {
 					found = true
 					break
 				}
@@ -136,7 +140,10 @@ func (op *setUnionOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*setUnionOp)(nil)
 
-type setIntersectionOp struct{ args []any }
+type setIntersectionOp struct {
+	args []any
+	collated
+}
 
 func newSetIntersection(args ...any) (Operator, error) {
 	return &setIntersectionOp{args: args}, nil
@@ -170,7 +177,7 @@ func (op *setIntersectionOp) Process(doc *types.Document) (any, error) {
 		}
 
 		if i == 0 {
-			if candidates, err = toSet(arr); err != nil {
+			if candidates, err = toSet(arr, op.cmp); err != nil {
 				return nil, err
 			}
 			continue
@@ -185,7 +192,7 @@ func (op *setIntersectionOp) Process(doc *types.Document) (any, error) {
 
 		for _, c := range candidates {
 			for _, item := range items {
-				if types.CompareForAggregation(c, item) == types.Equal {
+				if compareCollated(op.cmp, c, item) == types.Equal {
 					next = append(next, c)
 					break
 				}
@@ -212,6 +219,7 @@ var _ Operator = (*setIntersectionOp)(nil)
 type setDifferenceOp struct {
 	set1Arg any
 	set2Arg any
+	collated
 }
 
 func newSetDifference(args ...any) (Operator, error) {
@@ -245,7 +253,7 @@ func (op *setDifferenceOp) Process(doc *types.Document) (any, error) {
 			"both operands of $setDifference must be arrays. Second argument is of type: "+type2)
 	}
 
-	set1, err := toSet(arr1)
+	set1, err := toSet(arr1, op.cmp)
 	if err != nil {
 		return nil, err
 	}
@@ -261,7 +269,7 @@ func (op *setDifferenceOp) Process(doc *types.Document) (any, error) {
 		inSet2 := false
 
 		for _, s2 := range set2items {
-			if types.CompareForAggregation(item, s2) == types.Equal {
+			if compareCollated(op.cmp, item, s2) == types.Equal {
 				inSet2 = true
 				break
 			}
@@ -277,7 +285,10 @@ func (op *setDifferenceOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*setDifferenceOp)(nil)
 
-type setEqualsOp struct{ args []any }
+type setEqualsOp struct {
+	args []any
+	collated
+}
 
 func newSetEquals(args ...any) (Operator, error) {
 	if len(args) < 2 {
@@ -313,7 +324,7 @@ func (op *setEqualsOp) Process(doc *types.Document) (any, error) {
 				fmt.Sprintf("All operands of $setEquals must be arrays. %d-th argument is of type: %s", i+1, typeNames[i]))
 		}
 
-		set, err := toSet(arr)
+		set, err := toSet(arr, op.cmp)
 		if err != nil {
 			return nil, err
 		}
@@ -332,7 +343,7 @@ func (op *setEqualsOp) Process(doc *types.Document) (any, error) {
 			found := false
 
 			for _, o := range other {
-				if types.CompareForAggregation(item, o) == types.Equal {
+				if compareCollated(op.cmp, item, o) == types.Equal {
 					found = true
 					break
 				}
@@ -353,6 +364,7 @@ var _ Operator = (*setEqualsOp)(nil)
 type setIsSubsetOp struct {
 	set1Arg any
 	set2Arg any
+	collated
 }
 
 func newSetIsSubset(args ...any) (Operator, error) {
@@ -398,7 +410,7 @@ func (op *setIsSubsetOp) Process(doc *types.Document) (any, error) {
 			"both operands of $setIsSubset must be arrays. Second argument is of type: "+type2)
 	}
 
-	set1, err := toSet(arr1)
+	set1, err := toSet(arr1, op.cmp)
 	if err != nil {
 		return nil, err
 	}
@@ -412,7 +424,7 @@ func (op *setIsSubsetOp) Process(doc *types.Document) (any, error) {
 		found := false
 
 		for _, s2 := range set2items {
-			if types.CompareForAggregation(item, s2) == types.Equal {
+			if compareCollated(op.cmp, item, s2) == types.Equal {
 				found = true
 				break
 			}

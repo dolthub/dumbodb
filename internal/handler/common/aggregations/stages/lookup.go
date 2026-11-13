@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
@@ -149,8 +150,11 @@ func withFetchCache(f CollectionFetcher) *cachingFetcher {
 
 // unfilteredEqualityIndex returns the equality index on field over the cached
 // unfiltered documents of collectionName, building it once.
-func (c *cachingFetcher) unfilteredEqualityIndex(ctx context.Context, collectionName, field string) (*equalityIndex, error) {
+func (c *cachingFetcher) unfilteredEqualityIndex(ctx context.Context, collectionName, field string, cmp *collation.Comparator) (*equalityIndex, error) {
 	key := collectionName + "\x00" + field
+	if cmp != nil {
+		key += "\x00collated"
+	}
 	if idx, ok := c.eqIndexes[key]; ok {
 		return idx, nil
 	}
@@ -158,7 +162,7 @@ func (c *cachingFetcher) unfilteredEqualityIndex(ctx context.Context, collection
 	if err != nil {
 		return nil, err
 	}
-	idx := newEqualityIndex(docs, field)
+	idx := newEqualityIndex(docs, field, cmp)
 	c.eqIndexes[key] = idx
 	return idx, nil
 }
@@ -225,6 +229,8 @@ type lookup struct {
 	// before are the stages between this stage and its absorbed $unwind,
 	// which run on the input, as mongod moves them ahead of the $lookup.
 	before []aggregations.Stage
+	// cmp is the command's collation, under which join values compare.
+	cmp *collation.Comparator
 }
 
 // NewLookupStage creates a new $lookup stage with a collection fetcher.
@@ -292,6 +298,7 @@ func NewLookupStage(stage *types.Document, fetcher CollectionFetcher) (aggregati
 	}
 
 	l := &lookup{
+		cmp:     operators.CollationOf(stage),
 		from:    from,
 		as:      asField,
 		fetcher: fetcher,
@@ -420,7 +427,7 @@ type equalityIndex struct {
 	unkeyed []int
 }
 
-func newEqualityIndex(docs []*types.Document, foreignField string) *equalityIndex {
+func newEqualityIndex(docs []*types.Document, foreignField string, cmp *collation.Comparator) *equalityIndex {
 	idx := &equalityIndex{docs: docs, byKey: make(map[string][]int)}
 	parts := splitLookupPath(foreignField)
 	for pos, d := range docs {
@@ -428,7 +435,7 @@ func newEqualityIndex(docs []*types.Document, foreignField string) *equalityInde
 		var keys []string
 		ok := !missing
 		for _, v := range values {
-			vk, vok := equalityKeys(v)
+			vk, vok := equalityKeys(collatedLookupValue(cmp, v))
 			ok = ok && vok
 			keys = append(keys, vk...)
 		}
@@ -532,10 +539,13 @@ func equalityKey(v any) (string, bool) {
 // doc's localField under MongoDB's equality join semantics.
 func (l *lookup) equalityMatches(doc *types.Document, idx *equalityIndex) []*types.Document {
 	candidates := lookupLocalCandidates(doc, l.localField)
+	for i, c := range candidates {
+		candidates[i] = collatedLookupValue(l.cmp, c)
+	}
 
 	matched := make([]*types.Document, 0)
 	for _, fromDoc := range idx.candidatesFor(candidates) {
-		if foreignMatches(fromDoc, l.foreignField, candidates) {
+		if foreignMatches(fromDoc, l.foreignField, candidates, l.cmp) {
 			matched = append(matched, fromDoc)
 		}
 	}
@@ -674,9 +684,24 @@ func lookupForeignPathValues(doc *types.Document, parts []string) ([]any, bool) 
 	return out, missing
 }
 
+// collatedLookupValue returns v with its strings as sort keys under cmp, so
+// values equal under the collation are equal as BSON.
+func collatedLookupValue(cmp *collation.Comparator, v any) any {
+	if cmp == nil {
+		return v
+	}
+	if indexed, ok := v.(indexedArray); ok {
+		return indexedArray{arr: cmp.KeyValue(indexed.arr).(*types.Array)}
+	}
+	return cmp.KeyValue(v)
+}
+
 // foreignMatches reports whether doc matches {field: {$in: candidates}}.
-func foreignMatches(doc *types.Document, field string, candidates []any) bool {
+func foreignMatches(doc *types.Document, field string, candidates []any, cmp *collation.Comparator) bool {
 	values, missing := lookupForeignValues(doc, field)
+	for i, v := range values {
+		values[i] = collatedLookupValue(cmp, v)
+	}
 	for _, c := range candidates {
 		if isNullOrMissing(c) && missing {
 			return true
@@ -712,11 +737,11 @@ func (l *lookup) Process(ctx context.Context, iter types.DocumentsIterator, clos
 	// With an index on the joined field, ask the backend for just the matching
 	// documents; without one, load the collection once and join in memory.
 	var fetchFilter *types.Document
-	if l.localField != "" && fetcher.IndexedField(ctx, l.from, l.foreignField) {
+	if l.localField != "" && l.cmp == nil && fetcher.IndexedField(ctx, l.from, l.foreignField) {
 		fetchFilter = equalityFetchFilter(docs, l.localField, l.foreignField)
 	}
 	perDocField := ""
-	if l.pipeline != nil && l.localField == "" {
+	if l.pipeline != nil && l.localField == "" && l.cmp == nil {
 		if field := leadingMatchEqualityField(l.pipeline); field != "" && fetcher.IndexedField(ctx, l.from, field) {
 			perDocField = field
 		}
@@ -735,11 +760,11 @@ func (l *lookup) Process(ctx context.Context, iter types.DocumentsIterator, clos
 	case fetchFilter == nil:
 		// fromDocs is the cached whole collection; share its index with
 		// other lookups in this stage, such as nested ones.
-		if eqIdx, err = fetcher.unfilteredEqualityIndex(ctx, l.from, l.foreignField); err != nil {
+		if eqIdx, err = fetcher.unfilteredEqualityIndex(ctx, l.from, l.foreignField, l.cmp); err != nil {
 			return nil, lazyerrors.Error(err)
 		}
 	default:
-		eqIdx = newEqualityIndex(fromDocs, l.foreignField)
+		eqIdx = newEqualityIndex(fromDocs, l.foreignField, l.cmp)
 	}
 
 	res := &lookupIterator{
@@ -1222,6 +1247,7 @@ func (l *lookup) pipelineIter(ctx context.Context, fetcher CollectionFetcher, fr
 		}
 
 		substituted := substituteVarsInStage(stageDoc, vars)
+		operators.BindCollation(substituted, l.cmp)
 		specs[stageIndex] = substituted
 
 		if stageIndex == 0 && l.from == "" {

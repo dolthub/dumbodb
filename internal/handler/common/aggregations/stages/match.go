@@ -42,6 +42,9 @@ func newMatch(stage *types.Document) (aggregations.Stage, error) {
 // (see SeesStoredDocuments); only then are the document values it compares
 // against put in stored key order.
 func NewMatchStage(stage *types.Document, cmp *collation.Comparator, storedInput bool) (aggregations.Stage, error) {
+	if cmp == nil {
+		cmp = operators.CollationOf(stage)
+	}
 	filter, err := common.GetRequiredParam[*types.Document](stage, "$match")
 	if err != nil {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(

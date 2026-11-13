@@ -21,6 +21,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
@@ -48,6 +49,9 @@ func newSort(stage *types.Document) (aggregations.Stage, error) {
 // (in sort order) when limit > 0, bounding memory for a following $limit.
 // String ordering honors cmp when non-nil.
 func NewSortStage(stage *types.Document, limit int64, cmp *collation.Comparator) (aggregations.Stage, error) {
+	if cmp == nil {
+		cmp = operators.CollationOf(stage)
+	}
 	fields, err := common.GetRequiredParam[*types.Document](stage, "$sort")
 	if err != nil {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
