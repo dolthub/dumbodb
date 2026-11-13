@@ -443,9 +443,21 @@ const (
 	ErrSBEAddTwoDates            = ErrorCode(7157722) // Location7157722
 
 	// Classic engine expression errors.
-	ErrBucketNoBranch            = ErrorCode(40066) // Location40066
-	ErrSwitchNoMatch             = ErrorCode(40069) // Location40069
-	ErrMergeObjectsExprNotObject = ErrorCode(40400) // Location40400
+	ErrSwitchNotObject             = ErrorCode(40060) // Location40060
+	ErrSwitchBranchesNotArray      = ErrorCode(40061) // Location40061
+	ErrSwitchBranchNotObject       = ErrorCode(40062) // Location40062
+	ErrSwitchBranchUnknownArgument = ErrorCode(40063) // Location40063
+	ErrSwitchBranchMissingCase     = ErrorCode(40064) // Location40064
+	ErrSwitchBranchMissingThen     = ErrorCode(40065) // Location40065
+	ErrBucketNoBranch              = ErrorCode(40066) // Location40066
+	ErrSwitchUnknownArgument       = ErrorCode(40067) // Location40067
+	ErrSwitchNoBranches            = ErrorCode(40068) // Location40068
+	ErrSwitchNoMatch               = ErrorCode(40069) // Location40069
+	ErrLetNotObject                = ErrorCode(16874) // Location16874
+	ErrLetUnknownParameter         = ErrorCode(16875) // Location16875
+	ErrLetMissingVars              = ErrorCode(16876) // Location16876
+	ErrLetMissingIn                = ErrorCode(16877) // Location16877
+	ErrMergeObjectsExprNotObject   = ErrorCode(40400) // Location40400
 
 	// Input errors that mongod's SBE engine reports under its own codes.
 	ErrSBEBucketNoBranch         = ErrorCode(7158303) // Location7158303

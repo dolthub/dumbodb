@@ -15,11 +15,10 @@
 package operators
 
 import (
-	"errors"
-
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
-	"github.com/dolthub/dumbodb/internal/util/iterator"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 type switchBranch struct {
@@ -34,64 +33,83 @@ type switchOp struct {
 }
 
 func newSwitch(args ...any) (Operator, error) {
-	if len(args) != 1 {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$switch", "$switch requires a document argument")
+	var doc *types.Document
+	if len(args) == 1 {
+		doc, _ = args[0].(*types.Document)
+	}
+	if doc == nil {
+		found := "array"
+		if len(args) == 1 {
+			found = handlerparams.AliasFromType(args[0])
+		}
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSwitchNotObject,
+			"$switch requires an object as an argument, found: "+found, "$switch")
 	}
 
-	doc, ok := args[0].(*types.Document)
+	op := new(switchOp)
+	for _, k := range doc.Keys() {
+		v := must.NotFail(doc.Get(k))
+		switch k {
+		case "branches":
+			arr, ok := v.(*types.Array)
+			if !ok {
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSwitchBranchesNotArray,
+					"$switch expected an array for 'branches', found: "+handlerparams.AliasFromType(v), "$switch")
+			}
+			for i := range arr.Len() {
+				branch, err := parseSwitchBranch(must.NotFail(arr.Get(i)))
+				if err != nil {
+					return nil, err
+				}
+				op.branches = append(op.branches, branch)
+			}
+		case "default":
+			op.defaultArg = v
+		default:
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSwitchUnknownArgument,
+				"$switch found an unknown argument: "+k, "$switch")
+		}
+	}
+
+	if len(op.branches) == 0 {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSwitchNoBranches,
+			"$switch requires at least one branch", "$switch")
+	}
+
+	return op, nil
+}
+
+func parseSwitchBranch(v any) (switchBranch, error) {
+	doc, ok := v.(*types.Document)
 	if !ok {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$switch", "$switch requires a document argument")
+		return switchBranch{}, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSwitchBranchNotObject,
+			"$switch expected each branch to be an object, found: "+handlerparams.AliasFromType(v), "$switch")
 	}
 
-	branchesV, err := doc.Get("branches")
-	if err != nil {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$switch", "Missing 'branches' parameter to $switch")
+	var branch switchBranch
+	var hasCase, hasThen bool
+	for _, k := range doc.Keys() {
+		switch k {
+		case "case":
+			branch.caseExpr, hasCase = must.NotFail(doc.Get(k)), true
+		case "then":
+			branch.thenExpr, hasThen = must.NotFail(doc.Get(k)), true
+		default:
+			return switchBranch{}, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSwitchBranchUnknownArgument,
+				"$switch found an unknown argument to a branch: "+k, "$switch")
+		}
 	}
 
-	branchesArr, ok := branchesV.(*types.Array)
-	if !ok {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$switch", "'branches' must be an array")
+	switch {
+	case !hasCase:
+		return switchBranch{}, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSwitchBranchMissingCase,
+			"$switch requires each branch have a 'case' expression", "$switch")
+	case !hasThen:
+		return switchBranch{}, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSwitchBranchMissingThen,
+			"$switch requires each branch have a 'then' expression.", "$switch")
 	}
 
-	var branches []switchBranch
-
-	iter := branchesArr.Iterator()
-	defer iter.Close()
-
-	for {
-		_, v, err := iter.Next()
-		if errors.Is(err, iterator.ErrIteratorDone) {
-			break
-		}
-
-		if err != nil {
-			return nil, err
-		}
-
-		branchDoc, ok := v.(*types.Document)
-		if !ok {
-			return nil, newOperatorError(ErrArgsInvalidLen, "$switch", "each branch must be a document")
-		}
-
-		caseExpr, err := branchDoc.Get("case")
-		if err != nil {
-			return nil, newOperatorError(ErrArgsInvalidLen, "$switch", "Missing 'case' in branch")
-		}
-
-		thenExpr, err := branchDoc.Get("then")
-		if err != nil {
-			return nil, newOperatorError(ErrArgsInvalidLen, "$switch", "Missing 'then' in branch")
-		}
-
-		branches = append(branches, switchBranch{caseExpr: caseExpr, thenExpr: thenExpr})
-	}
-
-	var defaultArg any
-	if dv, err := doc.Get("default"); err == nil {
-		defaultArg = dv
-	}
-
-	return &switchOp{branches: branches, defaultArg: defaultArg}, nil
+	return branch, nil
 }
 
 func (op *switchOp) Process(doc *types.Document) (any, error) {
