@@ -172,6 +172,13 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 			doc.Set("_id", types.NewObjectID())
 		}
 
+		if upsert && !param.IsPipeline && !param.HasUpdateOperators {
+			if _, isArray := must.NotFail(doc.Get("_id")).(*types.Array); isArray {
+				return failAfterWrites(NewUpdateError(handlererrors.ErrNotSingleValueField,
+					"After applying the update to the document, the (immutable) field '_id' was found to be an array or array descendant.", cmd))
+			}
+		}
+
 		if err = doc.ValidateData(); err != nil {
 			return failAfterWrites(lazyerrors.Error(err))
 		}
@@ -289,43 +296,53 @@ func (s *seededPaths) add(key string) error {
 	return nil
 }
 
-// oneElementIn returns the array of a filter value {$in: [v]}, or nil.
-func oneElementIn(v *types.Document) *types.Array {
-	if v.Len() != 1 || v.Keys()[0] != "$in" {
-		return nil
-	}
-	in, ok := must.NotFail(v.Get("$in")).(*types.Array)
-	if !ok || in.Len() != 1 {
-		return nil
-	}
-	if _, isRegex := must.NotFail(in.Get(0)).(types.Regex); isRegex {
-		return nil
-	}
-	return in
-}
-
-// seedsValue reports whether a filter value gives its path a value: a
-// literal, a sub-document, $eq or a one-element $in.
-func seedsValue(val any) bool {
+// filterEqualities returns the values a filter value sets its path to, as
+// mongod extracts them for an upsert: the value itself, or from an operator
+// document each $eq, the element of a one-element $in, and each element of
+// $all; a regex or an $elemMatch is no equality.
+func filterEqualities(val any) []any {
 	switch v := val.(type) {
 	case types.Regex:
-		return false
+		return nil
 	case *types.Document:
 		if v.Len() == 0 || !strings.HasPrefix(v.Keys()[0], "$") {
-			return true
+			return []any{v}
 		}
-		if v.Len() != 1 {
-			return false
+		var eqs []any
+		for _, op := range v.Keys() {
+			arg := must.NotFail(v.Get(op))
+			switch op {
+			case "$eq":
+				eqs = append(eqs, arg)
+			case "$in":
+				if in, ok := arg.(*types.Array); ok && in.Len() == 1 {
+					if elem := must.NotFail(in.Get(0)); !isRegexOrElemMatch(elem) {
+						eqs = append(eqs, elem)
+					}
+				}
+			case "$all":
+				if all, ok := arg.(*types.Array); ok {
+					for i := range all.Len() {
+						if elem := must.NotFail(all.Get(i)); !isRegexOrElemMatch(elem) {
+							eqs = append(eqs, elem)
+						}
+					}
+				}
+			}
 		}
-		switch v.Keys()[0] {
-		case "$eq":
-			return true
-		case "$in":
-			return oneElementIn(v) != nil
-		}
-		return false
+		return eqs
 	}
-	return true
+	return []any{val}
+}
+
+func isRegexOrElemMatch(v any) bool {
+	switch v := v.(type) {
+	case types.Regex:
+		return true
+	case *types.Document:
+		return v.Len() > 0 && v.Keys()[0] == "$elemMatch"
+	}
+	return false
 }
 
 func seedFromFilter(doc, filter *types.Document, seeded *seededPaths, replacement bool) error {
@@ -359,45 +376,23 @@ func seedFromFilter(doc, filter *types.Document, seeded *seededPaths, replacemen
 			continue
 		}
 
+		eqs := filterEqualities(val)
 		if replacement && key != "_id" {
-			if strings.HasPrefix(key, "_id.") && seedsValue(val) {
+			if strings.HasPrefix(key, "_id.") && len(eqs) > 0 {
 				return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrNotExactValueField,
 					fmt.Sprintf("field at '_id' must be exactly specified, field at sub-path '%s'found", key), "update")
 			}
 			continue
 		}
-
-		// A regex matches strings rather than naming a value to insert.
-		if _, isRegex := val.(types.Regex); isRegex {
+		if len(eqs) == 0 {
 			continue
 		}
-
-		if valDoc, ok := val.(*types.Document); ok {
-			if valDoc.Len() == 1 {
-				innerKey := valDoc.Keys()[0]
-
-				if innerKey[0] != '$' {
-					// valDoc does not contain an operator
-					val = valDoc
-				} else if innerKey == "$eq" {
-					// valDoc has $eq operator, so extract the inner value
-					val, _ = valDoc.Get("$eq")
-				} else if in := oneElementIn(valDoc); in != nil {
-					// A one-element $in is an equality.
-					val = must.NotFail(in.Get(0))
-				} else {
-					// valDoc has operators like $lt, $gt, $ne, $in, $exists, $regex
-					continue
-				}
-			} else {
-				// valDoc is a sub-document with many key/val pairs, without any operators
-				val = valDoc
+		for range eqs {
+			if err = seeded.add(key); err != nil {
+				return err
 			}
 		}
-
-		if err = seeded.add(key); err != nil {
-			return err
-		}
+		val = eqs[0]
 
 		path, err := types.NewPathFromString(key)
 		if err != nil {
