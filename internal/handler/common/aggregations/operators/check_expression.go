@@ -194,8 +194,14 @@ func operatorSpec(v *types.Document) *types.Document {
 
 func checkLet(v *types.Document, scope map[string]bool) error {
 	spec := operatorSpec(v)
-	if spec == nil {
+	if spec == nil || !spec.Has("vars") || !spec.Has("in") {
+		// $let itself reports a malformed specification first.
 		return nil
+	}
+	for _, k := range spec.Keys() {
+		if k != "vars" && k != "in" {
+			return nil
+		}
 	}
 	var names []string
 	varsVal, _ := spec.Get("vars")
