@@ -65,12 +65,7 @@ func newLet(args ...any) (Operator, error) {
 		v := must.NotFail(doc.Get(k))
 		switch k {
 		case "vars":
-			vars, ok := v.(*types.Document)
-			if !ok {
-				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrExpectedObject,
-					"invalid parameter: expected an object (vars)", "$let")
-			}
-			op.varsDoc, hasVars = vars, true
+			hasVars = true
 		case "in":
 			op.inExpr, hasIn = v, true
 		default:
@@ -87,6 +82,13 @@ func newLet(args ...any) (Operator, error) {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrLetMissingIn,
 			"Missing 'in' parameter to $let", "$let")
 	}
+
+	vars, ok := must.NotFail(doc.Get("vars")).(*types.Document)
+	if !ok {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrExpectedObject,
+			"invalid parameter: expected an object (vars)", "$let")
+	}
+	op.varsDoc = vars
 
 	return op, nil
 }
