@@ -140,7 +140,9 @@ func bindNowInExpression(v any, now time.Time) any {
 	switch v := v.(type) {
 	case string:
 		if v == "$$NOW" {
-			return must.NotFail(types.NewDocument("$literal", now))
+			lit := must.NotFail(types.NewDocument("$literal", now))
+			lit.Annotate(boundNow{})
+			return lit
 		}
 	case *types.Array:
 		out := types.MakeArray(v.Len())
@@ -156,16 +158,19 @@ func bindNowInExpression(v any, now time.Time) any {
 		for _, k := range v.Keys() {
 			out.Set(k, bindNowInExpression(must.NotFail(v.Get(k)), now))
 		}
-		if v.Len() == 1 && v.Command() == "$shift" {
-			// $shift's default must be a constant, which $$NOW is not.
-			if spec, ok := must.NotFail(v.Get("$shift")).(*types.Document); ok && spec.Has("default") {
-				bound := must.NotFail(out.Get("$shift")).(*types.Document)
-				bound.Set("default", must.NotFail(spec.Get("default")))
-			}
-		}
 		return out
 	}
 	return v
+}
+
+// boundNow marks the literal that stands for $$NOW, which mongod does not
+// treat as a constant expression.
+type boundNow struct{}
+
+// isBoundNow reports whether doc is the literal bound for $$NOW.
+func isBoundNow(doc *types.Document) bool {
+	_, ok := doc.Annotation().(boundNow)
+	return ok
 }
 
 // CommandNow is the value of $$NOW for a command starting now, at the

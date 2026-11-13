@@ -138,7 +138,7 @@ func isConstantExpression(expr any) bool {
 			}
 			switch v.Command() {
 			case "$literal", "$const":
-				return true
+				return !isBoundNow(v)
 			case "$rand", "$sampleRate", "$meta":
 				return false
 			case "$getField":
