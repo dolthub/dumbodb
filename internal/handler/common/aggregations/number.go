@@ -493,7 +493,13 @@ func roundedDecimal(f float64) types.Decimal128 {
 // Returns types.Null for zero numeric values.
 type NumberAvg struct {
 	sum *NumberSum
+	// sbe divides an integer total as mongod's SBE engine does: the exact
+	// total, as the nearest double, over the count.
+	sbe bool
 }
+
+// UseSBE makes a average as mongod's SBE engine does.
+func (a *NumberAvg) UseSBE() { a.sbe = true }
 
 // NewNumberAvg returns a zeroed incremental averager.
 func NewNumberAvg() *NumberAvg { return &NumberAvg{sum: NewNumberSum()} }
@@ -509,6 +515,10 @@ func (a *NumberAvg) Result() any {
 
 	if a.sum.totalType == numberDecimal {
 		return avgFromDecimalSum(a.sum.decimalTotal(), a.sum.count)
+	}
+
+	if a.sbe && a.sum.totalType <= numberLong && a.sum.nonDecimal.fitsLong() {
+		return float64(a.sum.nonDecimal.long()) / float64(a.sum.count)
 	}
 
 	return a.sum.nonDecimal.double() / float64(a.sum.count)
