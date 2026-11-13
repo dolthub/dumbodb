@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
@@ -112,6 +113,7 @@ type setWindowFields struct {
 	partitionBy any // expression or nil (single partition)
 	sortBy      *types.Document
 	outputs     []windowOutputField
+	cmp         *collation.Comparator
 }
 
 func newSetWindowFields(stage *types.Document) (aggregations.Stage, error) {
@@ -124,7 +126,7 @@ func newSetWindowFields(stage *types.Document) (aggregations.Stage, error) {
 		)
 	}
 
-	swf := new(setWindowFields)
+	swf := &setWindowFields{cmp: operators.CollationOf(stage)}
 
 	// Parse partitionBy (optional).
 	if spec.Has("partitionBy") {
@@ -537,7 +539,7 @@ func (it *windowPartitionsIterator) Next() (struct{}, *types.Document, error) {
 		it.partitions = it.partitions[1:]
 
 		if it.s.sortBy != nil && it.s.sortBy.Len() > 0 {
-			if err := common.SortDocuments(partition, it.s.sortBy); err != nil {
+			if err := common.SortDocumentsWithCollation(partition, it.s.sortBy, it.s.cmp); err != nil {
 				return unused, nil, lazyerrors.Error(err)
 			}
 		}
@@ -583,12 +585,12 @@ func deferredWindowOutput(operator string) bool {
 
 // accumulateWindow applies acc to a window. mongod computes a window whose
 // lower edge is bounded with accumulators that keep every value.
-func accumulateWindow(acc accumulators.Accumulator, frame *windowFrame, window []*types.Document) (any, error) {
+func accumulateWindow(acc accumulators.Accumulator, frame *windowFrame, window []*types.Document, cmp *collation.Comparator) (any, error) {
 	iter := iterator.Values(iterator.ForSlice(window))
 	if frame != nil && !frame.lower.unbounded {
-		return accumulators.AccumulateWindow(acc, iter)
+		return accumulators.AccumulateWindow(acc, iter, cmp)
 	}
-	return accumulators.Accumulate(acc, iter)
+	return accumulators.Accumulate(acc, iter, cmp)
 }
 
 // windowValueAt computes a deferred window output for the document at index i
@@ -596,9 +598,9 @@ func accumulateWindow(acc accumulators.Accumulator, frame *windowFrame, window [
 func (s *setWindowFields) windowValueAt(partition []*types.Document, wof windowOutputField, i int) (any, error) {
 	window := s.windowDocs(wof.frame, i, partition)
 	if acc, ok := wof.opSpec.(accumulators.Accumulator); ok {
-		return accumulateWindow(acc, wof.frame, window)
+		return accumulateWindow(acc, wof.frame, window, s.cmp)
 	}
-	return applyAccumulator(wof.operator, wof.expression, window)
+	return applyAccumulator(wof.operator, wof.expression, window, s.cmp)
 }
 
 // partitionDocuments groups documents by the partitionBy expression.
@@ -624,7 +626,7 @@ func (s *setWindowFields) partitionDocuments(docs []*types.Document) ([][]*types
 		found := false
 
 		for i, entry := range entries {
-			if types.CompareForAggregation(key, entry.key) == types.Equal {
+			if types.CompareForAggregation(s.cmp.KeyValue(key), s.cmp.KeyValue(entry.key)) == types.Equal {
 				entries[i].docs = append(entries[i].docs, doc)
 				found = true
 
@@ -775,10 +777,10 @@ func (s *setWindowFields) computeWindowValues(partition []*types.Document, wof w
 		}
 
 	case "$rank":
-		vals = computeRank(partition, s.sortBy, false)
+		vals = computeRank(partition, s.sortBy, false, s.cmp)
 
 	case "$denseRank":
-		vals = computeRank(partition, s.sortBy, true)
+		vals = computeRank(partition, s.sortBy, true, s.cmp)
 
 	case "$sum", "$avg", "$min", "$max", "$first", "$last", "$push", "$addToSet",
 		"$stdDevPop", "$stdDevSamp":
@@ -789,7 +791,7 @@ func (s *setWindowFields) computeWindowValues(partition []*types.Document, wof w
 		for i := range partition {
 			window := s.windowDocs(wof.frame, i, partition)
 
-			val, err := applyAccumulator(wof.operator, wof.expression, window)
+			val, err := applyAccumulator(wof.operator, wof.expression, window, s.cmp)
 			if err != nil {
 				return nil, err
 			}
@@ -807,7 +809,7 @@ func (s *setWindowFields) computeWindowValues(partition []*types.Document, wof w
 		acc := wof.opSpec.(accumulators.Accumulator)
 		for i := range partition {
 			window := s.windowDocs(wof.frame, i, partition)
-			val, err := accumulateWindow(acc, wof.frame, window)
+			val, err := accumulateWindow(acc, wof.frame, window, s.cmp)
 			if err != nil {
 				return nil, err
 			}
@@ -1225,7 +1227,7 @@ func windowCount(n int) any {
 }
 
 // computeRank computes $rank or $denseRank values for all documents in a partition.
-func computeRank(partition []*types.Document, sortBy *types.Document, dense bool) []any {
+func computeRank(partition []*types.Document, sortBy *types.Document, dense bool, cmp *collation.Comparator) []any {
 	n := len(partition)
 	vals := make([]any, n)
 
@@ -1237,7 +1239,7 @@ func computeRank(partition []*types.Document, sortBy *types.Document, dense bool
 	vals[0] = windowCount(1)
 
 	for i := 1; i < n; i++ {
-		tied := isTied(partition[i-1], partition[i], sortBy)
+		tied := isTied(partition[i-1], partition[i], sortBy, cmp)
 
 		if tied {
 			if dense {
@@ -1271,7 +1273,7 @@ func sortByValue(doc *types.Document, key string) any {
 }
 
 // isTied returns true if two documents have the same sort key values.
-func isTied(a, b *types.Document, sortBy *types.Document) bool {
+func isTied(a, b *types.Document, sortBy *types.Document, cmp *collation.Comparator) bool {
 	if sortBy == nil || sortBy.Len() == 0 {
 		return true
 	}
@@ -1287,7 +1289,7 @@ func isTied(a, b *types.Document, sortBy *types.Document) bool {
 		if dir, ok := toFloat64(must.NotFail(sortBy.Get(key))); ok && dir < 0 {
 			order = types.Descending
 		}
-		if common.CompareSortKeys(commonpath.SortKeyValue(a, path), commonpath.SortKeyValue(b, path), order) != types.Equal {
+		if common.CompareSortKeys(cmp.KeyValue(commonpath.SortKeyValue(a, path)), cmp.KeyValue(commonpath.SortKeyValue(b, path)), order) != types.Equal {
 			return false
 		}
 	}
@@ -1297,7 +1299,7 @@ func isTied(a, b *types.Document, sortBy *types.Document) bool {
 
 // applyAccumulator applies a window function without its own state, such as
 // $sum, $push or $stdDevPop, over a window slice of documents.
-func applyAccumulator(op string, expression any, window []*types.Document) (any, error) {
+func applyAccumulator(op string, expression any, window []*types.Document, cmp *collation.Comparator) (any, error) {
 	switch op {
 	case "$first", "$last":
 		// The value of the first or last document, null when it is missing.
@@ -1335,9 +1337,9 @@ func applyAccumulator(op string, expression any, window []*types.Document) (any,
 		}
 		return avg.Result(), nil
 	case "$min":
-		return minWindowValue(values), nil
+		return minWindowValue(values, cmp), nil
 	case "$max":
-		return maxWindowValue(values), nil
+		return maxWindowValue(values, cmp), nil
 	case "$first":
 		if len(values) == 0 {
 			return types.Null, nil
@@ -1365,7 +1367,7 @@ func applyAccumulator(op string, expression any, window []*types.Document) (any,
 			found := false
 			for i := range arr.Len() {
 				existing := must.NotFail(arr.Get(i))
-				if types.CompareForAggregation(v, existing) == types.Equal {
+				if types.CompareForAggregation(cmp.KeyValue(v), cmp.KeyValue(existing)) == types.Equal {
 					found = true
 					break
 				}
@@ -1408,7 +1410,7 @@ func collectWindowValues(expression any, window []*types.Document) ([]any, error
 }
 
 // minWindowValue returns the minimum value; returns null for empty.
-func minWindowValue(values []any) any {
+func minWindowValue(values []any, cmp *collation.Comparator) any {
 	var result any
 
 	for _, v := range values {
@@ -1421,7 +1423,7 @@ func minWindowValue(values []any) any {
 			continue
 		}
 
-		if types.CompareOrder(v, result, types.Ascending) == types.Less {
+		if types.CompareOrder(cmp.KeyValue(v), cmp.KeyValue(result), types.Ascending) == types.Less {
 			result = v
 		}
 	}
@@ -1434,7 +1436,7 @@ func minWindowValue(values []any) any {
 }
 
 // maxWindowValue returns the maximum value; returns null for empty.
-func maxWindowValue(values []any) any {
+func maxWindowValue(values []any, cmp *collation.Comparator) any {
 	var result any
 
 	for _, v := range values {
@@ -1447,7 +1449,7 @@ func maxWindowValue(values []any) any {
 			continue
 		}
 
-		if types.CompareOrder(v, result, types.Ascending) == types.Greater {
+		if types.CompareOrder(cmp.KeyValue(v), cmp.KeyValue(result), types.Ascending) == types.Greater {
 			result = v
 		}
 	}

@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
@@ -49,6 +50,7 @@ type cmpOperator struct {
 	right any
 	op    compOp
 	name  string
+	collated
 }
 
 func newCmpOperator(name string, op compOp) newOperatorFunc {
@@ -67,7 +69,7 @@ func newCmpOperator(name string, op compOp) newOperatorFunc {
 
 // Process implements Operator. Evaluates both args and performs the comparison.
 func (c *cmpOperator) Process(doc *types.Document) (any, error) {
-	cmp, err := compareArgs(c.left, c.right, doc)
+	cmp, err := compareArgs(c.cmp, c.left, c.right, doc)
 	if err != nil {
 		return nil, err
 	}
@@ -97,6 +99,7 @@ var _ Operator = (*cmpOperator)(nil)
 type cmpOp struct {
 	left  any
 	right any
+	collated
 }
 
 func newCmp(args ...any) (Operator, error) {
@@ -112,7 +115,7 @@ func newCmp(args ...any) (Operator, error) {
 }
 
 func (c *cmpOp) Process(doc *types.Document) (any, error) {
-	cmp, err := compareArgs(c.left, c.right, doc)
+	cmp, err := compareArgs(c.cmp, c.left, c.right, doc)
 	if err != nil {
 		return nil, err
 	}
@@ -132,7 +135,7 @@ var _ Operator = (*cmpOp)(nil)
 // compareArgs evaluates and compares two operator arguments. As in MongoDB,
 // a missing field equals another missing value or undefined and sorts below
 // every other value except MinKey.
-func compareArgs(left, right any, doc *types.Document) (types.CompareResult, error) {
+func compareArgs(cmp *collation.Comparator, left, right any, doc *types.Document) (types.CompareResult, error) {
 	lv, lMissing, err := evalArgValueOrMissing(left, doc)
 	if err != nil {
 		return 0, err
@@ -155,7 +158,7 @@ func compareArgs(left, right any, doc *types.Document) (types.CompareResult, err
 	}
 	// Aggregation compares whole values in BSON order; an array is not
 	// matched element by element as in a query.
-	return types.CompareForAggregation(lv, rv), nil
+	return compareCollated(cmp, lv, rv), nil
 }
 
 // evalArgValueOrMissing is evalArgValue, also reporting whether arg is a

@@ -151,7 +151,7 @@ func TestEqualityIndex_MatchesFullScan(t *testing.T) {
 	}
 
 	l := &lookup{localField: "ref", foreignField: "k"}
-	idx := newEqualityIndex(foreign, "k")
+	idx := newEqualityIndex(foreign, "k", nil)
 
 	for _, local := range values {
 		input := doc("_id", int32(-1))

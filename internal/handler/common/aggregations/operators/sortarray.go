@@ -34,6 +34,7 @@ type sortArrayOp struct {
 	// fields is nil to sort whole values in order (1 or -1).
 	fields []sortArrayField
 	order  int
+	collated
 }
 
 type sortArrayField struct {
@@ -162,11 +163,11 @@ func (op *sortArrayOp) less(a, b any) bool {
 		if op.order < 0 {
 			a, b = b, a
 		}
-		return types.CompareOrder(a, b, types.Ascending) == types.Less
+		return types.CompareOrder(op.cmp.KeyValue(a), op.cmp.KeyValue(b), types.Ascending) == types.Less
 	}
 
 	for _, f := range op.fields {
-		c := types.CompareOrder(sortArrayKey(a, f.path), sortArrayKey(b, f.path), types.Ascending)
+		c := types.CompareOrder(op.cmp.KeyValue(sortArrayKey(a, f.path)), op.cmp.KeyValue(sortArrayKey(b, f.path)), types.Ascending)
 		if c == types.Equal {
 			continue
 		}

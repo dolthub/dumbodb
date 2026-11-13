@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/commonpath"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
@@ -149,15 +150,23 @@ func (a *topBottomAccumulator) New() Accumulation {
 	return &topBottomState{spec: a, mem: keptMemory{sbe: a.n.sbe}}
 }
 
-// compareKeys compares two documents' sort keys in sortBy order.
-func (a *topBottomAccumulator) compareKeys(x, y any) int {
-	xs, ys := x.([]any), y.([]any)
-	for i, order := range a.sortTypes {
-		if c := common.CompareSortKeys(xs[i], ys[i], order); c != types.Equal {
-			return int(c)
+// NewCollated returns an accumulation that orders strings under cmp.
+func (a *topBottomAccumulator) NewCollated(cmp *collation.Comparator) Accumulation {
+	return &topBottomState{spec: a, mem: keptMemory{sbe: a.n.sbe}, cmp: cmp}
+}
+
+// compareKeys returns a comparison of two documents' sort keys in sortBy
+// order, with strings compared under cmp when it is set.
+func (a *topBottomAccumulator) compareKeys(cmp *collation.Comparator) func(x, y any) int {
+	return func(x, y any) int {
+		xs, ys := x.([]any), y.([]any)
+		for i, order := range a.sortTypes {
+			if c := common.CompareSortKeys(cmp.KeyValue(xs[i]), cmp.KeyValue(ys[i]), order); c != types.Equal {
+				return int(c)
+			}
 		}
+		return 0
 	}
-	return 0
 }
 
 type topBottomState struct {
@@ -165,6 +174,7 @@ type topBottomState struct {
 	ranked *rankedSet
 	mem    keptMemory
 	all    bool
+	cmp    *collation.Comparator
 }
 
 func (s *topBottomState) keepAll() { s.all = true }
@@ -180,7 +190,7 @@ func (s *topBottomState) Accumulate(doc *types.Document) error {
 		if err != nil {
 			return err
 		}
-		s.ranked = newRankedSet(n, s.spec.compareKeys, s.spec.bottom, s.spec.n.sbe)
+		s.ranked = newRankedSet(n, s.spec.compareKeys(s.cmp), s.spec.bottom, s.spec.n.sbe)
 		s.ranked.all = s.all
 	}
 	out, missing, err := s.spec.output.evaluate(doc)

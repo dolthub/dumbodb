@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -195,6 +196,11 @@ func (a *nAccumulator) New() Accumulation {
 	return &nState{spec: a, mem: keptMemory{sbe: a.n.sbe}}
 }
 
+// NewCollated returns an accumulation that orders strings under cmp.
+func (a *nAccumulator) NewCollated(cmp *collation.Comparator) Accumulation {
+	return &nState{spec: a, mem: keptMemory{sbe: a.n.sbe}, cmp: cmp}
+}
+
 type nState struct {
 	spec   *nAccumulator
 	values []any
@@ -202,6 +208,7 @@ type nState struct {
 	n      int64
 	ready  bool
 	mem    keptMemory
+	cmp    *collation.Comparator
 	all    bool
 }
 
@@ -216,9 +223,9 @@ func (s *nState) Accumulate(doc *types.Document) error {
 		s.n, s.ready = n, true
 		switch s.spec.name {
 		case "$minN":
-			s.ranked = newRankedSet(n, compareValues, false, s.spec.n.sbe)
+			s.ranked = newRankedSet(n, compareValuesUnder(s.cmp), false, s.spec.n.sbe)
 		case "$maxN":
-			s.ranked = newRankedSet(n, compareValues, true, s.spec.n.sbe)
+			s.ranked = newRankedSet(n, compareValuesUnder(s.cmp), true, s.spec.n.sbe)
 		}
 		if s.ranked != nil {
 			s.ranked.all = s.all
@@ -269,8 +276,12 @@ func (s *nState) Result() (any, error) {
 	return out, nil
 }
 
-func compareValues(a, b any) int {
-	return int(types.CompareOrder(a, b, types.Ascending))
+// compareValuesUnder returns an ascending comparison of values, with strings
+// compared under cmp when it is set.
+func compareValuesUnder(cmp *collation.Comparator) func(a, b any) int {
+	return func(a, b any) int {
+		return int(types.CompareOrder(cmp.KeyValue(a), cmp.KeyValue(b), types.Ascending))
+	}
 }
 
 func isNull(v any) bool {

@@ -23,6 +23,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/stages"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -47,6 +48,9 @@ func buildViewPipelineStages(db backends.Database, viewPipeline *types.Array, cm
 
 	stageDocs := must.NotFail(iterator.ConsumeValues(viewPipeline.Iterator()))
 	result := make([]aggregations.Stage, 0, len(stageDocs))
+	for _, v := range stageDocs {
+		operators.BindCollation(v, cmp)
+	}
 
 	for i, v := range stageDocs {
 		vd, ok := v.(*types.Document)

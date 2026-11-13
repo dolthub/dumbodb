@@ -184,6 +184,9 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 	pipeline = stages.MoveSkipsBeforeTransforms(operators.BindNowInPipeline(pipeline, operators.CommandNow()))
 
 	aggregationStages := aggregations.MoveMatchesAhead(must.NotFail(iterator.ConsumeValues(pipeline.Iterator())))
+	for _, v := range aggregationStages {
+		operators.BindCollation(v, collCmp)
+	}
 	if err = aggregations.CheckExpandedPipelineLength(aggregations.ExpandedLength(aggregationStages)); err != nil {
 		return nil, err
 	}
@@ -771,6 +774,9 @@ func (h *Handler) aggregateDatabase(connCtx context.Context, document *types.Doc
 		return nil, err
 	}
 	pipeline = stages.MoveSkipsBeforeTransforms(operators.BindNowInPipeline(pipeline, operators.CommandNow()))
+	if cd, ok := getOrNilDocument(document, "collation"); ok {
+		operators.BindCollation(pipeline, collation.Parse(cd).Comparator())
+	}
 
 	if pipeline.Len() == 0 {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
@@ -1896,4 +1902,11 @@ func (d *recordKeyDropper) Next() (struct{}, *types.Document, error) {
 		doc.SetRecordKey(nil)
 	}
 	return zero, doc, err
+}
+
+// getOrNilDocument returns the document field key of doc, if it is one.
+func getOrNilDocument(doc *types.Document, key string) (*types.Document, bool) {
+	v, _ := doc.Get(key)
+	d, ok := v.(*types.Document)
+	return d, ok
 }

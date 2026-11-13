@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
@@ -54,6 +55,7 @@ type bucket struct {
 	defaultValue any // nil means no default
 	hasDefault   bool
 	output       []bucketOutput
+	cmp          *collation.Comparator
 }
 
 // useSBE implements sbeAware.
@@ -165,6 +167,7 @@ func newBucket(stage *types.Document) (aggregations.Stage, error) {
 	b := &bucket{
 		groupBy:    groupByVal,
 		boundaries: boundaries,
+		cmp:        operators.CollationOf(stage),
 	}
 
 	// default is optional.
@@ -266,7 +269,7 @@ func (b *bucket) Process(ctx context.Context, iter types.DocumentsIterator, clos
 		}
 
 		doc := must.NotFail(types.NewDocument("_id", b.boundaries[i]))
-		if err = appendBucketOutput(doc, b.output, groups[i]); err != nil {
+		if err = appendBucketOutput(doc, b.output, b.cmp, groups[i]); err != nil {
 			return nil, err
 		}
 		res = append(res, doc)
@@ -275,7 +278,7 @@ func (b *bucket) Process(ctx context.Context, iter types.DocumentsIterator, clos
 	// Default bucket.
 	if b.hasDefault && len(groups[numBuckets]) > 0 {
 		doc := must.NotFail(types.NewDocument("_id", b.defaultValue))
-		if err = appendBucketOutput(doc, b.output, groups[numBuckets]); err != nil {
+		if err = appendBucketOutput(doc, b.output, b.cmp, groups[numBuckets]); err != nil {
 			return nil, err
 		}
 		res = append(res, doc)
@@ -293,18 +296,18 @@ func (b *bucket) findBucket(val any) int {
 	lo, hi := 0, len(b.boundaries)-2
 
 	// First check if val is below the first boundary or at/above the last.
-	if types.CompareOrder(val, b.boundaries[0], types.Ascending) == types.Less {
+	if types.CompareOrder(b.cmp.KeyValue(val), b.cmp.KeyValue(b.boundaries[0]), types.Ascending) == types.Less {
 		return -1
 	}
 
-	if types.CompareOrder(val, b.boundaries[len(b.boundaries)-1], types.Ascending) != types.Less {
+	if types.CompareOrder(b.cmp.KeyValue(val), b.cmp.KeyValue(b.boundaries[len(b.boundaries)-1]), types.Ascending) != types.Less {
 		return -1
 	}
 
 	for lo <= hi {
 		mid := (lo + hi) / 2
-		cmpLower := types.CompareOrder(val, b.boundaries[mid], types.Ascending)
-		cmpUpper := types.CompareOrder(val, b.boundaries[mid+1], types.Ascending)
+		cmpLower := types.CompareOrder(b.cmp.KeyValue(val), b.cmp.KeyValue(b.boundaries[mid]), types.Ascending)
+		cmpUpper := types.CompareOrder(b.cmp.KeyValue(val), b.cmp.KeyValue(b.boundaries[mid+1]), types.Ascending)
 
 		if cmpLower != types.Less && cmpUpper == types.Less {
 			return mid
@@ -322,7 +325,7 @@ func (b *bucket) findBucket(val any) int {
 
 // appendBucketOutput applies optional output accumulators to a bucket document.
 // If no output is defined, adds a default "count" field with the document count.
-func appendBucketOutput(doc *types.Document, output []bucketOutput, groupDocs []*types.Document) error {
+func appendBucketOutput(doc *types.Document, output []bucketOutput, cmp *collation.Comparator, groupDocs []*types.Document) error {
 	if len(output) == 0 {
 		doc.Set("count", int32(len(groupDocs)))
 		return nil
@@ -330,7 +333,7 @@ func appendBucketOutput(doc *types.Document, output []bucketOutput, groupDocs []
 
 	for _, out := range output {
 		iter := iterator.Values(iterator.ForSlice(groupDocs))
-		val, err := accumulators.Accumulate(out.accumulator, iter)
+		val, err := accumulators.Accumulate(out.accumulator, iter, cmp)
 		if err != nil {
 			return processGroupStageError(err)
 		}
