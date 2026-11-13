@@ -20,6 +20,7 @@ import (
 	"fmt"
 
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -109,6 +110,7 @@ func NewUnionWithStage(stage *types.Document, fetcher CollectionFetcher) (aggreg
 	}
 
 	sub.sbeSubPipeline = true
+	sub.cmp = operators.CollationOf(stage)
 
 	return &unionWith{sub: sub, fetcher: fetcher}, nil
 }
@@ -122,6 +124,10 @@ func unionWithWrongType(field string, v any, want string) error {
 // Process implements aggregations.Stage.
 func (u *unionWith) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
 	fetcher := withFetchCache(u.fetcher)
+	if err := checkViewCollation(ctx, fetcher, u.sub.from, u.sub.cmp); err != nil {
+		iter.Close()
+		return nil, err
+	}
 	ctx = WithJoinStages(ctx, JoinStages{})
 
 	isView := func(name string) bool {

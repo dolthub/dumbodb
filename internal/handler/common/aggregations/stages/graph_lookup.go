@@ -204,6 +204,9 @@ func (gl *graphLookup) Process(ctx context.Context, iter types.DocumentsIterator
 	}
 
 	fetcher := withFetchCache(gl.fetcher)
+	if err := checkViewCollation(ctx, fetcher, gl.from, gl.cmp); err != nil {
+		return nil, err
+	}
 	ctx = WithJoinStages(ctx, JoinStages{N: 1})
 	var src graphSource
 	if gl.cmp == nil && fetcher.IndexedField(ctx, gl.from, gl.connectToField) {
