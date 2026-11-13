@@ -41,12 +41,20 @@ func newMergeObjectsAccumulator(args ...any) (Accumulator, error) {
 }
 
 func (m *mergeObjectsAccumulator) New() Accumulation {
-	return &mergeObjectsState{spec: m, result: must.NotFail(types.NewDocument())}
+	return &mergeObjectsState{spec: m, result: must.NotFail(types.NewDocument()), sizes: map[string]int{}}
 }
 
+// mergeObjectsState keeps the merged document. mongod does not limit it;
+// DumboDB limits the kept document to accumulatorMemoryLimit, a deliberate
+// deviation, as it can otherwise grow until the process runs out of memory.
 type mergeObjectsState struct {
 	spec   *mergeObjectsAccumulator
 	result *types.Document
+	// sizes holds each kept field's BSON size, and bytes their sum: a value
+	// is charged when its key is set and released when a later one
+	// overwrites it.
+	sizes map[string]int
+	bytes int
 }
 
 // Accumulate merges the operand's fields into the result. Missing and null
@@ -62,9 +70,17 @@ func (s *mergeObjectsState) Accumulate(doc *types.Document) error {
 	case types.NullType, types.UndefinedType:
 		return nil
 	case *types.Document:
-		// mongod does not limit the memory $mergeObjects keeps.
-		for _, k := range src.Keys() {
-			s.result.Set(k, must.NotFail(src.Get(k)))
+		keys, values := src.Keys(), src.Values()
+		for i, k := range keys {
+			size := len(k) + types.BSONValueSize(values[i])
+			s.bytes += size - s.sizes[k]
+			s.sizes[k] = size
+			if s.bytes > accumulatorMemoryLimit {
+				return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrExceededMemoryLimit,
+					fmt.Sprintf("$mergeObjects used too much memory: the merged document reached %d bytes, "+
+						"the limit DumboDB applies to one accumulator (mongod applies none)", s.bytes), "$mergeObjects")
+			}
+			s.result.Set(k, values[i])
 		}
 		return nil
 	default:
