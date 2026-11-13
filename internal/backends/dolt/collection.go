@@ -3065,14 +3065,14 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 			return nil, err
 		}
 
-		if err := idxpkg.TreePut(ctx, mut, key, v); err != nil {
+		if err := mut.Put(ctx, key, v); err != nil {
 			return nil, err
 		}
 
 		batchKeySet[string(h)] = struct{}{}
 	}
 
-	newMap, err := idxpkg.TreeFlush(ctx, mut)
+	newMap, err := mut.Map(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -3188,7 +3188,7 @@ func (c *collection) BulkLoadInitialSync(ctx context.Context, documents []*types
 			return backends.NewDuplicateKeyError(backends.DefaultIndexName, idDupKey(tuple.id))
 		}
 	}
-	primary, err = idxpkg.TreeMutateWithIter(ctx, primary, &initialSyncTupleIter{tuples: tuples})
+	primary, err = prolly.MutateMapWithTupleIter(ctx, primary, &initialSyncTupleIter{tuples: tuples})
 	if err != nil {
 		return fmt.Errorf("merging initial-sync sorted run: %w", err)
 	}
@@ -3366,7 +3366,7 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 			return nil, err
 		}
 
-		if err := idxpkg.TreePut(ctx, mut, key, v); err != nil {
+		if err := mut.Put(ctx, key, v); err != nil {
 			return nil, err
 		}
 
@@ -3377,7 +3377,7 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 		return &backends.UpdateAllResult{}, nil
 	}
 
-	newMap, err := idxpkg.TreeFlush(ctx, mut)
+	newMap, err := mut.Map(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -3533,7 +3533,7 @@ func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllPa
 		return &backends.DeleteAllResult{}, nil
 	}
 
-	newMap, err := idxpkg.TreeFlush(ctx, mut)
+	newMap, err := mut.Map(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -4637,7 +4637,7 @@ func (c *collection) buildSecondaryIndex(ctx context.Context, state *dbState, id
 		}
 	}
 
-	built, err := idxpkg.TreeFlush(ctx, mut)
+	built, err := mut.Map(ctx)
 	if err != nil {
 		return prolly.Map{}, 0, false, fmt.Errorf("index: flushing map: %w", err)
 	}

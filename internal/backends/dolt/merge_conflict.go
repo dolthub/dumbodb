@@ -759,12 +759,12 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 			return nil, fmt.Errorf("DumboDBResolveConflict: deleting document from collection %q: %w", params.Collection, err)
 		}
 	} else {
-		if err := idxpkg.TreePut(ctx, mut, target.rawKey, chosenVal); err != nil {
+		if err := mut.Put(ctx, target.rawKey, chosenVal); err != nil {
 			return nil, fmt.Errorf("DumboDBResolveConflict: updating document in collection %q: %w", params.Collection, err)
 		}
 	}
 
-	newCollMap, err := idxpkg.TreeFlush(ctx, mut)
+	newCollMap, err := mut.Map(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBResolveConflict: flushing collection map for %q: %w", params.Collection, err)
 	}
@@ -1268,7 +1268,7 @@ func captureConflictsForCollection(
 					theirsVal = tv
 				}
 				if baseVal != nil {
-					if err := idxpkg.TreePut(ctx, mut, key, baseVal); err != nil {
+					if err := mut.Put(ctx, key, baseVal); err != nil {
 						return err
 					}
 				} else if err := mut.Delete(ctx, key); err != nil {
@@ -1376,7 +1376,7 @@ func captureConflictsForCollection(
 		switch diff.Op {
 		// Left-only changes: apply to the merged map (starting from the from map).
 		case tree.DiffOpLeftAdd, tree.DiffOpLeftModify:
-			if err := idxpkg.TreePut(ctx, mut, diff.Key, diff.Left); err != nil {
+			if err := mut.Put(ctx, diff.Key, diff.Left); err != nil {
 				return prolly.Map{}, nil, fmt.Errorf("applying left change: %w", err)
 			}
 			if indexing {
@@ -1442,7 +1442,7 @@ func captureConflictsForCollection(
 				entry.oursRawVal = append(val.Tuple(nil), diff.Left...)
 				entry.ourDiffType = "modified"
 				// Override from's value with ours in the merged map.
-				if err := idxpkg.TreePut(ctx, mut, diff.Key, diff.Left); err != nil {
+				if err := mut.Put(ctx, diff.Key, diff.Left); err != nil {
 					return prolly.Map{}, nil, fmt.Errorf("applying ours for conflict: %w", err)
 				}
 			} else {
@@ -1492,7 +1492,7 @@ func captureConflictsForCollection(
 		// Resolved divergent edits: the JSON field merge succeeded. Apply
 		// the merged value to the map.
 		case tree.DiffOpDivergentModifyResolved:
-			if err := idxpkg.TreePut(ctx, mut, diff.Key, diff.Merged); err != nil {
+			if err := mut.Put(ctx, diff.Key, diff.Merged); err != nil {
 				return prolly.Map{}, nil, fmt.Errorf("applying resolved merge: %w", err)
 			}
 			if indexing {
@@ -1519,7 +1519,7 @@ func captureConflictsForCollection(
 					return prolly.Map{}, nil, fmt.Errorf("applying resolved delete: %w", err)
 				}
 			} else {
-				if err := idxpkg.TreePut(ctx, mut, diff.Key, diff.Merged); err != nil {
+				if err := mut.Put(ctx, diff.Key, diff.Merged); err != nil {
 					return prolly.Map{}, nil, fmt.Errorf("applying resolved merge: %w", err)
 				}
 			}
@@ -1543,7 +1543,7 @@ func captureConflictsForCollection(
 		}
 	}
 
-	mergedMap, err = idxpkg.TreeFlush(ctx, mut)
+	mergedMap, err = mut.Map(ctx)
 	if err != nil {
 		return prolly.Map{}, nil, fmt.Errorf("flushing merged map: %w", err)
 	}

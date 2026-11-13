@@ -23,10 +23,10 @@ import (
 	"github.com/dolthub/dumbodb/internal/index"
 )
 
-func TestIndexKeyError_TreeTooDeep(t *testing.T) {
-	err := fmt.Errorf("applyInsertsToIndexes: flushing map for %q: %w: detail", "a_1", index.ErrTreeTooDeep)
+func TestIndexKeyError_TreeTooTall(t *testing.T) {
+	err := fmt.Errorf("applyInsertsToIndexes: flushing map for %q: %w of 15 levels", "a_1", index.ErrTreeTooTall)
 	code, msg, ok := IndexKeyError(err)
 	require.True(t, ok)
 	require.Equal(t, ErrOperationFailed, code)
-	require.Equal(t, index.ErrTreeTooDeep.Error()+": detail", msg)
+	require.Equal(t, index.ErrTreeTooTall.Error()+" of 15 levels", msg)
 }

@@ -25,9 +25,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestTreeFlush_TooDeep writes keys far over MaxKeyLength, which Dolt arranges
-// into a binary tree, until the tree would pass MaxTreeLevels.
-func TestTreeFlush_TooDeep(t *testing.T) {
+// TestTreeTooTall writes keys far over MaxKeyLength, which Dolt arranges into
+// a binary tree, until the tree is too tall to grow.
+func TestTreeTooTall(t *testing.T) {
 	ctx := context.Background()
 	m, err := NewEmptyMap(ctx, tree.NewTestNodeStore())
 	require.NoError(t, err)
@@ -45,21 +45,12 @@ func TestTreeFlush_TooDeep(t *testing.T) {
 			vb.PutByteString(0, []byte{0})
 			value, err := vb.Build(ctx, idxBufPool)
 			require.NoError(t, err)
-			require.NoError(t, TreePut(ctx, mut, key, value))
+			require.NoError(t, mut.Put(ctx, key, value))
 		}
-		next, err := TreeFlush(ctx, mut)
-		if err != nil {
-			require.ErrorIs(t, err, ErrTreeTooDeep)
-			require.GreaterOrEqual(t, m.Height(), MaxTreeLevels-1, "the error comes only at the level limit")
+		if m, err = mut.Map(ctx); err != nil {
+			require.ErrorIs(t, err, ErrTreeTooTall)
 			return
 		}
-		m = next
 	}
 	t.Fatalf("tree reached %d levels without passing the limit", m.Height())
-}
-
-func TestTreeFlush_OtherPanicsPropagate(t *testing.T) {
-	require.Panics(t, func() {
-		_, _ = TreeFlush(context.Background(), nil)
-	})
 }

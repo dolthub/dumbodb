@@ -28,7 +28,6 @@ import (
 	"github.com/dolthub/dolt/go/store/val"
 
 	"github.com/dolthub/dumbodb/internal/backends"
-	idxpkg "github.com/dolthub/dumbodb/internal/index"
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
@@ -152,11 +151,11 @@ func secondaryIndexesFromRoots(ctx context.Context, ns tree.NodeStore, infos []b
 		if err != nil {
 			return secondaryIndexes{}, err
 		}
-		if err := idxpkg.TreePut(ctx, mut, k, v); err != nil {
+		if err := mut.Put(ctx, k, v); err != nil {
 			return secondaryIndexes{}, err
 		}
 	}
-	if s.m, err = idxpkg.TreeFlush(ctx, mut); err != nil {
+	if s.m, err = mut.Map(ctx); err != nil {
 		return secondaryIndexes{}, err
 	}
 	return s, nil

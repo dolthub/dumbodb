@@ -86,7 +86,7 @@ func InsertEntry(ctx context.Context, mut *prolly.MutableMap, fieldValues []any,
 	if err != nil {
 		return err
 	}
-	return TreePut(ctx, mut, keyTuple, valTuple)
+	return mut.Put(ctx, keyTuple, valTuple)
 }
 
 func DeleteEntry(ctx context.Context, mut *prolly.MutableMap, fieldValues []any, primaryIDBytes []byte) error {
@@ -178,6 +178,11 @@ const MaxKeyLength = 1024
 
 // ErrKeyTooLong reports a key longer than MaxKeyLength.
 var ErrKeyTooLong = errors.New("key too large to index")
+
+// ErrTreeTooTall reports a write that would grow a collection's or index's
+// tree past the levels Dolt supports, which only keys averaging near
+// MaxKeyLength can do.
+var ErrTreeTooTall = tree.ErrTreeTooTall
 
 // ErrCannotExtractGeoKeys reports a value a 2dsphere index cannot hold.
 var ErrCannotExtractGeoKeys = errors.New("Can't extract geo keys")

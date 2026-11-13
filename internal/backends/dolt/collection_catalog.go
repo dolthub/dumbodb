@@ -24,7 +24,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/dolthub/dumbodb/internal/backends"
-	idxpkg "github.com/dolthub/dumbodb/internal/index"
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
@@ -216,10 +215,10 @@ func (state *dbState) applyCatalogUpsert(ctx context.Context, am prolly.AddressM
 		return err
 	}
 	mut := catMap.Mutate()
-	if err := idxpkg.TreePut(ctx, mut, key, value); err != nil {
+	if err := mut.Put(ctx, key, value); err != nil {
 		return err
 	}
-	newMap, err := idxpkg.TreeFlush(ctx, mut)
+	newMap, err := mut.Map(ctx)
 	if err != nil {
 		return err
 	}
@@ -245,7 +244,7 @@ func (state *dbState) applyCatalogDelete(ctx context.Context, am prolly.AddressM
 	if err := mut.Delete(ctx, key); err != nil {
 		return err
 	}
-	newMap, err := idxpkg.TreeFlush(ctx, mut)
+	newMap, err := mut.Map(ctx)
 	if err != nil {
 		return err
 	}
@@ -289,14 +288,14 @@ func (state *dbState) applyCatalogRename(ctx context.Context, am prolly.AddressM
 		if err != nil {
 			return err
 		}
-		if err := idxpkg.TreePut(ctx, mut, newKey, value); err != nil {
+		if err := mut.Put(ctx, newKey, value); err != nil {
 			return err
 		}
 	}
 	if err := mut.Delete(ctx, oldKey); err != nil {
 		return err
 	}
-	newMap, err := idxpkg.TreeFlush(ctx, mut)
+	newMap, err := mut.Map(ctx)
 	if err != nil {
 		return err
 	}
