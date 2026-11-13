@@ -543,12 +543,12 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			info, err := lookupCollectionInfo(ctx, db, name)
 			return err == nil && info != nil && info.IsView
 		}
-		if !isView {
-			stages.MarkSBELookups(stagesDocuments, stagesSpecs, collectionIsView)
-		}
 		// mongod answers a missing collection with an empty plan, and a
 		// leading equality on _id with its express plan; neither runs in SBE.
 		if collectionExists && !stages.IsExpressMatch(stagesSpecs) {
+			if !isView {
+				stages.MarkSBELookups(stagesDocuments, stagesSpecs, collectionIsView)
+			}
 			stages.WrapSBEStages(stagesDocuments, stages.SBEPrefixLen(stagesSpecs, collectionIsView))
 		}
 
