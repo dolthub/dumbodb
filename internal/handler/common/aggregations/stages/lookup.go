@@ -102,6 +102,21 @@ type ViewResolver interface {
 	ViewPipeline(ctx context.Context, name string) (*types.Array, bool)
 }
 
+// ExistenceChecker is implemented by fetchers that can report whether a
+// collection, or the collection a view reads, exists.
+type ExistenceChecker interface {
+	SourceExists(ctx context.Context, name string) bool
+}
+
+// SourceExists implements ExistenceChecker, reporting true when the wrapped
+// fetcher cannot tell.
+func (c *cachingFetcher) SourceExists(ctx context.Context, name string) bool {
+	if ec, ok := c.CollectionFetcher.(ExistenceChecker); ok {
+		return ec.SourceExists(ctx, name)
+	}
+	return true
+}
+
 // ViewPipeline implements ViewResolver when the wrapped fetcher does.
 func (c *cachingFetcher) ViewPipeline(ctx context.Context, name string) (*types.Array, bool) {
 	if vr, ok := c.CollectionFetcher.(ViewResolver); ok {
