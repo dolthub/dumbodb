@@ -69,9 +69,12 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		return nil, err
 	}
 
+	// collDoc is the aggregate's collation and collCmp its comparator.
+	var collDoc *types.Document
 	var collCmp *collation.Comparator
 	if cv, _ := document.Get("collation"); cv != nil {
 		if cd, ok := cv.(*types.Document); ok {
+			collDoc = cd
 			collCmp = collation.Parse(cd).Comparator()
 		}
 	}
@@ -153,8 +156,10 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		if vErr != nil {
 			return nil, vErr
 		}
+		collDoc = viewCollation
 		collCmp = collation.Parse(viewCollation).Comparator()
 	} else if lookupErr == nil && target != nil && !document.Has("collation") && target.Collation != nil {
+		collDoc = target.Collation
 		collCmp = collation.Parse(target.Collation).Comparator()
 	}
 
@@ -232,7 +237,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			// $merge requires database read/write access to merge into a collection.
 			mergeWriter := makeMergeWriter(h.b, dbName)
 			if s, err = stages.NewMergeStage(d, dbName, mergeWriter); err == nil {
-				err = checkMergeOnIndex(connCtx, h.b, s)
+				err = checkMergeOnIndex(connCtx, h.b, s, collDoc)
 			}
 
 		case "$indexStats":
@@ -1675,9 +1680,9 @@ func mergeImmutableIDError(cause string) error {
 }
 
 // checkMergeOnIndex returns mongod's error when $merge's 'on' fields other than
-// _id alone are not exactly the fields of a unique, non-partial index with the
-// simple collation on the target collection.
-func checkMergeOnIndex(ctx context.Context, b backends.Backend, stage aggregations.Stage) error {
+// _id alone are not exactly the fields of a unique, non-partial index whose
+// collation is the aggregate's on the target collection.
+func checkMergeOnIndex(ctx context.Context, b backends.Backend, stage aggregations.Stage, aggCollation *types.Document) error {
 	dbName, collName, on, ok := stages.MergeTarget(stage)
 	if !ok || len(on) == 0 || (len(on) == 1 && on[0] == "_id") {
 		return nil
@@ -1708,7 +1713,8 @@ func checkMergeOnIndex(ctx context.Context, b backends.Backend, stage aggregatio
 		onFields[f] = true
 	}
 	for _, idx := range res.Indexes {
-		if !idx.Unique || idx.PartialFilterExpression != nil || idx.Collation != nil || len(idx.Key) != len(onFields) {
+		if !idx.Unique || idx.PartialFilterExpression != nil || len(idx.Key) != len(onFields) ||
+			collation.Parse(idx.Collation).Identity() != collation.Parse(aggCollation).Identity() {
 			continue
 		}
 		matches := true
