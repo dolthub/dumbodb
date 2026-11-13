@@ -54,13 +54,21 @@ func NewMatchStage(stage *types.Document, cmp *collation.Comparator, storedInput
 		)
 	}
 
-	if err := validateMatch(filter); err != nil {
-		return nil, err
-	}
-
+	// Canonicalize first: validation builds the filter's operators, which
+	// must see the values they will compare.
 	if storedInput {
 		common.CanonicalizeFilter(filter)
 	}
+
+	if err := validateMatch(filter); err != nil {
+		return nil, err
+	}
+	// mongod parses the whole pipeline before running it, so a malformed
+	// filter fails before any later stage's errors.
+	if err := common.ValidateFilter(filter, cmp); err != nil {
+		return nil, err
+	}
+
 	return &match{filter: filter, cmp: cmp}, nil
 }
 
