@@ -125,6 +125,11 @@ func checkVariableReference(name string, scope map[string]bool) error {
 			"empty variable names are not allowed", "$$")
 	case scope[name]:
 		return nil
+	}
+	if err := checkVariableNameForRead(name); err != nil {
+		return err
+	}
+	switch {
 	case name == "SEARCH_META":
 		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSearchMetaWithoutSearch,
 			"Can't access $$SEARCH_META without a $search stage earlier in the pipeline", "$$SEARCH_META")
@@ -144,7 +149,18 @@ func CheckUserVariableName(name string) error {
 	if name == "CURRENT" {
 		return nil
 	}
-	if c := name[0]; c < 0x80 && !(c >= 'a' && c <= 'z') {
+	return checkVariableName(name, false)
+}
+
+// checkVariableNameForRead is mongod's check of a name an expression reads,
+// which may also name a system variable.
+func checkVariableNameForRead(name string) error {
+	return checkVariableName(name, true)
+}
+
+func checkVariableName(name string, allowUpperFirst bool) error {
+	c := name[0]
+	if c < 0x80 && !(c >= 'a' && c <= 'z') && !(allowUpperFirst && c >= 'A' && c <= 'Z') {
 		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFailedToParse,
 			fmt.Sprintf("'%s' starts with an invalid character for a user variable name", name), name)
 	}
