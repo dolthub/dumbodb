@@ -224,7 +224,8 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 
 		case "$out":
 			// $out requires database write access to replace a collection.
-			outWriter := makeOutWriter(h.b, dbName)
+			bypass, _ := document.Get("bypassDocumentValidation")
+			outWriter := makeOutWriter(h.b, dbName, bypass == true)
 			s, err = stages.NewOutStage(d, dbName, outWriter)
 
 		case "$merge":
@@ -1467,15 +1468,29 @@ const (
 // collection with the provided documents. As in MongoDB, they are written in
 // batches to a temporary collection that is then renamed over the target, so
 // the target is unchanged if the pipeline or a write fails.
-func makeOutWriter(b backends.Backend, currentDB string) stages.OutWriter { //nolint:unparam // currentDB used by caller
+func makeOutWriter(b backends.Backend, currentDB string, bypassValidation bool) stages.OutWriter { //nolint:unparam // currentDB used by caller
 	return func(ctx context.Context, dbName, collName string, docs types.DocumentsIterator) error {
 		db, err := b.Database(dbName)
 		if err != nil {
 			return lazyerrors.Error(err)
 		}
 
+		// The new collection replaces an existing target with its options
+		// and indexes, as mongod's does.
 		tmpName := "tmp.agg_out." + uuid.NewString()
-		if err = db.CreateCollection(ctx, &backends.CreateCollectionParams{Name: tmpName}); err != nil {
+		tmpParams := &backends.CreateCollectionParams{Name: tmpName}
+		var validator *types.Document
+		if target, _ := lookupCollectionInfo(ctx, db, collName); target != nil {
+			if target.IsView {
+				return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCommandNotSupportedOnView,
+					fmt.Sprintf("Namespace %s.%s is a view, not a collection", dbName, collName), "$out")
+			}
+			tmpParams = outTargetOptions(tmpName, target)
+			if target.ValidationAction != "warn" && !bypassValidation {
+				validator = target.Validator
+			}
+		}
+		if err = db.CreateCollection(ctx, tmpParams); err != nil {
 			return lazyerrors.Error(err)
 		}
 		renamed := false
@@ -1516,6 +1531,16 @@ func makeOutWriter(b backends.Backend, currentDB string) stages.OutWriter { //no
 			if !doc.Has("_id") {
 				doc.Set("_id", types.NewObjectID())
 			}
+			if validator != nil {
+				valid, err := common.FilterDocument(doc, validator)
+				if err != nil {
+					return err
+				}
+				if !valid {
+					return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDocumentValidationFailure,
+						"Document failed validation", "$out")
+				}
+			}
 			batch = append(batch, doc)
 			batchBytes += doc.BSONSize()
 			if len(batch) >= outBatchSize || batchBytes >= outBatchBytes {
@@ -1534,6 +1559,25 @@ func makeOutWriter(b backends.Backend, currentDB string) stages.OutWriter { //no
 		renamed = true
 
 		return nil
+	}
+}
+
+// outTargetOptions returns the parameters of a collection named name with
+// target's options.
+func outTargetOptions(name string, target *backends.CollectionInfo) *backends.CreateCollectionParams {
+	return &backends.CreateCollectionParams{
+		Name:               name,
+		Validator:          target.Validator,
+		Collation:          target.Collation,
+		ValidationLevel:    target.ValidationLevel,
+		ValidationAction:   target.ValidationAction,
+		MergeMode:          target.MergeMode,
+		ClusteredIndexName: target.ClusteredIndexName,
+		IsTimeSeries:       target.IsTimeSeries,
+		TimeField:          target.TimeField,
+		MetaField:          target.MetaField,
+		Granularity:        target.Granularity,
+		BucketSpanSeconds:  target.BucketSpanSeconds,
 	}
 }
 
