@@ -1517,6 +1517,12 @@ func substituteVarsInStage(stage *types.Document, vars map[string]any) *types.Do
 		} else {
 			spec = substituteVarsInValue(spec, vars, false)
 		}
+	case "$graphLookup", "$geoNear":
+		if d, ok := spec.(*types.Document); ok {
+			spec = substituteVarsOutsideQueries(d, vars)
+		} else {
+			spec = substituteVarsInValue(spec, vars, false)
+		}
 	case "$facet":
 		if d, ok := spec.(*types.Document); ok {
 			facets := types.MakeDocument(d.Len())
@@ -1533,6 +1539,23 @@ func substituteVarsInStage(stage *types.Document, vars map[string]any) *types.Do
 		spec = substituteVarsInValue(spec, vars, false)
 	}
 	return must.NotFail(types.NewDocument(name, spec))
+}
+
+// substituteVarsOutsideQueries substitutes into a stage specification whose
+// query documents read variables only inside $expr.
+func substituteVarsOutsideQueries(spec *types.Document, vars map[string]any) *types.Document {
+	out := types.MakeDocument(spec.Len())
+	for _, k := range spec.Keys() {
+		v := must.NotFail(spec.Get(k))
+		switch q, isDoc := v.(*types.Document); {
+		case isDoc && (k == "restrictSearchWithMatch" || k == "query"):
+			v = substituteVarsInQuery(q, vars)
+		default:
+			v = substituteVarsInValue(v, vars, false)
+		}
+		out.Set(k, v)
+	}
+	return out
 }
 
 // substituteVarsInSubPipelineSpec substitutes into a nested $lookup or
