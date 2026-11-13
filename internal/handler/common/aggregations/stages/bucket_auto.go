@@ -21,6 +21,7 @@ import (
 	"math"
 	stdsort "sort"
 	"strconv"
+	"strings"
 
 	"github.com/cockroachdb/apd/v3"
 	"github.com/dolthub/dumbodb/internal/handler/common"
@@ -96,6 +97,14 @@ func newBucketAuto(stage *types.Document) (aggregations.Stage, error) {
 	numBuckets, err := parseBucketAutoBuckets(bucketsVal)
 	if err != nil {
 		return nil, err
+	}
+
+	doc, isDoc := groupByVal.(*types.Document)
+	isDoc = isDoc && isGroupExpression(doc)
+	if s, isPath := groupByVal.(string); !isDoc && (!isPath || !strings.HasPrefix(s, "$") || s == "$") {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketAutoGroupByInvalid,
+			"The $bucketAuto 'groupBy' field must be defined as a $-prefixed path or an expression object, but found: "+
+				types.FormatAnyValue(groupByVal), "$bucketAuto (stage)")
 	}
 
 	if err := operators.CheckFieldPaths(groupByVal); err != nil {
