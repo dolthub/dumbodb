@@ -71,7 +71,7 @@ func newValidatedMatchStage(stage *types.Document, storedInput bool) aggregation
 	if storedInput {
 		common.CanonicalizeFilter(filter)
 	}
-	return &match{filter: filter}
+	return &match{filter: filter, cmp: operators.CollationOf(stage)}
 }
 
 func (m *match) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
