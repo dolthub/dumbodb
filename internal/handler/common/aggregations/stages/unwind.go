@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
@@ -123,6 +124,20 @@ func newUnwindFromDocument(doc *types.Document) (aggregations.Stage, error) {
 	if v, getErr := doc.Get("includeArrayIndex"); getErr == nil {
 		switch s := v.(type) {
 		case string:
+			switch {
+			case s == "":
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrUnwindIndexEmpty,
+					"expected a non-empty string for the includeArrayIndex  option to $unwind stage, got string", "$unwind (stage)")
+			case strings.HasPrefix(s, "$"):
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrUnwindIndexDollar,
+					"includeArrayIndex option to $unwind stage should not be prefixed with a '$': "+s, "$unwind (stage)")
+			case strings.IndexByte(s, 0) >= 0:
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFieldPathNulByte,
+					"FieldPath field names may not contain '\\0'.", "$unwind (stage)")
+			}
+			if err := operators.CheckFieldPaths("$" + s); err != nil {
+				return nil, err
+			}
 			u.includeArrayIndex = s
 		case types.NullType:
 			// null is treated as not set
@@ -170,6 +185,17 @@ func newUnwindFromDocument(doc *types.Document) (aggregations.Stage, error) {
 
 // parseUnwindPath parses and validates a field path string for $unwind.
 func parseUnwindPath(field string) (*aggregations.Expression, error) {
+	// The path is a field path, never a variable.
+	switch {
+	case field == "$":
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrEmptyFieldPath,
+			"FieldPath cannot be constructed with empty string", "$unwind (stage)")
+	case strings.HasPrefix(field, "$$"):
+		name, _, _ := strings.Cut(field[1:], ".")
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFieldPathInvalidName,
+			"Consider using $getField or $setField for a field path with '.' or '$'. :: caused by :: "+
+				"FieldPath field names may not start with '$', given '"+name+"'.", "$unwind (stage)")
+	}
 	if err := operators.CheckFieldPaths(field); err != nil {
 		return nil, err
 	}

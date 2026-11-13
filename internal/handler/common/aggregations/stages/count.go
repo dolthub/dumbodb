@@ -48,6 +48,11 @@ func newCount(stage *types.Document) (aggregations.Stage, error) {
 		)
 	}
 
+	if strings.IndexByte(field, 0) >= 0 {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrStageCountNulByte,
+			"the count field cannot contain a null byte", "$count (stage)")
+	}
+
 	if strings.Contains(field, ".") {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrStageCountBadValue,
