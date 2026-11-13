@@ -784,13 +784,17 @@ const (
 	ErrArrayToObjectElementType     = ErrorCode(40398) // Location40398
 
 	// $bucket and $sortByCount specification errors.
-	ErrBucketBoundaryTypes   = ErrorCode(40193) // Location40193
-	ErrBucketBoundariesOrder = ErrorCode(40194) // Location40194
-	ErrBucketDefaultInRange  = ErrorCode(40199) // Location40199
-	ErrBucketGroupBy         = ErrorCode(40202) // Location40202
-	ErrSortByCountObject     = ErrorCode(40147) // Location40147
-	ErrSortByCountString     = ErrorCode(40148) // Location40148
-	ErrSortByCountType       = ErrorCode(40149) // Location40149
+	ErrBucketBoundaryTypes       = ErrorCode(40193) // Location40193
+	ErrBucketBoundariesOrder     = ErrorCode(40194) // Location40194
+	ErrBucketDefaultInRange      = ErrorCode(40199) // Location40199
+	ErrBucketBoundaryNotConstant = ErrorCode(40191) // Location40191
+	ErrBucketDefaultNotConstant  = ErrorCode(40195) // Location40195
+	ErrBucketOutputNotObject     = ErrorCode(40196) // Location40196
+	ErrBucketUnknownOption       = ErrorCode(40197) // Location40197
+	ErrBucketGroupBy             = ErrorCode(40202) // Location40202
+	ErrSortByCountObject         = ErrorCode(40147) // Location40147
+	ErrSortByCountString         = ErrorCode(40148) // Location40148
+	ErrSortByCountType           = ErrorCode(40149) // Location40149
 
 	// ErrStageGroupUnaryOperator indicates that $sum is a unary operator.
 	ErrStageGroupUnaryOperator = ErrorCode(40237) // Location40237
