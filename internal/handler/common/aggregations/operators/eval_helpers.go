@@ -226,6 +226,10 @@ func foldDocumentConstants(doc *types.Document) (any, bool, error) {
 		}
 	}
 
+	if name == "$switch" {
+		return foldSwitchConstants(doc)
+	}
+
 	folded := types.MakeDocument(doc.Len())
 	constant := true
 	keys, values := doc.Keys(), doc.Values()
@@ -250,12 +254,6 @@ func foldDocumentConstants(doc *types.Document) (any, bool, error) {
 	}
 
 	value, missing, err := foldConstant(folded, nil)
-	var cmdErr *handlererrors.CommandError
-	if name == "$switch" && errors.As(err, &cmdErr) && cmdErr.Code() == handlererrors.ErrBucketNoBranch {
-		// mongod's optimizer reports a constant $switch without a match.
-		return nil, false, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSwitchNoMatch,
-			"Cannot execute a switch statement where all the cases evaluate to false without a default", "$switch")
-	}
 	if err != nil {
 		return nil, false, err
 	}
@@ -263,6 +261,70 @@ func foldDocumentConstants(doc *types.Document) (any, bool, error) {
 		return folded, false, nil
 	}
 	return must.NotFail(types.NewDocument("$literal", value)), true, nil
+}
+
+// foldSwitchConstants folds a $switch as mongod's optimizer does: the default
+// first, then each case in turn. A constant falsy case drops its branch
+// unfolded, and a constant truthy one makes its then the default and drops
+// every later branch. With no branch left and no default it fails.
+func foldSwitchConstants(doc *types.Document) (any, bool, error) {
+	arg := must.NotFail(doc.Get("$switch"))
+	if _, err := newSwitch(arg); err != nil {
+		return nil, false, err
+	}
+	spec := arg.(*types.Document)
+
+	var def any
+	var defConstant, hasDefault bool
+	if v, err := spec.Get("default"); err == nil {
+		if def, defConstant, err = foldConstants(v); err != nil {
+			return nil, false, err
+		}
+		hasDefault = true
+	}
+
+	branches := must.NotFail(spec.Get("branches")).(*types.Array)
+	kept := types.MakeArray(branches.Len())
+	for i := range branches.Len() {
+		branch := must.NotFail(branches.Get(i)).(*types.Document)
+		caseExpr, caseConstant, err := foldConstants(must.NotFail(branch.Get("case")))
+		if err != nil {
+			return nil, false, err
+		}
+		if caseConstant {
+			v, _, err := foldConstant(caseExpr, nil)
+			if err != nil {
+				return nil, false, err
+			}
+			if isFalsy(v) {
+				continue
+			}
+			if def, defConstant, err = foldConstants(must.NotFail(branch.Get("then"))); err != nil {
+				return nil, false, err
+			}
+			hasDefault = true
+			break
+		}
+		thenExpr, _, err := foldConstants(must.NotFail(branch.Get("then")))
+		if err != nil {
+			return nil, false, err
+		}
+		kept.Append(must.NotFail(types.NewDocument("case", caseExpr, "then", thenExpr)))
+	}
+
+	if kept.Len() == 0 {
+		if !hasDefault {
+			return nil, false, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSwitchNoMatch,
+				"Cannot execute a switch statement where all the cases evaluate to false without a default", "$switch")
+		}
+		return def, defConstant, nil
+	}
+
+	folded := must.NotFail(types.NewDocument("branches", kept))
+	if hasDefault {
+		folded.Set("default", def)
+	}
+	return must.NotFail(types.NewDocument("$switch", folded)), false, nil
 }
 
 // foldConstant is EvalOperand. Operator constructors call it, and EvalOperand
