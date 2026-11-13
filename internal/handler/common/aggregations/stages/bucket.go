@@ -230,11 +230,11 @@ func (b *bucket) Process(ctx context.Context, iter types.DocumentsIterator, clos
 		return nil, lazyerrors.Error(err)
 	}
 
-	// bucketGroups maps bucket index to documents.
-	// Indices 0..len(boundaries)-2 are the regular buckets.
-	// Index len(boundaries)-1 is the default bucket.
+	// Indices 0..len(boundaries)-2 are the regular buckets and
+	// len(boundaries)-1 the default one. As mongod's $group does, each
+	// document is accumulated as soon as its bucket is known.
 	numBuckets := len(b.boundaries) - 1
-	groups := make([][]*types.Document, numBuckets+1)
+	buckets := make([]*bucketState, numBuckets+1)
 
 	for _, doc := range docs {
 		val, err := evaluateGroupExpr(b.groupBy, doc)
@@ -243,9 +243,7 @@ func (b *bucket) Process(ctx context.Context, iter types.DocumentsIterator, clos
 		}
 
 		bucketIdx := b.findBucket(val)
-
 		if bucketIdx < 0 {
-			// out of range  -- goes to default
 			if !b.hasDefault {
 				return nil, handlererrors.NewCommandErrorMsgWithArgument(
 					handlererrors.ErrBucketNoBranch,
@@ -253,32 +251,28 @@ func (b *bucket) Process(ctx context.Context, iter types.DocumentsIterator, clos
 					"$bucket (stage)",
 				)
 			}
-
-			groups[numBuckets] = append(groups[numBuckets], doc)
-		} else {
-			groups[bucketIdx] = append(groups[bucketIdx], doc)
-		}
-	}
-
-	// Build output documents.
-	var res []*types.Document
-
-	for i := 0; i < numBuckets; i++ {
-		if len(groups[i]) == 0 {
-			continue
+			bucketIdx = numBuckets
 		}
 
-		doc := must.NotFail(types.NewDocument("_id", b.boundaries[i]))
-		if err = appendBucketOutput(doc, b.output, b.cmp, groups[i]); err != nil {
+		if buckets[bucketIdx] == nil {
+			buckets[bucketIdx] = newBucketState(b.output, b.cmp)
+		}
+		if err = buckets[bucketIdx].add(doc); err != nil {
 			return nil, err
 		}
-		res = append(res, doc)
 	}
 
-	// Default bucket.
-	if b.hasDefault && len(groups[numBuckets]) > 0 {
-		doc := must.NotFail(types.NewDocument("_id", b.defaultValue))
-		if err = appendBucketOutput(doc, b.output, b.cmp, groups[numBuckets]); err != nil {
+	var res []*types.Document
+	for i, state := range buckets {
+		if state == nil {
+			continue
+		}
+		id := b.defaultValue
+		if i < numBuckets {
+			id = b.boundaries[i]
+		}
+		doc := must.NotFail(types.NewDocument("_id", id))
+		if err = state.appendTo(doc); err != nil {
 			return nil, err
 		}
 		res = append(res, doc)
@@ -288,6 +282,47 @@ func (b *bucket) Process(ctx context.Context, iter types.DocumentsIterator, clos
 	closer.Add(result)
 
 	return result, nil
+}
+
+// bucketState accumulates one bucket's documents.
+type bucketState struct {
+	output []bucketOutput
+	accs   []accumulators.Accumulation
+	count  int32
+}
+
+func newBucketState(output []bucketOutput, cmp *collation.Comparator) *bucketState {
+	s := &bucketState{output: output, accs: make([]accumulators.Accumulation, len(output))}
+	for i, out := range output {
+		s.accs[i] = accumulators.NewAccumulation(out.accumulator, cmp)
+	}
+	return s
+}
+
+func (s *bucketState) add(doc *types.Document) error {
+	s.count++
+	for _, acc := range s.accs {
+		if err := acc.Accumulate(doc); err != nil {
+			return processGroupStageError(err)
+		}
+	}
+	return nil
+}
+
+// appendTo sets the bucket's outputs on doc, or a count when there are none.
+func (s *bucketState) appendTo(doc *types.Document) error {
+	if len(s.output) == 0 {
+		doc.Set("count", s.count)
+		return nil
+	}
+	for i, out := range s.output {
+		val, err := s.accs[i].Result()
+		if err != nil {
+			return processGroupStageError(err)
+		}
+		doc.Set(out.field, val)
+	}
+	return nil
 }
 
 // findBucket returns the bucket index for a value, or -1 if out of range.
