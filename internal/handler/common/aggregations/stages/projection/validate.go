@@ -223,6 +223,13 @@ func validateShape(projection *types.Document, ctx context) (*types.Document, bo
 		// A computed value makes the projection an inclusion; an _id flag
 		// does not decide the mode.
 		if computed && inclusion != nil && !*inclusion {
+			if d, ok := value.(*types.Document); ok && operators.IsOperator(d) && d.Command() != "$meta" {
+				return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrProjectionExpressionInExclusion,
+					ctx.prefix()+"Cannot use expression other than $meta in exclusion projection",
+					"projection",
+				)
+			}
 			return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrProjectionIDExpressionInExclusion,
 				ctx.prefix()+fmt.Sprintf("Cannot use an expression %s: %s in an exclusion projection", key, types.FormatAnyValue(value)),
