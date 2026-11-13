@@ -15,9 +15,11 @@
 package operators
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
@@ -172,6 +174,17 @@ func evalArgValueOrMissing(arg any, doc *types.Document) (any, bool, error) {
 			}
 			return v, false, nil
 		}
+	}
+	if expr, ok := arg.(*types.Document); ok && IsOperator(expr) {
+		op, err := cachedOperator(expr)
+		if err != nil {
+			return nil, false, err
+		}
+		v, err := op.Process(doc)
+		if errors.Is(err, aggregations.ErrMissingValue) {
+			return types.Null, true, nil
+		}
+		return v, false, err
 	}
 	v, err := evalArgValue(arg, doc)
 	return v, false, err

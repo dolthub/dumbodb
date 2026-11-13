@@ -137,6 +137,10 @@ func isConstantExpression(expr any) bool {
 				return true
 			case "$rand", "$sampleRate", "$meta":
 				return false
+			case "$getField":
+				if getFieldReadsCurrent(v) {
+					return false
+				}
 			}
 		}
 		for _, k := range v.Keys() {
@@ -148,6 +152,13 @@ func isConstantExpression(expr any) bool {
 	default:
 		return true
 	}
+}
+
+// getFieldReadsCurrent reports whether a $getField expression has no input,
+// so that it reads $$CURRENT.
+func getFieldReadsCurrent(expr *types.Document) bool {
+	spec, ok := must.NotFail(expr.Get("$getField")).(*types.Document)
+	return !ok || !isFullForm(spec) || !spec.Has("input")
 }
 
 // checkConstantOperand returns the error mongod raises when it folds a
@@ -231,6 +242,8 @@ func foldDocumentConstants(doc *types.Document) (any, bool, error) {
 	case !operator:
 		return folded, constant, nil
 	case name == "$rand" || name == "$sampleRate" || name == "$meta":
+		return folded, false, nil
+	case name == "$getField" && getFieldReadsCurrent(doc):
 		return folded, false, nil
 	case !constant || convertOperators[name]:
 		return folded, constant, nil

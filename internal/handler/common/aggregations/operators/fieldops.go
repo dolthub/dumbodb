@@ -240,7 +240,7 @@ func newGetField(args ...any) (Operator, error) {
 }
 
 func (op *getFieldOp) Process(doc *types.Document) (any, error) {
-	if doc == nil {
+	if doc == nil && op.input == nil {
 		return types.Null, nil
 	}
 
