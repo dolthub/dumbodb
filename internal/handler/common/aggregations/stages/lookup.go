@@ -1467,17 +1467,107 @@ func evaluateLetExpr(expr any, localDoc *types.Document) (any, error) {
 	return v, nil
 }
 
-// substituteVarsInStage substitutes let variables into a sub-pipeline stage.
-// A $match query only reads variables inside $expr.
+// substituteVarsInStage substitutes let variables into a sub-pipeline stage,
+// leaving alone the names a nested $lookup's let defines again. A $match query
+// only reads variables inside $expr.
 func substituteVarsInStage(stage *types.Document, vars map[string]any) *types.Document {
-	if len(vars) == 0 || stage.Len() != 1 || stage.Command() != "$match" {
-		return substituteVarsInDoc(stage, vars, false)
-	}
-	query, ok := must.NotFail(stage.Get("$match")).(*types.Document)
-	if !ok {
+	if len(vars) == 0 {
 		return stage
 	}
-	return must.NotFail(types.NewDocument("$match", substituteVarsInQuery(query, vars)))
+	if stage.Len() != 1 {
+		return substituteVarsInDoc(stage, vars, false)
+	}
+	name := stage.Command()
+	spec := must.NotFail(stage.Get(name))
+	switch name {
+	case "$match":
+		if query, ok := spec.(*types.Document); ok {
+			spec = substituteVarsInQuery(query, vars)
+		}
+	case "$lookup", "$unionWith":
+		if d, ok := spec.(*types.Document); ok {
+			spec = substituteVarsInSubPipelineSpec(d, vars)
+		} else {
+			spec = substituteVarsInValue(spec, vars, false)
+		}
+	case "$facet":
+		if d, ok := spec.(*types.Document); ok {
+			facets := types.MakeDocument(d.Len())
+			for _, k := range d.Keys() {
+				v := must.NotFail(d.Get(k))
+				if p, ok := v.(*types.Array); ok {
+					v = substituteVarsInPipeline(p, vars)
+				}
+				facets.Set(k, v)
+			}
+			spec = facets
+		}
+	default:
+		spec = substituteVarsInValue(spec, vars, false)
+	}
+	return must.NotFail(types.NewDocument(name, spec))
+}
+
+// substituteVarsInSubPipelineSpec substitutes into a nested $lookup or
+// $unionWith: its let values see the outer variables, its pipeline sees those
+// its let does not define again.
+func substituteVarsInSubPipelineSpec(spec *types.Document, vars map[string]any) *types.Document {
+	inner := vars
+	if let, ok := getOrNil(spec, "let").(*types.Document); ok {
+		inner = withoutVars(vars, let.Keys()...)
+	}
+	out := types.MakeDocument(spec.Len())
+	for _, k := range spec.Keys() {
+		v := must.NotFail(spec.Get(k))
+		switch k {
+		case "let":
+			v = substituteVarsInValue(v, vars, false)
+		case "pipeline":
+			if p, ok := v.(*types.Array); ok {
+				v = substituteVarsInPipeline(p, inner)
+			}
+		}
+		out.Set(k, v)
+	}
+	return out
+}
+
+func substituteVarsInPipeline(pipeline *types.Array, vars map[string]any) *types.Array {
+	out := types.MakeArray(pipeline.Len())
+	for i := range pipeline.Len() {
+		v := must.NotFail(pipeline.Get(i))
+		if stage, ok := v.(*types.Document); ok {
+			v = substituteVarsInStage(stage, vars)
+		}
+		out.Append(v)
+	}
+	return out
+}
+
+func getOrNil(doc *types.Document, key string) any {
+	v, _ := doc.Get(key)
+	return v
+}
+
+// withoutVars returns vars less names, which an inner scope defines again.
+func withoutVars(vars map[string]any, names ...string) map[string]any {
+	shadowed := false
+	for _, n := range names {
+		if _, ok := vars[n]; ok {
+			shadowed = true
+		}
+	}
+	if !shadowed {
+		return vars
+	}
+	out := make(map[string]any, len(vars))
+	for k, v := range vars {
+		out[k] = v
+	}
+	for _, n := range names {
+		delete(out, n)
+	}
+	return out
 }
 
 func substituteVarsInQuery(query *types.Document, vars map[string]any) *types.Document {
@@ -1507,40 +1597,81 @@ func substituteVarsInQuery(query *types.Document, vars map[string]any) *types.Do
 
 // substituteVarsInDoc recursively replaces $$varName references in a document
 // with the corresponding values from vars, as literalOperand so that values
-// such as "$b" are not evaluated again.
+// such as "$b" are not evaluated again. $literal is left alone, and the
+// operators that bind variables hide the names they define from their scope.
 func substituteVarsInDoc(doc *types.Document, vars map[string]any, inExpr bool) *types.Document {
 	if len(vars) == 0 {
 		return doc
 	}
 
-	result := new(types.Document)
-	docIter := doc.Iterator()
-
-	defer docIter.Close()
-
-	for {
-		k, v, err := docIter.Next()
-		if errors.Is(err, iterator.ErrIteratorDone) {
-			break
+	if doc.Len() == 1 {
+		switch doc.Command() {
+		case "$literal", "$const":
+			return doc
+		case "$let", "$map", "$filter", "$reduce":
+			if spec, ok := must.NotFail(doc.Get(doc.Command())).(*types.Document); ok {
+				return must.NotFail(types.NewDocument(doc.Command(), substituteVarsInBinding(doc.Command(), spec, vars)))
+			}
 		}
+	}
 
-		if err != nil {
-			break
-		}
-
-		result.Set(k, substituteVarsInValue(v, vars, inExpr))
+	result := types.MakeDocument(doc.Len())
+	for _, k := range doc.Keys() {
+		result.Set(k, substituteVarsInValue(must.NotFail(doc.Get(k)), vars, inExpr))
 	}
 
 	return result
 }
 
-// checkSubPipeline parses the sub-pipeline once, with null for each let
-// variable, so its errors surface before any document is read, as in mongod.
+// substituteVarsInBinding substitutes into the specification of an operator
+// that binds variables: its bound expression does not see the outer value of
+// a name it defines.
+func substituteVarsInBinding(op string, spec *types.Document, vars map[string]any) *types.Document {
+	var bound []string
+	scopedKey := "in"
+	switch op {
+	case "$let":
+		if names, ok := getOrNil(spec, "vars").(*types.Document); ok {
+			bound = names.Keys()
+		}
+	case "$map", "$filter":
+		bound = []string{"this"}
+		if as, ok := getOrNil(spec, "as").(string); ok {
+			bound = []string{as}
+		}
+		if op == "$filter" {
+			scopedKey = "cond"
+		}
+	case "$reduce":
+		bound = []string{"this", "value"}
+	}
+	inner := withoutVars(vars, bound...)
+
+	out := types.MakeDocument(spec.Len())
+	for _, k := range spec.Keys() {
+		v := must.NotFail(spec.Get(k))
+		if k == scopedKey {
+			v = substituteVarsInValue(v, inner, true)
+		} else {
+			v = substituteVarsInValue(v, vars, true)
+		}
+		out.Set(k, v)
+	}
+	return out
+}
+
+// unboundLetVariable stands in for a let variable while the sub-pipeline is
+// parsed: references become $$CURRENT, a variable reference too, so a place
+// that needs a constant rejects it as mongod rejects the variable.
+type unboundLetVariable struct{}
+
+// checkSubPipeline parses the sub-pipeline once, before any document is read,
+// so its errors surface as in mongod.
 func (l *lookup) checkSubPipeline() error {
 	vars := map[string]any{}
 	if l.letVars != nil {
 		for _, name := range l.letVars.Keys() {
-			vars[name] = types.Null
+			vars[name] = unboundLetVariable{}
 		}
 	}
 	for i := range l.pipeline.Len() {
@@ -1595,6 +1726,9 @@ func substituteVarsInValue(val any, vars map[string]any, inExpr bool) any {
 		if strings.HasPrefix(v, "$$") {
 			varName, _, dotted := strings.Cut(strings.TrimPrefix(v, "$$"), ".")
 			if resolved, ok := vars[varName]; ok {
+				if _, unbound := resolved.(unboundLetVariable); unbound {
+					return "$$CURRENT" + strings.TrimPrefix(v, "$$"+varName)
+				}
 				if dotted {
 					return must.NotFail(types.NewDocument("$let", must.NotFail(types.NewDocument(
 						"vars", must.NotFail(types.NewDocument(varName, must.NotFail(types.NewDocument("$literal", resolved)))),
