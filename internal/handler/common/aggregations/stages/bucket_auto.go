@@ -76,104 +76,85 @@ func newBucketAuto(stage *types.Document) (aggregations.Stage, error) {
 		)
 	}
 
-	// groupBy is required.
-	groupByVal, err := spec.Get("groupBy")
-	if err != nil {
+	// mongod checks each field in the order given, then that groupBy and
+	// buckets are present, then that buckets is positive.
+	ba := &bucketAuto{cmp: operators.CollationOf(stage)}
+	var groupByVal any
+	var numBuckets int32
+	hasBuckets := false
+	for _, key := range spec.Keys() {
+		val := must.NotFail(spec.Get(key))
+		switch key {
+		case "groupBy":
+			doc, isDoc := val.(*types.Document)
+			isDoc = isDoc && isGroupExpression(doc)
+			if s, isPath := val.(string); !isDoc && (!isPath || !strings.HasPrefix(s, "$") || s == "$") {
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketAutoGroupByInvalid,
+					"The $bucketAuto 'groupBy' field must be defined as a $-prefixed path or an expression object, but found: "+
+						types.FormatAnyValue(val), "$bucketAuto (stage)")
+			}
+			if err := operators.CheckFieldPaths(val); err != nil {
+				return nil, err
+			}
+			if err := operators.CheckConstantSubexpressions(val); err != nil {
+				return nil, err
+			}
+			groupByVal = val
+		case "buckets":
+			if numBuckets, err = parseBucketAutoBuckets(val); err != nil {
+				return nil, err
+			}
+			hasBuckets = true
+		case "granularity":
+			name, ok := val.(string)
+			if !ok {
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketAutoGranularityType,
+					"The $bucketAuto 'granularity' field must be a string, but found type: "+handlerparams.AliasFromType(val),
+					"$bucketAuto (stage)")
+			}
+			if ba.rounder, ok = newGranularityRounder(name); !ok {
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketAutoUnknownGranularity,
+					fmt.Sprintf("Unknown rounding granularity '%s'", name), "$bucketAuto (stage)")
+			}
+		case "output":
+			outputDoc, ok := val.(*types.Document)
+			if !ok {
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketAutoOutputNotObject,
+					"The $bucketAuto 'output' field must be an object, but found type: "+handlerparams.AliasFromType(val),
+					"$bucketAuto (stage)")
+			}
+			if err := operators.CheckFieldPaths(outputDoc); err != nil {
+				return nil, err
+			}
+			for _, field := range outputDoc.Keys() {
+				acc, accErr := accumulators.NewAccumulator("$bucketAuto", field, must.NotFail(outputDoc.Get(field)))
+				if accErr != nil {
+					return nil, lazyerrors.Error(accErr)
+				}
+				if accErr = accumulators.UseBucketAuto(acc); accErr != nil {
+					return nil, accErr
+				}
+				ba.output = append(ba.output, bucketOutput{field: field, accumulator: acc})
+			}
+		default:
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketAutoUnknownOption,
+				"Unrecognized option to $bucketAuto: "+key, "$bucketAuto (stage)")
+		}
+	}
+	if groupByVal == nil || !hasBuckets {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrBucketAutoMissingRequiredFields,
 			"$bucketAuto requires 'groupBy' and 'buckets' to be specified",
 			"$bucketAuto (stage)",
 		)
 	}
-
-	// buckets is required.
-	bucketsVal, err := spec.Get("buckets")
-	if err != nil {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrBucketAutoMissingRequiredFields,
-			"$bucketAuto requires 'groupBy' and 'buckets' to be specified",
-			"$bucketAuto (stage)",
-		)
+	if numBuckets <= 0 {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketAutoBucketsNotPositive,
+			fmt.Sprintf("The $bucketAuto 'buckets' field must be greater than 0, but found: %d", numBuckets),
+			"$bucketAuto (stage)")
 	}
-
-	numBuckets, err := parseBucketAutoBuckets(bucketsVal)
-	if err != nil {
-		return nil, err
-	}
-
-	doc, isDoc := groupByVal.(*types.Document)
-	isDoc = isDoc && isGroupExpression(doc)
-	if s, isPath := groupByVal.(string); !isDoc && (!isPath || !strings.HasPrefix(s, "$") || s == "$") {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketAutoGroupByInvalid,
-			"The $bucketAuto 'groupBy' field must be defined as a $-prefixed path or an expression object, but found: "+
-				types.FormatAnyValue(groupByVal), "$bucketAuto (stage)")
-	}
-
-	if err := operators.CheckFieldPaths(groupByVal); err != nil {
-		return nil, err
-	}
-	if err := operators.CheckConstantSubexpressions(groupByVal); err != nil {
-		return nil, err
-	}
-
-	ba := &bucketAuto{
-		groupBy: groupByVal,
-		buckets: numBuckets,
-		cmp:     operators.CollationOf(stage),
-	}
-
-	if g, getErr := spec.Get("granularity"); getErr == nil {
-		name, ok := g.(string)
-		if !ok {
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketAutoGranularityType,
-				"The $bucketAuto 'granularity' field must be a string, but found type: "+handlerparams.AliasFromType(g),
-				"$bucketAuto (stage)")
-		}
-		if ba.rounder, ok = newGranularityRounder(name); !ok {
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketAutoUnknownGranularity,
-				fmt.Sprintf("Unknown rounding granularity '%s'", name), "$bucketAuto (stage)")
-		}
-	}
-
-	// output is optional.
-	if outputVal, getErr := spec.Get("output"); getErr == nil {
-		outputDoc, ok := outputVal.(*types.Document)
-		if !ok {
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrBadValue,
-				"$bucketAuto 'output' field must be a document",
-				"$bucketAuto (stage)",
-			)
-		}
-
-		if err := operators.CheckFieldPaths(outputDoc); err != nil {
-			return nil, err
-		}
-
-		outputIter := outputDoc.Iterator()
-		defer outputIter.Close()
-
-		for {
-			field, accVal, iterErr := outputIter.Next()
-			if errors.Is(iterErr, iterator.ErrIteratorDone) {
-				break
-			}
-
-			if iterErr != nil {
-				return nil, lazyerrors.Error(iterErr)
-			}
-
-			acc, accErr := accumulators.NewAccumulator("$bucketAuto", field, accVal)
-			if accErr != nil {
-				return nil, lazyerrors.Error(accErr)
-			}
-			if accErr = accumulators.UseBucketAuto(acc); accErr != nil {
-				return nil, accErr
-			}
-
-			ba.output = append(ba.output, bucketOutput{field: field, accumulator: acc})
-		}
-	}
+	ba.groupBy = groupByVal
+	ba.buckets = numBuckets
 
 	return ba, nil
 }
@@ -306,11 +287,6 @@ func parseBucketAutoBuckets(v any) (int32, error) {
 		return 0, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketAutoBucketsNotInt32,
 			"The $bucketAuto 'buckets' field must be representable as a 32-bit integer, but found "+
 				strconv.FormatFloat(f, 'g', 6, 64), "$bucketAuto (stage)")
-	}
-	if f <= 0 {
-		return 0, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketAutoBucketsNotPositive,
-			fmt.Sprintf("The $bucketAuto 'buckets' field must be greater than 0, but found: %d", int64(f)),
-			"$bucketAuto (stage)")
 	}
 	return int32(f), nil
 }

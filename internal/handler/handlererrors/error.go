@@ -807,6 +807,8 @@ const (
 
 	// ErrBucketAutoMissingRequiredFields indicates that $bucketAuto is missing required 'groupBy' or 'buckets' fields.
 	ErrBucketAutoMissingRequiredFields = ErrorCode(40246) // Location40246
+	ErrBucketAutoOutputNotObject       = ErrorCode(40244) // Location40244
+	ErrBucketAutoUnknownOption         = ErrorCode(40245) // Location40245
 
 	// ErrStageGroupInvalidAccumulator indicates invalid accumulator field.
 	ErrStageGroupInvalidAccumulator = ErrorCode(40234) // Location40234
@@ -1124,6 +1126,12 @@ const (
 
 	// ErrFilterUnknownArgument indicates an unrecognized $filter parameter.
 	ErrFilterUnknownArgument = ErrorCode(28647) // Location28647
+
+	// ErrFilterMissingInput indicates a $filter without input.
+	ErrFilterMissingInput = ErrorCode(28648) // Location28648
+
+	// ErrFilterMissingCond indicates a $filter without cond.
+	ErrFilterMissingCond = ErrorCode(28650) // Location28650
 
 	// ErrFilterInputNotArray indicates a $filter input that is not an array.
 	ErrFilterInputNotArray = ErrorCode(28651) // Location28651
