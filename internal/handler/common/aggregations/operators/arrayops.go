@@ -649,11 +649,13 @@ func (op *inArrayOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*inArrayOp)(nil)
 
-// filterOp represents { $filter: { input: <array>, as: <var>, cond: <cond-expr> } }.
+// filterOp represents
+// { $filter: { input: <array>, as: <var>, cond: <cond-expr>, limit: <expr> } }.
 type filterOp struct {
 	inputArg any
 	asName   string
 	condArg  any
+	limitArg any
 }
 
 func newFilter(args ...any) (Operator, error) {
@@ -666,6 +668,15 @@ func newFilter(args ...any) (Operator, error) {
 	if !ok {
 		return nil, newOperatorError(ErrArgsInvalidLen, "$filter",
 			"$filter requires a document argument")
+	}
+
+	for _, k := range doc.Keys() {
+		switch k {
+		case "input", "as", "cond", "limit":
+		default:
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFilterUnknownArgument,
+				"Unrecognized parameter to $filter: "+k, "$filter")
+		}
 	}
 
 	inputArg, err := doc.Get("input")
@@ -685,32 +696,38 @@ func newFilter(args ...any) (Operator, error) {
 		}
 	}
 
-	return &filterOp{inputArg: inputArg, asName: asName, condArg: condArg}, nil
+	limitArg, _ := doc.Get("limit")
+
+	return &filterOp{inputArg: inputArg, asName: asName, condArg: condArg, limitArg: limitArg}, nil
 }
 
 func (op *filterOp) Process(doc *types.Document) (any, error) {
-	arr, isNull, err := collectArray(op.inputArg, doc, "$filter")
+	input, err := evalArgValue(op.inputArg, doc)
 	if err != nil {
 		return nil, err
 	}
-
-	if isNull {
+	if isNullish(input) {
 		return types.Null, nil
 	}
+	arr, ok := input.(*types.Array)
+	if !ok {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFilterInputNotArray,
+			"input to $filter must be an array not "+handlerparams.AliasFromType(input), "$filter")
+	}
+	if arr.Len() == 0 {
+		return arr, nil
+	}
 
-	items, err := arrayToSlice(arr)
+	limit, err := op.limit(doc)
 	if err != nil {
 		return nil, err
 	}
 
-	var result []any
+	result := types.MakeArray(0)
+	for i := 0; i < arr.Len() && (limit == 0 || result.Len() < limit); i++ {
+		item := must.NotFail(arr.Get(i))
 
-	for _, item := range items {
 		iterDoc := copyForVariables(doc)
-		if err != nil {
-			return nil, err
-		}
-
 		bindVariable(iterDoc, op.asName, item, false)
 
 		condVal, err := evalArgValue(op.condArg, iterDoc)
@@ -719,11 +736,63 @@ func (op *filterOp) Process(doc *types.Document) (any, error) {
 		}
 
 		if !isFalsy(condVal) {
-			result = append(result, item)
+			result.Append(item)
 		}
 	}
 
-	return sliceToArray(result), nil
+	return result, nil
+}
+
+// limit evaluates the limit argument; 0 means none.
+func (op *filterOp) limit(doc *types.Document) (int, error) {
+	if op.limitArg == nil {
+		return 0, nil
+	}
+	v, missing, err := EvalOperand(op.limitArg, doc)
+	if err != nil {
+		return 0, err
+	}
+	if missing || isNullish(v) {
+		return 0, nil
+	}
+
+	n, ok := exactInt32(v)
+	if !ok {
+		return 0, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFilterLimitNotInt32,
+			"$filter: limit must be represented as a 32-bit integral value: "+types.FormatAnyValue(v), "$filter")
+	}
+	if n <= 0 {
+		return 0, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFilterLimitNotPositive,
+			fmt.Sprintf("$filter: limit must be greater than 0: %d", n), "$filter")
+	}
+	return int(n), nil
+}
+
+// exactInt32 returns a number that represents a 32-bit integer exactly.
+func exactInt32(v any) (int32, bool) {
+	var n int64
+	switch v := v.(type) {
+	case int32:
+		return v, true
+	case int64:
+		n = v
+	case float64:
+		if v != math.Trunc(v) || v < math.MinInt32 || v > math.MaxInt32 {
+			return 0, false
+		}
+		n = int64(v)
+	case types.Decimal128:
+		var ok bool
+		if n, ok = aggregations.Decimal128ToInt64(v); !ok {
+			return 0, false
+		}
+	default:
+		return 0, false
+	}
+	if n < math.MinInt32 || n > math.MaxInt32 {
+		return 0, false
+	}
+	return int32(n), true
 }
 
 var _ Operator = (*filterOp)(nil)
