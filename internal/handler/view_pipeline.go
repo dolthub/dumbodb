@@ -230,6 +230,17 @@ func (f *foreignFetcher) SourceExists(ctx context.Context, name string) bool {
 	return err == nil && baseInfo != nil
 }
 
+// CheckViewCollation implements stages.ViewCollationChecker.
+func (f *foreignFetcher) CheckViewCollation(ctx context.Context, name string, cmp *collation.Comparator) error {
+	info, err := lookupCollectionInfo(ctx, f.db, name)
+	if err != nil || info == nil || !info.IsView || collation.Parse(info.Collation).Comparator() == cmp {
+		return nil
+	}
+	dbName, _ := ctx.Value(dbNameKey{}).(string)
+	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrOptionNotSupportedOnView,
+		"Cannot override a view's default collation"+dbName+"."+name, "aggregate")
+}
+
 // ViewPipeline implements stages.ViewResolver: the stages of a view and of
 // the views it reads from.
 func (f *foreignFetcher) ViewPipeline(ctx context.Context, name string) (*types.Array, bool) {

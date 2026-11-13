@@ -103,6 +103,31 @@ type ViewResolver interface {
 	ViewPipeline(ctx context.Context, name string) (*types.Array, bool)
 }
 
+// ViewCollationChecker is implemented by fetchers that can tell whether a
+// sub-pipeline under cmp may read name: a view must be read under its own
+// collation.
+type ViewCollationChecker interface {
+	CheckViewCollation(ctx context.Context, name string, cmp *collation.Comparator) error
+}
+
+// CheckViewCollation implements ViewCollationChecker when the wrapped fetcher
+// does.
+func (c *cachingFetcher) CheckViewCollation(ctx context.Context, name string, cmp *collation.Comparator) error {
+	if vc, ok := c.CollectionFetcher.(ViewCollationChecker); ok {
+		return vc.CheckViewCollation(ctx, name, cmp)
+	}
+	return nil
+}
+
+// checkViewCollation returns mongod's error when a stage under cmp reads a
+// view with another collation.
+func checkViewCollation(ctx context.Context, fetcher CollectionFetcher, name string, cmp *collation.Comparator) error {
+	if vc, ok := fetcher.(ViewCollationChecker); ok && name != "" {
+		return vc.CheckViewCollation(ctx, name, cmp)
+	}
+	return nil
+}
+
 // ExistenceChecker is implemented by fetchers that can report whether a
 // collection, or the collection a view reads, exists.
 type ExistenceChecker interface {
@@ -728,6 +753,9 @@ func (l *lookup) Process(ctx context.Context, iter types.DocumentsIterator, clos
 	}
 
 	fetcher := withFetchCache(l.fetcher)
+	if err := checkViewCollation(ctx, fetcher, l.from, l.cmp); err != nil {
+		return nil, err
+	}
 	pipelineLen := 0
 	if l.pipeline != nil {
 		pipelineLen = l.pipeline.Len()
