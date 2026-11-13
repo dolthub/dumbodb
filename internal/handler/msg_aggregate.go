@@ -712,6 +712,10 @@ func checkDatabasePipelineStages(pipeline *types.Array, dbName string) error {
 			if _, err := stages.NewStage(stage.DeepCopy()); err != nil {
 				return err
 			}
+		case "$querySettings":
+			if err := stages.CheckQuerySettingsSpec(stage); err != nil {
+				return err
+			}
 		case "$documents", "$currentOp", "$listLocalSessions":
 		default:
 			if stages.FailsParsing(stage) {
