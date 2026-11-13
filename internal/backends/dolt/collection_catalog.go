@@ -53,6 +53,9 @@ type collMeta struct {
 	// resolves to DefaultMergeMode, which keeps catalogs written before the
 	// field existed readable.
 	MergeMode string
+	// ClusteredIndexName is stored only when set, so the catalog entry of a
+	// collection with the default name is unchanged.
+	ClusteredIndexName string
 }
 
 func collMetaToDoc(collName string, m *collMeta) (*types.Document, error) {
@@ -64,7 +67,7 @@ func collMetaToDoc(collName string, m *collMeta) (*types.Document, error) {
 	if m.Collation != nil {
 		collation = m.Collation
 	}
-	return types.NewDocument(
+	doc, err := types.NewDocument(
 		"_id", collName,
 		"uuid", m.UUID,
 		"sourceUUID", m.SourceUUID,
@@ -78,6 +81,15 @@ func collMetaToDoc(collName string, m *collMeta) (*types.Document, error) {
 		"granularity", m.Granularity,
 		"mergeMode", m.MergeMode,
 	)
+	if err == nil && m.ClusteredIndexName != "" {
+		doc.Set("clusteredIndexName", m.ClusteredIndexName)
+	}
+	// The catalog entry is stored with sorted keys; mongod keeps and compares
+	// a validator in the order it was given, so its bytes are kept as well.
+	if err == nil && m.Validator != nil {
+		doc.Set("validatorBSON", types.Binary{Subtype: types.BinaryGeneric, B: m.Validator.AppendBSON(nil)})
+	}
+	return doc, err
 }
 
 func docToCollMeta(doc *types.Document) *collMeta {
@@ -97,6 +109,13 @@ func docToCollMeta(doc *types.Document) *collMeta {
 			m.Validator = vd
 		}
 	}
+	if v, err := doc.Get("validatorBSON"); err == nil {
+		if b, ok := v.(types.Binary); ok {
+			if vd, derr := decodeDocument(b.B); derr == nil {
+				m.Validator = vd
+			}
+		}
+	}
 	if v, err := doc.Get("collation"); err == nil {
 		if cd, ok := v.(*types.Document); ok {
 			m.Collation = cd
@@ -111,6 +130,7 @@ func docToCollMeta(doc *types.Document) *collMeta {
 	m.MetaField = getStr("metaField")
 	m.Granularity = getStr("granularity")
 	m.MergeMode = getStr("mergeMode")
+	m.ClusteredIndexName = getStr("clusteredIndexName")
 	return m
 }
 
@@ -133,11 +153,11 @@ func (m *collMeta) effectiveValidation() (level, action string) {
 }
 
 func catalogKey(collName string) (val.Tuple, error) {
-	h, err := hashID(collName)
+	h, err := primaryKey(collName)
 	if err != nil {
-		return nil, fmt.Errorf("hashing catalog key %q: %w", collName, err)
+		return nil, fmt.Errorf("encoding catalog key %q: %w", collName, err)
 	}
-	return buildKey(h[:])
+	return buildKey(h)
 }
 
 // catalogMapFromAM opens the catalog document map from am, or an empty map if
@@ -157,11 +177,11 @@ func catalogMapFromAM(ctx context.Context, state *dbState, am prolly.AddressMap)
 // reserved catalog name. It performs no commit; the catalog write folds into the
 // caller's AddressMap transaction. The caller holds state.mu (write lock).
 func (state *dbState) setCatalogEntry(ctx context.Context, am prolly.AddressMap, ed prolly.AddressMapEditor, m prolly.Map) error {
-	emptyIdx, err := emptyIndexAM(state.ns)
+	noIndexes, err := emptySecondaryIndexes(ctx, state.ns)
 	if err != nil {
 		return err
 	}
-	dtblHash, err := state.dtblHashForCollection(ctx, reservedCatalogName, m, emptyIdx, hash.Hash{})
+	dtblHash, err := state.dtblHashForCollection(ctx, reservedCatalogName, m, noIndexes, hash.Hash{})
 	if err != nil {
 		return err
 	}

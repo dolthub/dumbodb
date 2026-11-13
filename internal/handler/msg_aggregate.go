@@ -161,76 +161,9 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		v = int64(0)
 	}
 
-	// cannot use other existing handlerparams function, they return different error codes
-	maxTimeMS, err := handlerparams.GetWholeNumberParam(v)
+	maxTimeMS, err := handlerparams.FindMaxTimeMS(v, "aggregate")
 	if err != nil {
-		switch {
-		case errors.Is(err, handlerparams.ErrUnexpectedType):
-			if _, ok = v.(types.NullType); ok {
-				return nil, handlererrors.NewCommandErrorMsgWithArgument(
-					handlererrors.ErrBadValue,
-					"maxTimeMS must be a number",
-					document.Command(),
-				)
-			}
-
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrTypeMismatch,
-				fmt.Sprintf(
-					`BSON field 'aggregate.maxTimeMS' is the wrong type '%s', expected types '[long, int, decimal, double']`,
-					handlerparams.AliasFromType(v),
-				),
-				document.Command(),
-			)
-		case errors.Is(err, handlerparams.ErrNotWholeNumber):
-			// For negative non-integral floats, MongoDB reports a "must be >= 0" error
-			// using the floor (truncated toward -inf) integer value.
-			if fv, ok := v.(float64); ok && fv < 0 {
-				return nil, handlererrors.NewCommandErrorMsgWithArgument(
-					handlererrors.ErrValueNegative,
-					fmt.Sprintf("BSON field 'maxTimeMS' value must be >= 0, actual value '%d'", int64(math.Floor(fv))),
-					document.Command(),
-				)
-			}
-
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrBadValue,
-				"maxTimeMS has non-integral value",
-				document.Command(),
-			)
-		case errors.Is(err, handlerparams.ErrLongExceededPositive):
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrBadValue,
-				fmt.Sprintf("%d value for maxTimeMS is out of range [0, 2147483647]", int64(math.MaxInt64)),
-				document.Command(),
-			)
-		case errors.Is(err, handlerparams.ErrLongExceededNegative):
-			// For floats that exceed the int64 range in the negative direction, MongoDB
-			// reports the saturated int64 value (math.MinInt64) rather than the original float.
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrValueNegative,
-				fmt.Sprintf("BSON field 'maxTimeMS' value must be >= 0, actual value '%d'", int64(math.MinInt64)),
-				document.Command(),
-			)
-		default:
-			return nil, lazyerrors.Error(err)
-		}
-	}
-
-	if maxTimeMS < int64(0) {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrValueNegative,
-			fmt.Sprintf("BSON field 'maxTimeMS' value must be >= 0, actual value '%s'", types.FormatAnyValue(v)),
-			document.Command(),
-		)
-	}
-
-	if maxTimeMS > math.MaxInt32 {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrBadValue,
-			fmt.Sprintf("%v value for maxTimeMS is out of range [0, 2147483647]", v),
-			document.Command(),
-		)
+		return nil, err
 	}
 
 	pipeline, err := common.GetRequiredParam[*types.Array](document, "pipeline")
@@ -241,8 +174,14 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			document.Command(),
 		)
 	}
+	if err = aggregations.CheckPipelineLength(pipeline.Len()); err != nil {
+		return nil, err
+	}
 
-	aggregationStages := must.NotFail(iterator.ConsumeValues(pipeline.Iterator()))
+	aggregationStages := aggregations.MoveMatchesAhead(must.NotFail(iterator.ConsumeValues(pipeline.Iterator())))
+	if err = aggregations.CheckExpandedPipelineLength(aggregations.ExpandedLength(aggregationStages)); err != nil {
+		return nil, err
+	}
 	stagesDocuments := make([]aggregations.Stage, 0, len(aggregationStages))
 	collStatsDocuments := make([]aggregations.Stage, 0, len(aggregationStages))
 
@@ -265,6 +204,9 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 
 		switch d.Command() {
 		case "$lookup", "$graphLookup", "$unionWith", "$facet":
+			if err = checkJoinedViewLength(connCtx, db, d); err != nil {
+				return nil, err
+			}
 			s, err = newForeignCollectionStage(d, db)
 
 		case "$out":
@@ -292,6 +234,9 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			} else {
 				s, err = stages.NewStage(d)
 			}
+
+		case "$group":
+			s, err = stages.NewGroupStage(d, collCmp)
 
 		case "$sort":
 			// Coalesce a following $limit (or $skip + $limit) into a top-K bound
@@ -357,6 +302,9 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 	}
 
 	ctx := connCtx
+	if common.MentionsRecordIDMeta(pipeline) {
+		ctx = backends.WithRecordKeys(ctx)
+	}
 	cancel := func() {}
 
 	if maxTimeMS != 0 {
@@ -426,6 +374,32 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			cInfo = cList.Collections[0]
 		}
 
+		if hint, _ := document.Get("hint"); hint != nil {
+			hint = clusteredHint(hint, cInfo.ClusteredIndexName)
+			document.Set("hint", hint)
+			err = checkHintType(hint)
+			// Led by $match, mongod plans the read as a query, which refuses a
+			// compound $natural hint and overlooks a bad $natural value.
+			ledByMatch := false
+			if pipeline.Len() > 0 {
+				first, _ := must.NotFail(pipeline.Get(0)).(*types.Document)
+				ledByMatch = first != nil && first.Command() == "$match"
+			}
+			if err == nil && ledByMatch {
+				err = checkCompoundNaturalHint(hint, "aggregate")
+			}
+			if err == nil && !cInfo.IsView && !(ledByMatch && backends.HintIsNatural(hint)) {
+				err = validateHintExists(ctx, c, hint, "aggregate")
+			}
+			if err == nil && cInfo.IsView {
+				err = validateViewHint(ctx, db, &cInfo, hint, "aggregate", ledByMatch)
+			}
+			if err != nil {
+				closer.Close()
+				return nil, err
+			}
+		}
+
 		// Fast path: drivers (notably the official Go driver) implement
 		// CountDocuments by issuing an aggregate pipeline of the form
 		// [{$match: <filter>}, optional $skip/$limit, {$group: {_id: <c>, n: {$sum: 1}}}].
@@ -438,7 +412,8 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		// cannot honor a collation, so skip it when one is set and let the
 		// regular pipeline path re-check $match through the collator (mirrors
 		// the count command). workspace-4jf.
-		if !cInfo.IsView && collCmp == nil {
+		hint, _ := document.Get("hint")
+		if !cInfo.IsView && collCmp == nil && (hint == nil || backends.HintIsNatural(hint)) {
 			if info, ok := tryCountAggregateShortcut(aggregationStages); ok {
 				if info.filter != nil {
 					if err := common.ValidateFilter(info.filter, nil); err != nil {
@@ -502,13 +477,21 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			}
 		}
 
+		// The stages the pushed filter and limit are drawn from: the user's,
+		// or for a view, the view's then the user's, as they run on the base.
+		pushdownStages := aggregationStages
 		isView := cInfo.IsView
 		if isView {
 			view := cList.Collections[0]
-			baseCollection, viewStages, _, vErr := resolveViewChain(ctx, db, view.Name, view.ViewOn, view.ViewPipeline, collCmp)
+			baseCollection, viewStages, rawViewStages, vErr := resolveViewChain(ctx, db, view.Name, view.ViewOn, view.ViewPipeline, collCmp)
 			if vErr != nil {
 				closer.Close()
 				return nil, handleMaxTimeMSError(vErr, maxTimeMS, "aggregate")
+			}
+			if err = viewPipelineLength(aggregations.ExpandedLength(aggregationStages) +
+				aggregations.ExpandedLength(rawViewStages) - len(rawViewStages))(len(rawViewStages)); err != nil {
+				closer.Close()
+				return nil, err
 			}
 			srcInfo, srcErr := lookupCollectionInfo(ctx, db, baseCollection)
 			if srcErr != nil {
@@ -525,6 +508,11 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 				return nil, lazyerrors.Error(err)
 			}
 			stagesDocuments = append(viewStages, stagesDocuments...)
+			pushdownStages = aggregations.MoveMatchesAhead(append(append([]any{}, rawViewStages...), aggregationStages...))
+			if !h.DisablePushdown {
+				qp.Filter, _ = aggregations.GetPushdownQuery(pushdownStages)
+				common.CanonicalizeFilter(qp.Filter)
+			}
 		}
 
 		switch {
@@ -545,13 +533,39 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		if qp.Sort != nil && qp.Sort.Keys()[0] != "$natural" {
 			sortStage = stagesDocuments[pushdownSortStageIndex(aggregationStages)]
 		}
-		qp.LimitHint = pushdownLimit(aggregationStages)
+		qp.LimitHint = pushdownLimit(pushdownStages)
 
+		var hintOrder, hintSortFilter *types.Document
 		if hint, _ := document.Get("hint"); hint != nil {
 			qp.Hint = hint
+			if qp.Sort == nil {
+				if hintOrder, hintSortFilter, _, err = hintedIndexOrder(ctx, c, hint, qp.Filter, qp.Collation, 0); err != nil {
+					closer.Close()
+					return nil, handleMaxTimeMSError(err, maxTimeMS, "aggregate")
+				}
+			}
+			if hintOrder != nil {
+				// The backend reads ascending, so a limit would stop it early,
+				// and the sort reads the index's keys, which the stages'
+				// fields may not include.
+				qp.LimitHint = 0
+				if qp.Fields != nil {
+					for _, k := range hintOrder.Keys() {
+						root, _, _ := strings.Cut(k, ".")
+						if !slices.Contains(qp.Fields, root) {
+							qp.Fields = append(qp.Fields, root)
+						}
+					}
+				}
+			}
 		}
 
-		iter, err = processStagesDocuments(ctx, closer, &stagesDocumentsParams{c, qp, stagesDocuments, sortStage})
+		if runsInSBE(aggregationStages) {
+			ctx = backends.WithSBEScan(ctx)
+		}
+		iter, err = processStagesDocuments(ctx, closer, &stagesDocumentsParams{
+			c: c, qp: qp, stages: stagesDocuments, sortStage: sortStage, hintOrder: hintOrder, hintSortFilter: hintSortFilter, cmp: collCmp,
+		})
 	} else {
 		statistics := stages.GetStatistics(collStatsDocuments)
 
@@ -647,6 +661,9 @@ func (h *Handler) aggregateDatabase(connCtx context.Context, document *types.Doc
 			"'pipeline' option must be specified as an array",
 			document.Command(),
 		)
+	}
+	if err = aggregations.CheckPipelineLength(pipeline.Len()); err != nil {
+		return nil, err
 	}
 
 	if pipeline.Len() == 0 {
@@ -962,6 +979,12 @@ type stagesDocumentsParams struct {
 	// sortStage is the $sort stage qp.Sort pushes down; it is skipped when
 	// the backend returns documents already in that order.
 	sortStage aggregations.Stage
+	// hintOrder, set for an unsorted read hinted to an index with a
+	// descending key, is that index's key pattern, the order mongod returns.
+	hintOrder *types.Document
+	// hintSortFilter is the filter hintOrder sorts by (hintedIndexOrder).
+	hintSortFilter *types.Document
+	cmp            *collation.Comparator
 }
 
 // pushdownSortStageIndex returns the position of the $sort stage
@@ -975,7 +998,6 @@ func pushdownSortStageIndex(aggregationStages []any) int {
 	panic("pushdownSortStageIndex: no $sort among the pushdown stages")
 }
 
-// processStagesDocuments retrieves the documents from the database and then processes them through the stages.
 // sortLimitBound returns the top-K bound a $sort at index i may use when a
 // $limit (optionally preceded by a $skip) immediately follows it, else 0. This
 // mirrors MongoDB's sort+limit and sort+skip+limit coalescence.
@@ -1004,6 +1026,17 @@ func sortLimitBound(aggregationStages []any, i int) int64 {
 	}
 
 	return 0
+}
+
+// runsInSBE reports whether mongod runs a pipeline in SBE: one with a stage
+// SBE executes, such as $group or $lookup.
+func runsInSBE(stages []any) bool {
+	for _, s := range stages {
+		if d, _ := s.(*types.Document); d != nil && sbeStages[d.Command()] {
+			return true
+		}
+	}
+	return false
 }
 
 // pushdownLimit returns the $limit that directly follows the stages
@@ -1059,8 +1092,9 @@ func stageInt64(d *types.Document, key string, parse func(any) (int64, error)) (
 	return n, true
 }
 
+// processStagesDocuments retrieves the documents from the database and then processes them through the stages.
 func processStagesDocuments(ctx context.Context, closer *iterator.MultiCloser, p *stagesDocumentsParams) (types.DocumentsIterator, error) { //nolint:lll // for readability
-	queryRes, err := p.c.Query(ctx, p.qp)
+	queryRes, err := stagesSource(ctx, p)
 	if err != nil {
 		closer.Close()
 		return nil, lazyerrors.Error(err)
@@ -1070,18 +1104,47 @@ func processStagesDocuments(ctx context.Context, closer *iterator.MultiCloser, p
 
 	// Stages evaluate expressions per document; stop between documents once
 	// maxTimeMS expires or the client goes away.
-	iter := iterator.WithContext(ctx, queryRes.Iter)
+	var iter types.DocumentsIterator = iterator.WithContext(ctx, queryRes.Iter)
+	if p.hintOrder != nil {
+		if iter, err = common.SortIteratorInIndexOrder(iter, closer, p.hintOrder, p.hintSortFilter, p.cmp); err != nil {
+			return nil, err
+		}
+	}
 
 	for _, s := range p.stages {
 		if queryRes.Sorted && s == p.sortStage {
+			iter = withoutRecordKeys(iter)
 			continue
 		}
 		if iter, err = s.Process(ctx, iter, closer); err != nil {
 			return nil, err
 		}
+		if !stages.KeepsRecordID(s) {
+			iter = withoutRecordKeys(iter)
+		}
 	}
 
 	return iter, nil
+}
+
+// stagesSource reads the pipeline's input: nearest first from a geo index
+// when it starts with a $geoNear one serves, otherwise by p.qp.
+func stagesSource(ctx context.Context, p *stagesDocumentsParams) (*backends.QueryResult, error) {
+	if len(p.stages) > 0 {
+		near, isNear := p.stages[0].(stages.GeoNearStage)
+		scanner, canScan := p.c.(backends.GeoNearScanner)
+		if isNear && canScan {
+			res, err := scanner.GeoNear(ctx, near.NearParams())
+			if err != nil {
+				return nil, err
+			}
+			if res != nil {
+				near.ReadsSorted(res.Field)
+				return &backends.QueryResult{Iter: res.Iter}, nil
+			}
+		}
+	}
+	return p.c.Query(ctx, p.qp)
 }
 
 type stagesStatsParams struct {
@@ -1502,4 +1565,21 @@ func documentsNotFirst(stage *types.Document, i int) error {
 		"$documents is only valid as the first stage in a pipeline",
 		"$documents",
 	)
+}
+
+// withoutRecordKeys yields iter's documents without their RecordId key.
+func withoutRecordKeys(iter types.DocumentsIterator) types.DocumentsIterator {
+	return &recordKeyDropper{iter}
+}
+
+type recordKeyDropper struct {
+	types.DocumentsIterator
+}
+
+func (d *recordKeyDropper) Next() (struct{}, *types.Document, error) {
+	zero, doc, err := d.DocumentsIterator.Next()
+	if doc != nil {
+		doc.SetRecordKey(nil)
+	}
+	return zero, doc, err
 }

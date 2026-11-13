@@ -18,10 +18,12 @@ package handlererrors
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/FerretDB/wire/wirebson"
 
 	"github.com/dolthub/dumbodb/internal/bson"
+	"github.com/dolthub/dumbodb/internal/index"
 )
 
 //go:generate ../../../bin/stringer -linecomment -type ErrorCode
@@ -176,6 +178,9 @@ const (
 
 	// ErrNotImplemented indicates that a flag or command is not implemented.
 	ErrNotImplemented = ErrorCode(238) // NotImplemented
+
+	// ErrQueryFeatureNotAllowed indicates a query operator used where it is not allowed.
+	ErrQueryFeatureNotAllowed = ErrorCode(224) // QueryFeatureNotAllowed
 
 	ErrTransactionTooOld = ErrorCode(225) // TransactionTooOld
 
@@ -498,9 +503,55 @@ const (
 	// ErrConvertSubtypeColumn indicates a conversion to BinData subtype Column.
 	ErrConvertSubtypeColumn = ErrorCode(12910300) // Location12910300
 
+	// ErrTooManyCompoundKeys indicates an index key pattern of more than 32 fields.
+	ErrTooManyCompoundKeys = ErrorCode(13103) // Location13103
+
 	// ErrRangeWindowDescendingSort indicates range-based window bounds over a
 	// descending sortBy.
 	ErrRangeWindowDescendingSort = ErrorCode(8947401) // Location8947401
+
+	// ErrNearMinDistanceNegative indicates a $minDistance beside $near that is
+	// NaN or negative.
+	ErrNearMinDistanceNegative = ErrorCode(16894) // Location16894
+
+	// ErrNearMaxDistanceNegative indicates a $maxDistance beside $near that is
+	// NaN or negative.
+	ErrNearMaxDistanceNegative = ErrorCode(16896) // Location16896
+
+	// ErrCannotExtractGeoKeys indicates a value a 2dsphere index cannot hold.
+	ErrCannotExtractGeoKeys = ErrorCode(16755) // Location16755
+
+	// ErrKeyTooLong indicates a key longer than DumboDB stores.
+	ErrKeyTooLong = ErrorCode(17280) // KeyTooLong
+
+	// ErrClusteredIndexNotUnique indicates a clusteredIndex without unique: true.
+	ErrClusteredIndexNotUnique = ErrorCode(5979700) // Location5979700
+
+	// ErrClusteredIndexLegacyFormat indicates clusteredIndex: true.
+	ErrClusteredIndexLegacyFormat = ErrorCode(5979703) // Location5979703
+
+	// ErrClusteredIndexVersion indicates a clusteredIndex with v other than 2.
+	ErrClusteredIndexVersion = ErrorCode(5979704) // Location5979704
+
+	// ErrClusteredIndexDrop indicates a dropIndexes of the clustered index.
+	ErrClusteredIndexDrop = ErrorCode(5979800) // Location5979800
+
+	// ErrIndexNameMatchesClusteredIndex indicates an index named like the
+	// collection's clustered index.
+	ErrIndexNameMatchesClusteredIndex = ErrorCode(6100906) // Location6100906
+
+	// ErrPipelineTooLong indicates a pipeline of more than 1000 stages.
+	ErrPipelineTooLong = ErrorCode(7749501) // Location7749501
+
+	// ErrViewPipelineTooLong indicates a view's and a query's stages together
+	// exceed 1000.
+	ErrViewPipelineTooLong = ErrorCode(5054701) // Location5054701
+
+	// ErrClusteredIndexOnView indicates a clusteredIndex on a view.
+	ErrClusteredIndexOnView = ErrorCode(6026500) // Location6026500
+
+	// ErrClusteredIndexCappedSize indicates a capped size on a clustered collection.
+	ErrClusteredIndexCappedSize = ErrorCode(6049200) // Location6049200
 
 	// ErrSizeNotArray indicates that the argument to $size is not an array.
 	ErrSizeNotArray = ErrorCode(17124) // Location17124
@@ -718,10 +769,6 @@ const (
 	// were used in a context that does not sort (e.g. a $match stage or count).
 	ErrGeoNearNotAllowedInContext = ErrorCode(5626500) // Location5626500
 
-	// ErrQueryFeatureNotAllowed indicates a query feature, such as $expr in a
-	// $pull condition, that is not allowed in the context it was used in.
-	ErrQueryFeatureNotAllowed = ErrorCode(224) // QueryFeatureNotAllowed
-
 	ErrInvalidReplicaSetConfig               = ErrorCode(93)    // InvalidReplicaSetConfig
 	ErrNotYetInitialized                     = ErrorCode(94)    // NotYetInitialized
 	ErrTopologyVersionMissingProcessID       = ErrorCode(31368) // Location31368
@@ -781,6 +828,10 @@ func ProtocolError(err error) ProtoErr {
 		}
 	}
 
+	if code, msg, ok := IndexKeyError(err); ok {
+		return NewCommandErrorMsg(code, msg).(*CommandError)
+	}
+
 	if errors.Is(err, bson.ErrNestingTooDeep) {
 		msg := fmt.Sprintf("BSONObj exceeded maximum nested object depth: %d", bson.MaxNestingDepth)
 		return NewCommandErrorMsg(ErrOverflow, msg).(*CommandError)
@@ -788,4 +839,26 @@ func ProtocolError(err error) ProtoErr {
 
 	//nolint:errorlint // only *CommandError could be returned
 	return NewCommandError(errInternalError, err).(*CommandError)
+}
+
+// IndexKeyError returns the code and message MongoDB reports when err is a
+// value an index cannot hold: index.ErrKeyTooLong or
+// index.ErrCannotExtractGeoKeys. The message drops the internal call chain.
+func IndexKeyError(err error) (ErrorCode, string, bool) {
+	for _, e := range []struct {
+		sentinel error
+		code     ErrorCode
+	}{
+		{index.ErrKeyTooLong, ErrKeyTooLong},
+		{index.ErrCannotExtractGeoKeys, ErrCannotExtractGeoKeys},
+	} {
+		if errors.Is(err, e.sentinel) {
+			msg := err.Error()
+			if i := strings.Index(msg, e.sentinel.Error()); i >= 0 {
+				msg = msg[i:]
+			}
+			return e.code, msg, true
+		}
+	}
+	return 0, "", false
 }

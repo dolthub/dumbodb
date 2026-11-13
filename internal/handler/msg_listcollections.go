@@ -125,6 +125,8 @@ func (h *Handler) MsgListCollections(connCtx context.Context, msg *wire.OpMsg) (
 			}
 			options.Set("timeseries", tsOpts)
 		} else {
+			options.Set("clusteredIndex", clusteredIndexSpec(collection.ClusteredIndexName))
+
 			if collection.Capped() {
 				options.Set("capped", true)
 			}
@@ -181,8 +183,9 @@ func (h *Handler) MsgListCollections(connCtx context.Context, msg *wire.OpMsg) (
 			info.Set("uuid", uuidBinary)
 		}
 
-		if collection.IsView {
-			// Views don't have an idIndex.
+		if collection.IsView || !collection.IsTimeSeries {
+			// Views have no _id index, and a clustered collection reports its
+			// _id index as options.clusteredIndex instead of idIndex.
 			d = must.NotFail(types.NewDocument(
 				"name", collection.Name,
 				"type", collType,

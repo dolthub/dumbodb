@@ -18,13 +18,10 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/dolthub/dumbodb/internal/index"
 	"log/slog"
-	"math"
 	"sort"
-	"strconv"
 	"time"
-
-	"go.mongodb.org/mongo-driver/v2/bson"
 
 	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/commonpath"
@@ -46,8 +43,10 @@ type DistinctParams struct {
 
 	Query any `dumbo:"query,opt"`
 
-	Collation *types.Document `dumbo:"collation,opt"`
-	MaxTimeMS int64           `dumbo:"maxTimeMS,opt,wholePositiveNumber"`
+	Collation      *types.Document `dumbo:"collation,opt"`
+	MaxTimeMSValue any             `dumbo:"maxTimeMS,opt"`
+	MaxTimeMS      int64           `dumbo:"-"`
+	Hint           any             `dumbo:"hint,opt"`
 
 	ReadConcern    *types.Document `dumbo:"readConcern,ignored"`
 	LSID           any             `dumbo:"lsid,ignored"`
@@ -63,6 +62,9 @@ func GetDistinctParams(document *types.Document, l *slog.Logger) (*DistinctParam
 	var dp DistinctParams
 
 	err := handlerparams.ExtractParams(document, "distinct", &dp, l)
+	if err == nil {
+		dp.MaxTimeMS, err = handlerparams.CommandMaxTimeMS(dp.MaxTimeMSValue)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -94,32 +96,14 @@ func GetDistinctParams(document *types.Document, l *slog.Logger) (*DistinctParam
 	return &dp, nil
 }
 
-// decimal128ToFloat64 converts a Decimal128 to float64 via its string representation.
-// Returns (value, true) on success, or (0, false) for NaN/Infinity or parse errors.
-func decimal128ToFloat64(d types.Decimal128) (float64, bool) {
-	s := bson.NewDecimal128(d.H, d.L).String()
-	switch s {
-	case "NaN", "Infinity", "-Infinity":
-		return 0, false
-	}
-	f, err := strconv.ParseFloat(s, 64)
-	if err != nil {
-		return 0, false
-	}
-	return f, true
-}
-
 // distinctKey returns a canonical byte key for v such that two values produce
 // the same key iff distinct should treat them as equal. Returns ok=false for
 // composite types (Document, Array) where structural comparison is required;
 // callers must fall back to a linear scan for those.
 //
 // The canonical form mirrors compareScalars semantics:
-//   - int32(5), int64(5), float64(5.0) all hash to the same key (numeric
-//     equality across types).
-//   - Decimal128 hashes by numeric value when convertible to float64; NaN /
-//     Infinity fall back to bit-level equality. Decimal128 only collides with
-//     other Decimal128s  -- matching the prior distinctContains carve-out.
+//   - Numbers equal in value share a key whatever their types: int32(5),
+//     int64(5), 5.0 and NumberDecimal("5.00") are one value, as are 0 and -0.
 //   - Strings, ObjectIDs, dates, binary, regex, timestamps, bool, null,
 //     min/max keys each occupy distinct buckets via a leading tag byte.
 func distinctKey(v any) ([]byte, bool) {
@@ -133,20 +117,9 @@ func distinctKey(v any) ([]byte, bool) {
 		}
 		return []byte{tagBool, 0}, true
 
-	case int32:
-		return numericIntKey(int64(val)), true
-
-	case int64:
-		return numericIntKey(val), true
-
-	case float64:
-		if math.IsNaN(val) {
-			return []byte{tagNumeric, 'N', 'a', 'N'}, true
-		}
-		if !math.IsInf(val, 0) && val == math.Trunc(val) && val >= math.MinInt64 && val <= math.MaxInt64 {
-			return numericIntKey(int64(val)), true
-		}
-		return numericFloatKey(val), true
+	case int32, int64, float64, types.Decimal128:
+		// Numbers equal in value share a KeyString, whatever their types.
+		return index.AppendValue([]byte{tagNumeric}, val), true
 
 	case string:
 		b := make([]byte, 1+len(val))
@@ -196,20 +169,6 @@ func distinctKey(v any) ([]byte, bool) {
 	case types.MaxKeyType:
 		return []byte{tagMaxKey}, true
 
-	case types.Decimal128:
-		// Decimal128 only collides with other Decimal128s. Within that bucket,
-		// equality is by numeric value when convertible; NaN / Infinity fall
-		// back to bit-level equality.
-		b := make([]byte, 1+16)
-		b[0] = tagDecimal128
-		if f, ok := decimal128ToFloat64(val); ok {
-			binary.BigEndian.PutUint64(b[1:9], math.Float64bits(f))
-			// remaining 8 bytes left zero  -- convertible decimals share key
-		} else {
-			binary.BigEndian.PutUint64(b[1:9], val.H)
-			binary.BigEndian.PutUint64(b[9:17], val.L)
-		}
-		return b, true
 	}
 
 	return nil, false
@@ -218,39 +177,19 @@ func distinctKey(v any) ([]byte, bool) {
 // Tag bytes that prefix each distinctKey, ensuring values from different type
 // buckets never collide.
 const (
-	tagNull       byte = 0x00
-	tagBool       byte = 0x01
-	tagNumeric    byte = 0x02
-	tagString     byte = 0x03
-	tagObjectID   byte = 0x04
-	tagDate       byte = 0x05
-	tagBinary     byte = 0x06
-	tagTimestamp  byte = 0x07
-	tagRegex      byte = 0x08
-	tagMinKey     byte = 0x09
-	tagMaxKey     byte = 0x0a
-	tagDecimal128 byte = 0x0b
-	tagUndefined  byte = 0x0c
+	tagNull      byte = 0x00
+	tagBool      byte = 0x01
+	tagNumeric   byte = 0x02
+	tagString    byte = 0x03
+	tagObjectID  byte = 0x04
+	tagDate      byte = 0x05
+	tagBinary    byte = 0x06
+	tagTimestamp byte = 0x07
+	tagRegex     byte = 0x08
+	tagMinKey    byte = 0x09
+	tagMaxKey    byte = 0x0a
+	tagUndefined byte = 0x0c
 )
-
-// numericIntKey encodes an integer in the numeric bucket. int32(n), int64(n),
-// and float64(n) (when n is exactly integer-valued) all hash to this form.
-func numericIntKey(n int64) []byte {
-	b := make([]byte, 1+1+8)
-	b[0] = tagNumeric
-	b[1] = 'i'
-	binary.BigEndian.PutUint64(b[2:], uint64(n))
-	return b
-}
-
-// numericFloatKey encodes a non-integer float in the numeric bucket.
-func numericFloatKey(f float64) []byte {
-	b := make([]byte, 1+1+8)
-	b[0] = tagNumeric
-	b[1] = 'f'
-	binary.BigEndian.PutUint64(b[2:], math.Float64bits(f))
-	return b
-}
 
 // FilterDistinctValues returns distinct values from the given slice of documents with the given key.
 //
@@ -393,6 +332,8 @@ type distinctSet struct {
 	values  []any
 	// cmp, when set, makes strings equal under the collation duplicates.
 	cmp *collation.Comparator
+	// scratch holds the key of the value being added.
+	scratch []byte
 }
 
 func newDistinctSet() *distinctSet {
@@ -403,6 +344,18 @@ func newDistinctSet() *distinctSet {
 func (s *distinctSet) add(v any) {
 	if str, isString := v.(string); isString && s.cmp != nil {
 		s.addKeyed(append([]byte{tagString}, s.cmp.Key(str)...), v)
+		return
+	}
+	// Scalars most often repeat: key them in a reused buffer, so a value
+	// already seen allocates nothing.
+	switch val := v.(type) {
+	case int32, int64, float64, types.Decimal128:
+		s.scratch = index.AppendValue(append(s.scratch[:0], tagNumeric), val)
+		s.addKeyed(s.scratch, v)
+		return
+	case string:
+		s.scratch = append(append(s.scratch[:0], tagString), val...)
+		s.addKeyed(s.scratch, v)
 		return
 	}
 	if k, ok := distinctKey(v); ok {
@@ -422,11 +375,10 @@ func (s *distinctSet) add(v any) {
 }
 
 func (s *distinctSet) addKeyed(key []byte, v any) {
-	ks := string(key)
-	if _, dup := s.seen[ks]; dup {
+	if _, dup := s.seen[string(key)]; dup {
 		return
 	}
-	s.seen[ks] = struct{}{}
+	s.seen[string(key)] = struct{}{}
 	s.values = append(s.values, v)
 }
 

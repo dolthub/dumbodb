@@ -20,11 +20,11 @@ package dolt
 // produce docs whose entries exist in neither parent's index.
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"sort"
 
-	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/prolly"
 
 	"github.com/dolthub/dumbodb/internal/backends"
@@ -34,26 +34,20 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-func indexSetFromAM(ctx context.Context, state *dbState, am prolly.AddressMap) (map[string]*resolvedIndexEntry, error) {
+func indexSetOf(ctx context.Context, indexes secondaryIndexes) (map[string]*resolvedIndexEntry, error) {
 	out := make(map[string]*resolvedIndexEntry)
-	if err := am.IterAll(ctx, func(name string, entryHash hash.Hash) error {
-		if entryHash.IsEmpty() {
-			return nil
-		}
-		resolved, err := resolveIndexEntry(ctx, state.ns, entryHash)
-		if err != nil {
-			return err
-		}
-		out[name] = resolved
+	if err := indexes.IterAll(ctx, func(name string, entry *resolvedIndexEntry) error {
+		out[name] = entry
 		return nil
 	}); err != nil {
-		return nil, fmt.Errorf("indexSetFromAM: %w", err)
+		return nil, fmt.Errorf("indexSetOf: %w", err)
 	}
 	return out, nil
 }
 
 // indexSpecEqual compares definitions only: content (map root) and the
-// sticky Lossy/Multikey flags never count as definition changes.
+// sticky Lossy/Multikey flags never count as definition changes. Partial
+// filters compare in canonical form, so key order never counts either.
 func indexSpecEqual(a, b backends.IndexInfo) bool {
 	if a.Name != b.Name || a.Unique != b.Unique || a.Sparse != b.Sparse || a.Hidden != b.Hidden {
 		return false
@@ -69,12 +63,13 @@ func indexSpecEqual(a, b backends.IndexInfo) bool {
 			return false
 		}
 	}
-	aEntry, aErr := indexInfoToEntry(a, hash.Hash{})
-	bEntry, bErr := indexInfoToEntry(b, hash.Hash{})
-	if aErr != nil || bErr != nil {
+	if (a.PartialFilterExpression == nil) != (b.PartialFilterExpression == nil) {
 		return false
 	}
-	return aEntry.PartialBSONHex == bEntry.PartialBSONHex
+	if a.PartialFilterExpression == nil {
+		return true
+	}
+	return bytes.Equal(a.PartialFilterExpression.AppendBSONSortedKeys(nil), b.PartialFilterExpression.AppendBSONSortedKeys(nil))
 }
 
 type pendingOwner struct {
@@ -197,7 +192,7 @@ func openSurvivors(ctx context.Context, state *dbState, seeds map[string]struct 
 	out := make([]*indexMergeSurvivor, 0, len(seeds))
 	for _, name := range names {
 		seed := seeds[name]
-		m, err := openIndexMap(ctx, state.vs, state.ns, seed.entry.mapRoot)
+		m, err := openIndexMap(ctx, state.ns, seed.entry.mapRoot)
 		if err != nil {
 			return nil, fmt.Errorf("openSurvivors: %q: %w", name, err)
 		}
@@ -220,7 +215,10 @@ func (s *indexMergeSurvivor) deleteDoc(ctx context.Context, doc *types.Document,
 	if doc == nil {
 		return nil
 	}
-	rows, _, _ := indexEntriesForDoc(doc, s.info)
+	rows, _, _, err := indexEntriesForDoc(ctx, doc, s.info)
+	if err != nil {
+		return err
+	}
 	for _, row := range rows {
 		if err := idxpkg.DeleteEntry(ctx, s.mut, row, idBytes); err != nil {
 			return err
@@ -241,8 +239,11 @@ func (s *indexMergeSurvivor) insertDoc(ctx context.Context, doc *types.Document,
 	if doc == nil {
 		return nil
 	}
-	rows, multikey, lossy := indexEntriesForDoc(doc, s.info)
-	s.info.Multikey = s.info.Multikey || multikey
+	rows, multikey, lossy, err := indexEntriesForDoc(ctx, doc, s.info)
+	if err != nil {
+		return err
+	}
+	s.info.MarkMultikey(multikey)
 	s.info.Lossy = s.info.Lossy || lossy
 	for _, row := range rows {
 		if err := idxpkg.InsertEntry(ctx, s.mut, row, idBytes); err != nil {
@@ -262,7 +263,10 @@ func (s *indexMergeSurvivor) uniqueCollision(ctx context.Context, doc *types.Doc
 	if !s.info.Unique || doc == nil {
 		return nil, false, false, nil
 	}
-	rows, _, lossy := indexEntriesForDoc(doc, s.info)
+	rows, _, lossy, err := indexEntriesForDoc(ctx, doc, s.info)
+	if err != nil {
+		return nil, false, false, err
+	}
 	if lossy || s.info.Lossy {
 		// No faithful encoding: probes would collide on collapsed
 		// bytes. Skip merge-time enforcement for this index; write-path
@@ -419,16 +423,16 @@ func (a *indexMergeApplier) removeDocEverywhere(ctx context.Context, doc *types.
 	return nil
 }
 
-func (a *indexMergeApplier) finalize(ctx context.Context) (prolly.AddressMap, error) {
+func (a *indexMergeApplier) finalize(ctx context.Context) (secondaryIndexes, error) {
 	infos := make([]backends.IndexInfo, 0, len(a.survivors))
 	maps := make(map[string]prolly.Map, len(a.survivors))
 	for _, s := range a.survivors {
 		m, err := s.mut.Map(ctx)
 		if err != nil {
-			return prolly.AddressMap{}, fmt.Errorf("flushing merged index %q: %w", s.info.Name, err)
+			return secondaryIndexes{}, fmt.Errorf("flushing merged index %q: %w", s.info.Name, err)
 		}
 		infos = append(infos, s.info)
 		maps[s.info.Name] = m
 	}
-	return buildIndexAM(ctx, a.state, infos, maps)
+	return buildSecondaryIndexes(ctx, a.state, infos, maps)
 }

@@ -1,3 +1,5 @@
+//go:build mongod
+
 // Copyright 2026 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -38,7 +40,7 @@ import (
 func TestLiveRuntimeInitialSyncSteadyApplyAndRestart(t *testing.T) {
 	mongodBinary := os.Getenv("MONGOD_BIN")
 	if mongodBinary == "" {
-		t.Skip("set MONGOD_BIN to run the live replication runtime test")
+		t.Fatal("MONGOD_BIN must name a mongod binary to run the live replication runtime test; these tests build only with -tags mongod")
 	}
 	mongoAddress := freeRuntimeAddress(t)
 	_, mongoPort, err := net.SplitHostPort(mongoAddress)
@@ -93,10 +95,13 @@ func TestLiveRuntimeInitialSyncSteadyApplyAndRestart(t *testing.T) {
 	waitForRuntimeState(t, ctx, manager, topology.StateSecondary)
 	waitForRuntimeDocuments(t, ctx, backend, 1)
 
+	insertsBefore := manager.Snapshot().Runtime.ReplicatedInserts
 	if _, err := collection.InsertOne(ctx, mongobson.D{{Key: "_id", Value: 2}, {Key: "value", Value: "steady"}}); err != nil {
 		t.Fatal(err)
 	}
 	waitForRuntimeDocuments(t, ctx, backend, 2)
+	// The insert is visible before its publication commits.
+	waitForRuntimeInsertsAfter(t, ctx, manager, insertsBefore)
 	beforeIdleCommits := runtimeCommitCount(t, ctx, backend)
 	beforeIdlePosition := manager.Snapshot().Checkpoint.Applied
 	waitForRuntimeAppliedAfter(t, ctx, manager, beforeIdlePosition)
@@ -128,10 +133,12 @@ func TestLiveRuntimeInitialSyncSteadyApplyAndRestart(t *testing.T) {
 		}
 	}()
 	waitForRuntimeState(t, ctx, reopenedManager, topology.StateSecondary)
+	insertsBefore = reopenedManager.Snapshot().Runtime.ReplicatedInserts
 	if _, err := collection.InsertOne(ctx, mongobson.D{{Key: "_id", Value: 3}, {Key: "value", Value: "restart"}}); err != nil {
 		t.Fatal(err)
 	}
 	waitForRuntimeDocuments(t, ctx, reopenedBackend, 3)
+	waitForRuntimeInsertsAfter(t, ctx, reopenedManager, insertsBefore)
 
 	beforeRemoval := reopenedManager.ControlSnapshot()
 	removedConfiguration := *reopenedManager.Snapshot().Configuration
@@ -250,6 +257,17 @@ func waitForRuntimeAppliedAfter(t *testing.T, ctx context.Context, manager *topo
 		select {
 		case <-ctx.Done():
 			t.Fatalf("waiting for idle oplog progress after %+v: %v", previous, ctx.Err())
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
+func waitForRuntimeInsertsAfter(t *testing.T, ctx context.Context, manager *topology.Manager, previous int64) {
+	t.Helper()
+	for manager.Snapshot().Runtime.ReplicatedInserts <= previous {
+		select {
+		case <-ctx.Done():
+			t.Fatalf("waiting for a replicated insert after %d: %v", previous, ctx.Err())
 		case <-time.After(100 * time.Millisecond):
 		}
 	}

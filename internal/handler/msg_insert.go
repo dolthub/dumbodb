@@ -287,6 +287,18 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 				continue
 			}
 
+			if code, msg, ok := handlererrors.IndexKeyError(err); ok {
+				writeErrors = append(writeErrors, &mongo.WriteError{
+					Index:   docsIndexes[j],
+					Code:    int(code),
+					Message: msg,
+				})
+				if params.Ordered {
+					break
+				}
+				continue
+			}
+
 			if !backends.ErrorCodeIs(err, backends.ErrorCodeInsertDuplicateID) {
 				return nil, lazyerrors.Error(err)
 			}

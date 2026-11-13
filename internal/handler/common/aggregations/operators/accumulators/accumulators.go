@@ -24,6 +24,7 @@ package accumulators
 import (
 	"errors"
 	"fmt"
+	"github.com/dolthub/dumbodb/internal/collation"
 
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
@@ -43,6 +44,13 @@ type newAccumulatorFunc func(args ...any) (Accumulator, error)
 type Accumulator interface {
 	// New returns a fresh, zero-state Accumulation for a single group.
 	New() Accumulation
+}
+
+// CollatedAccumulator is an Accumulator whose results depend on string
+// equality, which a collation changes.
+type CollatedAccumulator interface {
+	Accumulator
+	NewCollated(cmp *collation.Comparator) Accumulation
 }
 
 // Accumulation folds the documents of a single group and produces the

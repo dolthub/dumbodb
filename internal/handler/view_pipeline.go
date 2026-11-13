@@ -69,6 +69,8 @@ func buildViewPipelineStages(db backends.Database, viewPipeline *types.Array, cm
 			vs, err = stages.NewMatchStage(vd, cmp, stages.SeesStoredDocuments(stageDocs, i))
 		case "$sort":
 			vs, err = stages.NewSortStage(vd, sortLimitBound(stageDocs, i), cmp)
+		case "$group":
+			vs, err = stages.NewGroupStage(vd, cmp)
 		default:
 			vs, err = stages.NewStage(vd)
 		}
@@ -137,7 +139,15 @@ func (f *foreignFetcher) Fetch(ctx context.Context, collName string, filter *typ
 		defer closer.Close()
 
 		cmp := collation.Parse(info.Collation).Comparator()
-		iter, err := viewSourceIterator(ctx, db, info.Name, info.ViewOn, info.ViewPipeline, cmp, closer, false)
+		// A $unionWith over a view was checked as the stage was parsed
+		// (checkJoinedViewLength); a $lookup also is as it executes.
+		js := stages.JoinStagesOf(ctx)
+		ctx = stages.WithJoinStages(ctx, stages.JoinStages{})
+		check := func(n int) error { return wrapAggregateExecutorError(aggregations.CheckPipelineLength(n + js.N)) }
+		if js.ViewLimit {
+			check = func(n int) error { return wrapAggregateExecutorError(viewPipelineLength(js.N)(n)) }
+		}
+		iter, err := viewSourceIterator(ctx, db, info.Name, info.ViewOn, info.ViewPipeline, cmp, closer, false, check)
 		if err != nil {
 			return nil, err
 		}
@@ -171,25 +181,42 @@ func (f *foreignFetcher) Fetch(ctx context.Context, collName string, filter *typ
 // IndexedField reports whether collName has a single-field index on field that
 // the backend can use for an equality or $in filter without a collation.
 func (f *foreignFetcher) IndexedField(ctx context.Context, collName, field string) bool {
+	_, ok := f.indexOn(ctx, collName, field)
+	return ok
+}
+
+// indexOn returns the index IndexedField finds.
+func (f *foreignFetcher) indexOn(ctx context.Context, collName, field string) (backends.IndexInfo, bool) {
 	info, err := lookupCollectionInfo(ctx, f.db, collName)
 	if err != nil || info == nil || info.IsView {
-		return false
+		return backends.IndexInfo{}, false
 	}
 	coll, err := f.db.Collection(collName)
 	if err != nil {
-		return false
+		return backends.IndexInfo{}, false
 	}
 	res, err := coll.ListIndexes(ctx, new(backends.ListIndexesParams))
 	if err != nil {
-		return false
+		return backends.IndexInfo{}, false
 	}
-	for _, idx := range res.Indexes {
-		if len(idx.Key) == 1 && idx.Key[0].Field == field && !idx.Lossy &&
-			idx.PartialFilterExpression == nil && collation.Parse(idx.Collation).IsSimple() {
-			return true
+	// A single-field index on the join field, else a compound one it leads.
+	var led *backends.IndexInfo
+	for i, idx := range res.Indexes {
+		if len(idx.Key) == 0 || idx.Key[0].Field != field || idx.Lossy ||
+			idx.PartialFilterExpression != nil || !collation.Parse(idx.Collation).IsSimple() {
+			continue
+		}
+		if len(idx.Key) == 1 {
+			return idx, true
+		}
+		if led == nil {
+			led = &res.Indexes[i]
 		}
 	}
-	return false
+	if led != nil {
+		return *led, true
+	}
+	return backends.IndexInfo{}, false
 }
 
 // viewReadCollation returns the collation a read on a view runs under: the
@@ -215,6 +242,87 @@ func lookupCollectionInfo(ctx context.Context, db backends.Database, name string
 		return nil, nil
 	}
 	return &res.Collections[0], nil
+}
+
+// checkJoinedViewLength returns mongod's error for a $unionWith, or a $lookup
+// with only a pipeline, over a view whose stages and the stage's sub-pipeline
+// are together over the limit, which mongod refuses as it parses the stage.
+func checkJoinedViewLength(ctx context.Context, db backends.Database, stage *types.Document) error {
+	spec, _ := stage.Get(stage.Command())
+	var from string
+	var pipeline *types.Array
+	switch stage.Command() {
+	case "$unionWith":
+		switch spec := spec.(type) {
+		case string:
+			from = spec
+		case *types.Document:
+			from, pipeline = joinSpecFields(spec, "coll")
+		}
+	case "$lookup":
+		specDoc, ok := spec.(*types.Document)
+		if !ok || specDoc.Has("localField") {
+			return nil
+		}
+		from, pipeline = joinSpecFields(specDoc, "from")
+	}
+	if from == "" {
+		return nil
+	}
+	info, err := lookupCollectionInfo(ctx, db, from)
+	if err != nil || info == nil || !info.IsView {
+		return nil
+	}
+	_, _, rawStages, err := resolveViewChain(ctx, db, info.Name, info.ViewOn, info.ViewPipeline, nil)
+	if err != nil {
+		return nil
+	}
+	pipelineLen := 0
+	if pipeline != nil {
+		pipelineLen = pipeline.Len()
+	}
+	return aggregations.CheckPipelineLength(len(rawStages) + pipelineLen)
+}
+
+// joinSpecFields returns a join spec's namespace, under fromField, and
+// pipeline, each zero when absent or of the wrong type.
+func joinSpecFields(spec *types.Document, fromField string) (string, *types.Array) {
+	v, _ := spec.Get(fromField)
+	from, _ := v.(string)
+	v, _ = spec.Get("pipeline")
+	pipeline, _ := v.(*types.Array)
+	return from, pipeline
+}
+
+// viewPipelineLength returns a check of a resolved view's stages for a
+// command that adds extra stages of its own: mongod refuses a view over the
+// limit with ErrPipelineTooLong, and one the command takes over it with
+// ErrViewPipelineTooLong.
+func viewPipelineLength(extra int) func(viewStages int) error {
+	return func(viewStages int) error {
+		if err := aggregations.CheckPipelineLength(viewStages); err != nil {
+			return err
+		}
+		if viewStages+extra > aggregations.MaxPipelineLength {
+			return handlererrors.NewCommandErrorMsg(handlererrors.ErrViewPipelineTooLong,
+				"Pipeline length must be no longer than 1000 stages")
+		}
+		return nil
+	}
+}
+
+// findStageCount is how many stages mongod runs a find on a view as, after
+// the view's own: a $match, $sort, $skip, $limit and $project as set.
+func findStageCount(params *common.FindParams) int {
+	return boolInt(params.Filter.Len() > 0) + boolInt(params.Sort.Len() > 0) + boolInt(params.Skip > 0) +
+		boolInt(params.Limit != 0) + boolInt(params.Projection.Len() > 0)
+}
+
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // resolveViewChain flattens a view -- whose source may itself be a view -- into
@@ -408,9 +516,12 @@ func pipelineForeignNamespaces(pipeline *types.Array) []string {
 // Callers layer their own filter, sort, projection, skip and limit on top of
 // the returned iterator, matching how MongoDB resolves a read against a view to
 // an aggregation over its source.
-func viewSourceIterator(ctx context.Context, db backends.Database, viewName, viewOn string, viewPipeline *types.Array, cmp *collation.Comparator, closer *iterator.MultiCloser, disablePushdown bool) (types.DocumentsIterator, error) { //nolint:lll // for readability
+func viewSourceIterator(ctx context.Context, db backends.Database, viewName, viewOn string, viewPipeline *types.Array, cmp *collation.Comparator, closer *iterator.MultiCloser, disablePushdown bool, checkLength func(viewStages int) error) (types.DocumentsIterator, error) { //nolint:lll // for readability
 	baseCollection, viewStages, rawStages, err := resolveViewChain(ctx, db, viewName, viewOn, viewPipeline, cmp)
 	if err != nil {
+		return nil, err
+	}
+	if err = checkLength(len(rawStages)); err != nil {
 		return nil, err
 	}
 
@@ -434,5 +545,5 @@ func viewSourceIterator(ctx context.Context, db backends.Database, viewName, vie
 		qp.Filter = filter
 	}
 
-	return processStagesDocuments(ctx, closer, &stagesDocumentsParams{srcColl, qp, viewStages, nil})
+	return processStagesDocuments(ctx, closer, &stagesDocumentsParams{c: srcColl, qp: qp, stages: viewStages})
 }

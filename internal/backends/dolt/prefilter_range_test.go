@@ -387,3 +387,52 @@ func TestScanTopLevelBSONNumeric_DirectCases(t *testing.T) {
 		})
 	}
 }
+
+// A stored decimal may equal or bound any numeric literal, so neither the
+// equality nor the range prefilter rejects it.
+func TestPrefilter_StoredDecimalPasses(t *testing.T) {
+	t.Parallel()
+	seven, err := mongobson.ParseDecimal128("7.000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := canonicalDoc(t, mongobson.D{{Key: "_id", Value: int32(1)}, {Key: "x", Value: seven}, {Key: "w", Value: int32(1)}})
+	for _, filter := range []*types.Document{
+		must.NotFail(types.NewDocument("x", int32(7))),
+		must.NotFail(types.NewDocument("x", int64(7), "w", int32(1))),
+		must.NotFail(types.NewDocument("x", 7.0)),
+		rangeOp(t, "x", "$gt", int32(5)),
+		rangeOp(t, "x", "$lte", 7.0),
+	} {
+		if pf := buildScanPrefilter(filter); pf != nil && !pf(doc) {
+			t.Errorf("prefilter for %v rejects x: NumberDecimal(\"7.000\")", filter)
+		}
+	}
+}
+
+// NaN equals NaN, and longs beyond the doubles' exact range compare exactly.
+func TestPrefilter_NaNAndLargeLongs(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		stored any
+		target any
+		want   bool
+	}{
+		{"NaN equals NaN", math.NaN(), math.NaN(), true},
+		{"NaN is not 1", 1.0, math.NaN(), false},
+		{"MaxInt64 equals itself", int64(math.MaxInt64), int64(math.MaxInt64), true},
+		{"MaxInt64 is not MaxInt64-1", int64(math.MaxInt64), int64(math.MaxInt64 - 1), false},
+		{"2^53+1 is not 2^53", int64(1<<53 + 1), int64(1 << 53), false},
+		{"a long beyond doubles may equal a double", int64(1<<53 + 1), float64(1 << 53), true},
+	} {
+		doc := canonicalDoc(t, mongobson.D{{Key: "_id", Value: int32(1)}, {Key: "a", Value: tc.stored}, {Key: "n", Value: int32(1)}})
+		pf := buildScanPrefilter(must.NotFail(types.NewDocument("a", tc.target, "n", int32(1))))
+		if pf == nil {
+			t.Fatalf("%s: no prefilter", tc.name)
+		}
+		if got := pf(doc); got != tc.want {
+			t.Errorf("%s: %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

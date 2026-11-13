@@ -115,6 +115,9 @@ func newFacet(stage *types.Document) (aggregations.Stage, error) {
 				"$facet (stage)",
 			)
 		}
+		if err := aggregations.CheckPipelineLength(pipelineArr.Len()); err != nil {
+			return nil, err
+		}
 
 		// Validate that each element is a document (basic validation at parse time).
 		for i := 0; i < pipelineArr.Len(); i++ {
@@ -224,6 +227,10 @@ func (f *facet) Process(ctx context.Context, iter types.DocumentsIterator, close
 	inputDocs, err := common.ConsumeDocuments(iter, "$facet")
 	if err != nil {
 		return nil, lazyerrors.Error(err)
+	}
+	// mongod's sub-pipelines see no RecordId.
+	for _, doc := range inputDocs {
+		doc.SetRecordKey(nil)
 	}
 
 	// Build the output document.

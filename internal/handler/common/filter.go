@@ -706,6 +706,17 @@ func filterFieldOperators(doc *types.Document, filterKey, filterSuffix string, e
 			}
 		}
 
+		// A clustered collection's _id range stays within MinKey's or
+		// MaxKey's own type, as a clustered mongod scans it.
+		if filterKey != "_id" {
+			if matched, ok := minMaxKeyRange(exprKey, fieldValue, exprValue); ok {
+				if !matched {
+					return false, nil
+				}
+				continue
+			}
+		}
+
 		if !strings.HasPrefix(exprKey, "$") {
 			// An array matches if it, or one of its elements, equals expr.
 			switch fieldValue.(type) {
@@ -2174,7 +2185,7 @@ func filterFieldExprElemMatch(doc *types.Document, filterKey, filterSuffix strin
 			if !ok {
 				continue
 			}
-			matches, err = FilterDocumentColl(elemDoc, expr, cmp)
+			matches, err = filterElementDocument(elemDoc, expr, cmp)
 		}
 
 		if err != nil {
@@ -2193,6 +2204,74 @@ func filterFieldExprElemMatch(doc *types.Document, filterKey, filterSuffix strin
 // that is itself an array. As in MongoDB they test the element as a whole
 // value and do not look inside it, except $size and a nested $elemMatch,
 // which apply to arrays.
+// nestedIDKey stands for an embedded document's _id while filtering it. BSON
+// field names cannot hold a NUL byte, so it names no real field.
+const nestedIDKey = "\x00_id"
+
+// filterElementDocument filters an array element as a document. Its _id is an
+// ordinary field, so the element and filter are matched with _id renamed and
+// the clustered top-level _id rules in filterFieldExpr do not apply.
+func filterElementDocument(elem, filter *types.Document, cmp *collation.Comparator) (bool, error) {
+	if !mentionsID(filter) {
+		return FilterDocumentColl(elem, filter, cmp)
+	}
+	return FilterDocumentColl(renameID(elem), renameIDInFilter(filter), cmp)
+}
+
+func mentionsID(filter *types.Document) bool {
+	for _, k := range filter.Keys() {
+		switch k {
+		case "_id":
+			return true
+		case "$and", "$or", "$nor":
+			arr, _ := must.NotFail(filter.Get(k)).(*types.Array)
+			for i := 0; arr != nil && i < arr.Len(); i++ {
+				if sub, ok := must.NotFail(arr.Get(i)).(*types.Document); ok && mentionsID(sub) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func renameID(doc *types.Document) *types.Document {
+	out := types.MakeDocument(doc.Len())
+	for _, k := range doc.Keys() {
+		v := must.NotFail(doc.Get(k))
+		if k == "_id" {
+			k = nestedIDKey
+		}
+		out.Set(k, v)
+	}
+	return out
+}
+
+func renameIDInFilter(filter *types.Document) *types.Document {
+	out := types.MakeDocument(filter.Len())
+	for _, k := range filter.Keys() {
+		v := must.NotFail(filter.Get(k))
+		switch k {
+		case "_id":
+			k = nestedIDKey
+		case "$and", "$or", "$nor":
+			if arr, ok := v.(*types.Array); ok {
+				renamed := types.MakeArray(arr.Len())
+				for i := 0; i < arr.Len(); i++ {
+					el := must.NotFail(arr.Get(i))
+					if sub, ok := el.(*types.Document); ok {
+						el = renameIDInFilter(sub)
+					}
+					renamed.Append(el)
+				}
+				v = renamed
+			}
+		}
+		out.Set(k, v)
+	}
+	return out
+}
+
 func elemMatchArrayElement(elem *types.Array, filterKey, filterSuffix string, expr *types.Document, cmp *collation.Comparator) (bool, error) {
 	equalsElem := func(v any) bool {
 		if _, isRegex := v.(types.Regex); isRegex {
@@ -2510,4 +2589,52 @@ func textContainsWord(s, word string, caseSensitive, diacriticSensitive bool) bo
 func isWordChar(r rune) bool {
 	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' ||
 		r > 127 // include unicode characters as word chars
+}
+
+// minMaxKeyRange evaluates $gt, $gte, $lt or $lte against MinKey or MaxKey,
+// which are not type-bracketed: they bound every value, a missing field (null)
+// included. ok is false for any other operator or operand. An array matches
+// when it or any of its elements does.
+func minMaxKeyRange(op string, fieldValue, bound any) (matched, ok bool) {
+	var minKey bool
+	switch bound.(type) {
+	case types.MinKeyType:
+		minKey = true
+	case types.MaxKeyType:
+	default:
+		return false, false
+	}
+	test := func(v any) bool {
+		_, isMin := v.(types.MinKeyType)
+		_, isMax := v.(types.MaxKeyType)
+		switch {
+		case minKey && op == "$gt":
+			return !isMin
+		case minKey && op == "$gte", !minKey && op == "$lte":
+			return true
+		case minKey && op == "$lte":
+			return isMin
+		case !minKey && op == "$gte":
+			return isMax
+		case !minKey && op == "$lt":
+			return !isMax
+		}
+		return false
+	}
+	switch op {
+	case "$gt", "$gte", "$lt", "$lte":
+	default:
+		return false, false
+	}
+	if test(fieldValue) {
+		return true, true
+	}
+	if arr, isArr := fieldValue.(*types.Array); isArr {
+		for i := 0; i < arr.Len(); i++ {
+			if test(must.NotFail(arr.Get(i))) {
+				return true, true
+			}
+		}
+	}
+	return false, true
 }

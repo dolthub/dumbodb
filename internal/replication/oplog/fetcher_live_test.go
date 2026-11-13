@@ -1,3 +1,5 @@
+//go:build mongod
+
 // Copyright 2026 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -37,7 +39,7 @@ import (
 func TestLiveMongoInclusiveOplogFetch(t *testing.T) {
 	mongodBinary := os.Getenv("MONGOD_BIN")
 	if mongodBinary == "" {
-		t.Skip("set MONGOD_BIN to run the live MongoDB oplog fetch test")
+		t.Fatal("MONGOD_BIN must name a mongod binary to run the live MongoDB oplog fetch test; these tests build only with -tags mongod")
 	}
 	mongoAddress := freeOplogTestAddress(t)
 	_, mongoPort, err := net.SplitHostPort(mongoAddress)

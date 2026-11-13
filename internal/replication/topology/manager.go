@@ -144,6 +144,8 @@ type Manager struct {
 	state      Snapshot
 	onChange   func()
 	onProgress func()
+	// losses counts continuity losses marked, numbering each.
+	losses uint64
 }
 
 func New(store *control.Store) *Manager {
@@ -659,12 +661,47 @@ func (m *Manager) ResetFetchProgress() error {
 }
 
 func (m *Manager) MarkContinuityLost(tooStale bool) error {
+	_, err := m.markContinuityLost(tooStale)
+	return err
+}
+
+// MarkInterrupted marks continuity lost after a failure that broke none and
+// returns the loss's number, for ResumeSteady.
+func (m *Manager) MarkInterrupted() uint64 {
+	loss, _ := m.markContinuityLost(false)
+	return loss
+}
+
+// ResumeSteady returns a RECOVERING member to SECONDARY unless a continuity
+// loss was marked after the one numbered loss, reporting whether it did.
+func (m *Manager) ResumeSteady(loss uint64) (bool, error) {
+	if m.store.Snapshot().InitialSyncPhase != control.InitialSyncComplete {
+		return false, errors.New("member cannot become secondary before initial sync completes")
+	}
+	m.mu.Lock()
+	if m.losses != loss || m.state.State != StateRecovering {
+		m.mu.Unlock()
+		return false, nil
+	}
+	previous := cloneSnapshot(m.state)
+	m.state.State = StateSecondary
+	listener := m.changeListenerLocked(previous)
+	m.mu.Unlock()
+	if listener != nil {
+		listener()
+	}
+	return true, nil
+}
+
+func (m *Manager) markContinuityLost(tooStale bool) (uint64, error) {
 	if tooStale {
 		if err := m.store.SetInitialSyncPhase(control.InitialSyncNotStarted); err != nil {
-			return err
+			return 0, err
 		}
 	}
 	m.mu.Lock()
+	m.losses++
+	loss := m.losses
 	previous := cloneSnapshot(m.state)
 	if tooStale {
 		m.state.State = StateStartup2
@@ -676,7 +713,7 @@ func (m *Manager) MarkContinuityLost(tooStale bool) error {
 	if listener != nil {
 		listener()
 	}
-	return nil
+	return loss, nil
 }
 
 func (m *Manager) MarkSteady() error {

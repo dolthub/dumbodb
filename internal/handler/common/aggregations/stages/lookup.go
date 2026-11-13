@@ -34,6 +34,30 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
+type joinStagesKey struct{}
+
+// JoinStages describes, for fetches of a join's foreign view, the stages
+// mongod runs the view as besides the view's own, and refuses as it executes
+// when that is over the limit.
+type JoinStages struct {
+	// N is the join's own stages; 0 means no check.
+	N int
+	// ViewLimit reports that mongod refuses with ViewPipelineTooLong, as for a
+	// $lookup with only a pipeline, rather than PipelineTooLong.
+	ViewLimit bool
+}
+
+// WithJoinStages records js for fetches under ctx.
+func WithJoinStages(ctx context.Context, js JoinStages) context.Context {
+	return context.WithValue(ctx, joinStagesKey{}, js)
+}
+
+// JoinStagesOf returns the JoinStages WithJoinStages recorded.
+func JoinStagesOf(ctx context.Context) JoinStages {
+	js, _ := ctx.Value(joinStagesKey{}).(JoinStages)
+	return js
+}
+
 // CollectionFetcher reads the foreign side of $lookup and $graphLookup.
 type CollectionFetcher interface {
 	// Fetch returns the documents of collectionName that match filter (all of
@@ -222,6 +246,9 @@ func NewLookupStage(stage *types.Document, fetcher CollectionFetcher) (aggregati
 				fmt.Sprintf("$lookup 'pipeline' must be an array, got %s", types.FormatAnyValue(pipelineVal)),
 				"$lookup (stage)",
 			)
+		}
+		if err := aggregations.CheckPipelineLength(pipelineArr.Len()); err != nil {
+			return nil, err
 		}
 
 		l.pipeline = pipelineArr
@@ -416,6 +443,11 @@ func (l *lookup) Process(ctx context.Context, iter types.DocumentsIterator, clos
 	}
 
 	fetcher := withFetchCache(l.fetcher)
+	pipelineLen := 0
+	if l.pipeline != nil {
+		pipelineLen = l.pipeline.Len()
+	}
+	ctx = WithJoinStages(ctx, JoinStages{N: pipelineLen + 1, ViewLimit: l.localField == ""})
 
 	// With an index on the joined field, ask the backend for just the matching
 	// documents; without one, load the collection once and join in memory.
@@ -566,10 +598,13 @@ func (l *lookup) runPipeline(ctx context.Context, fetcher CollectionFetcher, fro
 	// do not modify documents) and copy only the survivors.
 	current := fromDocs
 	copied := false
+	// The copies keep their stored documents' RecordIds, which the
+	// sub-pipeline sees until a stage other than $match reshapes them.
 	copyCurrent := func() {
 		copies := make([]*types.Document, len(current))
 		for i, d := range current {
 			copies[i] = d.DeepCopy()
+			copies[i].SetRecordKey(d.RecordKey())
 		}
 		current = copies
 		copied = true
@@ -643,12 +678,32 @@ func (l *lookup) runPipeline(ctx context.Context, fetcher CollectionFetcher, fro
 		if err != nil {
 			return nil, lazyerrors.Error(err)
 		}
+		if substituted.Command() != "$match" {
+			for _, d := range current {
+				d.SetRecordKey(nil)
+			}
+		}
 	}
 
 	if !copied {
 		copyCurrent()
 	}
 	return current, nil
+}
+
+// LookupJoinField returns the field of a $lookup's foreign collection whose
+// index the stage probes for each joined document: the foreignField, or the
+// field of a leading $match equality in its pipeline. It is empty when the
+// stage reads the whole foreign collection.
+func LookupJoinField(spec *types.Document) string {
+	if v, _ := spec.Get("localField"); v != nil {
+		foreign, _ := spec.Get("foreignField")
+		field, _ := foreign.(string)
+		return field
+	}
+	v, _ := spec.Get("pipeline")
+	pipeline, _ := v.(*types.Array)
+	return leadingMatchEqualityField(pipeline)
 }
 
 // leadingMatchEqualityField returns the foreign field compared for equality by

@@ -73,9 +73,9 @@ func indexHolders(t *testing.T, ctx context.Context, coll *collection, name stri
 	held := lookup(value)
 	out := []int32{}
 	for _, id := range candidates {
-		h := must.NotFail(hashID(id))
+		h := must.NotFail(primaryKey(id))
 		for _, got := range held {
-			if bytes.Equal(got, h[:]) {
+			if bytes.Equal(got, h) {
 				out = append(out, id)
 				break
 			}

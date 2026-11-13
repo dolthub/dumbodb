@@ -21,6 +21,9 @@ import (
 	"math"
 	"strings"
 
+	"github.com/cockroachdb/apd/v3"
+	"go.mongodb.org/mongo-driver/v2/bson"
+
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
@@ -237,4 +240,121 @@ func SplitNamespace(ns, argument string) (string, string, error) {
 	}
 
 	return db, collection, nil
+}
+
+// CommandMaxTimeMS reads a maxTimeMS as mongod's generic command parsing does
+// for count, distinct and explain: a non-number fails, a double is truncated,
+// a Decimal128 is rounded half to even (NaN is 0), both saturate, and the
+// result is checked against [0, 2^31-1] before a double is checked for being
+// whole. An unset maxTimeMS is 0.
+func CommandMaxTimeMS(v any) (int64, error) {
+	var ms int64
+	integral := true
+	switch n := v.(type) {
+	case nil:
+		return 0, nil
+	case int32:
+		ms = int64(n)
+	case int64:
+		ms = n
+	case float64:
+		t := math.Trunc(n)
+		switch {
+		case math.IsNaN(n):
+			ms = 0
+		case t >= math.MaxInt64:
+			ms = math.MaxInt64
+		case t <= math.MinInt64:
+			ms = math.MinInt64
+		default:
+			ms = int64(t)
+		}
+		integral = !math.IsNaN(n) && t == n
+	case types.Decimal128:
+		ms = decimalRoundedInt64(n)
+	default:
+		return 0, handlererrors.NewCommandErrorMsg(handlererrors.ErrBadValue, "maxTimeMS must be a number")
+	}
+	if ms < 0 || ms > math.MaxInt32 {
+		return 0, handlererrors.NewCommandErrorMsg(handlererrors.ErrBadValue,
+			fmt.Sprintf("%d value for maxTimeMS is out of range [0, 2147483647]", ms))
+	}
+	if !integral {
+		return 0, handlererrors.NewCommandErrorMsg(handlererrors.ErrBadValue, "maxTimeMS has non-integral value")
+	}
+	return ms, nil
+}
+
+// TypedMaxTimeMS checks maxTimeMS as mongod's typed command parsers do, for
+// the command or request named field: it must be a number, and once a double
+// is truncated and a Decimal128 rounded, not negative. Null passes.
+func TypedMaxTimeMS(v any, field string) error {
+	var ms int64
+	switch n := v.(type) {
+	case nil, types.NullType:
+		return nil
+	case int32:
+		ms = int64(n)
+	case int64:
+		ms = n
+	case float64:
+		switch t := math.Trunc(n); {
+		case math.IsNaN(n):
+		case t <= math.MinInt64:
+			ms = math.MinInt64
+		case t < 0:
+			ms = int64(t)
+		}
+	case types.Decimal128:
+		ms = decimalRoundedInt64(n)
+	default:
+		return handlererrors.NewCommandErrorMsg(handlererrors.ErrTypeMismatch, fmt.Sprintf(
+			"BSON field '%s.maxTimeMS' is the wrong type '%s', expected types '[long, int, decimal, double']",
+			field, AliasFromType(v)))
+	}
+	if ms < 0 {
+		return handlererrors.NewCommandErrorMsg(handlererrors.ErrBadValue,
+			fmt.Sprintf("BSON field 'maxTimeMS' value must be >= 0, actual value '%d'", ms))
+	}
+	return nil
+}
+
+// FindMaxTimeMS reads a find's or aggregate's maxTimeMS: TypedMaxTimeMS's
+// checks for field, then CommandMaxTimeMS's. Null is not a number here.
+func FindMaxTimeMS(v any, field string) (int64, error) {
+	if _, ok := v.(types.NullType); ok {
+		return 0, handlererrors.NewCommandErrorMsg(handlererrors.ErrBadValue, "maxTimeMS must be a number")
+	}
+	if err := TypedMaxTimeMS(v, field); err != nil {
+		return 0, err
+	}
+	return CommandMaxTimeMS(v)
+}
+
+// decimalRoundedInt64 rounds d half to even into an int64, saturating, with
+// NaN as 0.
+func decimalRoundedInt64(d types.Decimal128) int64 {
+	a, _, err := apd.NewFromString(bson.NewDecimal128(d.H, d.L).String())
+	if err != nil || a.Form == apd.NaN || a.Form == apd.NaNSignaling {
+		return 0
+	}
+	if a.Form == apd.Infinite {
+		if a.Negative {
+			return math.MinInt64
+		}
+		return math.MaxInt64
+	}
+	ctx := apd.BaseContext.WithPrecision(40)
+	ctx.Rounding = apd.RoundHalfEven
+	var rounded apd.Decimal
+	if _, err := ctx.RoundToIntegralValue(&rounded, a); err != nil {
+		return 0
+	}
+	if n, err := rounded.Int64(); err == nil {
+		return n
+	}
+	if rounded.Negative {
+		return math.MinInt64
+	}
+	return math.MaxInt64
 }

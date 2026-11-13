@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/FerretDB/wire"
@@ -94,6 +95,7 @@ func (h *Handler) MsgFindAndModify(connCtx context.Context, msg *wire.OpMsg) (*w
 			if projErr != nil {
 				return nil, projErr
 			}
+			nullRecordIDFields(projection, projected)
 
 			res.value = projected
 		}
@@ -161,8 +163,17 @@ func (h *Handler) findAndModifyDocument(ctx context.Context, params *common.Find
 
 	cmp := collation.Parse(params.Collation).Comparator()
 
+	params.Hint = clusteredHint(params.Hint, recordedClusteredName(ctx, db, params.Collection))
+	if err = checkHintType(params.Hint); err != nil {
+		return nil, err
+	}
+	if err = validateHint(ctx, c, params.Hint, "findAndModify", params.Sort, params.Upsert); err != nil {
+		return nil, err
+	}
+
 	var qp backends.QueryParams
 	qp.Collated = cmp != nil
+	qp.Hint = params.Hint
 	if !h.DisablePushdown {
 		qp.Filter = params.Query
 	}
@@ -176,7 +187,12 @@ func (h *Handler) findAndModifyDocument(ctx context.Context, params *common.Find
 
 	iter := common.FilterIteratorColl(iterator.WithContext(ctx, queryRes.Iter), closer, params.Query, cmp)
 
-	iter, err = common.SortIteratorWithCollation(iter, closer, params.Sort, cmp)
+	if params.Sort.Len() > 0 {
+		iter, err = common.SortIteratorWithCollation(iter, closer, params.Sort, cmp)
+	} else {
+		// The first match is in the hinted index's order.
+		iter, err = hintedFirstMatches(ctx, c, params.Hint, params.Query, params.Collation, iter, closer, cmp)
+	}
 	if err != nil {
 		var pathErr *types.PathError
 		if errors.As(err, &pathErr) && pathErr.Code() == types.ErrPathElementEmpty {
@@ -187,7 +203,7 @@ func (h *Handler) findAndModifyDocument(ctx context.Context, params *common.Find
 			)
 		}
 
-		return nil, lazyerrors.Error(err)
+		return nil, handleMaxTimeMSError(err, params.MaxTimeMS, "findAndModify")
 	}
 
 	// findAndModify modifies a single document
@@ -303,4 +319,19 @@ func validationErrToUpdateErr(command string, ve *types.ValidationError) error {
 	}
 
 	return common.NewUpdateError(code, ve.Error(), command)
+}
+
+// nullRecordIDFields sets each top-level field projection gives as
+// {$meta: "recordId"} to null in doc: findAndModify has no RecordId to report,
+// and mongod returns null for it.
+func nullRecordIDFields(projection, doc *types.Document) {
+	for _, k := range projection.Keys() {
+		meta, ok := must.NotFail(projection.Get(k)).(*types.Document)
+		if !ok || meta.Len() != 1 || !meta.Has("$meta") || must.NotFail(meta.Get("$meta")) != "recordId" {
+			continue
+		}
+		if !doc.Has(k) && !strings.Contains(k, ".") {
+			doc.Set(k, types.Null)
+		}
+	}
 }

@@ -16,9 +16,11 @@ package types
 
 import (
 	"fmt"
-	"math"
+	"strconv"
 	"strings"
 	"time"
+
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 // FormatAnyValue formats BSON value for error message output.
@@ -32,27 +34,7 @@ func FormatAnyValue(value any) string {
 		return formatArray(value)
 
 	case float64:
-		switch {
-		case math.IsNaN(value):
-			return "nan.0"
-
-		case math.IsInf(value, -1):
-			return "-inf.0"
-		case math.IsInf(value, +1):
-			return "inf.0"
-		case value == 0 && math.Signbit(value):
-			return "-0.0"
-		case value == 0.0:
-			return "0.0"
-		case value > 1000 || value < -1000 || value == math.SmallestNonzeroFloat64:
-			return fmt.Sprintf("%.15e", value)
-		case math.Trunc(value) == value:
-			return fmt.Sprintf("%d.0", int64(value))
-		default:
-			res := fmt.Sprintf("%.2f", value)
-
-			return strings.TrimSuffix(res, "0")
-		}
+		return formatDouble(value)
 
 	case string:
 		return fmt.Sprintf(`"%v"`, value)
@@ -77,7 +59,7 @@ func FormatAnyValue(value any) string {
 	case int64:
 		return fmt.Sprintf("%d", value)
 	case Decimal128:
-		return fmt.Sprintf("Decimal128(%d, %d)", value.H, value.L)
+		return primitive.NewDecimal128(value.H, value.L).String()
 	case MinKeyType:
 		return "MinKey"
 	case MaxKeyType:
@@ -120,4 +102,23 @@ func formatArray(array *Array) string {
 	result = strings.TrimSuffix(result, ", ")
 
 	return result + " ]"
+}
+
+// formatDouble formats f as MongoDB's StringBuilder::appendDoubleNice does:
+// %.16g, then ".0" unless the text holds '.', 'E' or 'N' (so "1e+20.0",
+// "nan.0" and "inf.0").
+func formatDouble(f float64) string {
+	s := strconv.FormatFloat(f, 'g', 16, 64)
+	switch s {
+	case "NaN":
+		s = "nan"
+	case "+Inf":
+		s = "inf"
+	case "-Inf":
+		s = "-inf"
+	}
+	if !strings.ContainsAny(s, ".EN") {
+		s += ".0"
+	}
+	return s
 }

@@ -17,6 +17,7 @@ package common
 import (
 	"log/slog"
 
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -48,6 +49,17 @@ type ExplainParams struct {
 	StagesDocs []any           `dumbo:"-"`
 	Aggregate  bool            `dumbo:"-"`
 	Command    *types.Document `dumbo:"-"`
+
+	// Multi is set for an update or delete that may write more than one
+	// document.
+	Multi bool `dumbo:"-"`
+
+	// Remove is set for a findAndModify that deletes its document.
+	Remove bool `dumbo:"-"`
+
+	// StatementCollation is the collation of the update or delete statement
+	// explained, which applies when the command sets none.
+	StatementCollation *types.Document `dumbo:"-"`
 
 	// Verbosity controls what explain returns:
 	// "queryPlanner" (default), "executionStats", or "allPlansExecution".
@@ -125,27 +137,17 @@ func GetExplainParams(document *types.Document, l *slog.Logger) (*ExplainParams,
 	}
 	// update / delete carry the predicate inside the first element of the
 	// updates / deletes array as "q", not as a top-level filter.
+	// Its sort, hint and collation sit in the statement too.
+	var multi bool
+	var write, statementCollation *types.Document
 	if filter == nil {
-		var writeArrayKey string
-		switch commandName {
-		case "update":
-			writeArrayKey = "updates"
-		case "delete":
-			writeArrayKey = "deletes"
-		}
-		if writeArrayKey != "" {
-			if arrVal, _ := explain.Get(writeArrayKey); arrVal != nil {
-				if arr, ok := arrVal.(*types.Array); ok && arr.Len() > 0 {
-					if first, ferr := arr.Get(0); ferr == nil {
-						if fd, ok := first.(*types.Document); ok {
-							if q, qerr := fd.Get("q"); qerr == nil {
-								if qd, ok := q.(*types.Document); ok {
-									filter = qd
-								}
-							}
-						}
-					}
-				}
+		if write = firstWriteStatement(explain, commandName); write != nil {
+			if q, _ := write.Get("q"); q != nil {
+				filter, _ = q.(*types.Document)
+			}
+			multi = writeIsMulti(write, commandName)
+			if c, _ := write.Get("collation"); c != nil {
+				statementCollation, _ = c.(*types.Document)
 			}
 		}
 	}
@@ -153,6 +155,11 @@ func GetExplainParams(document *types.Document, l *slog.Logger) (*ExplainParams,
 	sort, err = GetOptionalParam(explain, "sort", sort)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
+	}
+	if sort == nil && write != nil {
+		if s, _ := write.Get("sort"); s != nil {
+			sort, _ = s.(*types.Document)
+		}
 	}
 
 	var projection *types.Document
@@ -171,6 +178,8 @@ func GetExplainParams(document *types.Document, l *slog.Logger) (*ExplainParams,
 	var hint any
 	if hintVal, _ := explain.Get("hint"); hintVal != nil {
 		hint = hintVal
+	} else if write != nil {
+		hint, _ = write.Get("hint")
 	}
 
 	var limit, skip int64
@@ -219,7 +228,13 @@ func GetExplainParams(document *types.Document, l *slog.Logger) (*ExplainParams,
 			)
 		}
 
+		if err := aggregations.CheckPipelineLength(pipeline.Len()); err != nil {
+			return nil, err
+		}
 		stagesDocs = must.NotFail(iterator.ConsumeValues(pipeline.Iterator()))
+		if err := aggregations.CheckExpandedPipelineLength(aggregations.ExpandedLength(stagesDocs)); err != nil {
+			return nil, err
+		}
 		for _, d := range stagesDocs {
 			if _, ok := d.(*types.Document); !ok {
 				return nil, handlererrors.NewCommandErrorMsgWithArgument(
@@ -229,6 +244,16 @@ func GetExplainParams(document *types.Document, l *slog.Logger) (*ExplainParams,
 				)
 			}
 		}
+	}
+
+	var remove bool
+	if commandName == "findAndModify" {
+		v, _ := explain.Get("remove")
+		remove, _ = v.(bool)
+	}
+
+	if err := checkExplainedUpdatePipeline(explain, commandName); err != nil {
+		return nil, err
 	}
 
 	CanonicalizeFilter(filter)
@@ -248,5 +273,57 @@ func GetExplainParams(document *types.Document, l *slog.Logger) (*ExplainParams,
 		Command:     cmd,
 		Verbosity:   verbosity,
 		Hint:        hint,
+		Multi:       multi,
+		Remove:      remove,
+
+		StatementCollation: statementCollation,
 	}, nil
+}
+
+// checkExplainedUpdatePipeline returns mongod's error for an explained update
+// or findAndModify whose pipeline-style update is over the stage limit.
+func checkExplainedUpdatePipeline(explain *types.Document, commandName string) error {
+	var update any
+	switch commandName {
+	case "update":
+		if first := firstWriteStatement(explain, commandName); first != nil {
+			update, _ = first.Get("u")
+		}
+	case "findAndModify":
+		update, _ = explain.Get("update")
+	}
+	if pipeline, ok := update.(*types.Array); ok {
+		return aggregations.CheckPipelineLength(pipeline.Len())
+	}
+	return nil
+}
+
+// firstWriteStatement returns the first statement of an update's updates or
+// a delete's deletes, which is the one explain plans.
+func firstWriteStatement(explain *types.Document, commandName string) *types.Document {
+	key := map[string]string{"update": "updates", "delete": "deletes"}[commandName]
+	if key == "" {
+		return nil
+	}
+	v, _ := explain.Get(key)
+	arr, _ := v.(*types.Array)
+	if arr == nil || arr.Len() == 0 {
+		return nil
+	}
+	v, _ = arr.Get(0)
+	first, _ := v.(*types.Document)
+	return first
+}
+
+// writeIsMulti reports whether an update with multi: true or a delete with
+// limit: 0 may write more than one document.
+func writeIsMulti(write *types.Document, commandName string) bool {
+	if commandName == "update" {
+		multi, _ := write.Get("multi")
+		b, _ := multi.(bool)
+		return b
+	}
+	limit, _ := write.Get("limit")
+	n, err := handlerparams.GetWholeNumberParam(limit)
+	return err == nil && n == 0
 }

@@ -290,8 +290,9 @@ func validateProjectionShape(projection *types.Document) (*types.Document, bool,
 					return nil, false, err
 				}
 
-				inclusionField = true
 				validated.Set(key, value)
+				// $meta is neutral: it adds a field in either mode.
+				continue
 
 			default:
 				if value.Len() == 0 {
@@ -406,6 +407,7 @@ func validateProjectionShape(projection *types.Document) (*types.Document, bool,
 // - ErrOperatorWrongLenOfArgs when the operator has an invalid number of arguments.
 // - ErrInvalidPipelineOperator when an the operator does not exist.
 func ProjectDocument(doc, projection, filter *types.Document, inclusion bool) (*types.Document, error) {
+	defer doc.ShowRecordKey()()
 	if inclusion && !hasFindProjectionOperator(projection) && operators.SpecHasComputedPath(projection, true) {
 		return operators.ProjectInclusionTree(doc, projection)
 	}
@@ -484,7 +486,7 @@ func projectID(doc, projection *types.Document) (*types.Document, error) {
 		projected.Set("_id", idValue)
 	}
 
-	projected.SetRecordID(doc.RecordID())
+	projected.CopyRecordIdentity(doc)
 
 	if projection.Has("_id") {
 		idValue := must.NotFail(projection.Get("_id"))
@@ -574,7 +576,7 @@ func projectDocumentWithoutID(doc *types.Document, projection, filter *types.Doc
 
 			case "$meta":
 				metaType := opVal.(string) //nolint:forcetypeassert // validated in ValidateProjection
-				applyMetaProjection(key, metaType, projected)
+				applyMetaProjection(key, metaType, doc, projected)
 
 			default:
 				if err = setComputed(projected, path, value, doc); err != nil {
@@ -929,15 +931,19 @@ func findFirstElemMatchElement(arr *types.Array, condition *types.Document) (any
 	return nil, false, nil
 }
 
-// applyMetaProjection sets a $meta projection value in projected.
+// applyMetaProjection sets a $meta projection value of source in projected.
 // textScore returns 0.0 (DumboDB does not support text search).
 // indexKey returns an empty document.
-func applyMetaProjection(key, metaType string, projected *types.Document) {
+func applyMetaProjection(key, metaType string, source, projected *types.Document) {
 	switch metaType {
 	case "textScore":
 		projected.Set(key, float64(0))
 	case "indexKey":
 		projected.Set(key, types.MakeDocument(0))
+	case "recordId":
+		if recordKey := source.RecordKey(); recordKey != nil {
+			projected.Set(key, types.Binary{Subtype: types.BinaryGeneric, B: recordKey})
+		}
 	}
 	// Other metadata is missing: DumboDB attaches none to documents.
 }

@@ -151,8 +151,9 @@ type QueryResult struct {
 // Filter may be ignored, or safely applied partially or entirely.
 // Extra documents will be filtered out by the handler.
 //
-// Sort should be nil, {}, or hold a single key. {"$natural": int64(1)} or
-// {"$natural": int64(-1)} must be applied. A field sort may be applied, in which
+// Sort should be nil, {}, or a PushableSort. {"$natural": int64(1)} or
+// {"$natural": int64(-1)} must be applied. A field sort (one field, or several
+// in one direction; see PushableSort) may be applied, in which
 // case the result reports Sorted; otherwise the caller sorts.
 //
 // Limit, if non-zero, should be applied.
@@ -165,7 +166,7 @@ func (cc *collectionContract) Query(ctx context.Context, params *QueryParams) (*
 	}
 
 	if params.Sort.Len() != 0 {
-		must.BeTrue(params.Sort.Len() == 1)
+		must.BeTrue(PushableSort(params.Sort))
 
 		if natural, ok := params.Sort.Map()["$natural"]; ok {
 			if sortValue := natural.(int64); sortValue != -1 && sortValue != 1 {
@@ -194,6 +195,14 @@ type CountParams struct {
 
 	// Collation is the effective operation collation, nil when simple/binary.
 	Collation *types.Document
+
+	// Stop, when positive, is skip + limit: a count reads no further keys
+	// than that, as MongoDB's COUNT stage stops pulling from its scan.
+	Stop int64
+
+	// Hint, when it names an index, limits the count to that index: the
+	// backend declines unless it would count from it anyway.
+	Hint any
 }
 
 type CountResult struct {
@@ -243,6 +252,9 @@ type ExplainParams struct {
 	Projection *types.Document
 	Limit      int64
 	Skip       int64
+	// ZeroLimit marks a limit of 0, which Limit's 0 cannot tell from none: a
+	// skip after a limit used it up, and the plan returns nothing.
+	ZeroLimit bool
 
 	// Command is the original wire command being explained ("find", "count",
 	// "distinct", "aggregate"). The backend picks a top-level explain shape
@@ -265,6 +277,21 @@ type ExplainParams struct {
 	// pattern, or a single-string value naming an index by name (the latter
 	// is left to the backend to interpret).
 	Hint any
+
+	// Multi is set for an update or delete that may write more than one
+	// document.
+	Multi bool
+
+	// Remove is set for a findAndModify that deletes its document.
+	Remove bool
+
+	// Fields names the only top-level fields the explained read returns, as
+	// QueryParams.Fields.
+	Fields []string
+
+	// CountOnly is set for a pipeline that only counts the documents Filter
+	// matches in a $group, which MongoDB plans as a GROUP over a scan.
+	CountOnly bool
 }
 
 type ExplainResult struct {
@@ -561,6 +588,9 @@ type ListIndexesResult struct {
 	Indexes []IndexInfo
 }
 
+// MaxIndexKeyFields is the most fields an index key pattern may hold.
+const MaxIndexKeyFields = 32
+
 type IndexInfo struct {
 	Name                    string
 	Key                     []IndexKeyPair
@@ -588,6 +618,11 @@ type IndexInfo struct {
 	// so count fast paths skip range filters on it. Sticky until
 	// rebuild.
 	Multikey bool
+	// MultikeyFields marks, bit i for Key[i], the fields that held an array.
+	// An index made multikey before these were recorded has
+	// MultikeyFieldsKnown false, and every field is assumed to.
+	MultikeyFields      uint64
+	MultikeyFieldsKnown bool
 
 	// MatchesPartialFilter, when non-nil, reports whether doc satisfies the partial
 	// filter expression. If nil, all documents are considered as matching (no partial
@@ -747,4 +782,29 @@ func ValidMergeMode(name string) bool {
 		return true
 	}
 	return false
+}
+
+// KeyMultikey reports whether Key[pos] may have held an array.
+func (i IndexInfo) KeyMultikey(pos int) bool {
+	if !i.Multikey {
+		return false
+	}
+	if !i.MultikeyFieldsKnown || pos >= 64 {
+		return true
+	}
+	return i.MultikeyFields&(1<<pos) != 0
+}
+
+// MarkMultikey records an entry that expanded the arrays of the fields mask
+// marks. An index that was not multikey has no other array fields, so its
+// fields are known.
+func (i *IndexInfo) MarkMultikey(mask uint64) {
+	if mask == 0 {
+		return
+	}
+	if !i.Multikey {
+		i.MultikeyFieldsKnown = true
+	}
+	i.Multikey = true
+	i.MultikeyFields |= mask
 }

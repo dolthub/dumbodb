@@ -54,7 +54,7 @@ type Delete struct {
 
 	Collation *types.Document `dumbo:"collation,opt"`
 
-	Hint string `dumbo:"hint,ignored"`
+	Hint any `dumbo:"hint,opt"`
 }
 
 func GetDeleteParams(document *types.Document, l *slog.Logger) (*DeleteParams, error) {

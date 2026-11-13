@@ -222,6 +222,7 @@ func (db *database) ListCollections(ctx context.Context, params *backends.ListCo
 			ci.MetaField = m.MetaField
 			ci.Granularity = m.Granularity
 			ci.MergeMode = m.MergeMode
+			ci.ClusteredIndexName = m.ClusteredIndexName
 		}
 		colls = append(colls, ci)
 		return nil
@@ -294,26 +295,27 @@ func (db *database) CreateCollection(ctx context.Context, params *backends.Creat
 		return err
 	}
 
-	emptyAM, err := emptyIndexAM(state.ns)
+	noIndexes, err := emptySecondaryIndexes(ctx, state.ns)
 	if err != nil {
 		return err
 	}
-	dtblHash, err := state.dtblHashForCollection(ctx, params.Name, emptyMap, emptyAM, hash.Hash{})
+	dtblHash, err := state.dtblHashForCollection(ctx, params.Name, emptyMap, noIndexes, hash.Hash{})
 	if err != nil {
 		return err
 	}
 	meta := &collMeta{
-		UUID:             collectionUUID(db.name, params.Name),
-		SourceUUID:       params.SourceUUID,
-		Validator:        params.Validator,
-		Collation:        params.Collation,
-		ValidationLevel:  params.ValidationLevel,
-		ValidationAction: params.ValidationAction,
-		IsTimeSeries:     params.IsTimeSeries,
-		TimeField:        params.TimeField,
-		MetaField:        params.MetaField,
-		Granularity:      params.Granularity,
-		MergeMode:        params.MergeMode,
+		UUID:               collectionUUID(db.name, params.Name),
+		SourceUUID:         params.SourceUUID,
+		Validator:          params.Validator,
+		Collation:          params.Collation,
+		ValidationLevel:    params.ValidationLevel,
+		ValidationAction:   params.ValidationAction,
+		IsTimeSeries:       params.IsTimeSeries,
+		TimeField:          params.TimeField,
+		MetaField:          params.MetaField,
+		Granularity:        params.Granularity,
+		MergeMode:          params.MergeMode,
+		ClusteredIndexName: params.ClusteredIndexName,
 	}
 	createAM, err := state.getOrInitBranchAM(ctx, db.rootish)
 	if err != nil {
@@ -520,6 +522,19 @@ func (db *database) CollMod(ctx context.Context, params *backends.CollModParams)
 	}
 	if params.ValidationAction != "" {
 		meta.ValidationAction = params.ValidationAction
+	}
+	// mongod stores the validation level and action once collMod sets any
+	// validation option, and drops an emptied validator.
+	if params.SetValidator || params.ValidationLevel != "" || params.ValidationAction != "" {
+		if meta.Validator.Len() == 0 {
+			meta.Validator = nil
+		}
+		if meta.ValidationLevel == "" {
+			meta.ValidationLevel = "strict"
+		}
+		if meta.ValidationAction == "" {
+			meta.ValidationAction = "error"
+		}
 	}
 	if params.MergeMode != "" {
 		meta.MergeMode = params.MergeMode

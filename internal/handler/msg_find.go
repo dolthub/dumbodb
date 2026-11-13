@@ -29,6 +29,8 @@ import (
 	"github.com/dolthub/dumbodb/internal/clientconn/cursor"
 	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/stages"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
@@ -104,11 +106,19 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 	)
 
 	if cInfo.IsView {
+		if params.ShowRecordId {
+			return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrInvalidPipelineOperator,
+				"Option showRecordId not supported in aggregation.")
+		}
 		isView = true
+		params.ProjectAsStage = true
 		viewName = cInfo.Name
 		viewOn = cInfo.ViewOn
 		viewPipeline = cInfo.ViewPipeline
 		viewCollation = cInfo.Collation
+		if err = validateViewHint(connCtx, db, &cInfo, params.Hint, "find", params.Filter.Len() > 0); err != nil {
+			return nil, err
+		}
 
 		params.Collection = cInfo.ViewOn
 		viewSourceParam := backends.ListCollectionsParams{Name: cInfo.ViewOn}
@@ -168,8 +178,24 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 
 	// A hint naming an index that does not exist is an error, matching MongoDB.
 	if !isView {
-		if err = validateHintExists(connCtx, coll, params.Hint, "find"); err != nil {
+		params.Hint = clusteredHint(params.Hint, cInfo.ClusteredIndexName)
+		if err = checkHintType(params.Hint); err != nil {
 			return nil, err
+		}
+		if err = validateHint(connCtx, coll, params.Hint, "find", params.Sort, false); err != nil {
+			return nil, err
+		}
+		if params.Sort.Len() == 0 {
+			hintCtx, hintCancel := withMaxTimeMS(connCtx, params.MaxTimeMS)
+			params.Sort, params.IndexOrderFilter, _, err = hintedIndexOrder(hintCtx, coll, params.Hint, params.Filter, params.Collation,
+				trialNumToReturn(params.Limit, params.BatchSize))
+			hintCancel()
+			if err != nil {
+				return nil, handleMaxTimeMSError(err, params.MaxTimeMS, "find")
+			}
+			// The backend reads the hinted index ascending, equal keys in _id
+			// order; sorting that stably gives mongod's index order.
+			params.SortInMemory = params.Sort != nil
 		}
 	}
 
@@ -179,6 +205,9 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 	}
 
 	ctx := connCtx
+	if params.ShowRecordId || common.MentionsRecordIDMeta(params.Projection) {
+		ctx = backends.WithRecordKeys(ctx)
+	}
 	cancel := func() {}
 
 	if params.MaxTimeMS != 0 {
@@ -205,7 +234,12 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 	var sorted bool
 	if isView {
 		viewCmp := collation.Parse(params.Collation).Comparator()
-		srcIter, err = viewSourceIterator(ctx, db, viewName, viewOn, viewPipeline, viewCmp, closer, h.DisablePushdown)
+		srcIter, err = viewSourceIterator(ctx, db, viewName, viewOn, viewPipeline, viewCmp, closer, h.DisablePushdown,
+			viewPipelineLength(findStageCount(params)))
+	} else if near, nerr := geoNearSource(ctx, coll, params.Filter, h.DisablePushdown); nerr != nil || near != nil {
+		if err = nerr; near != nil {
+			srcIter, sorted = near.Iter, true
+		}
 	} else {
 		var queryRes *backends.QueryResult
 		if queryRes, err = coll.Query(ctx, qp); err != nil {
@@ -335,7 +369,7 @@ func (h *Handler) makeFindQueryParams(ctx context.Context, params *common.FindPa
 	case params.Sort.Len() == 0 && cInfo.Capped():
 		// Capped collections default to $natural (recordID) order.
 		qp.Sort = must.NotFail(types.NewDocument("$natural", int64(1)))
-	case params.Sort.Len() == 1:
+	case backends.PushableSort(params.Sort) && !params.SortInMemory:
 		// A $natural sort is honored by the scan; a field sort may be served by
 		// walking an index, which the backend reports with QueryResult.Sorted.
 		qp.Sort = params.Sort
@@ -370,10 +404,29 @@ func (h *Handler) makeFindQueryParams(ctx context.Context, params *common.FindPa
 	return qp, nil
 }
 
+// geoNearSource reads, nearest first, the documents of a filter with $near or
+// $nearSphere from coll's geo index, or returns nil when there is none to read.
+func geoNearSource(ctx context.Context, coll backends.Collection, filter *types.Document, disablePushdown bool) (*backends.GeoNearResult, error) {
+	geoSort := common.FindGeoSortKey(filter)
+	scanner, ok := coll.(backends.GeoNearScanner)
+	if geoSort == nil || !ok || disablePushdown {
+		return nil, nil
+	}
+	return scanner.GeoNear(ctx, &backends.GeoNearParams{
+		Field:       geoSort.Field,
+		X:           geoSort.Lon,
+		Y:           geoSort.Lat,
+		Spherical:   geoSort.Spherical,
+		MaxDistance: geoSort.MaxDistance,
+		Distance:    geoSort.Distance,
+	})
+}
+
 // makeFindIter builds the find iterator chain. All iterators, including the
 // initial one, are added to the passed closer, and the returned iterator is
 // wrapped with it. sorted reports that iter already yields params.Sort order,
-// so no blocking sort is needed and a limit stops reading early.
+// or for a $near filter distance order, so no blocking sort is needed and a
+// limit stops reading early.
 //
 //nolint:lll // for readability
 func (h *Handler) makeFindIter(iter types.DocumentsIterator, closer *iterator.MultiCloser, params *common.FindParams, sorted bool) (types.DocumentsIterator, error) {
@@ -395,7 +448,11 @@ func (h *Handler) makeFindIter(iter types.DocumentsIterator, closer *iterator.Mu
 	// Otherwise use the regular sort (with collation-aware comparison if needed).
 	var sortErr error
 	if geoSort := common.FindGeoSortKey(filterDoc); geoSort != nil {
-		iter, sortErr = common.GeoDistanceSortIterator(iter, closer, geoSort)
+		if !sorted {
+			iter, sortErr = common.GeoDistanceSortIterator(iter, closer, geoSort)
+		}
+	} else if !sorted && params.SortInMemory {
+		iter, sortErr = common.SortIteratorInIndexOrder(iter, closer, params.Sort, params.IndexOrderFilter, cmp)
 	} else if !sorted {
 		iter, sortErr = common.SortIteratorWithCollation(iter, closer, params.Sort, cmp)
 	}
@@ -430,12 +487,38 @@ func (h *Handler) makeFindIter(iter types.DocumentsIterator, closer *iterator.Mu
 	}
 
 	var err error
-	if iter, err = common.ProjectionIterator(iter, closer, params.Projection, params.Filter); err != nil {
+	if params.ProjectAsStage && onlyMetaProjection(params.Projection) {
+		var project aggregations.Stage
+		if project, err = stages.NewStage(must.NotFail(types.NewDocument("$project", params.Projection))); err == nil {
+			iter, err = project.Process(context.Background(), iter, closer)
+		}
+	} else {
+		iter, err = common.ProjectionIterator(iter, closer, params.Projection, params.Filter)
+	}
+	if err != nil {
 		closer.Close()
 		return nil, lazyerrors.Error(err)
 	}
 
 	return iterator.WithClose(iter, closer.Close), nil
+}
+
+// onlyMetaProjection reports whether projection gives only $meta fields and
+// perhaps an _id flag: a find keeps every other field, but the $project mongod
+// runs a find on a view as includes only these.
+func onlyMetaProjection(projection *types.Document) bool {
+	metas := 0
+	for _, k := range projection.Keys() {
+		v := must.NotFail(projection.Get(k))
+		if d, ok := v.(*types.Document); ok && d.Len() == 1 && d.Has("$meta") {
+			metas++
+			continue
+		}
+		if k != "_id" {
+			return false
+		}
+	}
+	return metas > 0
 }
 
 // buildReturnKeyProjection projects only the hint's index key fields, _id excluded.
@@ -573,6 +656,19 @@ var executorWrapSkip = map[handlererrors.ErrorCode]bool{
 	// validation error MongoDB reports at parse time, bare, rather than
 	// wrapped in "Executor error during find command".
 	handlererrors.ErrTypeMismatch: true,
+}
+
+// trialNumToReturn is the results a find's plan trial stops at: its limit or
+// batch size when smaller than mongod's default.
+func trialNumToReturn(limit, batchSize int64) int {
+	n := int64(common.TrialMaxAdvanced)
+	if limit != 0 {
+		n = min(n, max(limit, -limit))
+	}
+	if batchSize > 0 {
+		n = min(n, batchSize)
+	}
+	return int(n)
 }
 
 // withMaxTimeMS bounds ctx by maxTimeMS, if it is set.

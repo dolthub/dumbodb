@@ -88,6 +88,17 @@ func (h *Handler) MsgDelete(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 	var deleted int32
 	writeErrors := types.MakeArray(0)
 
+	clusteredName := recordedClusteredName(connCtx, db, params.Collection)
+	for i := range params.Deletes {
+		params.Deletes[i].Hint = clusteredHint(params.Deletes[i].Hint, clusteredName)
+	}
+	// mongod refuses a hint of the wrong type for the whole command.
+	for _, p := range params.Deletes {
+		if err = checkHintType(p.Hint); err != nil {
+			return nil, err
+		}
+	}
+
 	for i, p := range params.Deletes {
 		p.Collation = h.effectiveCollation(connCtx, db, params.Collection, p.Collation)
 		var d int32
@@ -148,8 +159,13 @@ func (h *Handler) execDelete(ctx context.Context, c backends.Collection, p *comm
 		return 0, err
 	}
 
+	if err := validateHint(ctx, c, p.Hint, "delete", nil, false); err != nil {
+		return 0, err
+	}
+
 	var qp backends.QueryParams
 	qp.Collated = cmp != nil
+	qp.Hint = p.Hint
 	if !h.DisablePushdown {
 		qp.Filter = p.Filter
 	}
@@ -159,6 +175,15 @@ func (h *Handler) execDelete(ctx context.Context, c backends.Collection, p *comm
 		return 0, lazyerrors.Error(err)
 	}
 	q.Iter = iterator.WithContext(ctx, q.Iter)
+	if p.Limited {
+		// The one document deleted is the first match in the hinted index's
+		// order.
+		closer := iterator.NewMultiCloser(q.Iter)
+		defer closer.Close()
+		if q.Iter, err = hintedFirstMatches(ctx, c, p.Hint, p.Filter, p.Collation, q.Iter, closer, cmp); err != nil {
+			return 0, err
+		}
+	}
 
 	var ids []any
 	for {

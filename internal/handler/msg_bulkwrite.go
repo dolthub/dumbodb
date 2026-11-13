@@ -55,8 +55,8 @@ func (h *Handler) MsgBulkWrite(connCtx context.Context, msg *wire.OpMsg) (*wire.
 	dbName, _ := document.Get("$db")
 	if s, _ := dbName.(string); s != "admin" {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrOperationFailed,
-			"bulkWrite may only be run against the admin database",
+			handlererrors.ErrUnauthorized,
+			"bulkWrite may only be run against the admin database.",
 			"bulkWrite",
 		)
 	}

@@ -76,12 +76,34 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 			params.FieldMutations = pendingMutations
 		}
 		if _, err := c.UpdateAll(ctx, params); err != nil {
-			return lazyerrors.Error(err)
+			if len(pending) == 1 {
+				return lazyerrors.Error(err)
+			}
+			// A document that fails the write, as on a duplicate key, keeps
+			// the ones before it written, as mongod writes one at a time.
+			for i, doc := range pending {
+				one := &backends.UpdateAllParams{Docs: []*types.Document{doc}}
+				if params.FieldMutations != nil {
+					one.FieldMutations = pendingMutations[i : i+1]
+				}
+				if _, err := c.UpdateAll(ctx, one); err != nil {
+					return lazyerrors.Error(err)
+				}
+			}
 		}
 		result.Modified.Count += int32(len(pending))
 		pending = nil
 		pendingMutations = nil
 		return nil
+	}
+
+	// failAfterWrites writes the documents already updated, which a
+	// statement failing partway keeps on mongod, and returns err.
+	failAfterWrites := func(err error) (*UpdateResult, error) {
+		if ferr := flushPending(); ferr != nil {
+			return nil, ferr
+		}
+		return nil, err
 	}
 
 	for {
@@ -100,7 +122,7 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 
 			if !upsert {
 				if err := flushPending(); err != nil {
-					return nil, err
+					return failAfterWrites(err)
 				}
 				return result, nil
 			}
@@ -108,7 +130,7 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 
 		if upsert {
 			if err = processFilterEqualityCondition(doc, param.Filter); err != nil {
-				return nil, lazyerrors.Error(err)
+				return failAfterWrites(lazyerrors.Error(err))
 			}
 		} else {
 			result.Matched.Count++
@@ -143,7 +165,7 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 		}
 
 		if err != nil {
-			return nil, lazyerrors.Error(err)
+			return failAfterWrites(lazyerrors.Error(err))
 		}
 
 		if !doc.Has("_id") {
@@ -151,12 +173,12 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 		}
 
 		if err = doc.ValidateData(); err != nil {
-			return nil, lazyerrors.Error(err)
+			return failAfterWrites(lazyerrors.Error(err))
 		}
 
 		if upsert || param.IsPipeline || !param.HasUpdateOperators {
 			if err = types.ValidateReplacementID(must.NotFail(doc.Get("_id"))); err != nil {
-				return nil, lazyerrors.Error(err)
+				return failAfterWrites(lazyerrors.Error(err))
 			}
 		}
 
@@ -165,23 +187,23 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 			if !upsert && param.ValidationLevel == "moderate" {
 				preOK, verr := FilterDocument(preImage, param.Validator)
 				if verr != nil {
-					return nil, lazyerrors.Error(verr)
+					return failAfterWrites(lazyerrors.Error(verr))
 				}
 				mustValidate = preOK
 			}
 			if mustValidate {
 				ok, verr := FilterDocument(doc, param.Validator)
 				if verr != nil {
-					return nil, lazyerrors.Error(verr)
+					return failAfterWrites(lazyerrors.Error(verr))
 				}
 				if !ok {
 					if param.ValidationAction == "warn" {
 						result.WarnAllowed++
 					} else {
 						if err := flushPending(); err != nil {
-							return nil, err
+							return failAfterWrites(err)
 						}
-						return nil, NewUpdateError(handlererrors.ErrDocumentValidationFailure, "Document failed validation", cmd)
+						return failAfterWrites(NewUpdateError(handlererrors.ErrDocumentValidationFailure, "Document failed validation", cmd))
 					}
 				}
 			}
@@ -192,11 +214,11 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 			// but any pending updates must land first so their modified
 			// count is reflected before the caller sees the upsert result.
 			if err := flushPending(); err != nil {
-				return nil, err
+				return failAfterWrites(err)
 			}
 			_, err = c.InsertAll(ctx, &backends.InsertAllParams{Docs: []*types.Document{doc}})
 			if err != nil {
-				return nil, lazyerrors.Error(err)
+				return failAfterWrites(lazyerrors.Error(err))
 			}
 			result.Upserted.Doc = doc
 
@@ -275,8 +297,11 @@ func RegisterUpdatePipelineParser(parse func(pipeline *types.Array) ([]aggregati
 }
 
 // ParseUpdatePipeline returns the stages of a pipeline-style update, or the
-// parse error MongoDB raises for it.
+// parse error MongoDB raises for it, a pipeline over the stage limit included.
 func ParseUpdatePipeline(pipeline *types.Array) ([]aggregations.Stage, error) {
+	if err := aggregations.CheckPipelineLength(pipeline.Len()); err != nil {
+		return nil, err
+	}
 	return parseUpdatePipeline(pipeline)
 }
 
@@ -415,6 +440,10 @@ func evaluateReplaceDocTemplate(templateDoc *types.Document, doc *types.Document
 // original _id.
 // Returns true if the document is changed. Returns error when _id is attempted to be changed.
 func processReplacementDoc(command string, doc, update *types.Document) (bool, error) {
+	if err := replacementDollarField(command, update); err != nil {
+		return false, err
+	}
+
 	if types.Compare(doc, update) == types.Equal {
 		return false, nil
 	}
@@ -1499,9 +1528,14 @@ func checkPullQueryFeatures(query *types.Document) error {
 // Returns false when no update operators are found. Returns an error when the document contains
 // unsupported operators or when there is a mix of operators and non-$-prefixed fields.
 func HasSupportedUpdateModifiers(command string, update *types.Document) (bool, error) {
-	var updateOps int
+	keys := update.Keys()
+	// A first field without $ makes a replacement, whose $-prefixed fields
+	// fail only when it is applied (replacementDollarField).
+	if len(keys) == 0 || !strings.HasPrefix(keys[0], "$") {
+		return false, nil
+	}
 
-	for _, operator := range update.Keys() {
+	for _, operator := range keys {
 		switch operator {
 		case // field update operators:
 			"$currentDate",
@@ -1512,33 +1546,41 @@ func HasSupportedUpdateModifiers(command string, update *types.Document) (bool, 
 
 			// array update operators:
 			"$pop", "$push", "$addToSet", "$pullAll", "$pull":
-			updateOps++
 		default:
-			if strings.HasPrefix(operator, "$") {
-				return false, NewUpdateError(
-					handlererrors.ErrFailedToParse,
-					fmt.Sprintf(
-						"Unknown modifier: %s. Expected a valid update modifier or pipeline-style "+
-							"update specified as an array", operator,
-					),
-					command,
-				)
-			}
-
-			// In case the operator doesn't start with $, treat the update as a replacement document
+			return false, NewUpdateError(
+				handlererrors.ErrFailedToParse,
+				fmt.Sprintf(
+					"Unknown modifier: %s. Expected a valid update modifier or pipeline-style "+
+						"update specified as an array", operator,
+				),
+				command,
+			)
 		}
 	}
 
-	if updateOps > 0 && updateOps != update.Len() {
-		// update contains a mix of non-$-prefixed fields (replacement document) and operators
-		return false, NewUpdateError(
-			handlererrors.ErrDollarPrefixedFieldName,
-			"The dollar ($) prefixed field is not allowed in the context of an update's replacement document.",
-			command,
-		)
-	}
+	return true, nil
+}
 
-	return (updateOps > 0), nil
+// replacementDollarField returns mongod's error for a replacement document
+// holding a top-level $-prefixed field, raised when it is applied.
+func replacementDollarField(command string, update *types.Document) error {
+	for _, key := range update.Keys() {
+		if !strings.HasPrefix(key, "$") {
+			continue
+		}
+		msg := fmt.Sprintf(
+			"The dollar ($) prefixed field '%s' in '%s' is not allowed in the context of an update's replacement document. "+
+				"Consider using an aggregation pipeline with $replaceWith.", key, key,
+		)
+		switch strings.ToLower(command) {
+		case "findandmodify":
+			msg = "Plan executor error during findAndModify :: caused by :: " + msg
+		case "bulkwrite":
+			msg = "Plan executor error during update :: caused by :: " + msg
+		}
+		return NewUpdateError(handlererrors.ErrDollarPrefixedFieldName, msg, command)
+	}
+	return nil
 }
 
 // NewUpdateError returns CommandError for findAndModify command, WriteError for other commands.
@@ -1558,6 +1600,9 @@ func validateOperatorKeys(command string, docs ...*types.Document) error {
 
 	for _, doc := range docs {
 		for _, key := range doc.Keys() {
+			if key == "" {
+				return NewUpdateError(handlererrors.ErrEmptyName, "An empty update path is not valid.", command)
+			}
 			nextPath, err := types.NewPathFromString(key)
 			if err != nil {
 				return NewUpdateError(

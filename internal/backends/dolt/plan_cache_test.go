@@ -308,3 +308,12 @@ func TestPlanCacheStatsAndClear(t *testing.T) {
 		t.Fatalf("stats on a missing collection: %v", err)
 	}
 }
+
+func TestIndexFingerprintTracksMultikeyFields(t *testing.T) {
+	idx := backends.IndexInfo{Name: "a_b", Key: []backends.IndexKeyPair{{Field: "a"}, {Field: "b"}}, Multikey: true, MultikeyFieldsKnown: true}
+	first, second := idx, idx
+	first.MultikeyFields, second.MultikeyFields = 1, 2
+	if indexFingerprint([]backends.IndexInfo{first}) == indexFingerprint([]backends.IndexInfo{second}) {
+		t.Fatal("indexes multikey on different fields share a fingerprint")
+	}
+}

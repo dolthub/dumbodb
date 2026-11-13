@@ -47,15 +47,17 @@ const (
 	bsonTypeMaxKey   byte = 0x7F
 )
 
-// buildBSONFieldPredicate returns a sound predicate for (field, value),
-// or nil when no sound predicate can be expressed (dotted paths, regex,
-// $in/$nin/$ne, NaN/Inf, decimal128, ...). Supported: scalar equality on
-// numeric/string/bool/time/ObjectID, numeric range via $gt/$gte/$lt/$lte,
-// and top-level array containment of a scalar.
 // scanPredicate reports whether a stored document may match, given all of it
 // or, when not complete, a prefix of it.
 type scanPredicate func(stored []byte, complete bool) bool
 
+// buildBSONFieldPredicate returns a sound predicate for (field, value),
+// or nil when no sound predicate can be expressed (dotted paths, regex,
+// $in/$nin/$ne, a Decimal128 or null literal, ...). Supported: scalar equality
+// on numeric (NaN and infinities included)/string/bool/time/ObjectID, numeric
+// range via $gt/$gte/$lt/$lte, and top-level array containment of a scalar. A
+// numeric predicate passes any stored value it cannot rule out to the full
+// filter (numericMayMatch).
 func buildBSONFieldPredicate(field string, value any) scanPredicate {
 	if opDoc, ok := value.(*types.Document); ok {
 		return buildBSONNumericRangePredicate(field, opDoc)
@@ -283,20 +285,18 @@ func bsonValueEqualsOrContains(typeByte byte, valueBytes []byte, target any) boo
 func scalarMatch(typeByte byte, valueBytes []byte, target any) bool {
 	switch t := target.(type) {
 	case int32:
-		f, ok := bsonNumericAsFloat(typeByte, valueBytes)
-		return ok && f == float64(t)
-	case int64:
-		f, ok := bsonNumericAsFloat(typeByte, valueBytes)
-		return ok && f == float64(t)
-	case float64:
-		f, ok := bsonNumericAsFloat(typeByte, valueBytes)
-		if !ok {
-			return false
+		// The common case, decided without converting to a double.
+		switch {
+		case typeByte == bsonTypeInt32 && len(valueBytes) >= 4:
+			return int32(binary.LittleEndian.Uint32(valueBytes)) == t
+		case typeByte == bsonTypeInt64 && len(valueBytes) >= 8:
+			return int64(binary.LittleEndian.Uint64(valueBytes)) == int64(t)
+		case typeByte == bsonTypeDouble && len(valueBytes) >= 8:
+			return math.Float64frombits(binary.LittleEndian.Uint64(valueBytes)) == float64(t)
 		}
-		if math.IsNaN(t) || math.IsNaN(f) {
-			return false
-		}
-		return f == t
+		return numericMayMatch(typeByte, valueBytes, t)
+	case int64, float64:
+		return numericMayMatch(typeByte, valueBytes, t)
 	case string:
 		if typeByte != bsonTypeString {
 			return false
@@ -329,6 +329,40 @@ func scalarMatch(typeByte byte, valueBytes []byte, target any) bool {
 	return false
 }
 
+// numericMayMatch reports whether a stored value may equal target, a number:
+// false only when it is certainly a different value. NaN equals NaN, as in
+// MongoDB's equality. A stored decimal, or a long that no double holds exactly,
+// is left to the full filter.
+func numericMayMatch(typeByte byte, valueBytes []byte, target any) bool {
+	switch typeByte {
+	case bsonTypeDecimal:
+		return true
+	case bsonTypeInt64:
+		if n, ok := target.(int64); ok && len(valueBytes) >= 8 {
+			return int64(binary.LittleEndian.Uint64(valueBytes)) == n
+		}
+	}
+	f, ok := bsonNumericAsFloat(typeByte, valueBytes)
+	if !ok {
+		return typeByte == bsonTypeInt64
+	}
+	switch t := target.(type) {
+	case int32:
+		return f == float64(t)
+	case int64:
+		if float64(t) >= 0x1p63 || int64(float64(t)) != t {
+			return true
+		}
+		return f == float64(t)
+	case float64:
+		if math.IsNaN(t) {
+			return math.IsNaN(f)
+		}
+		return f == t
+	}
+	return false
+}
+
 // bsonNumericAsFloat returns ok=false for int64 values outside the
 // float64-exact range so the predicate falls back to permissive.
 func bsonNumericAsFloat(typeByte byte, valueBytes []byte) (float64, bool) {
@@ -344,7 +378,7 @@ func bsonNumericAsFloat(typeByte byte, valueBytes []byte) (float64, bool) {
 		}
 		n := int64(binary.LittleEndian.Uint64(valueBytes))
 		f := float64(n)
-		if int64(f) != n {
+		if f >= 0x1p63 || int64(f) != n {
 			return 0, false
 		}
 		return f, true

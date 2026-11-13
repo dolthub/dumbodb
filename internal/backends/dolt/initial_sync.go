@@ -46,9 +46,11 @@ func (b *Backend) ResetInitialSyncData(ctx context.Context) error {
 		if state == nil {
 			continue
 		}
-		state.mu.Lock()
-		initialCommit, err := initialCommitHash(ctx, state)
-		state.mu.Unlock()
+		initialCommit, err := func() (hash.Hash, error) {
+			state.mu.Lock()
+			defer state.mu.Unlock()
+			return initialCommitHash(ctx, state)
+		}()
 		if err != nil {
 			return fmt.Errorf("finding %s initial commit: %w", entry.Name(), err)
 		}

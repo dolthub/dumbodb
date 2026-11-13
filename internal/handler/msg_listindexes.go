@@ -63,9 +63,16 @@ func (h *Handler) MsgListIndexes(connCtx context.Context, msg *wire.OpMsg) (*wir
 		return nil, lazyerrors.Error(err)
 	}
 
-	if info, verr := lookupCollectionInfo(connCtx, db, collection); verr == nil && info != nil && info.IsView {
+	info, verr := lookupCollectionInfo(connCtx, db, collection)
+	if verr == nil && info != nil && info.IsView {
 		msg := fmt.Sprintf("Namespace %s.%s is a view, not a collection", dbName, collection)
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCommandNotSupportedOnView, msg, document.Command())
+	}
+	// A time-series collection has no _id index of its own.
+	timeSeries := verr == nil && info != nil && info.IsTimeSeries
+	clusteredName := backends.DefaultIndexName
+	if verr == nil && info != nil {
+		clusteredName = clusteredIndexName(info.ClusteredIndexName)
 	}
 
 	c, err := db.Collection(collection)
@@ -91,6 +98,9 @@ func (h *Handler) MsgListIndexes(connCtx context.Context, msg *wire.OpMsg) (*wir
 	firstBatch := types.MakeArray(len(res.Indexes))
 
 	for _, index := range res.Indexes {
+		if timeSeries && index.Name == backends.DefaultIndexName {
+			continue
+		}
 		indexKey := must.NotFail(types.NewDocument())
 
 		for _, key := range index.Key {
@@ -121,6 +131,13 @@ func (h *Handler) MsgListIndexes(connCtx context.Context, msg *wire.OpMsg) (*wir
 		// only non-default unique indexes should have unique field in the response
 		if index.Unique && index.Name != backends.DefaultIndexName {
 			indexDoc.Set("unique", index.Unique)
+		}
+
+		// The _id index is the clustered index every collection is stored by.
+		if index.Name == backends.DefaultIndexName {
+			indexDoc.Set("name", clusteredName)
+			indexDoc.Set("unique", true)
+			indexDoc.Set("clustered", true)
 		}
 
 		// sparse is reported only when set, matching MongoDB

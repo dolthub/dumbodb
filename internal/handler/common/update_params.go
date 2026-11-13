@@ -35,7 +35,7 @@ type UpdateParams struct {
 
 	Let *types.Document `dumbo:"let,unimplemented"`
 
-	Ordered                  bool            `dumbo:"ordered,ignored"`
+	Ordered                  bool            `dumbo:"ordered,opt"`
 	BypassDocumentValidation bool            `dumbo:"bypassDocumentValidation,opt"`
 	BypassEmptyTsReplacement bool            `dumbo:"bypassEmptyTsReplacement,ignored"`
 	WriteConcern             *types.Document `dumbo:"writeConcern,opt"`
@@ -65,6 +65,9 @@ type Update struct {
 	PipelineStages     []aggregations.Stage `dumbo:"-"`
 	HasUpdateOperators bool                 `dumbo:"-"`
 	IsPipeline         bool                 `dumbo:"-"`
+	// InvalidUpdate is the statement's update document error, which mongod
+	// reports at the statement rather than failing the batch.
+	InvalidUpdate error `dumbo:"-"`
 
 	// Validator is nil when no active validator applies (absent, or
 	// validationLevel "off"). ValidationLevel is "strict" or "moderate";
@@ -77,7 +80,7 @@ type Update struct {
 	Collation    *types.Document `dumbo:"collation,opt"`
 	ArrayFilters *types.Array    `dumbo:"arrayFilters,opt"`
 
-	Hint string `dumbo:"hint,ignored"`
+	Hint any `dumbo:"hint,opt"`
 }
 
 // UpdateResult is the result type returned from common.UpdateDocument.
@@ -104,7 +107,7 @@ type UpdateResult struct {
 }
 
 func GetUpdateParams(document *types.Document, l *slog.Logger) (*UpdateParams, error) {
-	var params UpdateParams
+	params := UpdateParams{Ordered: true}
 
 	err := handlerparams.ExtractParams(document, "update", &params, l)
 	if err != nil {
@@ -124,18 +127,15 @@ func GetUpdateParams(document *types.Document, l *slog.Logger) (*UpdateParams, e
 				update.Update = u
 
 				hasUpdateOperators, err := HasSupportedUpdateModifiers("update", u)
-				if err != nil {
-					return nil, err
-				}
-
-				if hasUpdateOperators {
+				switch {
+				case err != nil:
+					update.InvalidUpdate = err
+				case hasUpdateOperators:
 					update.HasUpdateOperators = true
 
-					if err := ValidateUpdateOperators(document.Command(), u); err != nil {
-						return nil, err
-					}
-				} else if update.Multi {
-					return nil, NewUpdateError(
+					update.InvalidUpdate = ValidateUpdateOperators(document.Command(), u)
+				case update.Multi:
+					update.InvalidUpdate = NewUpdateError(
 						handlererrors.ErrFailedToParse,
 						"multi update is not supported for replacement-style update",
 						"update",

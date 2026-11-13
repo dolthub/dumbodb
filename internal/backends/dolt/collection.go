@@ -18,12 +18,12 @@ import (
 	"bytes"
 	"cmp"
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"math"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/dolthub/dolt/go/store/hash"
@@ -97,50 +97,91 @@ func (c *collection) getMap(ctx context.Context) (prolly.Map, bool, *dbState, er
 }
 
 func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*backends.QueryResult, error) {
+	res, _, err := c.query(ctx, params)
+	return res, err
+}
+
+// query is Query, also returning the stage tree of the scan that serves
+// params, as explain shows it.
+func (c *collection) query(ctx context.Context, params *backends.QueryParams) (*backends.QueryResult, *explainStage, error) {
 	m, exists, state, err := c.getMap(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	if !exists {
 		return &backends.QueryResult{
 			Iter: newEmptyIter(),
-		}, nil
+		}, collscanStage(), nil
+	}
+	if params != nil && filterNeverMatches(params.Filter) {
+		return &backends.QueryResult{Iter: newEmptyIter()}, &explainStage{stage: "EOF"}, nil
 	}
 
 	// A {$natural: ...} hint forces a collection scan: skip both the secondary
 	// index lookup and the _id point lookup below.
 	naturalHint := params != nil && backends.HintIsNatural(params.Hint)
 
-	sparseHint, err := c.hintedSparseIndex(ctx, state, params)
+	memberHint, err := c.hintedMemberIndex(ctx, state, params)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if sparseHint != nil && !sparseHint.Lossy {
-		docs, err := c.sparseMembers(ctx, state, m, *sparseHint, params.Fields)
+	if memberHint != nil && !memberHint.Lossy {
+		iter, err := c.indexMembers(ctx, state, m, *memberHint, params.Fields)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		return &backends.QueryResult{Iter: newSliceIter(docs)}, nil
+		return &backends.QueryResult{Iter: iter}, fetchStage(ixscanStage(*memberHint)), nil
 	}
-	if sparseHint != nil {
-		res, err := c.queryUnhintedSparse(ctx, params)
+	if memberHint != nil {
+		res, err := c.queryUnhintedMembers(ctx, params)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		res.Iter = newSparseMemberIter(res.Iter, *sparseHint)
-		return res, nil
+		res.Iter = newIndexMemberIter(res.Iter, *memberHint)
+		return res, fetchStage(ixscanStage(*memberHint)), nil
 	}
 
-	fieldSort := params != nil && sortIsSingleField(params.Sort)
+	// An _id equality is one primary-key read, cheaper than any index range,
+	// so without a hint it is tried first, as MongoDB prefers _id_.
+	if !naturalHint && params != nil && params.Hint == nil && !params.Collated && params.Filter != nil {
+		// mongod reads {_id: {$eq: null}} as a range of the clustered index,
+		// not an express point lookup.
+		if idVal, ok := simpleIDEquality(params.Filter); ok && idVal != types.Null {
+			if params.Filter.Len() == 1 {
+				if iter, err := pointLookupByID(ctx, state.ns, m, idVal, params.OnlyRecordIDs); err == nil {
+					return &backends.QueryResult{Iter: iter}, idPointStage(), nil
+				}
+			} else if res, ok, err := clusteredQuery(ctx, state, m, params); err != nil || ok {
+				return res, clusteredStage(), err
+			}
+		}
+	}
+
+	fieldSort := params != nil && sortIsFieldSort(params.Sort)
+	var idxInfos []backends.IndexInfo
+
+	// A sort on several fields that no index's keys yield is sorted in
+	// memory over the filter's own plan, as mongod does, rather than giving
+	// up the filter's index for a walk that cannot serve the sort.
+	if fieldSort && params.Sort.Len() > 1 && !naturalHint {
+		infos, _, err := resolveIndexesLocked(ctx, c, state)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !anyIndexYieldsSort(infos, params.Sort) {
+			unsorted := *params
+			unsorted.Sort = nil
+			return c.query(ctx, &unsorted)
+		}
+	}
 
 	if !naturalHint && params != nil && params.Filter != nil && (params.Sort.Len() == 0 || fieldSort) &&
-		(!params.Collated || params.Collation != nil) {
-		state.mu.RLock()
-		idxInfos, idxMaps, err := resolveIndexes(ctx, c, state)
-		state.mu.RUnlock()
+		(!params.Collated || params.Collation != nil) && !idSortedMinMaxKeyRead(params) {
+		var idxMaps []prolly.Map
+		idxInfos, idxMaps, err = resolveIndexesLocked(ctx, c, state)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		var cacheKey string
@@ -153,15 +194,17 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 		if hit && cached.walkIndex != "" {
 			walk, ok, err := c.trySortWalk(ctx, state, m, params)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			if ok && walk.index == cached.walkIndex {
 				iter, run, err := runWalkWithin(walk, params, cached.budget(params))
 				if err != nil {
-					return nil, err
+					return nil, nil, err
 				}
 				if run == walkReachedTarget {
-					return &backends.QueryResult{Iter: iter, Sorted: true}, nil
+					stage := walkStage(idxInfos, walk.index)
+					stage.subplan = loneOrPlannedPerBranch(params.Filter)
+					return &backends.QueryResult{Iter: iter, Sorted: true}, stage, nil
 				}
 			} else if ok {
 				walk.Close()
@@ -171,34 +214,43 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 		}
 
 		if fieldSort {
-			iter, ok, err := tryStreamSortedRange(ctx, state, m, idxInfos, idxMaps, params)
+			iter, scan, ok, err := tryStreamMergedRanges(ctx, state, m, idxInfos, idxMaps, params)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			if ok {
-				return &backends.QueryResult{Iter: iter, Sorted: true}, nil
+				return &backends.QueryResult{Iter: iter, Sorted: true}, scan, nil
+			}
+		}
+		if fieldSort {
+			iter, info, ok, err := tryStreamSortedRange(ctx, state, m, idxInfos, idxMaps, params)
+			if err != nil {
+				return nil, nil, err
+			}
+			if ok {
+				return &backends.QueryResult{Iter: iter, Sorted: true}, fetchStage(ixscanStage(info)), nil
 			}
 		}
 
 		var plan *indexLookupPlan
 		if !fieldSort {
-			iter, ok, err := streamIndexRanges(ctx, state, m, idxInfos, idxMaps, params)
+			iter, info, ok, err := streamIndexRanges(ctx, state, m, idxInfos, idxMaps, params)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			if ok {
-				return &backends.QueryResult{Iter: iter}, nil
+				return &backends.QueryResult{Iter: iter}, fetchStage(ixscanStage(info)), nil
 			}
 		}
 		// The stream has already sized and declined any filter without $or.
 		if fieldSort || params.Filter.Has("$or") {
-			if plan, err = planIndexLookupIn(ctx, m, idxInfos, idxMaps, params.Filter, params.Hint, params.Collation, fieldSort); err != nil {
-				return nil, err
+			if plan, err = planIndexLookupIn(ctx, state.ns, m, idxInfos, idxMaps, params.Filter, params.Hint, params.Collation, fieldSort); err != nil {
+				return nil, nil, err
 			}
 		}
 		if plan != nil {
 			if reverse, ok := indexScanSortOrder(plan.info, params.Filter, params.Sort, params.Collation); fieldSort && !plan.union && ok {
-				return &backends.QueryResult{Iter: plan.sortedIter(ctx, state, m, params.Sort, reverse, params.Fields), Sorted: true}, nil
+				return &backends.QueryResult{Iter: plan.sortedIter(ctx, state, m, params.Sort, reverse, params.Fields), Sorted: true}, plan.stage(), nil
 			}
 			if hit && filterPlanWorks(plan, params) > cached.budget(params) {
 				c.db.backend.planCache.evict(cacheKey)
@@ -207,12 +259,21 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 			if fieldSort && !hit {
 				iter, outcome, err := c.trySortWalkTrial(ctx, state, m, params, plan)
 				if err != nil {
-					return nil, err
+					return nil, nil, err
 				}
 				switch outcome {
 				case trialWalkWon:
+					// The filter plan's keys were read to plan, not by the
+					// winning walk, so the operation's own counts drop them
+					// as MongoDB's executionStats leave out a losing plan's
+					// trial work.
+					backends.AddKeysExamined(ctx, -plan.keys)
 					c.db.backend.planCache.put(cacheKey, newPlanCacheEntry(idxInfos, params, iter.rest.index, "", len(iter.docs)))
-					return &backends.QueryResult{Iter: iter, Sorted: true}, nil
+					walk := walkStage(idxInfos, iter.rest.index)
+					// A lone $or is planned per branch, under SUBPLAN, even
+					// when a walk of the sort index wins.
+					walk.subplan = loneOrPlannedPerBranch(params.Filter)
+					return &backends.QueryResult{Iter: iter, Sorted: true}, walk, nil
 				case trialFilterWon:
 					c.db.backend.planCache.put(cacheKey, newPlanCacheEntry(idxInfos, params, "", plan.index, filterPlanWorks(plan, params)))
 				}
@@ -220,17 +281,17 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 			if pos, ok := indexKeySortPosition(plan.info, params.Filter, params.Sort, params.Collation); fieldSort && !plan.union && ok {
 				iter, err := plan.keySortedIter(ctx, state, m, params.Sort, pos, params.Fields)
 				if err != nil {
-					return nil, err
+					return nil, nil, err
 				}
-				return &backends.QueryResult{Iter: iter, Sorted: true}, nil
+				return &backends.QueryResult{Iter: iter, Sorted: true}, fetchStage(&explainStage{stage: "SORT", input: ixscanStage(plan.info)}), nil
 			}
 			docs, err := plan.fetch(ctx, state, m, params.Fields)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			return &backends.QueryResult{
 				Iter: newSliceIter(docs),
-			}, nil
+			}, plan.stage(), nil
 		}
 	}
 
@@ -239,10 +300,19 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 	if !naturalHint && fieldSort && (params.LimitHint > 0 || params.Filter.Len() == 0) {
 		iter, ok, err := c.trySortWalk(ctx, state, m, params)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if ok {
-			return &backends.QueryResult{Iter: iter, Sorted: true}, nil
+			if idxInfos == nil {
+				idxInfos, _, err = resolveIndexesLocked(ctx, c, state)
+				if err != nil {
+					iter.Close()
+					return nil, nil, err
+				}
+			}
+			stage := walkStage(idxInfos, iter.index)
+			stage.subplan = loneOrPlannedPerBranch(params.Filter)
+			return &backends.QueryResult{Iter: iter, Sorted: true}, stage, nil
 		}
 	}
 
@@ -250,6 +320,10 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 	if params != nil && sortIsNatural(params.Sort) {
 		sortVal := params.Sort.Map()["$natural"].(int64)
 		reverse = sortVal == -1
+	}
+	// Without a sort, {$natural: -1} as a hint reads the collection backward.
+	if naturalHint && params.Sort.Len() == 0 {
+		reverse = naturalHintDescending(params.Hint)
 	}
 
 	var limit int64
@@ -259,16 +333,31 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 
 	onlyRecordIDs := params != nil && params.OnlyRecordIDs
 
-	// Fast path: if the filter pins _id to a concrete scalar value, use the
-	// primary-key point lookup instead of a full collection scan. The handler's
-	// downstream FilterIterator applies any remaining predicates.
 	if !naturalHint && params != nil && !params.Collated && params.Filter != nil {
-		if idVal, ok := simpleIDEquality(params.Filter); ok {
+		if idVal, ok := simpleIDEquality(params.Filter); ok && params.Filter.Len() == 1 && idVal != types.Null {
 			iter, err := pointLookupByID(ctx, state.ns, m, idVal, onlyRecordIDs)
 			if err == nil {
-				return &backends.QueryResult{Iter: iter}, nil
+				return &backends.QueryResult{Iter: iter}, idPointStage(), nil
 			}
 			// Fall back to full scan on any error (e.g. unsupported _id type).
+		}
+	}
+
+	// The primary map is the clustered _id index: it serves _id ranges and
+	// _id sorts.
+	if !naturalHint && params != nil && !params.Collated {
+		if idSort, _ := sortIsID(params.Sort); params.Sort.Len() == 0 || idSort {
+			res, ok, err := clusteredQuery(ctx, state, m, params)
+			if err != nil {
+				return nil, nil, err
+			}
+			if ok {
+				stage := collscanStage()
+				if _, _, ranged := clusteredIDRange(ctx, params.Filter); ranged {
+					stage = clusteredStage()
+				}
+				return res, stage, nil
+			}
 		}
 	}
 
@@ -300,35 +389,32 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 			mi.release = state.backend.backgroundRP.pinRoot(state.name, m.HashOf())
 		}
 	}
-	return &backends.QueryResult{Iter: iter}, nil
+	return &backends.QueryResult{Iter: iter}, collscanStage(), nil
 }
 
-// hintedSparseIndex returns the sparse index params hints, or nil.
-func (c *collection) hintedSparseIndex(ctx context.Context, state *dbState, params *backends.QueryParams) (*backends.IndexInfo, error) {
+// hintedMemberIndex returns the index params hints when it holds only some
+// documents, a sparse or partial index, or nil.
+func (c *collection) hintedMemberIndex(ctx context.Context, state *dbState, params *backends.QueryParams) (*backends.IndexInfo, error) {
 	if params == nil || params.Hint == nil || params.OnlyRecordIDs || backends.HintIsNatural(params.Hint) {
 		return nil, nil
 	}
-	state.mu.RLock()
-	infos, _, err := resolveIndexes(ctx, c, state)
-	state.mu.RUnlock()
+	infos, _, err := resolveIndexesLocked(ctx, c, state)
 	if err != nil {
 		return nil, err
 	}
 	name := backends.MatchHintedIndex(params.Hint, infos)
 	for i := range infos {
-		if infos[i].Name == name && infos[i].Sparse {
+		if infos[i].Name == name && (infos[i].Sparse || infos[i].PartialFilterExpression != nil) {
 			return &infos[i], nil
 		}
 	}
 	return nil, nil
 }
 
-// sparseMembers reads the documents a sparse index holds, keeping only fields
-// when it is non-nil.
-func (c *collection) sparseMembers(ctx context.Context, state *dbState, primary prolly.Map, idx backends.IndexInfo, fields []string) ([]*types.Document, error) {
-	state.mu.RLock()
-	infos, maps, err := resolveIndexes(ctx, c, state)
-	state.mu.RUnlock()
+// indexMembers reads, in index order, the documents the sparse or partial
+// index idx holds, lazily, so a downstream limit stops the reads.
+func (c *collection) indexMembers(ctx context.Context, state *dbState, primary prolly.Map, idx backends.IndexInfo, fields []string) (types.DocumentsIterator, error) {
+	infos, maps, err := resolveIndexesLocked(ctx, c, state)
 	if err != nil {
 		return nil, err
 	}
@@ -336,48 +422,51 @@ func (c *collection) sparseMembers(ctx context.Context, state *dbState, primary 
 	if i < 0 {
 		return nil, fmt.Errorf("sparse index %q not found", idx.Name)
 	}
-	entries, err := idxpkg.RangeLookup(ctx, maps[i], nil, nil)
-	if err != nil {
-		return nil, err
-	}
-	countKeysExamined(len(entries))
-	plan := &indexLookupPlan{info: idx, index: idx.Name, keys: len(entries)}
-	seen := make(map[string]struct{}, len(entries))
-	for _, id := range entries {
-		if _, dup := seen[string(id)]; !dup {
-			seen[string(id)] = struct{}{}
-			plan.ids = append(plan.ids, id)
-		}
-	}
-	return plan.fetch(ctx, state, primary, fields)
+	return &indexRangeIter{
+		ctx:     ctx,
+		ns:      state.ns,
+		primary: primary,
+		ids:     newIndexIDStream(ctx, maps[i], [][2][]byte{{nil, nil}}, false, true),
+		fields:  fields,
+		release: pinRoots(state, primary, maps[i]),
+	}, nil
 }
 
-// queryUnhintedSparse runs params with its sparse-index hint removed; the
+// queryUnhintedMembers runs params with its index hint removed; the
 // caller restricts the result to the index's members.
-func (c *collection) queryUnhintedSparse(ctx context.Context, params *backends.QueryParams) (*backends.QueryResult, error) {
+func (c *collection) queryUnhintedMembers(ctx context.Context, params *backends.QueryParams) (*backends.QueryResult, error) {
 	unhinted := *params
 	unhinted.Hint = nil
 	return c.Query(ctx, &unhinted)
 }
 
-// sparseMemberIter yields only documents a sparse index holds. MongoDB answers
-// a query hinted onto a sparse index from the index alone, so documents
-// missing every indexed field are absent even when the filter matches them.
-type sparseMemberIter struct {
+// indexMemberIter yields only documents a sparse or partial index holds.
+// MongoDB answers a query hinted onto such an index from the index alone, so
+// documents it leaves out are absent even when the filter matches them.
+type indexMemberIter struct {
 	types.DocumentsIterator
 	idx backends.IndexInfo
 }
 
-func newSparseMemberIter(iter types.DocumentsIterator, idx backends.IndexInfo) types.DocumentsIterator {
-	return &sparseMemberIter{DocumentsIterator: iter, idx: idx}
+func newIndexMemberIter(iter types.DocumentsIterator, idx backends.IndexInfo) types.DocumentsIterator {
+	return &indexMemberIter{DocumentsIterator: iter, idx: idx}
 }
 
-func (it *sparseMemberIter) Next() (struct{}, *types.Document, error) {
+func (it *indexMemberIter) Next() (struct{}, *types.Document, error) {
 	for {
 		k, doc, err := it.DocumentsIterator.Next()
-		if err != nil || !sparseExcludes(doc, it.idx) {
+		if err != nil {
 			return k, doc, err
 		}
+		if sparseExcludes(doc, it.idx) {
+			continue
+		}
+		if it.idx.MatchesPartialFilter != nil {
+			if member, merr := it.idx.MatchesPartialFilter(doc); merr != nil || !member {
+				continue
+			}
+		}
+		return k, doc, nil
 	}
 }
 
@@ -477,7 +566,7 @@ const (
 // simpleIDEquality reports whether filter contains an "_id" field bound to a
 // concrete value that can be hashed into a primary key, either bare or as the
 // literal operand of {$eq: x}. It rejects other operator forms, array
-// equality ({_id: [1,2]}), regex, and bare null.
+// equality ({_id: [1,2]}), bare null and a regex, which matches a pattern.
 // Other filter fields are allowed  -- the handler re-checks them on the result.
 func simpleIDEquality(filter *types.Document) (any, bool) {
 	v, err := filter.Get("_id")
@@ -504,7 +593,8 @@ func simpleIDEquality(filter *types.Document) (any, bool) {
 		return v, true
 	}
 	switch v.(type) {
-	case *types.Array, types.NullType:
+	case *types.Array, types.NullType, types.Regex:
+		// A regex matches a pattern rather than equal values.
 		return nil, false
 	default:
 		return v, true
@@ -512,12 +602,12 @@ func simpleIDEquality(filter *types.Document) (any, bool) {
 }
 
 func pointLookupByID(ctx context.Context, ns tree.NodeStore, m prolly.Map, idVal any, onlyRecordID bool) (types.DocumentsIterator, error) {
-	h, err := hashID(idVal)
+	h, err := primaryKey(idVal)
 	if err != nil {
 		return nil, err
 	}
 
-	key, err := buildKey(h[:])
+	key, err := buildKey(h)
 	if err != nil {
 		return nil, err
 	}
@@ -527,8 +617,7 @@ func pointLookupByID(ctx context.Context, ns tree.NodeStore, m prolly.Map, idVal
 		if v == nil {
 			return nil
 		}
-		countKeysExamined(1)
-		countDocsExamined(1)
+		countDocsExamined(ctx, 1)
 
 		keyBytes, ok := keyDesc.GetBytes(0, k)
 		if !ok {
@@ -551,6 +640,9 @@ func pointLookupByID(ctx context.Context, ns tree.NodeStore, m prolly.Map, idVal
 			return err
 		}
 		d.SetRecordID(recordID)
+		if backends.WantsRecordKeys(ctx) {
+			d.SetRecordKey(keyBytes)
+		}
 		doc = d
 		return nil
 	})
@@ -606,6 +698,11 @@ type indexLookupPlan struct {
 	// union is set when ids are the union of one index scan per $or branch;
 	// info and index are then empty, and ids are not in any index order.
 	union bool
+	// branches are a union's index scans, without their ids.
+	branches []unionBranch
+	// withoutSubplan marks a union MongoDB plans without SUBPLAN: a lone
+	// branch, or equalities it rewrites as an $in.
+	withoutSubplan bool
 	// keys is the number of index entries scanned; ids holds each matched
 	// document once and, when kept, values its entry's encoded index values.
 	keys   int
@@ -620,26 +717,32 @@ func (c *collection) planIndexLookup(ctx context.Context, state *dbState, primar
 	if filter == nil || filter.Len() == 0 {
 		return nil, nil
 	}
-	state.mu.RLock()
-	idxInfos, idxMaps, err := resolveIndexes(ctx, c, state)
-	state.mu.RUnlock()
+	idxInfos, idxMaps, err := resolveIndexesLocked(ctx, c, state)
 	if err != nil {
 		return nil, err
 	}
-	return planIndexLookupIn(ctx, primary, idxInfos, idxMaps, filter, hint, queryCollation, keepValues)
+	return planIndexLookupIn(ctx, state.ns, primary, idxInfos, idxMaps, filter, hint, queryCollation, keepValues)
 }
 
 // planIndexLookupIn is planIndexLookup over already resolved indexes.
-func planIndexLookupIn(ctx context.Context, primary prolly.Map, idxInfos []backends.IndexInfo, idxMaps []prolly.Map, filter *types.Document, hint any, queryCollation *types.Document, keepValues bool) (*indexLookupPlan, error) {
-	plan, err := readIndexLookup(ctx, primary, idxInfos, idxMaps, filter, hint, queryCollation, keepValues)
+func planIndexLookupIn(ctx context.Context, ns tree.NodeStore, primary prolly.Map, idxInfos []backends.IndexInfo, idxMaps []prolly.Map, filter *types.Document, hint any, queryCollation *types.Document, keepValues bool) (*indexLookupPlan, error) {
+	plan, err := readIndexLookup(ctx, ns, primary, idxInfos, idxMaps, filter, hint, queryCollation, keepValues)
 	if plan != nil {
-		countKeysExamined(plan.keys)
+		countKeysExamined(ctx, plan.keys)
+		counts := backends.ExaminedCountsFrom(ctx)
+		for i, branch := range plan.branches {
+			counts.AddBranchKeys(i, int64(branch.keys), int64(branch.matched))
+			if branch.residual {
+				countDocsExamined(ctx, branch.fetched)
+				counts.AddBranchDocs(i, int64(branch.fetched), int64(branch.kept))
+			}
+		}
 	}
 	return plan, err
 }
 
 // readIndexLookup is planIndexLookupIn without counting the keys read.
-func readIndexLookup(ctx context.Context, primary prolly.Map, idxInfos []backends.IndexInfo, idxMaps []prolly.Map, filter *types.Document, hint any, queryCollation *types.Document, keepValues bool) (*indexLookupPlan, error) {
+func readIndexLookup(ctx context.Context, ns tree.NodeStore, primary prolly.Map, idxInfos []backends.IndexInfo, idxMaps []prolly.Map, filter *types.Document, hint any, queryCollation *types.Document, keepValues bool) (*indexLookupPlan, error) {
 	if filter == nil || filter.Len() == 0 || len(idxInfos) == 0 {
 		return nil, nil
 	}
@@ -647,14 +750,14 @@ func readIndexLookup(ctx context.Context, primary prolly.Map, idxInfos []backend
 		if hint != nil {
 			return nil, nil
 		}
-		return planOrUnion(ctx, primary, idxInfos, idxMaps, must.NotFail(filter.Get("$or")), queryCollation)
+		return planOrUnion(ctx, ns, primary, idxInfos, idxMaps, must.NotFail(filter.Get("$or")), queryCollation)
 	}
 
-	choice, ok := chooseIndexRange(idxInfos, filter, hint, queryCollation)
+	choice, ok := chooseIndexRange(idxInfos, filter, hint, queryCollation, nil)
 	if !ok {
 		return nil, nil
 	}
-	if hint != nil {
+	if hint != nil || idxInfos[choice.mapIdx].Sparse {
 		return scanIndexChoice(ctx, idxInfos, idxMaps, choice, keepValues, -1)
 	}
 	var plan *indexLookupPlan
@@ -672,13 +775,27 @@ func readIndexLookup(ctx context.Context, primary prolly.Map, idxInfos []backend
 }
 
 // narrowRangeEntries is how many entries of a range are read before counting
-// it: a range that ends within them costs less to read than to count.
+// it: a range that ends within them costs less to read than to count, and so
+// little either way that it is always read.
 const narrowRangeEntries = 128
 
-// indexRangesWithinHalf reports whether some index ranges hold at most half
-// of primary's documents; past that, one point lookup per entry loses to a
-// sequential scan. readsAtMost(n) reads up to n entries and reports whether
-// the ranges end within them, so narrow ranges are never counted;
+// anySparseIndex reports whether a scan reads a sparse index. MongoDB reads an
+// eligible index rather than scan the collection, which for a sparse index
+// leaves out the documents without its field, so a sparse index is read
+// however wide its ranges.
+func anySparseIndex(idxInfos []backends.IndexInfo, scans []indexRangeChoice) bool {
+	for _, scan := range scans {
+		if idxInfos[scan.mapIdx].Sparse {
+			return true
+		}
+	}
+	return false
+}
+
+// indexRangesWithinHalf reports whether some index ranges are narrow or hold
+// at most half of primary's documents; past that, one point lookup per entry
+// loses to a sequential scan. readsAtMost(n) reads up to n entries and reports
+// whether the ranges end within them, so narrow ranges are never counted;
 // countEntries counts them from the index tree.
 func indexRangesWithinHalf(primary prolly.Map, readsAtMost func(n int) (bool, error), countEntries func() (uint64, error)) (bool, error) {
 	docs, err := primary.Count()
@@ -686,12 +803,11 @@ func indexRangesWithinHalf(primary prolly.Map, readsAtMost func(n int) (bool, er
 		return false, fmt.Errorf("index lookup counting primary: %w", err)
 	}
 	half := docs / 2
-	probe := min(narrowRangeEntries, half)
-	narrow, err := readsAtMost(probe)
+	narrow, err := readsAtMost(narrowRangeEntries)
 	if err != nil || narrow {
 		return narrow, err
 	}
-	if probe == half {
+	if half <= narrowRangeEntries {
 		return false, nil
 	}
 	entries, err := countEntries()
@@ -739,7 +855,11 @@ func scanIndexChoice(ctx context.Context, idxInfos []backends.IndexInfo, idxMaps
 		valuesList = append(valuesList, values...)
 	}
 
-	plan := &indexLookupPlan{info: idxInfos[choice.mapIdx], index: idxInfos[choice.mapIdx].Name, keys: len(primaryIDBytesList)}
+	gaps, err := gapKeys(ctx, idxMap, choice.ranges())
+	if err != nil {
+		return nil, err
+	}
+	plan := &indexLookupPlan{info: idxInfos[choice.mapIdx], index: idxInfos[choice.mapIdx].Name, keys: len(primaryIDBytesList) + gaps}
 	seenIDs := make(map[string]struct{}, len(primaryIDBytesList))
 	for i, idBytes := range primaryIDBytesList {
 		if _, dup := seenIDs[string(idBytes)]; dup {
@@ -761,6 +881,9 @@ type indexRangeChoice struct {
 	startKey    []byte
 	stopKey     []byte
 	pointRanges [][2][]byte
+	// residual, set for an $or branch its ranges do not bound, is the filter
+	// the documents they hold must still match.
+	residual *types.Document
 }
 
 // ranges returns choice's point ranges, or its single range.
@@ -772,27 +895,26 @@ func (choice indexRangeChoice) ranges() [][2][]byte {
 }
 
 // chooseIndexRange picks the index serving filter's first indexable field and
-// the range to scan in it, without scanning.
-func chooseIndexRange(idxInfos []backends.IndexInfo, filter *types.Document, hint any, queryCollation *types.Document) (indexRangeChoice, bool) {
+// the range to scan in it, without scanning. fields, when set, are the only
+// fields the read returns, so an index holding them all covers it.
+func chooseIndexRange(idxInfos []backends.IndexInfo, filter *types.Document, hint any, queryCollation *types.Document, fields []string) (indexRangeChoice, bool) {
 	queryColl := collation.Parse(queryCollation)
 	queryIdentity := queryColl.Identity()
 	queryCmp := queryColl.Comparator()
 
 	// A hint naming a specific index forces selection: only that index is a
-	// candidate, matching what Explain reports (and MongoDB). When the hinted
-	// index does not cover the filter with a usable range, selection falls
-	// through to a collection scan -- results are unaffected either way.
+	// candidate, as on MongoDB. When the filter gives the hinted index no
+	// range, the whole index is scanned.
 	hintedName := backends.MatchHintedIndex(hint, idxInfos)
 
-	// Single-field indexes are preferred (tighter scan range); compound
-	// indexes are used when no single-field index covers the leading filter
-	// field. The handler re-filters every returned doc, so a compound index's
-	// suffix-field constraints are applied post-scan.
+	// For each leading field the index scoring best (indexCandidateScore)
+	// serves it. The handler re-filters every returned doc, so a compound
+	// index's unbounded suffix-field constraints are applied post-scan.
 	type indexedFieldEntry struct {
 		idxName  string
 		mapIdx   int
 		compound bool
-		rank     int
+		score    indexCandidateScore
 	}
 	indexedField := make(map[string]indexedFieldEntry, len(idxInfos))
 	for i, idx := range idxInfos {
@@ -803,11 +925,20 @@ func chooseIndexRange(idxInfos []backends.IndexInfo, filter *types.Document, hin
 		// index is usable only when the filter implies its partial condition,
 		// so every matching doc lies within it; otherwise it drops non-member
 		// matches. (Sparse is fine: no admitted operator matches a missing field.)
-		if idx.Lossy || len(idx.Key) == 0 || idx.Key[0].Field == "" {
+		// A geo index's leading key is its point's cell, not the field's value.
+		if idx.Lossy || len(idx.Key) == 0 || idx.Key[0].Field == "" || isGeoKey(idx.Key[0]) {
 			continue
 		}
+		// An index of another collation serves bounds that hold no string,
+		// as mongod's does; hinted, it is scanned whole for any others.
 		if collation.Parse(idx.Collation).Identity() != queryIdentity {
-			continue
+			v, err := filter.Get(idx.Key[0].Field)
+			if err != nil || !backends.CollationFree(v) {
+				if hintedName != "" {
+					return indexRangeChoice{mapIdx: i}, true
+				}
+				continue
+			}
 		}
 		partial := idx.PartialFilterExpression != nil
 		if partial && !filterImpliesPartial(filter, idx.PartialFilterExpression, collation.Parse(idx.Collation).IsSimple()) {
@@ -815,10 +946,10 @@ func chooseIndexRange(idxInfos []backends.IndexInfo, filter *types.Document, hin
 		}
 		leading := idx.Key[0].Field
 		isCompound := len(idx.Key) > 1
-		rank := indexRank(isCompound, partial)
-		if cur, have := indexedField[leading]; !have || rank < cur.rank {
+		score := scoreIndexCandidate(idx, filter, fields, partial)
+		if cur, have := indexedField[leading]; !have || score.beats(cur.score) {
 			indexedField[leading] = indexedFieldEntry{
-				idxName: idx.Name, mapIdx: i, compound: isCompound, rank: rank,
+				idxName: idx.Name, mapIdx: i, compound: isCompound, score: score,
 			}
 		}
 	}
@@ -846,7 +977,13 @@ func chooseIndexRange(idxInfos []backends.IndexInfo, filter *types.Document, hin
 		if !ok {
 			continue
 		}
-		v, err := filter.Get(k)
+		// An equality beside other comparisons reads only its value, or
+		// nothing, on a field that holds no array.
+		rf, empty := reducedForIndex(filter, idxInfos[entry.mapIdx], queryColl.IsSimple())
+		if empty {
+			return indexRangeChoice{mapIdx: entry.mapIdx, pointRanges: [][2][]byte{}}, true
+		}
+		v, err := rf.Get(k)
 		if err != nil {
 			continue
 		}
@@ -874,10 +1011,19 @@ func chooseIndexRange(idxInfos []backends.IndexInfo, filter *types.Document, hin
 				break
 			}
 		}
+		if isEmptyArrayEquality(v) && !entry.compound {
+			chosenMapIdx = entry.mapIdx
+			pointRanges = emptyArrayRanges()
+			usable = true
+			break
+		}
 		if queryCmp != nil {
 			v = collateFilterValue(v, queryCmp)
 		}
-		if idxInfos[entry.mapIdx].Multikey {
+		if inner, ok := elemMatchOperators(v); ok {
+			// One element meets every operator, so both sides bound it.
+			v = inner
+		} else if idxInfos[entry.mapIdx].KeyMultikey(0) {
 			v = multikeyScanBound(v)
 		}
 		s, e, ok := indexBoundsForFilterValue(v)
@@ -887,11 +1033,16 @@ func chooseIndexRange(idxInfos []backends.IndexInfo, filter *types.Document, hin
 		if !ok && isExistsTrue(v) && existsIndexable(idxInfos[entry.mapIdx]) {
 			s, e, ok = nil, nil, true
 		}
+		// A MinKey or MaxKey bound matches a missing field, but mongod reads
+		// it from a sparse index, which leaves those documents out.
+		if !ok && idxInfos[entry.mapIdx].Sparse {
+			s, e, ok = minMaxKeyBounds(v)
+		}
 		if !ok {
 			continue
 		}
 		if entry.compound {
-			if cs, ce, cok := compoundIndexBounds(idxInfos[entry.mapIdx], filter, queryCmp); cok {
+			if cs, ce, cok := compoundIndexBounds(idxInfos[entry.mapIdx], rf, queryCmp); cok {
 				s, e = cs, ce
 			} else {
 				s, e = compoundLeadingBounds(s, e)
@@ -904,6 +1055,11 @@ func chooseIndexRange(idxInfos []backends.IndexInfo, filter *types.Document, hin
 	}
 
 	if !usable {
+		if hintedName != "" {
+			for _, entry := range indexedField {
+				return indexRangeChoice{mapIdx: entry.mapIdx}, true
+			}
+		}
 		return indexRangeChoice{}, false
 	}
 	return indexRangeChoice{mapIdx: chosenMapIdx, startKey: startKey, stopKey: stopKey, pointRanges: pointRanges}, true
@@ -912,35 +1068,150 @@ func chooseIndexRange(idxInfos []backends.IndexInfo, filter *types.Document, hin
 // planOrUnion plans each $or branch on its own index and unions the matched
 // ids, or returns nil when any branch has no index plan or the branches'
 // ranges together hold more than half the collection.
-func planOrUnion(ctx context.Context, primary prolly.Map, idxInfos []backends.IndexInfo, idxMaps []prolly.Map, branches any, queryCollation *types.Document) (*indexLookupPlan, error) {
+func planOrUnion(ctx context.Context, ns tree.NodeStore, primary prolly.Map, idxInfos []backends.IndexInfo, idxMaps []prolly.Map, branches any, queryCollation *types.Document) (*indexLookupPlan, error) {
 	flat, ok := flattenOrBranches(branches)
 	if !ok {
 		return nil, nil
 	}
 	choices := make([]indexRangeChoice, len(flat))
 	for i, branch := range flat {
-		if choices[i], ok = chooseIndexRange(idxInfos, branch, nil, queryCollation); !ok {
+		if choices[i], ok = chooseIndexRange(idxInfos, branch, nil, queryCollation, nil); !ok {
 			return nil, nil
 		}
 	}
+	scans := orBranchScans(idxInfos, flat, choices, collation.Parse(queryCollation).IsSimple())
 	var union *indexLookupPlan
-	within, err := indexRangesWithinHalf(primary, func(n int) (bool, error) {
-		var err error
-		union, err = unionIndexChoices(ctx, idxInfos, idxMaps, choices, n)
-		return union != nil, err
-	}, func() (uint64, error) {
-		return indexRangeEntries(ctx, idxMaps, choices...)
-	})
-	if err != nil || !within || union != nil {
-		return union, err
+	var err error
+	within := anySparseIndex(idxInfos, scans)
+	if !within {
+		within, err = indexRangesWithinHalf(primary, func(n int) (bool, error) {
+			var err error
+			union, err = unionIndexChoices(ctx, ns, primary, idxInfos, idxMaps, scans, n)
+			return union != nil, err
+		}, func() (uint64, error) {
+			return indexRangeEntries(ctx, idxMaps, scans...)
+		})
 	}
-	return unionIndexChoices(ctx, idxInfos, idxMaps, choices, -1)
+	if err == nil && within && union == nil {
+		union, err = unionIndexChoices(ctx, ns, primary, idxInfos, idxMaps, scans, -1)
+	}
+	if union != nil {
+		union.withoutSubplan = len(flat) == 1 || orOfEqualitiesOnOneField(flat)
+	}
+	return union, err
+}
+
+// orBranchScans returns the index scans MongoDB runs for an $or's branches,
+// in the order its OR stage reads them: by index, in catalog order, a branch
+// of several predicates scanning as soon as it is reached, and the branches
+// of one predicate on an index merged into one scan of all their ranges, read
+// when a single-predicate branch on another index follows, or last. A branch
+// its index does not bound keeps its filter as the scan's residual, matched
+// before the union when matching needs no collation.
+func orBranchScans(idxInfos []backends.IndexInfo, flat []*types.Document, choices []indexRangeChoice, simpleCollation bool) []indexRangeChoice {
+	order := make([]int, len(flat))
+	for i := range order {
+		order[i] = i
+	}
+	slices.SortStableFunc(order, func(a, b int) int { return choices[a].mapIdx - choices[b].mapIdx })
+
+	var scans []indexRangeChoice
+	var pending *indexRangeChoice
+	flush := func() {
+		if pending != nil {
+			scans = append(scans, mergedRangeChoice(*pending))
+			pending = nil
+		}
+	}
+	for _, i := range order {
+		choice := choices[i]
+		if !singlePredicate(flat[i]) {
+			if simpleCollation && boundedKeyFields(idxInfos[choice.mapIdx], flat[i]) < flat[i].Len() {
+				choice.residual = flat[i]
+			}
+			scans = append(scans, choice)
+			continue
+		}
+		if pending != nil && pending.mapIdx != choice.mapIdx {
+			flush()
+		}
+		if pending == nil {
+			pending = &indexRangeChoice{mapIdx: choice.mapIdx}
+		}
+		pending.pointRanges = append(pending.pointRanges, choice.ranges()...)
+	}
+	flush()
+	return scans
+}
+
+// mergedRangeChoice sorts choice's ranges and joins those that overlap.
+func mergedRangeChoice(choice indexRangeChoice) indexRangeChoice {
+	ranges := choice.pointRanges
+	if len(ranges) == 0 {
+		// An empty $in reads nothing; a nil list would read the whole index.
+		return indexRangeChoice{mapIdx: choice.mapIdx, pointRanges: [][2][]byte{}}
+	}
+	slices.SortStableFunc(ranges, func(a, b [2][]byte) int { return bytes.Compare(a[0], b[0]) })
+	merged := ranges[:1]
+	for _, r := range ranges[1:] {
+		last := &merged[len(merged)-1]
+		if len(last[1]) != 0 && bytes.Compare(r[0], last[1]) > 0 {
+			merged = append(merged, r)
+			continue
+		}
+		if len(r[1]) == 0 || (len(last[1]) != 0 && bytes.Compare(r[1], last[1]) > 0) {
+			last[1] = r[1]
+		}
+	}
+	if len(merged) == 1 {
+		return indexRangeChoice{mapIdx: choice.mapIdx, startKey: merged[0][0], stopKey: merged[0][1]}
+	}
+	return indexRangeChoice{mapIdx: choice.mapIdx, pointRanges: merged}
+}
+
+// singlePredicate reports whether branch is one predicate on one field, such
+// as {k: 5} or {k: {$gt: 5}}, rather than an AND of several.
+func singlePredicate(branch *types.Document) bool {
+	if branch.Len() != 1 {
+		return false
+	}
+	ops, isDoc := must.NotFail(branch.Get(branch.Keys()[0])).(*types.Document)
+	return !isDoc || ops.Len() <= 1 || !strings.HasPrefix(ops.Keys()[0], "$")
+}
+
+// loneOrPlannedPerBranch reports whether filter is a lone $or that MongoDB
+// plans per branch, under SUBPLAN: one of two or more branches, other than
+// one it rewrites as an $in.
+func loneOrPlannedPerBranch(filter *types.Document) bool {
+	if filter.Len() != 1 || !filter.Has("$or") {
+		return false
+	}
+	flat, ok := flattenOrBranches(must.NotFail(filter.Get("$or")))
+	return ok && len(flat) > 1 && !orOfEqualitiesOnOneField(flat)
+}
+
+// orOfEqualitiesOnOneField reports whether every branch is a literal equality
+// on one same field, an $or MongoDB rewrites to an $in.
+func orOfEqualitiesOnOneField(flat []*types.Document) bool {
+	for _, branch := range flat {
+		if branch.Len() != 1 || branch.Keys()[0] != flat[0].Keys()[0] {
+			return false
+		}
+		v := must.NotFail(branch.Get(branch.Keys()[0]))
+		if _, isDoc := v.(*types.Document); isDoc {
+			return false
+		}
+		if _, isEq := indexEqualityValue(v); !isEq {
+			return false
+		}
+	}
+	return true
 }
 
 // unionIndexChoices reads every choice's ranges into one plan of their
 // distinct ids, or returns nil when they hold more than maxEntries entries;
 // -1 reads them all.
-func unionIndexChoices(ctx context.Context, idxInfos []backends.IndexInfo, idxMaps []prolly.Map, choices []indexRangeChoice, maxEntries int) (*indexLookupPlan, error) {
+func unionIndexChoices(ctx context.Context, ns tree.NodeStore, primary prolly.Map, idxInfos []backends.IndexInfo, idxMaps []prolly.Map, choices []indexRangeChoice, maxEntries int) (*indexLookupPlan, error) {
 	union := &indexLookupPlan{union: true}
 	seen := make(map[string]struct{})
 	for _, choice := range choices {
@@ -953,7 +1224,16 @@ func unionIndexChoices(ctx context.Context, idxInfos []backends.IndexInfo, idxMa
 			return nil, err
 		}
 		union.keys += plan.keys
-		for _, id := range plan.ids {
+		branch := unionBranch{info: plan.info, keys: plan.keys, matched: len(plan.ids)}
+		ids := plan.ids
+		if choice.residual != nil {
+			if ids, branch.fetched, err = matchResidual(ctx, ns, primary, ids, choice.residual); err != nil {
+				return nil, err
+			}
+			branch.residual, branch.kept = true, len(ids)
+		}
+		union.branches = append(union.branches, branch)
+		for _, id := range ids {
 			if _, dup := seen[string(id)]; dup {
 				continue
 			}
@@ -962,6 +1242,37 @@ func unionIndexChoices(ctx context.Context, idxInfos []backends.IndexInfo, idxMa
 		}
 	}
 	return union, nil
+}
+
+// unionBranch is one index scan of a union: its index, the keys it read, and
+// the documents they matched. A residual branch fetched its documents and
+// kept those matching its filter.
+type unionBranch struct {
+	info          backends.IndexInfo
+	keys, matched int
+	residual      bool
+	fetched, kept int
+}
+
+// matchResidual fetches the documents of ids and returns the ids of those
+// matching filter, with the number fetched.
+func matchResidual(ctx context.Context, ns tree.NodeStore, primary prolly.Map, ids [][]byte, filter *types.Document) ([][]byte, int, error) {
+	var kept [][]byte
+	fetched := 0
+	for _, id := range ids {
+		doc, err := readPrimaryDoc(ctx, ns, primary, id, nil)
+		if err != nil {
+			return nil, 0, err
+		}
+		if doc == nil {
+			continue
+		}
+		fetched++
+		if ok, err := backends.MatchPartialFilter(doc, filter); err != nil || ok {
+			kept = append(kept, id)
+		}
+	}
+	return kept, fetched, nil
 }
 
 // isLoneOr reports whether filter is a single top-level $or.
@@ -999,31 +1310,47 @@ func flattenOrBranches(branches any) ([]*types.Document, bool) {
 // when it is non-nil.
 func (plan *indexLookupPlan) fetch(ctx context.Context, state *dbState, primary prolly.Map, fields []string) ([]*types.Document, error) {
 	docs := make([]*types.Document, 0, len(plan.ids))
+	var examined examinedCounter
+	wantKeys := backends.WantsRecordKeys(ctx)
 	for _, idBytes := range plan.ids {
-		key, err := buildKey(idBytes)
+		doc, err := readPrimaryDoc(ctx, state.ns, primary, idBytes, fields)
 		if err != nil {
-			return nil, fmt.Errorf("index lookup building key: %w", err)
-		}
-		var doc *types.Document
-		if err := primary.Get(ctx, key, func(k, v val.Tuple) error {
-			if v == nil {
-				return nil
-			}
-			countDocsExamined(1)
-			stored, err := getBSONStoredBytes(ctx, state.ns, v)
-			if err != nil {
-				return err
-			}
-			doc, err = bsonToDocFields(stored, fields)
-			return err
-		}); err != nil {
-			return nil, fmt.Errorf("index lookup primary fetch: %w", err)
+			return nil, err
 		}
 		if doc != nil {
+			examined.docs(ctx, 1)
+			doc.SetRecordID(keyBytesToRecordID(idBytes))
+			if wantKeys {
+				doc.SetRecordKey(bytes.Clone(idBytes))
+			}
 			docs = append(docs, doc)
 		}
 	}
 	return docs, nil
+}
+
+// readPrimaryDoc reads the document with primary id idBytes, keeping only
+// fields when it is non-nil, or returns nil when there is none.
+func readPrimaryDoc(ctx context.Context, ns tree.NodeStore, primary prolly.Map, idBytes []byte, fields []string) (*types.Document, error) {
+	key, err := buildKey(idBytes)
+	if err != nil {
+		return nil, fmt.Errorf("index lookup building key: %w", err)
+	}
+	var doc *types.Document
+	if err := primary.Get(ctx, key, func(k, v val.Tuple) error {
+		if v == nil {
+			return nil
+		}
+		stored, err := getBSONStoredBytes(ctx, ns, v)
+		if err != nil {
+			return err
+		}
+		doc, err = bsonToDocFields(stored, fields)
+		return err
+	}); err != nil {
+		return nil, fmt.Errorf("index lookup primary fetch: %w", err)
+	}
+	return doc, nil
 }
 
 // indexPointRangesForIn returns one point range per value of a
@@ -1049,24 +1376,75 @@ func indexPointRangesForIn(v any) ([][2][]byte, bool) {
 		}
 		ranges = append(ranges, [2][]byte{idxpkg.LowerBoundInclusive(value), idxpkg.UpperBoundInclusive(value)})
 	}
+	// As MongoDB builds index bounds: in key order, once per key, so values
+	// equal as keys ([2, 2], [2, NumberLong(2)]) read their range once.
+	slices.SortFunc(ranges, func(a, b [2][]byte) int { return bytes.Compare(a[0], b[0]) })
+	ranges = slices.CompactFunc(ranges, func(a, b [2][]byte) bool { return bytes.Equal(a[0], b[0]) })
 	return ranges, true
 }
 
-// indexBoundsForFilterValue translates the value side of a single
-// {field: value} filter clause into a [startKey, stopKey) byte range over the
-// secondary index. The bounds are always sound: any document matching the
-// clause is guaranteed to lie in the returned range, though the range may
-// include false positives (the handler will filter them out).
-//
-// Supported value shapes:
-//   - bare scalar v                          -> [KS(v)+0x04, KS(v)+0x05)
-//   - operator doc using only $eq / $gt /
-//     $gte / $lt / $lte                      -> bounds derived from the
-//     tightest clause on each side.
-//
-// Returns ok=false for value shapes the index path can't handle (regex,
-// $in, $ne, nested operators, mixed comparisons against arrays, ...); the
-// caller falls back to the full-scan path.
+// elemMatchOperators returns the operators of an $elemMatch that applies
+// them to each element, like {$elemMatch: {$gt: 1}}.
+func elemMatchOperators(v any) (*types.Document, bool) {
+	doc, ok := v.(*types.Document)
+	if !ok || doc.Len() != 1 || doc.Keys()[0] != "$elemMatch" {
+		return nil, false
+	}
+	inner, ok := must.NotFail(doc.Get("$elemMatch")).(*types.Document)
+	if !ok || inner.Len() == 0 {
+		return nil, false
+	}
+	for _, k := range inner.Keys() {
+		if !strings.HasPrefix(k, "$") {
+			return nil, false
+		}
+	}
+	return inner, true
+}
+
+// isEmptyArrayEquality reports whether v, a filter field's condition, is an
+// equality to the empty array.
+func isEmptyArrayEquality(v any) bool {
+	if doc, ok := v.(*types.Document); ok && doc.Len() == 1 && doc.Has("$eq") {
+		v = must.NotFail(doc.Get("$eq"))
+	}
+	arr, ok := v.(*types.Array)
+	return ok && arr.Len() == 0
+}
+
+// emptyArrayRanges are the keys a field equal to the empty array has: undefined
+// for the empty array itself, and the empty array as an element of an array.
+func emptyArrayRanges() [][2][]byte {
+	empty := types.MakeArray(0)
+	return [][2][]byte{
+		{idxpkg.LowerBoundInclusive(types.Undefined), idxpkg.UpperBoundInclusive(types.Undefined)},
+		{idxpkg.LowerBoundInclusive(empty), idxpkg.UpperBoundInclusive(empty)},
+	}
+}
+
+// filterHasTwoSidedRange reports whether filter, one field's condition,
+// bounds it from below and above.
+func filterHasTwoSidedRange(filter *types.Document) bool {
+	return filter.Len() == 1 && isTwoSidedRange(must.NotFail(filter.Get(filter.Keys()[0])))
+}
+
+// trailingKeyMultikey reports whether a field after idx's first may have
+// held an array.
+func trailingKeyMultikey(idx backends.IndexInfo) bool {
+	for i := 1; i < len(idx.Key); i++ {
+		if idx.KeyMultikey(i) {
+			return true
+		}
+	}
+	return false
+}
+
+// isTwoSidedRange reports whether v bounds a field from below and above.
+func isTwoSidedRange(v any) bool {
+	opDoc, ok := v.(*types.Document)
+	return ok && !opDoc.Has("$eq") && (opDoc.Has("$gt") || opDoc.Has("$gte")) && (opDoc.Has("$lt") || opDoc.Has("$lte"))
+}
+
 // multikeyScanBound drops the upper-bound operators from a range that has both
 // sides. On a multikey field each operator may be met by a different element
 // ({$gt: 2, $lt: 3} matches [1, 3]), so the sides cannot be intersected; like
@@ -1195,12 +1573,32 @@ func isNullEquality(v any) bool {
 	return false
 }
 
-// nullEqualityIndexable reports whether idx's null entries are exactly the
-// documents a null equality on its leading field matches: missing values are
-// indexed as null, and no array element or dotted path can match null without
-// a null entry.
+// nullEqualityIndexable reports whether idx holds a null entry for every
+// document a null equality on its leading field matches: missing values are
+// indexed as null, and a dotted path without positional segments, as on
+// MongoDB, indexes null for each array element or branch it does not reach.
+// A multikey top-level field is not served.
 func nullEqualityIndexable(idx backends.IndexInfo) bool {
-	return !idx.Sparse && !idx.Multikey && !strings.Contains(idx.Key[0].Field, ".")
+	if idx.Sparse {
+		return false
+	}
+	field := idx.Key[0].Field
+	if !strings.Contains(field, ".") {
+		return !idx.KeyMultikey(0)
+	}
+	path, err := types.NewPathFromString(field)
+	return err == nil && !hasPositionalSegment(path)
+}
+
+// hasPositionalSegment reports whether a segment of path is numeric, which
+// may name an array position.
+func hasPositionalSegment(path types.Path) bool {
+	for _, seg := range path.Slice() {
+		if _, err := strconv.Atoi(seg); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // isExistsTrue reports whether v, a filter field's condition, is
@@ -1234,6 +1632,21 @@ func existsIndexable(idx backends.IndexInfo) bool {
 	return idx.Sparse && len(idx.Key) == 1 && !strings.Contains(idx.Key[0].Field, ".")
 }
 
+// indexBoundsForFilterValue translates the value side of a single
+// {field: value} filter clause into a [startKey, stopKey) byte range over the
+// secondary index. The bounds are always sound: any document matching the
+// clause is guaranteed to lie in the returned range, though the range may
+// include false positives (the handler will filter them out).
+//
+// Supported value shapes:
+//   - bare scalar v                          -> [KS(v)+0x04, KS(v)+0x05)
+//   - operator doc using only $eq / $gt /
+//     $gte / $lt / $lte                      -> bounds derived from the
+//     tightest clause on each side.
+//
+// Returns ok=false for value shapes the index path can't handle (regex,
+// $in, $ne, nested operators, mixed comparisons against arrays, ...); the
+// caller falls back to the full-scan path.
 func indexBoundsForFilterValue(v any) (startKey, stopKey []byte, ok bool) {
 	opDoc, isOp := v.(*types.Document)
 	if !isOp {
@@ -1510,6 +1923,15 @@ type explainStage struct {
 	keyPattern *types.Document
 	input      *explainStage
 	inputs     []*explainStage
+	// index is the index an IXSCAN reads.
+	index backends.IndexInfo
+	// idPoint marks the _id point lookup's IXSCAN.
+	idPoint bool
+	// subplan marks the plan of a lone $or, which MongoDB plans per branch
+	// under SUBPLAN.
+	subplan bool
+	// amount is a LIMIT's limitAmount or a SKIP's skipAmount.
+	amount int64
 }
 
 func (s *explainStage) toDoc() *types.Document {
@@ -1519,6 +1941,12 @@ func (s *explainStage) toDoc() *types.Document {
 	}
 	if s.keyPattern != nil {
 		d.Set("keyPattern", s.keyPattern)
+	}
+	switch s.stage {
+	case "LIMIT":
+		d.Set("limitAmount", explainAmount(s.amount))
+	case "SKIP":
+		d.Set("skipAmount", explainAmount(s.amount))
 	}
 	if len(s.inputs) > 0 {
 		arr := types.MakeArray(len(s.inputs))
@@ -1532,76 +1960,13 @@ func (s *explainStage) toDoc() *types.Document {
 	return d
 }
 
-// buildOrUnionPlan recognises the {$or: [<clauseDoc>, ...]} filter
-// shape and builds an OR union plan when every clause is matchable
-// to a single-field index. Each clause must be a single-field
-// equality/range predicate whose field has an index; otherwise
-// MongoDB cannot do an indexed OR-union and would fall back to a
-// COLLSCAN, so we do the same.
-//
-// Returns the outer FETCH stage (wrapping OR which wraps the
-// per-branch IXSCAN nodes) and ok=true on a match. Returns ok=false
-// for unsupported shapes (the caller falls through to the normal
-// index-pick or COLLSCAN plan).
-func buildOrUnionPlan(params *backends.ExplainParams, idxInfos []backends.IndexInfo) (*explainStage, bool) {
-	if params == nil || params.Filter == nil || params.Filter.Len() != 1 {
-		return nil, false
+// explainAmount is n as mongod reports a limit or skip amount: an int32
+// when it fits.
+func explainAmount(n int64) any {
+	if n >= math.MinInt32 && n <= math.MaxInt32 {
+		return int32(n)
 	}
-	if params.Filter.Keys()[0] != "$or" {
-		return nil, false
-	}
-	v, err := params.Filter.Get("$or")
-	if err != nil {
-		return nil, false
-	}
-	arr, ok := v.(*types.Array)
-	if !ok || arr.Len() < 2 {
-		return nil, false
-	}
-	branches := make([]*explainStage, 0, arr.Len())
-	for i := 0; i < arr.Len(); i++ {
-		clauseAny, err := arr.Get(i)
-		if err != nil {
-			return nil, false
-		}
-		clause, ok := clauseAny.(*types.Document)
-		if !ok || clause.Len() != 1 {
-			return nil, false
-		}
-		field := clause.Keys()[0]
-		if strings.HasPrefix(field, "$") {
-			return nil, false
-		}
-		val, err := clause.Get(field)
-		if err != nil {
-			return nil, false
-		}
-		if _, _, ok := indexBoundsForFilterValue(val); !ok {
-			return nil, false
-		}
-		var idx backends.IndexInfo
-		var found bool
-		for _, candidate := range idxInfos {
-			if len(candidate.Key) == 1 && candidate.Key[0].Field == field {
-				idx = candidate
-				found = true
-				break
-			}
-		}
-		if !found {
-			return nil, false
-		}
-		branches = append(branches, &explainStage{
-			stage:      "IXSCAN",
-			indexName:  idx.Name,
-			keyPattern: keyPatternOf(idx),
-		})
-	}
-	or := &explainStage{stage: "OR", inputs: branches}
-	fetch := &explainStage{stage: "FETCH", input: or}
-	// MongoDB wraps the indexed-OR plan in a SUBPLAN node (one plan
-	// per $or branch, unioned). Match that shape.
-	return &explainStage{stage: "SUBPLAN", input: fetch}, true
+	return n
 }
 
 // partialFilterScalar extracts the scalar a condition pins a field to:
@@ -1791,20 +2156,72 @@ func (r scalarRange) within(outer scalarRange) bool {
 	return true
 }
 
-// indexRank orders index candidates for the same leading field: lower
-// wins. Single-field beats compound; non-partial beats partial.
-func indexRank(compound, partial bool) int {
-	r := 0
-	if compound {
-		r += 2
-	}
-	if partial {
-		r += 1
-	}
-	return r
+// indexCandidateScore orders indexes sharing a leading field, as MongoDB's
+// plan ranking would: an index bounding more of the filter's fields scans
+// fewer keys, a covering one fetches nothing, and otherwise a single-field
+// index beats a compound one and a non-partial index a partial one.
+type indexCandidateScore struct {
+	bounded int
+	covers  bool
+	rank    int
 }
 
-func pickIndexForFilter(filter *types.Document, idxInfos []backends.IndexInfo, queryCollation *types.Document) (backends.IndexInfo, bool) {
+func (s indexCandidateScore) beats(other indexCandidateScore) bool {
+	if s.bounded != other.bounded {
+		return s.bounded > other.bounded
+	}
+	if s.covers != other.covers {
+		return s.covers
+	}
+	return s.rank < other.rank
+}
+
+func scoreIndexCandidate(idx backends.IndexInfo, filter *types.Document, fields []string, partial bool) indexCandidateScore {
+	rank := 0
+	if len(idx.Key) > 1 {
+		rank += 2
+	}
+	if partial {
+		rank++
+	}
+	return indexCandidateScore{bounded: boundedKeyFields(idx, filter), covers: coveredKeysFor(idx, fields) != nil, rank: rank}
+}
+
+// boundedKeyFields counts the leading keys of idx whose range filter narrows:
+// equalities, then at most one range, as compoundIndexBounds builds them, or
+// an $in on the leading key alone.
+func boundedKeyFields(idx backends.IndexInfo, filter *types.Document) int {
+	n := 0
+	for i, kp := range idx.Key {
+		if i > 0 && kp.Descending {
+			break
+		}
+		v, err := filter.Get(kp.Field)
+		if err != nil {
+			break
+		}
+		if _, isIn := indexPointRangesForIn(v); isIn {
+			if i == 0 {
+				n++
+			}
+			break
+		}
+		if _, isEq := indexEqualityValue(v); isEq {
+			n++
+			continue
+		}
+		if _, _, ok := indexBoundsForFilterValue(v); ok {
+			n++
+		}
+		break
+	}
+	return n
+}
+
+// pickIndexForFilter returns the index a count or distinct explains reading
+// for filter. arrayFilters admits an $elemMatch of operators and an equality
+// to [], which a count reads from the index and fetches.
+func pickIndexForFilter(filter *types.Document, idxInfos []backends.IndexInfo, queryCollation *types.Document, arrayFilters bool) (backends.IndexInfo, bool) {
 	queryIdentity := collation.Parse(queryCollation).Identity()
 	if filter == nil || filter.Len() == 0 {
 		return backends.IndexInfo{}, false
@@ -1822,14 +2239,20 @@ func pickIndexForFilter(filter *types.Document, idxInfos []backends.IndexInfo, q
 			_, inOK := indexPointRangesForIn(v)
 			_, regexOK := regexPrefixRanges(v)
 			nullEq, exists = isNullEquality(v), isExistsTrue(v)
-			if !inOK && !(regexOK && queryIdentity == "") && !nullEq && !exists {
+			arrayFilter := false
+			if inner, ok := elemMatchOperators(v); ok && arrayFilters {
+				_, _, arrayFilter = indexBoundsForFilterValue(inner)
+			}
+			arrayFilter = arrayFilter || (arrayFilters && isEmptyArrayEquality(v))
+			if !inOK && !(regexOK && queryIdentity == "") && !nullEq && !exists && !arrayFilter {
 				continue
 			}
 		}
 		// Pick the best-ranked index whose leading field is k. A partial
 		// index is eligible only when the filter implies its partial
 		// condition (so the query's matches all lie within it).
-		best := -1
+		found := false
+		var best indexCandidateScore
 		var bestIdx backends.IndexInfo
 		for _, idx := range idxInfos {
 			if idx.Lossy || len(idx.Key) == 0 || idx.Key[0].Field != k {
@@ -1845,12 +2268,12 @@ func pickIndexForFilter(filter *types.Document, idxInfos []backends.IndexInfo, q
 			if partial && !filterImpliesPartial(filter, idx.PartialFilterExpression, collation.Parse(idx.Collation).IsSimple()) {
 				continue
 			}
-			rank := indexRank(len(idx.Key) > 1, partial)
-			if best == -1 || rank < best {
-				best, bestIdx = rank, idx
+			score := scoreIndexCandidate(idx, filter, nil, partial)
+			if !found || score.beats(best) {
+				found, best, bestIdx = true, score, idx
 			}
 		}
-		if best != -1 {
+		if found {
 			return bestIdx, true
 		}
 	}
@@ -1929,292 +2352,346 @@ func isOperatorDoc(doc *types.Document) bool {
 }
 
 func (c *collection) Explain(ctx context.Context, params *backends.ExplainParams) (*backends.ExplainResult, error) {
-	var parsedQuery *types.Document
-	if params != nil {
-		parsedQuery = canonicalizeParsedQuery(params.Filter)
-	} else {
-		parsedQuery = types.MakeDocument(0)
+	if params == nil {
+		params = new(backends.ExplainParams)
 	}
+	parsedQuery := canonicalizeParsedQuery(params.Filter)
 
 	var idxInfos []backends.IndexInfo
 	if state, err := c.db.backend.getOrOpenDB(ctx, c.db.name, false); err == nil && state != nil {
-		state.mu.RLock()
-		resolvedInfos, _, rerr := resolveIndexes(ctx, c, state)
-		state.mu.RUnlock()
+		resolvedInfos, _, rerr := resolveIndexesLocked(ctx, c, state)
 		if rerr == nil {
 			idxInfos = append(idxInfos, resolvedInfos...)
 		}
 	}
 
-	// Picked index: explicit hint wins; otherwise an equality / range
-	// filter on a single-field index. A {$natural: ...} hint forces a
-	// collection scan and short-circuits all index selection -- MongoDB
-	// treats $natural as "ignore the indexes, walk the storage in
-	// natural order."
-	var picked backends.IndexInfo
-	var indexPicked bool
-	naturalHint := params != nil && hintIsNatural(params.Hint)
-	if !naturalHint && params != nil {
-		if hintName := pickHintedIndex(params.Hint, idxInfos); hintName != "" {
-			for _, idx := range idxInfos {
-				if idx.Name == hintName {
-					picked = idx
-					indexPicked = true
-					break
-				}
-			}
-		}
-	}
-	if !naturalHint && !indexPicked && params != nil {
-		picked, indexPicked = pickIndexForFilter(params.Filter, idxInfos, params.Collation)
-	}
-	if !naturalHint && !indexPicked && params != nil && params.Command == "distinct" && params.DistinctKey != "" {
-		// distinct uses a covered index on its key when one exists; the
-		// filter (if any) does not drive selection.
-		for _, idx := range idxInfos {
-			if len(idx.Key) == 1 && idx.Key[0].Field == params.DistinctKey {
-				picked = idx
-				indexPicked = true
-				break
-			}
-		}
-	}
-	// Covered-query detection: a find with a single-field IXSCAN whose
-	// projection only references the indexed field with _id explicitly
-	// excluded ({field:1, _id:0}). When covered, the explain tree omits
-	// the FETCH stage and wraps IXSCAN in PROJECTION_COVERED.
-	//
-	// Today this is an explain-shape signal only: the runtime
-	// (tryIndexLookup) still primary-fetches every matching doc. A
-	// runtime "skip the fetch and decode field values from the index
-	// key" optimization is a real performance win but requires
-	// KeyString decoding (workspace-cdq, future). The explain output
-	// stays honest about which queries COULD be covered; users can rely
-	// on PROJECTION_COVERED appearing iff the index key contains all
-	// projected data.
-	covered := false
-
-	// Sort-via-index: when no filter-driven index was chosen and the
-	// query has a single-field non-natural sort, an index on that field
-	// can drive the scan in sorted order without a SORT stage.
-	sortBy := sortInMemory
-	if walked, ok := c.explainSortWalkTrial(ctx, params, naturalHint, indexPicked, idxInfos); ok {
-		picked = walked
-		sortBy = sortByIndexOrder
-	} else if !naturalHint && !indexPicked && params != nil && sortIsSingleField(params.Sort) {
-		if i, ok := sortWalkIndex(idxInfos, params.Sort, params.Collation); ok {
-			picked = idxInfos[i]
-			indexPicked = true
-			sortBy = sortByIndexOrder
-		}
-	} else if indexPicked && params != nil && sortIsSingleField(params.Sort) {
-		if _, ok := indexScanSortOrder(picked, params.Filter, params.Sort, params.Collation); ok {
-			sortBy = sortByIndexOrder
-		} else if _, ok := indexKeySortPosition(picked, params.Filter, params.Sort, params.Collation); ok {
-			sortBy = sortByIndexKeys
-		}
-	}
-
-	if indexPicked && params != nil && !picked.Multikey {
-		covered = projectionIsCoveredBy(params.Projection, picked)
-	}
-
-	command := ""
-	if params != nil {
-		command = params.Command
-	}
-
-	// $or multi-index: when the filter is top-level $or with every
-	// clause matchable to a single-field index, MongoDB builds a union
-	// plan: FETCH -> OR -> [IXSCAN, IXSCAN, ...]. Build that shape
-	// here for explain. Runtime tryIndexLookup currently bails on $or
-	// and falls back to COLLSCAN -- the perf optimization (actually
-	// running the OR-union) is a separate ticket.
-	if orStage, ok := buildOrUnionPlan(params, idxInfos); ok {
-		winningDoc := orStage.toDoc()
-		qp := must.NotFail(types.NewDocument(
-			"namespace", c.db.name+"."+c.name,
-			"parsedQuery", parsedQuery,
-		))
-		c.planCacheExplain(params, idxInfos, qp, winningDoc)
-		qp.Set("winningPlan", winningDoc)
-		qp.Set("rejectedPlans", types.MakeArray(0))
-		return &backends.ExplainResult{QueryPlanner: qp}, nil
-	}
-
-	winningDoc := buildExplainPlan(command, params, picked, indexPicked, sortBy, covered).toDoc()
-
 	qp := must.NotFail(types.NewDocument(
 		"namespace", c.db.name+"."+c.name,
 		"parsedQuery", parsedQuery,
 	))
-	c.planCacheExplain(params, idxInfos, qp, winningDoc)
+	// The plan cache is read before planning, which may fill it.
+	shapeHash, keyHash, cached := c.planCacheState(params, idxInfos)
+
+	var winning *explainStage
+	switch params.Command {
+	case "count", "distinct":
+		winning = buildCountOrDistinctPlan(ctx, params, idxInfos)
+	default:
+		res, scan, err := c.query(ctx, explainQueryParams(params))
+		if err != nil {
+			return nil, err
+		}
+		res.Iter.Close()
+		winning = wrapScanPlan(params, scan, res.Sorted)
+		if params.CountOnly {
+			winning = &explainStage{stage: "GROUP", input: countingScan(params.Filter, scan)}
+		}
+		// MongoDB plans each branch of a lone $or separately, under SUBPLAN.
+		if (params.Command == "find" || params.Command == "aggregate") && scan.subplan {
+			winning = &explainStage{stage: "SUBPLAN", input: winning}
+		}
+	}
+
+	winningDoc := winning.toDoc()
+	winningDoc.Set("isCached", cached)
+	qp.Set("queryHash", shapeHash)
+	qp.Set("planCacheShapeHash", shapeHash)
+	qp.Set("planCacheKey", keyHash)
 	qp.Set("winningPlan", winningDoc)
 	qp.Set("rejectedPlans", types.MakeArray(0))
-	return &backends.ExplainResult{
-		QueryPlanner: qp,
-	}, nil
+	return &backends.ExplainResult{QueryPlanner: qp}, nil
 }
 
-// explainSortWalkTrial returns the sort index Query walks in place of the
-// filter's index for params, as decided by trySortWalkTrial.
-// explainQueryParams is the QueryParams the explained command runs with.
+// explainQueryParams is the QueryParams the explained command runs with. As
+// in find, only a pushable sort reaches the backend; another is applied in
+// memory over the filter's plan.
 func explainQueryParams(params *backends.ExplainParams) *backends.QueryParams {
-	qp := &backends.QueryParams{Filter: params.Filter, Sort: params.Sort, Hint: params.Hint, Collated: params.Collated, Collation: params.Collation}
+	qp := &backends.QueryParams{Filter: params.Filter, Hint: params.Hint, Collated: params.Collated, Collation: params.Collation, Fields: params.Fields}
+	if backends.PushableSort(params.Sort) {
+		qp.Sort = params.Sort
+	}
 	if params.Limit != 0 {
 		qp.LimitHint = params.Skip + max(params.Limit, -params.Limit)
 	}
 	return qp
 }
 
-// planCacheExplain adds the plan cache fields MongoDB reports to an explain:
-// the hashes on queryPlanner, and whether the winning plan is cached.
-func (c *collection) planCacheExplain(params *backends.ExplainParams, idxInfos []backends.IndexInfo, queryPlanner, winningPlan *types.Document) {
-	if params == nil {
-		params = new(backends.ExplainParams)
-	}
+// planCacheState returns the plan cache hashes MongoDB reports for params, and
+// whether a plan for them is cached.
+func (c *collection) planCacheState(params *backends.ExplainParams, idxInfos []backends.IndexInfo) (shapeHash, keyHash string, cached bool) {
 	qp := explainQueryParams(params)
-	shapeHash, keyHash := planCacheHashes(idxInfos, qp)
-	_, cached := c.db.backend.planCache.get(c.planCacheKey(idxInfos, qp))
-	winningPlan.Set("isCached", cached)
-	queryPlanner.Set("queryHash", shapeHash)
-	queryPlanner.Set("planCacheShapeHash", shapeHash)
-	queryPlanner.Set("planCacheKey", keyHash)
+	shapeHash, keyHash = planCacheHashes(idxInfos, qp)
+	_, cached = c.db.backend.planCache.get(c.planCacheKey(idxInfos, qp))
+	return shapeHash, keyHash, cached
 }
 
-func (c *collection) explainSortWalkTrial(ctx context.Context, params *backends.ExplainParams, naturalHint, indexPicked bool, idxInfos []backends.IndexInfo) (backends.IndexInfo, bool) {
-	if naturalHint || !indexPicked || params == nil || params.Hint != nil || params.Collated || !sortIsSingleField(params.Sort) {
-		return backends.IndexInfo{}, false
-	}
-	name, ok := c.sortWalkWinsTrial(ctx, explainQueryParams(params))
-	if !ok {
-		return backends.IndexInfo{}, false
-	}
-	for _, idx := range idxInfos {
-		if idx.Name == name {
-			return idx, true
+func collscanStage() *explainStage { return &explainStage{stage: "COLLSCAN"} }
+
+func fetchStage(input *explainStage) *explainStage {
+	return &explainStage{stage: "FETCH", input: input}
+}
+
+func ixscanStage(info backends.IndexInfo) *explainStage {
+	return &explainStage{stage: "IXSCAN", indexName: info.Name, keyPattern: keyPatternOf(info), index: info}
+}
+
+// idPointStage is the _id point lookup, one read of the clustered _id index.
+func idPointStage() *explainStage {
+	return &explainStage{stage: "CLUSTERED_IXSCAN", idPoint: true}
+}
+
+// clusteredStage is a scan of an _id range of the clustered _id index.
+func clusteredStage() *explainStage {
+	return &explainStage{stage: "CLUSTERED_IXSCAN"}
+}
+
+// walkStage is a sort walk of the index named name, fetching each document.
+func walkStage(idxInfos []backends.IndexInfo, name string) *explainStage {
+	for _, info := range idxInfos {
+		if info.Name == name {
+			return fetchStage(ixscanStage(info))
 		}
 	}
-	return backends.IndexInfo{}, false
+	return fetchStage(&explainStage{stage: "IXSCAN", indexName: name})
 }
 
-// buildExplainPlan composes the stage tree for the given command and
-// planning choice. Only shapes the planner choices DumboDB already makes
-// (workspace-bbg scope) -- no new planner capabilities (covered queries,
-// compound indexes, OR/AND multi-index, sort via index) are introduced
-// here; those land in their own follow-ups.
-// sortSource is where a plan's sort order comes from.
-type sortSource int
+// stage is the scan plan reads: its index, or an OR of a union's branches,
+// fetching each document.
+func (plan *indexLookupPlan) stage() *explainStage {
+	if !plan.union {
+		return fetchStage(ixscanStage(plan.info))
+	}
+	if len(plan.branches) == 1 {
+		fetch := fetchStage(ixscanStage(plan.branches[0].info))
+		fetch.subplan = !plan.withoutSubplan
+		return fetch
+	}
+	or := &explainStage{stage: "OR"}
+	for _, branch := range plan.branches {
+		scan := ixscanStage(branch.info)
+		if branch.residual {
+			scan = fetchStage(scan)
+		}
+		or.inputs = append(or.inputs, scan)
+	}
+	fetch := fetchStage(or)
+	fetch.subplan = true
+	return fetch
+}
 
-const (
-	// sortInMemory sorts fetched documents in a SORT stage above FETCH.
-	sortInMemory sortSource = iota
-	// sortByIndexOrder reads the index already in sort order: no SORT stage.
-	sortByIndexOrder
-	// sortByIndexKeys sorts the scanned index keys before FETCH.
-	sortByIndexKeys
-)
+// indexAnswersFilter reports whether info's bounds alone decide filter, so a
+// scan of it fetches no document that does not match.
+func indexAnswersFilter(info backends.IndexInfo, filter *types.Document) bool {
+	return !info.Multikey && filter.Len() > 0 && boundedKeyFields(info, filter) == filter.Len() && filterFieldsAreIndexKeys(filter, info)
+}
 
-func buildExplainPlan(command string, params *backends.ExplainParams, picked backends.IndexInfo, indexPicked bool, sortBy sortSource, covered bool) *explainStage {
-	switch command {
-	case "count":
-		var leaf *explainStage
-		if indexPicked {
-			leaf = &explainStage{
-				stage:      "COUNT_SCAN",
-				indexName:  picked.Name,
-				keyPattern: keyPatternOf(picked),
+// countingScan is the scan under a counting GROUP, which reads no document
+// when its index bounds every filtered field: a COUNT_SCAN of a single
+// interval, or an IXSCAN of several.
+func countingScan(filter *types.Document, scan *explainStage) *explainStage {
+	if scan.stage != "FETCH" || scan.input == nil || scan.input.stage != "IXSCAN" {
+		return scan
+	}
+	info := scan.input.index
+	if !indexAnswersFilter(info, filter) {
+		return scan
+	}
+	for _, f := range filter.Keys() {
+		if ops, _ := must.NotFail(filter.Get(f)).(*types.Document); ops != nil && ops.Has("$in") {
+			if in, _ := must.NotFail(ops.Get("$in")).(*types.Array); in != nil && in.Len() > 1 {
+				return scan.input
 			}
-		} else {
-			leaf = &explainStage{stage: "COLLSCAN"}
+		}
+	}
+	return &explainStage{stage: "COUNT_SCAN", indexName: info.Name, keyPattern: keyPatternOf(info)}
+}
+
+// buildCountOrDistinctPlan composes the stage tree for a count or distinct.
+func buildCountOrDistinctPlan(ctx context.Context, params *backends.ExplainParams, idxInfos []backends.IndexInfo) *explainStage {
+	var picked backends.IndexInfo
+	var indexPicked bool
+	if !hintIsNatural(params.Hint) {
+		if hintName := pickHintedIndex(params.Hint, idxInfos); hintName != "" {
+			for _, idx := range idxInfos {
+				if idx.Name == hintName {
+					picked, indexPicked = idx, true
+					break
+				}
+			}
+		}
+		if !indexPicked {
+			picked, indexPicked = pickIndexForFilter(equalitiesAlone(params.Filter, collation.Parse(params.Collation).IsSimple()), idxInfos, params.Collation, params.Command == "count")
+		}
+	}
+	if params.Command == "count" {
+		if filterNeverMatches(params.Filter) {
+			return &explainStage{stage: "COUNT", input: &explainStage{stage: "EOF"}}
+		}
+		leaf := collscanStage()
+		reduced, empty := params.Filter, false
+		if indexPicked {
+			reduced, empty = reducedForIndex(params.Filter, picked, collation.Parse(params.Collation).IsSimple())
+		}
+		switch {
+		case indexPicked && empty:
+			// The intersected bounds hold no key.
+			leaf = ixscanStage(picked)
+		case indexPicked && reduced != params.Filter && !hintedOffFilter(&backends.ExplainParams{Hint: params.Hint, Filter: reduced, Collation: params.Collation}, picked) &&
+			!countFetchesToMatch(reduced) && !filterIsIn(reduced):
+			leaf = &explainStage{stage: "COUNT_SCAN", indexName: picked.Name, keyPattern: keyPatternOf(picked)}
+		case indexPicked && hintedOffFilter(params, picked):
+			// A hinted index the filter does not lead fetches every entry.
+			leaf = fetchStage(ixscanStage(picked))
+		case indexPicked && (countFetchesToMatch(params.Filter) || picked.KeyMultikey(0) && filterHasTwoSidedRange(params.Filter)):
+			// Its keys cannot decide whether a document matches.
+			leaf = fetchStage(ixscanStage(picked))
+		case indexPicked && filterIsIn(params.Filter):
+			// An $in counts from an IXSCAN of its ranges, without a FETCH.
+			leaf = ixscanStage(picked)
+		case indexPicked && !countBoundsExact(reduced) && !sparseExistsCount(picked, reduced):
+			// Its bounds hold more keys than matches, so each is fetched.
+			leaf = fetchStage(ixscanStage(picked))
+		case indexPicked:
+			leaf = &explainStage{stage: "COUNT_SCAN", indexName: picked.Name, keyPattern: keyPatternOf(picked)}
+		default:
+			if _, _, ranged := clusteredIDRange(ctx, params.Filter); ranged && !params.Collated && !hintIsNatural(params.Hint) {
+				leaf = clusteredStage()
+			}
 		}
 		return &explainStage{stage: "COUNT", input: leaf}
-
-	case "distinct":
-		// MongoDB emits PROJECTION_COVERED above DISTINCT_SCAN for a top-level
-		// key and PROJECTION_DEFAULT for a dotted one. DumboDB's DistinctScan
-		// path uses the index covering the distinct key; if no usable index,
-		// fall back to COLLSCAN (rare in practice; the parity test always
-		// provides one).
-		if indexPicked {
-			leaf := &explainStage{
-				stage:      "DISTINCT_SCAN",
-				indexName:  picked.Name,
-				keyPattern: keyPatternOf(picked),
-			}
-			projection := "PROJECTION_COVERED"
-			if strings.ContainsRune(params.DistinctKey, '.') {
-				projection = "PROJECTION_DEFAULT"
-			}
-			return &explainStage{stage: projection, input: leaf}
-		}
-		return &explainStage{stage: "COLLSCAN"}
-
-	case "update", "delete":
-		// MongoDB wraps the query plan in an UPDATE / DELETE stage. The
-		// inner scan follows the same index-vs-collection choice as find.
-		inner := buildFindExplainPlan(params, picked, indexPicked, sortBy, covered)
-		stage := "UPDATE"
-		if command == "delete" {
-			stage = "DELETE"
-		}
-		return &explainStage{stage: stage, input: inner}
-
-	default:
-		// "find" and "aggregate" (the latter via pushed-down $match) share
-		// the same shape rules.
-		return buildFindExplainPlan(params, picked, indexPicked, sortBy, covered)
 	}
+
+	// distinct uses a covered index on its key when one exists; the filter
+	// (if any) does not drive selection. MongoDB emits PROJECTION_COVERED
+	// above DISTINCT_SCAN for a top-level key and PROJECTION_DEFAULT for a
+	// dotted one.
+	if !indexPicked && !hintIsNatural(params.Hint) && params.DistinctKey != "" {
+		for _, idx := range idxInfos {
+			if len(idx.Key) == 1 && idx.Key[0].Field == params.DistinctKey {
+				picked, indexPicked = idx, true
+				break
+			}
+		}
+	}
+	if !indexPicked {
+		return collscanStage()
+	}
+	leaf := &explainStage{stage: "DISTINCT_SCAN", indexName: picked.Name, keyPattern: keyPatternOf(picked)}
+	projection := "PROJECTION_COVERED"
+	if strings.ContainsRune(params.DistinctKey, '.') {
+		projection = "PROJECTION_DEFAULT"
+	}
+	return &explainStage{stage: projection, input: leaf}
 }
 
-// buildFindExplainPlan composes the stage tree for a find-like query
-// (also used for aggregate with pushed-down $match). Wrapping order
-// from inner to outer: leaf -> FETCH (if IXSCAN) -> SORT -> SKIP ->
-// LIMIT (only when no SORT, because SORT absorbs LIMIT into a TopK
-// internally) -> PROJECTION_SIMPLE. Covered-query (PROJECTION_COVERED
-// without FETCH) is bucket B and not handled here.
-func buildFindExplainPlan(params *backends.ExplainParams, picked backends.IndexInfo, indexPicked bool, sortBy sortSource, covered bool) *explainStage {
-	var node *explainStage
-	if indexPicked {
-		node = &explainStage{
-			stage:      "IXSCAN",
-			indexName:  picked.Name,
-			keyPattern: keyPatternOf(picked),
+// countFetchesToMatch reports whether filter, one field's condition, needs
+// each document to decide a match: an $elemMatch, a $size, or an equality to
+// an array.
+func countFetchesToMatch(filter *types.Document) bool {
+	if filter.Len() != 1 {
+		return false
+	}
+	v := must.NotFail(filter.Get(filter.Keys()[0]))
+	if doc, ok := v.(*types.Document); ok && doc.Len() == 1 {
+		switch doc.Keys()[0] {
+		case "$elemMatch", "$size":
+			return true
+		case "$eq":
+			v = must.NotFail(doc.Get("$eq"))
 		}
-		if sortBy == sortByIndexKeys {
-			node = &explainStage{stage: "SORT", input: node}
-		}
-		if !covered {
-			node = &explainStage{stage: "FETCH", input: node}
-		}
-	} else {
-		node = &explainStage{stage: "COLLSCAN"}
+	}
+	_, isArray := v.(*types.Array)
+	return isArray
+}
+
+// wrapScanPlan composes the stage tree for a find, aggregate or write around
+// scan, the scan Query runs; sorted reports that scan returns the requested
+// sort order. Wrapping order from inner to outer: SORT (unless sorted), SKIP,
+// LIMIT (only when no SORT, because SORT absorbs LIMIT into a TopK), the
+// projection, then the write.
+func wrapScanPlan(params *backends.ExplainParams, scan *explainStage, sorted bool) *explainStage {
+	if express, ok := expressStage(params, scan); ok {
+		return express
 	}
 
-	if params == nil {
-		return node
+	// A projection of only indexed fields is answered from the index keys:
+	// PROJECTION_COVERED replaces the FETCH. DumboDB still fetches each
+	// document (dolthub/dumbodb#142); the shape shows the query could be
+	// covered.
+	node := scan
+	covered := false
+	if scan.stage == "FETCH" && scan.input != nil && scan.input.stage == "IXSCAN" && !scan.input.idPoint &&
+		!scan.input.index.Multikey && projectionIsCoveredBy(params.Projection, scan.input.index) &&
+		!leadingKeyUnfiltered(scan.input.index, params.Filter) {
+		node, covered = scan.input, true
 	}
 
-	sortPresent := params.Sort != nil && params.Sort.Len() > 0 && !sortIsNatural(params.Sort) && sortBy != sortByIndexOrder
-	if sortPresent && sortBy == sortInMemory {
-		node = &explainStage{stage: "SORT", input: node}
-	}
-	if params.Skip > 0 {
-		node = &explainStage{stage: "SKIP", input: node}
-	}
-	// MongoDB absorbs LIMIT into SORT (TopK), so it does not emit a
-	// separate LIMIT stage when sort is present.
-	if params.Limit > 0 && !sortPresent {
-		node = &explainStage{stage: "LIMIT", input: node}
-	}
-	if params.Projection != nil && params.Projection.Len() > 0 {
-		projStage := "PROJECTION_SIMPLE"
+	sortPresent := params.Sort.Len() > 0 && !sortIsNatural(params.Sort) && !sorted
+	projStage := ""
+	if params.Projection.Len() > 0 {
+		projStage = "PROJECTION_SIMPLE"
 		if covered {
 			projStage = "PROJECTION_COVERED"
 		}
+	}
+	// The skip drops index keys before their documents are fetched, when the
+	// FETCH has no filter left to apply.
+	skipped := false
+	if params.Skip > 0 && !sortPresent && node == scan && scan.stage == "FETCH" && scan.input != nil && scan.input.stage == "IXSCAN" &&
+		(params.Filter.Len() == 0 || indexAnswersFilter(scan.input.index, params.Filter)) {
+		fetch := *scan
+		fetch.input = &explainStage{stage: "SKIP", input: scan.input, amount: params.Skip}
+		node, skipped = &fetch, true
+	}
+	// An aggregate's projection runs under its skip and limit, and under a
+	// sort that has no limit to absorb.
+	if projStage != "" && params.Command == "aggregate" && (!sortPresent || params.Limit == 0) {
+		node = &explainStage{stage: projStage, input: node}
+		projStage = ""
+	}
+	if sortPresent {
+		node = &explainStage{stage: "SORT", input: node}
+	}
+	if params.Skip > 0 && !skipped {
+		node = &explainStage{stage: "SKIP", input: node, amount: params.Skip}
+	}
+	// A scan that sorts its index keys also absorbs the limit.
+	keysSorted := scan.input != nil && scan.input.stage == "SORT"
+	if params.Limit > 0 && !sortPresent && !keysSorted {
+		node = &explainStage{stage: "LIMIT", input: node, amount: max(params.Limit, -params.Limit)}
+	}
+	if params.ZeroLimit {
+		node = &explainStage{stage: "LIMIT", input: node}
+	}
+	if projStage != "" {
 		node = &explainStage{stage: projStage, input: node}
 	}
+
+	switch {
+	case params.Command == "update" || params.Command == "findAndModify" && !params.Remove:
+		return &explainStage{stage: "UPDATE", input: node}
+	case params.Command == "delete" && params.Multi:
+		return &explainStage{stage: "BATCHED_DELETE", input: node}
+	case params.Command == "delete" || params.Command == "findAndModify":
+		return &explainStage{stage: "DELETE", input: node}
+	}
 	return node
+}
+
+// expressStage returns the single EXPRESS stage MongoDB explains a clustered
+// _id point lookup with when the filter is the _id equality alone.
+func expressStage(params *backends.ExplainParams, scan *explainStage) (*explainStage, bool) {
+	if !scan.idPoint || params.Filter.Len() != 1 {
+		return nil, false
+	}
+	stage := "EXPRESS_CLUSTERED_IXSCAN"
+	switch {
+	case params.Command == "update" || params.Command == "findAndModify" && !params.Remove:
+		stage = "EXPRESS_UPDATE"
+	case params.Command == "delete" || params.Command == "findAndModify":
+		stage = "EXPRESS_DELETE"
+	}
+	return &explainStage{stage: stage}, true
 }
 
 // projectionIsCoveredBy reports whether projection only references
@@ -2282,6 +2759,50 @@ func sortIsSingleField(sort *types.Document) bool {
 	return sort.Keys()[0] != "$natural"
 }
 
+// sortIsFieldSort reports whether sort is on one field, or on several fields
+// all in the same direction (backends.PushableSort), so an index whose keys
+// are those fields in order can yield it.
+func sortIsFieldSort(sort *types.Document) bool {
+	if sortIsSingleField(sort) {
+		return true
+	}
+	return sort.Len() > 1 && backends.PushableSort(sort)
+}
+
+// anyIndexYieldsSort reports whether some index has sort's fields as
+// consecutive keys in a direction it can be walked in.
+func anyIndexYieldsSort(infos []backends.IndexInfo, sort *types.Document) bool {
+	for _, idx := range infos {
+		for pos := 0; pos+sort.Len() <= len(idx.Key); pos++ {
+			if indexKeysMatchSort(idx, pos, sort) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// indexKeysMatchSort reports whether idx's keys from pos on are sort's fields
+// in order, and, for a sort on several fields, all in one direction, as
+// MongoDB walks a compound index only when its directions agree with the
+// sort's or are all reversed.
+func indexKeysMatchSort(idx backends.IndexInfo, pos int, sort *types.Document) bool {
+	fields := sort.Keys()
+	if pos+len(fields) > len(idx.Key) {
+		return false
+	}
+	for j, f := range fields {
+		k := idx.Key[pos+j]
+		if k.Field != f || k.Hashed || k.Text || k.Geo2D || k.Geo2DSphere {
+			return false
+		}
+		if len(fields) > 1 && k.Descending != idx.Key[pos].Descending {
+			return false
+		}
+	}
+	return true
+}
+
 // sortDirectionAscending assumes sort is already single-field (see sortIsSingleField).
 func sortDirectionAscending(sort *types.Document) bool {
 	v, err := sort.Get(sort.Keys()[0])
@@ -2332,7 +2853,7 @@ func indexScanSortOrder(idx backends.IndexInfo, filter, sort, queryCollation *ty
 		if k.Field != sort.Keys()[0] {
 			continue
 		}
-		if !filterBindsEqualityPrefix(filter, idx.Key[:pos]) {
+		if !indexKeysMatchSort(idx, pos, sort) || !filterBindsEqualityPrefix(filter, idx.Key[:pos]) {
 			return false, false
 		}
 		return !sortDirectionAscending(sort), true
@@ -2345,7 +2866,7 @@ func indexScanSortOrder(idx backends.IndexInfo, filter, sort, queryCollation *ty
 // its min or max element, not the one an entry holds), the sort is a direction,
 // and both orders are binary.
 func indexKeysOrderSort(idx backends.IndexInfo, sort, queryCollation *types.Document) bool {
-	if idx.Multikey || !sortIsSingleField(sort) || !collation.Parse(queryCollation).IsSimple() || !collation.Parse(idx.Collation).IsSimple() {
+	if idx.Multikey || !sortIsFieldSort(sort) || !collation.Parse(queryCollation).IsSimple() || !collation.Parse(idx.Collation).IsSimple() {
 		return false
 	}
 	switch must.NotFail(sort.Get(sort.Keys()[0])).(type) {
@@ -2360,7 +2881,7 @@ func indexKeysOrderSort(idx backends.IndexInfo, sort, queryCollation *types.Docu
 // is fetched: the keys order the sort, and every filter field is an index key,
 // so the bounds alone decide a match.
 func indexKeySortPosition(idx backends.IndexInfo, filter, sort, queryCollation *types.Document) (int, bool) {
-	if filter == nil || !indexKeysOrderSort(idx, sort, queryCollation) {
+	if filter == nil || !sortIsSingleField(sort) || !indexKeysOrderSort(idx, sort, queryCollation) {
 		return 0, false
 	}
 	for _, f := range filter.Keys() {
@@ -2415,6 +2936,18 @@ func sortIsNatural(sort *types.Document) bool {
 
 func hintIsNatural(hint any) bool {
 	return backends.HintIsNatural(hint)
+}
+
+// hintedOffFilter reports whether params hints idx while filtering on fields
+// other than idx's leading one, so counting must read the documents.
+func hintedOffFilter(params *backends.ExplainParams, idx backends.IndexInfo) bool {
+	if params.Hint == nil || hintIsNatural(params.Hint) || params.Filter.Len() == 0 || len(idx.Key) == 0 {
+		return false
+	}
+	if _, _, ok := exactCompoundCountBounds(idx, params.Filter, collation.Parse(params.Collation).Comparator()); ok {
+		return false
+	}
+	return params.Filter.Len() != 1 || params.Filter.Keys()[0] != idx.Key[0].Field
 }
 
 func pickHintedIndex(hint any, idxInfos []backends.IndexInfo) string {
@@ -2591,8 +3124,8 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 
 	mut := m.Mutate()
 
-	// batchHashSet detects in-batch duplicate _id hashes in O(1).
-	batchHashSet := make(map[[20]byte]struct{}, len(params.Docs))
+	// batchKeySet detects in-batch duplicate primary keys in O(1).
+	batchKeySet := make(map[string]struct{}, len(params.Docs))
 	// In-batch collated string _ids (the primary probe only sees pre-batch state).
 	var batchStrIDs []string
 	// In-batch claims per unique index (probes only see pre-batch state).
@@ -2609,9 +3142,9 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 			return nil, fmt.Errorf("document missing _id: %w", err)
 		}
 
-		h, err := hashID(docID)
+		h, err := primaryKey(docID)
 		if err != nil {
-			return nil, fmt.Errorf("hashing _id: %w", err)
+			return nil, fmt.Errorf("encoding _id: %w", err)
 		}
 
 		exists, err := existsID(ctx, m, h)
@@ -2622,7 +3155,7 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 			return nil, backends.NewDuplicateKeyError(backends.DefaultIndexName, idDupKey(docID))
 		}
 
-		if _, dup := batchHashSet[h]; dup {
+		if _, dup := batchKeySet[string(h)]; dup {
 			return nil, backends.NewDuplicateKeyError(backends.DefaultIndexName, idDupKey(docID))
 		}
 
@@ -2648,7 +3181,10 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 		// Unique constraints: one bounded index probe per entry row;
 		// membership and multikey expansion via indexEntriesForDoc.
 		for i, idx := range uniqueIndexes {
-			rows, _, lossy := indexEntriesForDoc(doc, idx)
+			rows, _, lossy, err := indexEntriesForDoc(ctx, doc, idx)
+			if err != nil {
+				return nil, err
+			}
 			if len(rows) == 0 {
 				continue
 			}
@@ -2684,7 +3220,7 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 				}
 			}
 			for _, row := range rows {
-				conflict, probeErr := idxpkg.UniqueConflict(ctx, branchIdxMaps[idx.Name], row, h[:])
+				conflict, probeErr := idxpkg.UniqueConflict(ctx, branchIdxMaps[idx.Name], row, h)
 				if probeErr != nil {
 					return nil, fmt.Errorf("unique probe on %s: %w", idx.Name, probeErr)
 				}
@@ -2697,7 +3233,7 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 			}
 		}
 
-		key, err := buildKey(h[:])
+		key, err := buildKey(h)
 		if err != nil {
 			return nil, err
 		}
@@ -2711,7 +3247,7 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 			return nil, err
 		}
 
-		batchHashSet[h] = struct{}{}
+		batchKeySet[string(h)] = struct{}{}
 	}
 
 	newMap, err := mut.Map(ctx)
@@ -2729,12 +3265,12 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 	if err != nil {
 		return nil, fmt.Errorf("updating secondary indexes: %w", err)
 	}
-	newIdxAM, err := buildIndexAM(ctx, state, updatedInfos, updatedIdxMaps)
+	newIndexes, err := buildSecondaryIndexes(ctx, state, updatedInfos, updatedIdxMaps)
 	if err != nil {
-		return nil, fmt.Errorf("building index AM: %w", err)
+		return nil, fmt.Errorf("building secondary indexes: %w", err)
 	}
 
-	dtblHash, err := state.dtblHashForCollection(ctx, c.name, newMap, newIdxAM, hash.Hash{})
+	dtblHash, err := state.dtblHashForCollection(ctx, c.name, newMap, newIndexes, hash.Hash{})
 	if err != nil {
 		return nil, err
 	}
@@ -2748,10 +3284,10 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 }
 
 type initialSyncTuple struct {
-	hash  [20]byte
-	id    any
-	key   val.Tuple
-	value val.Tuple
+	primaryKey []byte
+	id         any
+	key        val.Tuple
+	value      val.Tuple
 }
 
 type initialSyncTupleIter struct {
@@ -2801,11 +3337,11 @@ func (c *collection) BulkLoadInitialSync(ctx context.Context, documents []*types
 		if err != nil {
 			return fmt.Errorf("document missing _id: %w", err)
 		}
-		hash, err := hashID(documentID)
+		pk, err := primaryKey(documentID)
 		if err != nil {
-			return fmt.Errorf("hashing _id: %w", err)
+			return fmt.Errorf("encoding _id: %w", err)
 		}
-		key, err := buildKey(hash[:])
+		key, err := buildKey(pk)
 		if err != nil {
 			return err
 		}
@@ -2813,16 +3349,16 @@ func (c *collection) BulkLoadInitialSync(ctx context.Context, documents []*types
 		if err != nil {
 			return err
 		}
-		tuples = append(tuples, initialSyncTuple{hash: hash, id: documentID, key: key, value: value})
+		tuples = append(tuples, initialSyncTuple{primaryKey: pk, id: documentID, key: key, value: value})
 	}
 	slices.SortFunc(tuples, func(left, right initialSyncTuple) int {
-		return bytes.Compare(left.hash[:], right.hash[:])
+		return bytes.Compare(left.primaryKey, right.primaryKey)
 	})
 	for index, tuple := range tuples {
-		if index > 0 && tuple.hash == tuples[index-1].hash {
+		if index > 0 && bytes.Equal(tuple.primaryKey, tuples[index-1].primaryKey) {
 			return backends.NewDuplicateKeyError(backends.DefaultIndexName, idDupKey(tuple.id))
 		}
-		exists, err := existsID(ctx, primary, tuple.hash)
+		exists, err := existsID(ctx, primary, tuple.primaryKey)
 		if err != nil {
 			return fmt.Errorf("checking existing _id: %w", err)
 		}
@@ -2834,11 +3370,11 @@ func (c *collection) BulkLoadInitialSync(ctx context.Context, documents []*types
 	if err != nil {
 		return fmt.Errorf("merging initial-sync sorted run: %w", err)
 	}
-	indexAM, err := buildIndexAM(ctx, state, nil, nil)
+	indexes, err := buildSecondaryIndexes(ctx, state, nil, nil)
 	if err != nil {
 		return fmt.Errorf("building empty initial-sync index map: %w", err)
 	}
-	dtblHash, err := state.dtblHashForCollection(ctx, c.name, primary, indexAM, hash.Hash{})
+	dtblHash, err := state.dtblHashForCollection(ctx, c.name, primary, indexes, hash.Hash{})
 	if err != nil {
 		return err
 	}
@@ -2847,8 +3383,8 @@ func (c *collection) BulkLoadInitialSync(ctx context.Context, documents []*types
 	})
 }
 
-func existsID(ctx context.Context, m prolly.Map, h [20]byte) (bool, error) {
-	key, err := buildKey(h[:])
+func existsID(ctx context.Context, m prolly.Map, h []byte) (bool, error) {
+	key, err := buildKey(h)
 	if err != nil {
 		return false, err
 	}
@@ -2905,6 +3441,9 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 		return nil, fmt.Errorf("resolving branch index state: %w", err)
 	}
 	hasUnique := false
+	// batchClaims holds, per unique index, the keys documents earlier in
+	// this batch took, which the stored index does not hold yet.
+	batchClaims := make(map[string]map[string]struct{})
 	for _, idx := range idxInfos {
 		if idx.Unique {
 			hasUnique = true
@@ -2920,12 +3459,12 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 			return nil, fmt.Errorf("document missing _id: %w", err)
 		}
 
-		h, err := hashID(docID)
+		h, err := primaryKey(docID)
 		if err != nil {
-			return nil, fmt.Errorf("hashing _id: %w", err)
+			return nil, fmt.Errorf("encoding _id: %w", err)
 		}
 
-		key, err := buildKey(h[:])
+		key, err := buildKey(h)
 		if err != nil {
 			return nil, err
 		}
@@ -2991,7 +3530,7 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 			}
 
 			if hasUnique {
-				if err := c.validateUniqueOnUpdate(ctx, state, m, idxInfos, idxMaps, newDoc, h); err != nil {
+				if err := c.validateUniqueOnUpdate(ctx, state, m, idxInfos, idxMaps, newDoc, h, batchClaims); err != nil {
 					return nil, err
 				}
 			}
@@ -3025,12 +3564,12 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 	if err != nil {
 		return nil, fmt.Errorf("updating secondary indexes: %w", err)
 	}
-	curIdxAM, err := buildIndexAM(ctx, state, updatedInfos, updatedIdxMaps)
+	curIndexes, err := buildSecondaryIndexes(ctx, state, updatedInfos, updatedIdxMaps)
 	if err != nil {
-		return nil, fmt.Errorf("building index AM: %w", err)
+		return nil, fmt.Errorf("building secondary indexes: %w", err)
 	}
 
-	dtblHash, err := state.dtblHashForCollection(ctx, c.name, newMap, curIdxAM, hash.Hash{})
+	dtblHash, err := state.dtblHashForCollection(ctx, c.name, newMap, curIndexes, hash.Hash{})
 	if err != nil {
 		return nil, err
 	}
@@ -3133,12 +3672,12 @@ func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllPa
 		}
 	} else {
 		for _, id := range params.IDs {
-			h, err := hashID(id)
+			h, err := primaryKey(id)
 			if err != nil {
 				continue
 			}
 
-			key, err := buildKey(h[:])
+			key, err := buildKey(h)
 			if err != nil {
 				continue
 			}
@@ -3185,12 +3724,12 @@ func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllPa
 	if err != nil {
 		return nil, fmt.Errorf("updating secondary indexes: %w", err)
 	}
-	curIdxAM, err := buildIndexAM(ctx, state, idxInfos, updatedIdxMaps)
+	curIndexes, err := buildSecondaryIndexes(ctx, state, idxInfos, updatedIdxMaps)
 	if err != nil {
-		return nil, fmt.Errorf("building index AM: %w", err)
+		return nil, fmt.Errorf("building secondary indexes: %w", err)
 	}
 
-	dtblHash, err := state.dtblHashForCollection(ctx, c.name, newMap, curIdxAM, hash.Hash{})
+	dtblHash, err := state.dtblHashForCollection(ctx, c.name, newMap, curIndexes, hash.Hash{})
 	if err != nil {
 		return nil, err
 	}
@@ -3230,8 +3769,11 @@ func (c *collection) Count(ctx context.Context, params *backends.CountParams) (*
 		return &backends.CountResult{Count: 0}, nil
 	}
 
+	if params != nil && filterNeverMatches(params.Filter) {
+		return &backends.CountResult{Count: 0, Filtered: true}, nil
+	}
 	if params != nil && params.Filter != nil && params.Filter.Len() > 0 {
-		n, used, ferr := c.tryIndexedCount(ctx, state, params.Filter, params.Collation)
+		n, used, ferr := c.tryIndexedCount(ctx, state, params.Filter, params.Collation, params.Stop, params.Hint)
 		if ferr != nil {
 			return nil, ferr
 		}
@@ -3240,6 +3782,14 @@ func (c *collection) Count(ctx context.Context, params *backends.CountParams) (*
 		}
 		// Decline: handler will scan.
 		return &backends.CountResult{Count: 0, Filtered: false}, nil
+	}
+
+	if params != nil && params.Hint != nil {
+		n, used, herr := c.hintedIndexCount(ctx, state, params.Hint, params.Stop)
+		if herr != nil || !used {
+			return &backends.CountResult{}, herr
+		}
+		return &backends.CountResult{Count: n, Filtered: true}, nil
 	}
 
 	n, err := m.Count()
@@ -3260,7 +3810,10 @@ func (c *collection) Count(ctx context.Context, params *backends.CountParams) (*
 //
 // Returns (0, false, nil) when the filter shape is unsupported  -- caller
 // falls back to the scan path.
-func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter *types.Document, queryCollation *types.Document) (int64, bool, error) {
+func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter *types.Document, queryCollation *types.Document, stop int64, hint any) (int64, bool, error) {
+	if filter.Len() > 1 {
+		return c.tryExactIndexedCount(ctx, state, filter, queryCollation, stop, hint)
+	}
 	if filter == nil || filter.Len() != 1 {
 		return 0, false, nil
 	}
@@ -3274,9 +3827,7 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 	queryIdentity := queryColl.Identity()
 	queryCmp := queryColl.Comparator()
 
-	state.mu.RLock()
-	idxInfos, idxMaps, err := resolveIndexes(ctx, c, state)
-	state.mu.RUnlock()
+	idxInfos, idxMaps, err := resolveIndexesLocked(ctx, c, state)
 	if err != nil {
 		return 0, false, err
 	}
@@ -3298,17 +3849,36 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 		if idx.PartialFilterExpression != nil && !filterImpliesPartial(filter, idx.PartialFilterExpression, collation.Parse(idx.Collation).IsSimple()) {
 			continue
 		}
-		if collation.Parse(idx.Collation).Identity() != queryIdentity {
+		if collation.Parse(idx.Collation).Identity() != queryIdentity && !backends.CollationFree(must.NotFail(filter.Get(field))) {
 			continue
 		}
-		if len(idx.Key) == 1 && idx.Key[0].Field == field {
+		if backends.HintRequiresExistingIndex(hint) && backends.MatchHintedIndex(hint, []backends.IndexInfo{idx}) != idx.Name {
+			continue
+		}
+		// A single-field index on field, or else a compound one led by it.
+		if len(idx.Key) > 0 && idx.Key[0].Field == field && !isGeoKey(idx.Key[0]) && !idx.Key[0].Text && !idx.Key[0].Hashed &&
+			(!found || len(idx.Key) < len(chosen.Key)) {
 			idxMap = idxMaps[i]
 			chosen = idx
 			found = true
-			break
 		}
 	}
 	if !found {
+		return 0, false, nil
+	}
+	if sparseExistsCount(chosen, filter) {
+		return countIndexRange(ctx, idxMap, nil, nil, chosen.KeyMultikey(0), stop)
+	}
+	if !chosen.KeyMultikey(0) {
+		if reduced, empty, ok := equalityIntersection(v0(filter, field), queryColl.IsSimple()); ok {
+			if empty {
+				return 0, true, nil
+			}
+			filter = must.NotFail(types.NewDocument(field, reduced))
+		}
+	}
+	compound := len(chosen.Key) > 1
+	if backends.HintRequiresExistingIndex(hint) && backends.MatchHintedIndex(hint, []backends.IndexInfo{chosen}) != chosen.Name {
 		return 0, false, nil
 	}
 
@@ -3317,27 +3887,369 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 		return 0, false, nil
 	}
 
-	// A multikey range counts a doc once per matching element; equality
-	// counts stay exact (one entry per value+docID).
-	if _, isOp := v.(*types.Document); isOp && chosen.Multikey {
-		return 0, false, nil
-	}
-
 	if queryCmp != nil {
 		v = collateFilterValue(v, queryCmp)
 	}
 
-	startKey, stopKey, ok := indexBoundsForFilterValue(v)
-	if !ok {
+	// An $in reads one range per value, as MongoDB's IXSCAN does, counting
+	// each document once.
+	if ranges, ok := indexPointRangesForIn(v); ok {
+		if compound {
+			for i, r := range ranges {
+				ranges[i][0], ranges[i][1] = compoundLeadingBounds(r[0], r[1])
+			}
+		}
+		ids := newIndexIDStream(ctx, idxMap, ranges, false, true)
+		ids.noGapKeys = !backends.IsCountScan(ctx)
+		return streamedIndexCount(ctx, ids, stop)
+	}
+
+	// On a multikey field each side of a range may be met by a different
+	// element, so no index range holds exactly the matches (multikeyScanBound).
+	if chosen.KeyMultikey(0) && isTwoSidedRange(v) || !boundsExactForCount(v) {
 		return 0, false, nil
 	}
 
+	startKey, stopKey, ok := indexBoundsForFilterValue(v)
+	// A dotted path can index several nulls for one document, so only a
+	// top-level field's null is counted from the keys.
+	if !ok && isNullEquality(v) && nullEqualityIndexable(chosen) && !strings.Contains(field, ".") {
+		startKey, stopKey, ok = idxpkg.LowerBoundInclusive(types.Null), idxpkg.UpperBoundInclusive(types.Null), true
+	}
+	if !ok {
+		// mongod counts a MinKey or MaxKey bound from the index, so a sparse
+		// index leaves out the documents without the field, though find
+		// returns them.
+		if startKey, stopKey, ok = minMaxKeyBounds(v); !ok {
+			return 0, false, nil
+		}
+	}
+
+	if compound {
+		startKey, stopKey = compoundLeadingBounds(startKey, stopKey)
+	}
+
+	// A range on a multikey field holds a document once per matching
+	// element, and a compound index an entry per trailing element, so their
+	// documents are counted by id, still without fetching one; an equality
+	// on a field alone stays exact (one entry per value and document).
+	_, isOp := v.(*types.Document)
+	dedupe := (isOp && chosen.KeyMultikey(0)) || (compound && trailingKeyMultikey(chosen))
+	return countIndexRange(ctx, idxMap, startKey, stopKey, dedupe, stop)
+}
+
+// tryExactIndexedCount counts a filter of several fields from an index whose
+// bounds hold exactly its matches, without fetching a document.
+func (c *collection) tryExactIndexedCount(ctx context.Context, state *dbState, filter *types.Document, queryCollation *types.Document, stop int64, hint any) (int64, bool, error) {
+	queryColl := collation.Parse(queryCollation)
+	idxInfos, idxMaps, err := resolveIndexesLocked(ctx, c, state)
+	if err != nil {
+		return 0, false, err
+	}
+	found := -1
+	var start, end []byte
+	for i, idx := range idxInfos {
+		if idx.Lossy || collation.Parse(idx.Collation).Identity() != queryColl.Identity() && !allCollationFree(filter) ||
+			idx.PartialFilterExpression != nil && !filterImpliesPartial(filter, idx.PartialFilterExpression, collation.Parse(idx.Collation).IsSimple()) ||
+			backends.HintRequiresExistingIndex(hint) && backends.MatchHintedIndex(hint, []backends.IndexInfo{idx}) != idx.Name {
+			continue
+		}
+		rf, empty := reducedForIndex(filter, idx, queryColl.IsSimple())
+		if empty {
+			if _, _, ok := exactCompoundCountBounds(idx, rf, queryColl.Comparator()); ok || indexBindsFilter(idx, filter) {
+				return 0, true, nil
+			}
+			continue
+		}
+		s, e, ok := exactCompoundCountBounds(idx, rf, queryColl.Comparator())
+		if ok && (found < 0 || len(idx.Key) < len(idxInfos[found].Key)) {
+			found, start, end = i, s, e
+		}
+	}
+	if found < 0 {
+		return 0, false, nil
+	}
+	return countIndexRange(ctx, idxMaps[found], start, end, idxInfos[found].Multikey, stop)
+}
+
+// allCollationFree reports whether every field condition of filter compares
+// no string.
+func allCollationFree(filter *types.Document) bool {
+	for _, k := range filter.Keys() {
+		if !backends.CollationFree(must.NotFail(filter.Get(k))) {
+			return false
+		}
+	}
+	return true
+}
+
+// exactCompoundCountBounds returns the range of a compound index holding
+// exactly the documents filter matches: filter binds the index's leading
+// fields, none descending, by equality but for the last, which may be a
+// range, one-sided on a multikey field. A multikey index holds a document
+// more than once, so its count is by id.
+func exactCompoundCountBounds(idx backends.IndexInfo, filter *types.Document, queryCmp *collation.Comparator) (start, end []byte, ok bool) {
+	n := filter.Len()
+	if n < 2 || len(idx.Key) < n {
+		return nil, nil, false
+	}
+	var prefix []byte
+	for i, kp := range idx.Key[:n] {
+		if kp.Descending || kp.Text || kp.Hashed || isGeoKey(kp) || strings.Contains(kp.Field, ".") {
+			return nil, nil, false
+		}
+		v, err := filter.Get(kp.Field)
+		if err != nil {
+			return nil, nil, false
+		}
+		if queryCmp != nil {
+			v = collateFilterValue(v, queryCmp)
+		}
+		if i < n-1 {
+			eq, isEq := indexEqualityValue(v)
+			if !isEq {
+				return nil, nil, false
+			}
+			prefix = append(prefix, idxpkg.EncodeValue(eq)...)
+			continue
+		}
+		if idx.KeyMultikey(i) && isTwoSidedRange(v) || !boundsExactForCount(v) {
+			return nil, nil, false
+		}
+		s, e, bok := indexBoundsForFilterValue(v)
+		if !bok {
+			return nil, nil, false
+		}
+		start = append(append([]byte(nil), prefix...), s...)
+		end = append(append([]byte(nil), prefix...), e...)
+		if n < len(idx.Key) {
+			start, end = bracketSuffix(start), bracketSuffix(end)
+		}
+	}
+	return start, end, true
+}
+
+// boundsExactForCount reports whether the index bounds of field condition v
+// hold exactly its matches, so a count may skip the re-filter: an equality
+// alone or a pure range. indexBoundsForFilterValue takes $eq's range alone
+// beside other operators, a superset the re-filter narrows.
+func boundsExactForCount(v any) bool {
+	ops, ok := v.(*types.Document)
+	if !ok || ops.Len() == 0 || !strings.HasPrefix(ops.Keys()[0], "$") {
+		return true
+	}
+	if ops.Len() == 1 && ops.Has("$eq") {
+		return true
+	}
+	for _, op := range ops.Keys() {
+		switch op {
+		case "$gt", "$gte", "$lt", "$lte":
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// countBoundsExact reports whether every field condition of filter has
+// bounds exact for a count (boundsExactForCount).
+func countBoundsExact(filter *types.Document) bool {
+	for _, k := range filter.Keys() {
+		if !strings.HasPrefix(k, "$") && !boundsExactForCount(must.NotFail(filter.Get(k))) {
+			return false
+		}
+	}
+	return true
+}
+
+// v0 returns filter's condition on field.
+func v0(filter *types.Document, field string) any {
+	v, _ := filter.Get(field)
+	return v
+}
+
+// indexBindsFilter reports whether idx's leading keys are exactly filter's
+// fields, so its scan alone answers the filter.
+func indexBindsFilter(idx backends.IndexInfo, filter *types.Document) bool {
+	if len(idx.Key) < filter.Len() {
+		return false
+	}
+	for _, kp := range idx.Key[:filter.Len()] {
+		if !filter.Has(kp.Field) {
+			return false
+		}
+	}
+	return true
+}
+
+// sparseExistsCount reports whether filter is an $exists: true on the field
+// of idx, a single-field sparse index, whose entries are then exactly the
+// matching documents.
+func sparseExistsCount(idx backends.IndexInfo, filter *types.Document) bool {
+	if !idx.Sparse || len(idx.Key) != 1 || filter.Len() != 1 || filter.Keys()[0] != idx.Key[0].Field {
+		return false
+	}
+	ops, _ := must.NotFail(filter.Get(idx.Key[0].Field)).(*types.Document)
+	if ops == nil || ops.Len() != 1 || !ops.Has("$exists") {
+		return false
+	}
+	switch v := must.NotFail(ops.Get("$exists")).(type) {
+	case bool:
+		return v
+	case int32, int64, float64:
+		return types.Compare(v, int32(0)) != types.Equal
+	}
+	return false
+}
+
+// countIndexRange counts the documents in an index range without fetching
+// one, by id when multikey, and counts the keys read up to stop.
+func countIndexRange(ctx context.Context, idxMap prolly.Map, startKey, stopKey []byte, multikey bool, stop int64) (int64, bool, error) {
+	if multikey {
+		return multikeyRangeCount(ctx, idxMap, [][2][]byte{{startKey, stopKey}}, stop)
+	}
 	n, err := idxpkg.RangeCount(ctx, idxMap, startKey, stopKey)
 	if err != nil {
 		return 0, false, err
 	}
-	countKeysExamined(int(n))
+	read, keys := n, n+endOfScanKey(ctx)
+	if stop > 0 && n >= stop {
+		read, keys = stop, stop
+	}
+	var examined examinedCounter
+	examined.keys(ctx, int(keys))
+	examined.entries(ctx, int(read))
 	return n, true, nil
+}
+
+// hintedIndexCount counts the documents the index hint names holds, from the
+// index alone, as mongod counts an unfiltered count hinted to an index. It
+// declines an index whose entries do not map one to one onto documents.
+func (c *collection) hintedIndexCount(ctx context.Context, state *dbState, hint any, stop int64) (int64, bool, error) {
+	if !backends.HintRequiresExistingIndex(hint) {
+		return 0, false, nil
+	}
+	idxInfos, idxMaps, err := resolveIndexesLocked(ctx, c, state)
+	if err != nil {
+		return 0, false, err
+	}
+	name := backends.MatchHintedIndex(hint, idxInfos)
+	for i, idx := range idxInfos {
+		if idx.Name != name {
+			continue
+		}
+		if idx.Lossy || len(idx.Key) == 0 || isGeoKey(idx.Key[0]) || idx.Key[0].Text || idx.Key[0].Hashed {
+			return 0, false, nil
+		}
+		return countIndexRange(ctx, idxMaps[i], nil, nil, idx.Multikey, stop)
+	}
+	return 0, false, nil
+}
+
+// minMaxKeyBounds returns the index range of a lone $gt or $gte MinKey,
+// or $lt or $lte MaxKey: every key, less the bound itself when exclusive.
+func minMaxKeyBounds(v any) (start, stop []byte, ok bool) {
+	ops, isDoc := v.(*types.Document)
+	if !isDoc || ops.Len() != 1 {
+		return nil, nil, false
+	}
+	start, stop = idxpkg.LowerBoundInclusive(types.MinKey), idxpkg.UpperBoundInclusive(types.MaxKey)
+	switch op, bound := ops.Keys()[0], must.NotFail(ops.Get(ops.Keys()[0])); {
+	case op == "$gte" && bound == types.MinKey, op == "$lte" && bound == types.MaxKey:
+	case op == "$gt" && bound == types.MinKey:
+		start = idxpkg.LowerBoundExclusive(types.MinKey)
+	case op == "$lt" && bound == types.MaxKey:
+		stop = idxpkg.UpperBoundExclusive(types.MaxKey)
+	default:
+		return nil, nil, false
+	}
+	return start, stop, true
+}
+
+// idSortedMinMaxKeyRead reports whether params sorts by _id alone and filters
+// one field by a MinKey or MaxKey bound. Only a sparse index serves that
+// bound, and mongod prefers the clustered scan, which needs no sort, so the
+// documents without the field are returned.
+func idSortedMinMaxKeyRead(params *backends.QueryParams) bool {
+	if params.Sort.Len() != 1 || params.Sort.Keys()[0] != "_id" || params.Filter.Len() != 1 {
+		return false
+	}
+	field := params.Filter.Keys()[0]
+	if strings.HasPrefix(field, "$") {
+		return false
+	}
+	_, _, ok := minMaxKeyBounds(must.NotFail(params.Filter.Get(field)))
+	return ok
+}
+
+// filterIsIn reports whether filter is one field's $in.
+func filterIsIn(filter *types.Document) bool {
+	if filter.Len() != 1 {
+		return false
+	}
+	_, ok := indexPointRangesForIn(must.NotFail(filter.Get(filter.Keys()[0])))
+	return ok
+}
+
+// streamedIndexCount counts the documents ids yields, stopping once it has
+// found stop of them when stop is positive.
+func streamedIndexCount(ctx context.Context, ids *indexIDStream, stop int64) (int64, bool, error) {
+	var n int64
+	for stop <= 0 || n < stop {
+		e, err := ids.next()
+		if err != nil {
+			return 0, false, err
+		}
+		if e.id == nil {
+			break
+		}
+		n++
+	}
+	return n, true, nil
+}
+
+// multikeyRangeCount counts the distinct documents of multikey index ranges,
+// stopping once it has found stop of them when stop is positive, as MongoDB's
+// count reads only as far as skip plus limit.
+func multikeyRangeCount(ctx context.Context, idxMap prolly.Map, ranges [][2][]byte, stop int64) (int64, bool, error) {
+	seen := make(map[string]struct{})
+	var examined examinedCounter
+	for _, r := range ranges {
+		iter, err := idxpkg.NewRangeIDIter(ctx, idxMap, r[0], r[1], false)
+		if err != nil {
+			return 0, false, err
+		}
+		for {
+			id, err := iter.Next(ctx)
+			if err != nil {
+				return 0, false, err
+			}
+			if id == nil {
+				break
+			}
+			examined.keys(ctx, 1)
+			if _, dup := seen[string(id)]; dup {
+				continue
+			}
+			seen[string(id)] = struct{}{}
+			examined.entries(ctx, 1)
+			if stop > 0 && int64(len(seen)) >= stop {
+				return int64(len(seen)), true, nil
+			}
+		}
+	}
+	examined.keys(ctx, int(endOfScanKey(ctx)))
+	return int64(len(seen)), true, nil
+}
+
+// endOfScanKey is the key mongod's count command counts as examined when its
+// COUNT_SCAN reaches the end of its range rather than its limit: the key past
+// the end, or the end of the index. An aggregate's count does not.
+func endOfScanKey(ctx context.Context) int64 {
+	if backends.IsCountScan(ctx) {
+		return 1
+	}
+	return 0
 }
 
 func (c *collection) Stats(ctx context.Context, params *backends.CollectionStatsParams) (*backends.CollectionStatsResult, error) {
@@ -3415,10 +4327,9 @@ func (c *collection) Compact(ctx context.Context, params *backends.CompactParams
 
 // DistinctScan implements backends.DistinctScanner.
 //
-// Walks the leading-field secondary index for `key` in sorted order,
-// emitting one primary lookup per unique KeyString prefix to recover the
-// original BSON value. Avoids reading every document and the O(n) primary
-// fetches a full collection scan would do.
+// Walks the leading-field secondary index for `key` in sorted order, reading
+// one entry per distinct value and decoding the value from the entry, so most
+// values need no document fetch.
 //
 // Returns (nil, nil) when the request can't be served from an index  -- no
 // matching single-field index, partial filter that would drop rows, dotted
@@ -3436,9 +4347,7 @@ func (c *collection) DistinctScan(ctx context.Context, params *backends.Distinct
 		return &backends.DistinctResult{}, nil
 	}
 
-	state.mu.RLock()
-	idxInfos, idxMaps, err := resolveIndexes(ctx, c, state)
-	state.mu.RUnlock()
+	idxInfos, idxMaps, err := resolveIndexesLocked(ctx, c, state)
 	if err != nil {
 		return nil, err
 	}
@@ -3509,15 +4418,14 @@ func (c *collection) DistinctScan(ctx context.Context, params *backends.Distinct
 	return &backends.DistinctResult{Values: values}, nil
 }
 
-// scanDistinctFromIndex walks idxMap in key order and emits one primary lookup
-// per unique KeyString prefix. The secondary index key layout is
-// `[KeyString(value)][0x04][primaryID(20 bytes)]`; values with the same
-// KeyString prefix share a distinct value, so a single doc fetch per group
-// suffices to recover the original typed value. Each fetched doc contributes
-// its MongoDB index keys, including null for a missing field and undefined for
-// an empty array, as MongoDB's DISTINCT_SCAN does. Only entries in
-// [start, stop) are read, and a group counts only when its fetched document
-// matches filter, when set.
+// scanDistinctFromIndex returns the distinct values of field among idxMap's
+// entries in [start, stop), as MongoDB's DISTINCT_SCAN does: it reads one
+// entry per value, restoring the value from the entry and skipping past the
+// rest of its entries. An entry that cannot restore its value costs one
+// document fetch for its group. A fetched document contributes its MongoDB
+// index keys, including null for a missing field and undefined for an empty
+// array. A value counts
+// only when it, or its fetched document, matches filter, when set.
 func scanDistinctFromIndex(
 	ctx context.Context,
 	idxMap prolly.Map,
@@ -3527,83 +4435,81 @@ func scanDistinctFromIndex(
 	start, stop []byte,
 	filter *types.Document,
 ) ([]any, error) {
-	const primaryIDLen = 20
-
 	path, err := types.NewPathFromString(field)
 	if err != nil {
 		return nil, err
 	}
 
-	iter, err := idxpkg.IterKeyRange(ctx, idxMap, start, stop)
-	if err != nil {
-		return nil, fmt.Errorf("distinct scan iterating index: %w", err)
+	var out []any
+	emitDoc := func(id []byte) error {
+		doc, err := lookupDocFromPrimary(ctx, primary, ns, id, nil)
+		if err != nil || doc == nil {
+			return err
+		}
+		if filter != nil {
+			if match, err := backends.MatchPartialFilter(doc, filter); err != nil || !match {
+				return err
+			}
+		}
+		out = append(out, commonpath.IndexKeyValues(doc, path)...)
+		return nil
 	}
 
-	idxKeyDesc := idxpkg.KeyDescriptor()
-
-	var (
-		prevPrefix []byte
-		havePrev   bool
-		out        []any
-	)
-
-	for {
-		k, _, err := iter.Next(ctx)
+	for cursor := start; ; {
+		iter, ok, err := idxpkg.SeekKeyRange(ctx, idxMap, cursor, stop)
 		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			return nil, fmt.Errorf("distinct scan reading index: %w", err)
+			return nil, fmt.Errorf("distinct scan iterating index: %w", err)
 		}
-		if k == nil {
-			break
-		}
-
-		countKeysExamined(1)
-		composite, ok := idxKeyDesc.GetBytes(0, k)
 		if !ok {
-			continue
+			return out, nil
 		}
-		if len(composite) < primaryIDLen+1 {
-			continue
-		}
-		idStart := len(composite) - primaryIDLen
-		if composite[idStart-1] != 0x04 {
-			continue
-		}
-		prefix := composite[:idStart-1]
-
-		// Subdocuments and arrays all encode to one marker, so a group keyed by
-		// a marker holds distinct values and every member must be read.
-		if havePrev && bytes.Equal(prefix, prevPrefix) && !idxpkg.KeyMergesValues(prefix) {
-			continue
+		values, id, tags, done, err := nextDistinctEntry(ctx, iter)
+		if err != nil || done {
+			return out, err
 		}
 
-		idBytes := make([]byte, primaryIDLen)
-		copy(idBytes, composite[idStart:])
-
-		doc, err := lookupDocFromPrimary(ctx, primary, ns, idBytes, nil)
-		if err != nil {
+		if v, ok := decodeDistinctValue(values, tags); ok {
+			match := filter == nil
+			if !match {
+				if match, err = backends.MatchPartialFilter(must.NotFail(types.NewDocument(field, v)), filter); err != nil {
+					return nil, err
+				}
+			}
+			if match {
+				out = append(out, v)
+			}
+		} else if err := emitDoc(id); err != nil {
 			return nil, err
 		}
-		if doc != nil && filter != nil {
-			match, err := backends.MatchPartialFilter(doc, filter)
-			if err != nil {
-				return nil, err
-			}
-			if !match {
-				doc = nil
-			}
-		}
-		if doc != nil {
-			out = append(out, commonpath.IndexKeyValues(doc, path)...)
-		}
-
-		prevPrefix = append(prevPrefix[:0], prefix...)
-		havePrev = true
+		cursor = idxpkg.SkipValues(values)
 	}
+}
 
-	return out, nil
+// nextDistinctEntry reads iter's next entry, counting its key; done is set at
+// the end of the range.
+func nextDistinctEntry(ctx context.Context, iter prolly.MapIter) (values, id, tags []byte, done bool, err error) {
+	for {
+		k, v, err := iter.Next(ctx)
+		if err == io.EOF || (err == nil && len(k) == 0) {
+			return nil, nil, nil, true, nil
+		}
+		if err != nil {
+			return nil, nil, nil, false, fmt.Errorf("distinct scan reading index: %w", err)
+		}
+		countKeysExamined(ctx, 1)
+		if values, tags, id, ok := idxpkg.DecodeEntry(k, v); ok {
+			return values, id, tags, false, nil
+		}
+	}
+}
+
+// decodeDistinctValue restores a single-field entry's value from values and
+// tags.
+func decodeDistinctValue(values, tags []byte) (any, bool) {
+	if len(tags) != 1 {
+		return nil, false
+	}
+	return idxpkg.DecodeValue(values, tags[0])
 }
 
 // lookupDocFromPrimary fetches the primary document by encoded _id bytes, or
@@ -3625,7 +4531,7 @@ func lookupDocFromPrimary(
 		if v == nil {
 			return nil
 		}
-		countDocsExamined(1)
+		countDocsExamined(ctx, 1)
 		stored, err := getBSONStoredBytes(ctx, ns, v)
 		if err != nil {
 			return err
@@ -3651,9 +4557,11 @@ func (c *collection) ListIndexes(ctx context.Context, params *backends.ListIndex
 	// Only the AM resolution needs state.mu (resolveAM reads state.workingSets).
 	// The downstream chunk-store reads operate on immutable content-addressed
 	// chunks and need no dbState lock.
-	state.mu.RLock()
-	am, err := c.db.resolveAM(ctx, state)
-	state.mu.RUnlock()
+	am, err := func() (prolly.AddressMap, error) {
+		state.mu.RLock()
+		defer state.mu.RUnlock()
+		return c.db.resolveAM(ctx, state)
+	}()
 	if err != nil {
 		return nil, err
 	}
@@ -3667,7 +4575,7 @@ func (c *collection) ListIndexes(ctx context.Context, params *backends.ListIndex
 			fmt.Errorf("collection %q does not exist", c.name))
 	}
 
-	idxAM, err := indexAMForDTBL(ctx, state.cs, state.ns, dtblHash)
+	secondary, err := secondaryIndexesForDTBL(ctx, state.cs, state.ns, dtblHash)
 	if err != nil {
 		return nil, err
 	}
@@ -3686,15 +4594,8 @@ func (c *collection) ListIndexes(ctx context.Context, params *backends.ListIndex
 		indexes[0].Collation = meta.Collation
 	}
 
-	if err := idxAM.IterAll(ctx, func(name string, entryHash hash.Hash) error {
-		if entryHash.IsEmpty() {
-			return nil
-		}
-		resolved, rerr := resolveIndexEntry(ctx, state.ns, entryHash)
-		if rerr != nil {
-			return rerr
-		}
-		indexes = append(indexes, resolved.info)
+	if err := secondary.IterAll(ctx, func(_ string, entry *resolvedIndexEntry) error {
+		indexes = append(indexes, entry.info)
 		return nil
 	}); err != nil {
 		return nil, err
@@ -3747,7 +4648,7 @@ func (c *collection) CreateIndexes(ctx context.Context, params *backends.CreateI
 		if buildErr != nil {
 			return nil, fmt.Errorf("building secondary index %q on %q: %w", idx.Name, c.name, buildErr)
 		}
-		idx.Multikey = idx.Multikey || multikey
+		idx.MarkMultikey(multikey)
 		idx.Lossy = idx.Lossy || lossy
 		infoByName[idx.Name] = idx
 		curMaps[idx.Name] = idxMap
@@ -3761,26 +4662,18 @@ func (c *collection) CreateIndexes(ctx context.Context, params *backends.CreateI
 		return cmp.Compare(a.Name, b.Name)
 	})
 
-	newIdxAM, err := buildIndexAM(ctx, state, newInfos, curMaps)
+	newIndexes, err := buildSecondaryIndexes(ctx, state, newInfos, curMaps)
 	if err != nil {
-		return nil, fmt.Errorf("building index AM: %w", err)
+		return nil, fmt.Errorf("building secondary indexes: %w", err)
 	}
 
-	if err := c.rewriteDTBLAfterIndexChange(ctx, state, newIdxAM, fmt.Sprintf("auto: create index %s on %s", indexNames(params.Indexes), c.name)); err != nil {
+	if err := c.rewriteDTBLAfterIndexChange(ctx, state, newIndexes, fmt.Sprintf("auto: create index %s on %s", indexNames(params.Indexes), c.name)); err != nil {
 		return nil, fmt.Errorf("rewriting DTBL for %q: %w", c.name, err)
 	}
 
 	return &backends.CreateIndexesResult{}, nil
 }
 
-// rewriteDTBLAfterIndexChange rebuilds the collection's DTBL with the
-// given indexAM and updates the collections AM. Called after CreateIndexes
-// / DropIndexes so an index-only change is durable.
-//
-// If the collection has no primary map yet (no inserts have happened) it
-// uses a freshly created empty map  -- the same path as loadOrCreateMap.
-//
-// The caller must hold state.mu (write lock).
 func indexNames(indexes []backends.IndexInfo) string {
 	names := make([]string, len(indexes))
 	for i, idx := range indexes {
@@ -3789,7 +4682,15 @@ func indexNames(indexes []backends.IndexInfo) string {
 	return strings.Join(names, ", ")
 }
 
-func (c *collection) rewriteDTBLAfterIndexChange(ctx context.Context, state *dbState, indexAM prolly.AddressMap, commitMsg string) error {
+// rewriteDTBLAfterIndexChange rebuilds the collection's DTBL with the
+// given secondary indexes and updates the collections AM. Called after CreateIndexes
+// / DropIndexes so an index-only change is durable.
+//
+// If the collection has no primary map yet (no inserts have happened) it
+// uses a freshly created empty map  -- the same path as loadOrCreateMap.
+//
+// The caller must hold state.mu (write lock).
+func (c *collection) rewriteDTBLAfterIndexChange(ctx context.Context, state *dbState, indexes secondaryIndexes, commitMsg string) error {
 	am, err := state.getOrInitBranchAM(ctx, c.db.rootish)
 	if err != nil {
 		return err
@@ -3812,7 +4713,7 @@ func (c *collection) rewriteDTBLAfterIndexChange(ctx context.Context, state *dbS
 		}
 	}
 
-	dtblHash, err := state.dtblHashForCollection(ctx, c.name, primary, indexAM, hash.Hash{})
+	dtblHash, err := state.dtblHashForCollection(ctx, c.name, primary, indexes, hash.Hash{})
 	if err != nil {
 		return err
 	}
@@ -3827,10 +4728,10 @@ func (c *collection) rewriteDTBLAfterIndexChange(ctx context.Context, state *dbS
 // buildSecondaryIndex scans the primary map and builds the index's prolly.Map.
 // The returned flags report whether any scanned document made the index
 // multikey or lossy (see backends.IndexInfo). Caller must hold state.mu (write lock).
-func (c *collection) buildSecondaryIndex(ctx context.Context, state *dbState, idx backends.IndexInfo) (m prolly.Map, multikey, lossy bool, err error) {
+func (c *collection) buildSecondaryIndex(ctx context.Context, state *dbState, idx backends.IndexInfo) (m prolly.Map, multikey uint64, lossy bool, err error) {
 	idxMap, err := idxpkg.NewEmptyMap(ctx, state.ns)
 	if err != nil {
-		return prolly.Map{}, false, false, fmt.Errorf("index: creating empty map: %w", err)
+		return prolly.Map{}, 0, false, fmt.Errorf("index: creating empty map: %w", err)
 	}
 
 	// If the collection does not exist yet (no primary map), the index is
@@ -3839,24 +4740,24 @@ func (c *collection) buildSecondaryIndex(ctx context.Context, state *dbState, id
 	// real failures and propagate.
 	am, err := state.getOrInitBranchAM(ctx, c.db.rootish)
 	if err != nil {
-		return prolly.Map{}, false, false, fmt.Errorf("index: resolving branch AM: %w", err)
+		return prolly.Map{}, 0, false, fmt.Errorf("index: resolving branch AM: %w", err)
 	}
 	rootHash, err := am.Get(ctx, c.name)
 	if err != nil {
-		return prolly.Map{}, false, false, fmt.Errorf("index: looking up collection in AM: %w", err)
+		return prolly.Map{}, 0, false, fmt.Errorf("index: looking up collection in AM: %w", err)
 	}
 	if rootHash.IsEmpty() {
-		return idxMap, false, false, nil
+		return idxMap, 0, false, nil
 	}
 	primaryMap, err := openCollection(ctx, state.cs, state.ns, rootHash)
 	if err != nil {
-		return prolly.Map{}, false, false, fmt.Errorf("index: opening primary map: %w", err)
+		return prolly.Map{}, 0, false, fmt.Errorf("index: opening primary map: %w", err)
 	}
 
 	mut := idxMap.Mutate()
 	iter, err := primaryMap.IterAll(ctx)
 	if err != nil {
-		return prolly.Map{}, false, false, fmt.Errorf("index: iterating primary: %w", err)
+		return prolly.Map{}, 0, false, fmt.Errorf("index: iterating primary: %w", err)
 	}
 
 	// For a unique index, detect pre-existing duplicate values while scanning
@@ -3875,7 +4776,7 @@ func (c *collection) buildSecondaryIndex(ctx context.Context, state *dbState, id
 			if err == io.EOF {
 				break
 			}
-			return prolly.Map{}, false, false, err
+			return prolly.Map{}, 0, false, err
 		}
 		if v == nil {
 			break
@@ -3883,34 +4784,40 @@ func (c *collection) buildSecondaryIndex(ctx context.Context, state *dbState, id
 
 		idBytes, ok := keyDesc.GetBytes(0, k)
 		if !ok {
-			return prolly.Map{}, false, false, fmt.Errorf("index: primary key tuple missing _id bytes")
+			return prolly.Map{}, 0, false, fmt.Errorf("index: primary key tuple missing _id bytes")
 		}
 
 		doc, err := readDocFromValue(ctx, state.ns, v)
 		if err != nil {
-			return prolly.Map{}, false, false, fmt.Errorf("index: reading document for build scan: %w", err)
+			return prolly.Map{}, 0, false, fmt.Errorf("index: reading document for build scan: %w", err)
 		}
 
-		rows, rowMultikey, rowLossy := indexEntriesForDoc(doc, idx)
-		multikey = multikey || rowMultikey
+		if err := checkGeoKeys(doc, idx); err != nil {
+			return prolly.Map{}, 0, false, err
+		}
+		rows, rowMultikey, rowLossy, err := indexEntriesForDoc(ctx, doc, idx)
+		if err != nil {
+			return prolly.Map{}, 0, false, err
+		}
+		multikey |= rowMultikey
 		lossy = lossy || rowLossy
 
 		if seenUnique != nil && !rowLossy {
 			if err := checkUniqueBuildConflict(seenUnique, idx, doc, idBytes, rows); err != nil {
-				return prolly.Map{}, false, false, err
+				return prolly.Map{}, 0, false, err
 			}
 		}
 
 		for _, fv := range rows {
 			if err := idxpkg.InsertEntry(ctx, mut, fv, idBytes); err != nil {
-				return prolly.Map{}, false, false, fmt.Errorf("index: inserting entry: %w", err)
+				return prolly.Map{}, 0, false, fmt.Errorf("index: inserting entry: %w", err)
 			}
 		}
 	}
 
 	built, err := mut.Map(ctx)
 	if err != nil {
-		return prolly.Map{}, false, false, fmt.Errorf("index: flushing map: %w", err)
+		return prolly.Map{}, 0, false, fmt.Errorf("index: flushing map: %w", err)
 	}
 	return built, multikey, lossy, nil
 }
@@ -3950,7 +4857,7 @@ func checkUniqueBuildConflict(seen map[string][]byte, idx backends.IndexInfo, do
 
 // scanUniqueConflict is the O(N) value-level fallback for rows with no
 // faithful byte encoding (Decimal128); the common path is the probe.
-func (c *collection) scanUniqueConflict(ctx context.Context, state *dbState, m prolly.Map, idx backends.IndexInfo, doc *types.Document, selfHash [20]byte) (bool, error) {
+func (c *collection) scanUniqueConflict(ctx context.Context, state *dbState, m prolly.Map, idx backends.IndexInfo, doc *types.Document, selfKey []byte) (bool, error) {
 	cmp := indexComparator(idx)
 	newKey := extractIndexKey(doc, idx)
 	iter, err := m.IterAll(ctx)
@@ -3969,7 +4876,7 @@ func (c *collection) scanUniqueConflict(ctx context.Context, state *dbState, m p
 			break
 		}
 		idBytes, ok := keyDesc.GetBytes(0, k)
-		if ok && bytes.Equal(idBytes, selfHash[:]) {
+		if ok && bytes.Equal(idBytes, selfKey) {
 			continue
 		}
 		existingDoc, err := readDocFromValue(ctx, state.ns, v)
@@ -3994,10 +4901,10 @@ func (c *collection) scanUniqueConflict(ctx context.Context, state *dbState, m p
 }
 
 // scanCollatedIDConflict reports whether the primary map already holds a string
-// _id equal to idStr under cmp. The primary key is a hash of the raw _id, so
+// _id equal to idStr under cmp. The primary key encodes the raw _id, so
 // collation-equal-but-distinct values ("a"/"A") do not collide there; this O(N)
 // value scan enforces _id uniqueness under the collection collation (design 3.6).
-func (c *collection) scanCollatedIDConflict(ctx context.Context, state *dbState, m prolly.Map, idStr string, selfHash [20]byte, cmp *collation.Comparator) (bool, error) {
+func (c *collection) scanCollatedIDConflict(ctx context.Context, state *dbState, m prolly.Map, idStr string, selfKey []byte, cmp *collation.Comparator) (bool, error) {
 	iter, err := m.IterAll(ctx)
 	if err != nil {
 		return false, err
@@ -4013,7 +4920,7 @@ func (c *collection) scanCollatedIDConflict(ctx context.Context, state *dbState,
 		if v == nil {
 			break
 		}
-		if idBytes, ok := keyDesc.GetBytes(0, k); ok && bytes.Equal(idBytes, selfHash[:]) {
+		if idBytes, ok := keyDesc.GetBytes(0, k); ok && bytes.Equal(idBytes, selfKey) {
 			continue
 		}
 		existingDoc, err := readDocFromValue(ctx, state.ns, v)
@@ -4033,17 +4940,20 @@ func (c *collection) scanCollatedIDConflict(ctx context.Context, state *dbState,
 
 // validateUniqueOnUpdate rejects an update whose new version collides
 // with a different document on any unique index.
-func (c *collection) validateUniqueOnUpdate(ctx context.Context, state *dbState, m prolly.Map, infos []backends.IndexInfo, idxMaps map[string]prolly.Map, newDoc *types.Document, selfHash [20]byte) error {
+func (c *collection) validateUniqueOnUpdate(ctx context.Context, state *dbState, m prolly.Map, infos []backends.IndexInfo, idxMaps map[string]prolly.Map, newDoc *types.Document, selfKey []byte, claims map[string]map[string]struct{}) error { //nolint:lll // for readability
 	for _, idx := range infos {
 		if !idx.Unique {
 			continue
 		}
-		rows, _, lossy := indexEntriesForDoc(newDoc, idx)
+		rows, _, lossy, err := indexEntriesForDoc(ctx, newDoc, idx)
+		if err != nil {
+			return err
+		}
 		if len(rows) == 0 {
 			continue
 		}
 		if lossy || idx.Lossy {
-			conflict, err := c.scanUniqueConflict(ctx, state, m, idx, newDoc, selfHash)
+			conflict, err := c.scanUniqueConflict(ctx, state, m, idx, newDoc, selfKey)
 			if err != nil {
 				return err
 			}
@@ -4052,14 +4962,33 @@ func (c *collection) validateUniqueOnUpdate(ctx context.Context, state *dbState,
 			}
 			continue
 		}
+		// A doc's own duplicate rows ([5,5]) must not self-conflict.
+		prefixes := make(map[string]struct{}, len(rows))
 		for _, row := range rows {
-			conflict, err := idxpkg.UniqueConflict(ctx, idxMaps[idx.Name], row, selfHash[:])
+			start, _ := idxpkg.EqualityProbeBounds(row)
+			prefixes[string(start)] = struct{}{}
+		}
+		claimed := claims[idx.Name]
+		for prefix := range prefixes {
+			if _, taken := claimed[prefix]; taken {
+				return backends.NewDuplicateKeyError(idx.Name, indexDupKey(newDoc, idx))
+			}
+		}
+		for _, row := range rows {
+			conflict, err := idxpkg.UniqueConflict(ctx, idxMaps[idx.Name], row, selfKey)
 			if err != nil {
 				return fmt.Errorf("unique probe on %s: %w", idx.Name, err)
 			}
 			if conflict {
 				return backends.NewDuplicateKeyError(idx.Name, indexDupKey(newDoc, idx))
 			}
+		}
+		if claimed == nil {
+			claimed = make(map[string]struct{})
+			claims[idx.Name] = claimed
+		}
+		for prefix := range prefixes {
+			claimed[prefix] = struct{}{}
 		}
 	}
 	return nil
@@ -4071,6 +5000,9 @@ func extractIndexFieldValues(doc *types.Document, idx backends.IndexInfo) []any 
 	vals := make([]any, len(idx.Key))
 	for i, kp := range idx.Key {
 		vals[i] = indexFieldValue(doc, kp.Field)
+		if isGeoKey(kp) {
+			vals[i] = geoIndexValue(vals[i], kp)
+		}
 	}
 	return vals
 }
@@ -4123,6 +5055,17 @@ func indexFieldValue(doc *types.Document, field string) any {
 	path, err := types.NewPathFromString(field)
 	if err != nil {
 		return types.Null
+	}
+	if !hasPositionalSegment(path) {
+		// MongoDB's keys: null for each array element or branch the path
+		// does not reach.
+		vals := commonpath.IndexKeyValues(doc, path)
+		if len(vals) == 1 {
+			if _, isArray := vals[0].(*types.Array); !isArray {
+				return vals[0]
+			}
+		}
+		return must.NotFail(types.NewArray(vals...))
 	}
 	vals, err := commonpath.FindValues(doc, path, &commonpath.FindValuesOpts{
 		FindArrayDocuments: true,
@@ -4217,11 +5160,11 @@ func (c *collection) DropIndexes(ctx context.Context, params *backends.DropIndex
 		keptInfos = append(keptInfos, info)
 	}
 
-	newIdxAM, err := buildIndexAM(ctx, state, keptInfos, curMaps)
+	newIndexes, err := buildSecondaryIndexes(ctx, state, keptInfos, curMaps)
 	if err != nil {
-		return nil, fmt.Errorf("building index AM after drop: %w", err)
+		return nil, fmt.Errorf("building secondary indexes after drop: %w", err)
 	}
-	if err := c.rewriteDTBLAfterIndexChange(ctx, state, newIdxAM, fmt.Sprintf("auto: drop index %s on %s", strings.Join(params.Indexes, ", "), c.name)); err != nil {
+	if err := c.rewriteDTBLAfterIndexChange(ctx, state, newIndexes, fmt.Sprintf("auto: drop index %s on %s", strings.Join(params.Indexes, ", "), c.name)); err != nil {
 		return nil, fmt.Errorf("rewriting DTBL after drop for %q: %w", c.name, err)
 	}
 
@@ -4250,11 +5193,11 @@ func (c *collection) loadOrCreateMap(ctx context.Context, state *dbState) (proll
 		return prolly.Map{}, err
 	}
 
-	emptyAM, err := emptyIndexAM(state.ns)
+	noIndexes, err := emptySecondaryIndexes(ctx, state.ns)
 	if err != nil {
 		return prolly.Map{}, err
 	}
-	dtblHash, err := state.dtblHashForCollection(ctx, c.name, emptyMap, emptyAM, hash.Hash{})
+	dtblHash, err := state.dtblHashForCollection(ctx, c.name, emptyMap, noIndexes, hash.Hash{})
 	if err != nil {
 		return prolly.Map{}, err
 	}
@@ -4379,17 +5322,23 @@ func decodeDocument(data []byte) (*types.Document, error) {
 	return doc, nil
 }
 
-// keyBytesToRecordID derives a stable int64 RecordID from the fixed 20-byte hash key.
-// The first 8 bytes are interpreted as a big-endian int64.
+// keyBytesToRecordID derives a stable int64 RecordID from a primary key. Keys
+// share prefixes, so it hashes the whole key.
 func keyBytesToRecordID(keyBytes []byte) int64 {
-	if len(keyBytes) < 8 {
-		return 0
+	// FNV-64a, inline: a hash.Hash64 would allocate once per scanned document.
+	h := uint64(14695981039346656037)
+	for _, b := range keyBytes {
+		h ^= uint64(b)
+		h *= 1099511628211
 	}
-	return int64(binary.BigEndian.Uint64(keyBytes[:8]))
+	return int64(h)
 }
 
 // mapIter implements types.DocumentsIterator over a prolly.Map.
 type mapIter struct {
+	// arena supplies documents' record key state in batches.
+	arena        types.DocumentArena
+	recordKeys   recordKeyCache
 	ctx          context.Context
 	ns           tree.NodeStore
 	iter         prolly.MapIter
@@ -4410,6 +5359,11 @@ type mapIter struct {
 	buf          []byte
 	// release, if set, unpins the iterated map's root from GC on Close.
 	release func()
+	// outside, if set, ends the scan at the first key it reports, after
+	// counting that document examined as a clustered scan does.
+	outside  func(key []byte) bool
+	done     bool
+	examined examinedCounter
 }
 
 func newMapIter(ctx context.Context, ns tree.NodeStore, m prolly.Map, reverse bool, limit int64, onlyRecordID bool, prefilter func([]byte) bool) types.DocumentsIterator {
@@ -4437,7 +5391,7 @@ func newMapIter(ctx context.Context, ns tree.NodeStore, m prolly.Map, reverse bo
 }
 
 func (it *mapIter) Next() (struct{}, *types.Document, error) {
-	if it.limit > 0 && it.count >= it.limit {
+	if it.done || it.limit > 0 && it.count >= it.limit {
 		return struct{}{}, nil, iterator.ErrIteratorDone
 	}
 
@@ -4454,11 +5408,15 @@ func (it *mapIter) Next() (struct{}, *types.Document, error) {
 		if v == nil {
 			return struct{}{}, nil, iterator.ErrIteratorDone
 		}
-		countDocsExamined(1)
+		it.examined.docs(it.ctx, 1)
 
 		keyBytes, ok := keyDesc.GetBytes(0, k)
 		if !ok {
 			continue
+		}
+		if it.outside != nil && it.outside(keyBytes) {
+			it.done = true
+			return struct{}{}, nil, iterator.ErrIteratorDone
 		}
 
 		recordID := keyBytesToRecordID(keyBytes)
@@ -4499,6 +5457,11 @@ func (it *mapIter) Next() (struct{}, *types.Document, error) {
 		}
 
 		doc.SetRecordID(recordID)
+		// keyBytes points into an immutable tree node, so the key is kept
+		// without a copy.
+		if it.recordKeys.wanted(it.ctx) {
+			it.arena.SetRecordKey(doc, keyBytes)
+		}
 		it.count++
 
 		return struct{}{}, doc, nil
@@ -4555,3 +5518,22 @@ func (it *sliceIter) Next() (struct{}, *types.Document, error) {
 }
 
 func (it *sliceIter) Close() {}
+
+// naturalHintDescending reports whether a {$natural: n} hint has negative n.
+func naturalHintDescending(hint any) bool {
+	doc, _ := hint.(*types.Document)
+	if doc == nil {
+		return false
+	}
+	switch v := must.NotFail(doc.Get("$natural")).(type) {
+	case int32:
+		return v < 0
+	case int64:
+		return v < 0
+	case float64:
+		return v < 0
+	case types.Decimal128:
+		return types.Compare(v, int32(0)) == types.Less
+	}
+	return false
+}

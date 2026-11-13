@@ -16,19 +16,12 @@ package dolt
 
 import (
 	"context"
-	"crypto/sha512"
-	"encoding/binary"
-	"errors"
 	"fmt"
-	"math"
 	"math/big"
 	"strings"
-	"time"
 
-	"github.com/FerretDB/wire/wirebson"
 	fb "github.com/dolthub/flatbuffers/v23/go"
 	"github.com/dolthub/go-mysql-server/sql"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 
 	"github.com/dolthub/dolt/go/gen/fb/serial"
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
@@ -44,14 +37,15 @@ import (
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
+	idxpkg "github.com/dolthub/dumbodb/internal/index"
 	"github.com/dolthub/dumbodb/internal/sqlctx"
-	"github.com/dolthub/dumbodb/internal/types"
 )
 
 // emptyArtifactMapSentinel is a zero hash indicating no artifact map is set.
 var emptyArtifactMapSentinel [hash.ByteLen]byte
 
-// keyDesc describes the key tuple: one binary(20) field for the SHA-512[:20] encoded MongoDB _id.
+// keyDesc describes the key tuple: one bytes field holding the KeyString of the
+// MongoDB _id (see primaryKey).
 var keyDesc = val.NewTupleDescriptor(val.Type{Enc: val.ByteStringEnc, Nullable: false})
 
 // valDescFor returns the descriptor for the stored document: a bsonFormatVersion
@@ -92,6 +86,9 @@ func openCollection(ctx context.Context, cs *nbs.GenerationalNBS, ns tree.NodeSt
 	if err != nil {
 		return prolly.Map{}, fmt.Errorf("parsing DTBL: %w", err)
 	}
+	if err := checkTableLayout(tbl); err != nil {
+		return prolly.Map{}, err
+	}
 	node, _, err := tree.NodeFromBytes(tbl.PrimaryIndexBytes())
 	if err != nil {
 		return prolly.Map{}, fmt.Errorf("parsing DTBL primary_index: %w", err)
@@ -99,19 +96,45 @@ func openCollection(ctx context.Context, cs *nbs.GenerationalNBS, ns tree.NodeSt
 	return prolly.NewMap(node, ns, keyDesc, valDescFor(ns)), nil
 }
 
+// collectionSchemaHash addresses buildCollectionTableSchema's chunk, which
+// every table this version writes references.
+var collectionSchemaHash = hash.Of(buildCollectionTableSchema())
+
+// storedHash reads field, a hash stored in a chunk. A corrupt or foreign
+// chunk may hold one of another length, on which hash.New panics.
+func storedHash(b []byte, field string) (hash.Hash, error) {
+	if len(b) != hash.ByteLen {
+		return hash.Hash{}, fmt.Errorf("%s of %d bytes, want %d", field, len(b), hash.ByteLen)
+	}
+	return hash.New(b), nil
+}
+
+// checkTableLayout refuses a table whose schema is not this version's: an
+// older version keyed its primary map differently.
+func checkTableLayout(tbl *serial.Table) error {
+	schema := tbl.SchemaBytes()
+	if len(schema) != hash.ByteLen {
+		return fmt.Errorf("table schema of %d bytes, %w; recreate the database", len(schema), errUnsupportedLayout)
+	}
+	if h := hash.New(schema); h != collectionSchemaHash {
+		return fmt.Errorf("table schema %s, %w; recreate the database", h, errUnsupportedLayout)
+	}
+	return nil
+}
+
 // buildCollectionTableSchema builds the DSCH flatbuffer for every
-// dumbodb collection: _id binary(20) PK + doc longblob (BytesAdaptive,
+// dumbodb collection: _id varbinary PK (the KeyString of the _id) + doc longblob (BytesAdaptive,
 // spills out-of-band above the tuple-builder threshold).
 func buildCollectionTableSchema() serial.Message {
 	b := fb.NewBuilder(512)
 
 	// Pre-build all strings before starting any object.
 	idName := b.CreateString("_id")
-	idSqlType := b.CreateString("binary(20)")
+	idSqlType := b.CreateString("varbinary(16383)")
 	docName := b.CreateString("doc")
 	docSqlType := b.CreateString("longblob")
 
-	// Column 0: _id BINARY(20) NOT NULL PK
+	// Column 0: _id VARBINARY NOT NULL PK
 	serial.ColumnStart(b)
 	serial.ColumnAddName(b, idName)
 	serial.ColumnAddSqlType(b, idSqlType)
@@ -179,19 +202,15 @@ func buildCollectionTableSchema() serial.Message {
 // buildDoltTableFlatbuffer builds a DTBL (Table) flatbuffer that wraps a prolly.Map
 // as a proper dolt SQL table. The schema field stores a 20-byte hash referencing
 // the separately-written DSCH chunk; the primary_index field inlines the prolly.Map
-// root node bytes (TUPM). The secondary_indexes field inlines the given AddressMap
-// (typically state.collIndexAMs[collName] or state.emptyIndexAM if there are
-// no secondary indexes).
+// root node bytes (TUPM). The secondary_indexes field inlines idxBytes, the
+// collection's secondaryIndexes.tableBytes.
 // artifactsHash is the 20-byte noms hash of the ArtifactMap node in the value store;
 // pass hash.Hash{} (all zeros) when there are no conflict artifacts.
-func buildDoltTableFlatbuffer(m prolly.Map, schemaHash hash.Hash, indexAM prolly.AddressMap, artifactsHash hash.Hash) serial.Message {
+func buildDoltTableFlatbuffer(m prolly.Map, schemaHash hash.Hash, idxBytes []byte, artifactsHash hash.Hash) serial.Message {
 	b := fb.NewBuilder(1024)
 
 	// Primary index: inline TUPM bytes (prolly.Map root node).
 	rowBytes := []byte(tree.ValueFromNode(m.Node()).(dolttypes.SerialMessage))
-
-	// Secondary indexes: per-collection ADRM (name -> IndexEntry chunk hash).
-	idxBytes := []byte(tree.ValueFromNode(indexAM.Node()).(dolttypes.SerialMessage))
 
 	// Conflict struct fields (legacy format) and violations are always zero hashes.
 	var emptyHashBytes [hash.ByteLen]byte
@@ -225,220 +244,28 @@ func buildDoltTableFlatbuffer(m prolly.Map, schemaHash hash.Hash, indexAM prolly
 	return serial.FinishMessage(b, serial.TableEnd(b), []byte(serial.TableFileID))
 }
 
-func hashID(id any) ([20]byte, error) {
-	switch id.(type) {
-	case *types.Document, *types.Array, types.NullType, types.Timestamp, types.MinKeyType, types.MaxKeyType:
-		buf, err := appendCanonicalValue(nil, id)
-		if err != nil {
-			return [20]byte{}, err
-		}
-		return sha512Key(buf), nil
-	}
-
-	if key, ok := exactNumericKey(id); ok {
-		return sha512Key(key), nil
-	}
-	if i, ok := numericToInt64(id); ok {
-		return wirebsonIDHash(i)
-	}
-	return wirebsonIDHash(id)
-}
-
-func sha512Key(b []byte) [20]byte {
-	sum := sha512.Sum512(b)
-	var h [20]byte
-	copy(h[:], sum[:20])
-	return h
-}
-
-func wirebsonIDHash(id any) ([20]byte, error) {
-	doc := wirebson.MakeDocument(1)
-
-	var wval any
-	switch v := id.(type) {
-	case int32:
-		wval = int64(v)
-	case int64:
-		wval = v
-	case float64:
-		wval = v
-	case types.ObjectID:
-		wval = wirebson.ObjectID(v)
-	case string:
-		wval = v
-	case types.Binary:
-		wval = wirebson.Binary{B: v.B, Subtype: wirebson.BinarySubtype(v.Subtype)}
-	case bool:
-		wval = v
-	case time.Time:
-		wval = v
-	case types.Decimal128:
-		wval = wirebson.Decimal128{L: v.L, H: v.H}
-	default:
-		return [20]byte{}, fmt.Errorf("unsupported _id type %T", id)
-	}
-
-	if err := doc.Add("_id", wval); err != nil {
-		return [20]byte{}, fmt.Errorf("building _id doc for hash: %w", err)
-	}
-	raw, err := doc.Encode()
+// primaryKey returns a collection's primary map key for an _id: its
+// KeyString, which orders keys as MongoDB orders _id values and makes equal
+// values (1, 1.0, NumberLong(1)) one key, as a clustered collection does. A
+// key longer than idxpkg.MaxKeyLength is refused with idxpkg.ErrKeyTooLong.
+func primaryKey(id any) ([]byte, error) {
+	key, err := idKey(id)
 	if err != nil {
-		return [20]byte{}, fmt.Errorf("encoding _id for hash: %w", err)
+		return nil, err
 	}
-	return sha512Key(raw), nil
+	if err := idxpkg.CheckKeyLength(key); err != nil {
+		return nil, err
+	}
+	return key, nil
 }
 
-func exactNumericKey(id any) ([]byte, bool) {
-	if _, ok := numericToInt64(id); ok {
-		return nil, false
+// idKey is primaryKey without the length limit, for keys that are compared
+// but never stored, such as document lock ids.
+func idKey(id any) ([]byte, error) {
+	if idxpkg.ValueLossy(id) {
+		return nil, fmt.Errorf("unsupported _id type %T", id)
 	}
-	if tok, ok := numericValueToken(id); ok {
-		return []byte("num:" + tok), true
-	}
-	return nil, false
-}
-
-func appendCanonicalValue(dst []byte, v any) ([]byte, error) {
-	if tok, ok := numericValueToken(v); ok {
-		return appendLenBytes(append(dst, 'N'), []byte(tok)), nil
-	}
-	switch v := v.(type) {
-	case string:
-		return appendLenBytes(append(dst, 'S'), []byte(v)), nil
-	case types.ObjectID:
-		return append(append(dst, 'O'), v[:]...), nil
-	case types.Binary:
-		return appendLenBytes(append(dst, 'B', byte(v.Subtype)), v.B), nil
-	case bool:
-		if v {
-			return append(dst, 'L', 1), nil
-		}
-		return append(dst, 'L', 0), nil
-	case time.Time:
-		return binary.BigEndian.AppendUint64(append(dst, 'T'), uint64(v.UnixMilli())), nil
-	case types.NullType:
-		return append(dst, 'Z'), nil
-	case types.Regex:
-		dst = appendLenBytes(append(dst, 'R'), []byte(v.Pattern))
-		return appendLenBytes(dst, []byte(v.Options)), nil
-	case types.Timestamp:
-		return binary.BigEndian.AppendUint64(append(dst, 'P'), uint64(v)), nil
-	case types.MinKeyType:
-		return append(dst, '<'), nil
-	case types.MaxKeyType:
-		return append(dst, '>'), nil
-	case *types.Document:
-		keys := v.Keys()
-		dst = binary.AppendUvarint(append(dst, 'D'), uint64(len(keys)))
-		for _, k := range keys {
-			val, err := v.Get(k)
-			if err != nil {
-				return nil, err
-			}
-			dst = appendLenBytes(dst, []byte(k))
-			if dst, err = appendCanonicalValue(dst, val); err != nil {
-				return nil, err
-			}
-		}
-		return dst, nil
-	case *types.Array:
-		dst = binary.AppendUvarint(append(dst, 'A'), uint64(v.Len()))
-		for i := 0; i < v.Len(); i++ {
-			elem, err := v.Get(i)
-			if err != nil {
-				return nil, err
-			}
-			if dst, err = appendCanonicalValue(dst, elem); err != nil {
-				return nil, err
-			}
-		}
-		return dst, nil
-	default:
-		return nil, fmt.Errorf("unsupported _id type %T", v)
-	}
-}
-
-func appendLenBytes(dst, b []byte) []byte {
-	return append(binary.AppendUvarint(dst, uint64(len(b))), b...)
-}
-
-func numericValueToken(v any) (string, bool) {
-	switch v := v.(type) {
-	case int32:
-		return new(big.Rat).SetInt64(int64(v)).RatString(), true
-	case int64:
-		return new(big.Rat).SetInt64(v).RatString(), true
-	case float64:
-		switch {
-		case math.IsNaN(v):
-			return "nan", true
-		case math.IsInf(v, 1):
-			return "+inf", true
-		case math.IsInf(v, -1):
-			return "-inf", true
-		default:
-			return new(big.Rat).SetFloat64(v).RatString(), true
-		}
-	case types.Decimal128:
-		coeff, exp, err := primitive.NewDecimal128(v.H, v.L).BigInt()
-		if err != nil {
-			switch {
-			case errors.Is(err, primitive.ErrParseNaN):
-				return "nan", true
-			case errors.Is(err, primitive.ErrParseInf):
-				return "+inf", true
-			case errors.Is(err, primitive.ErrParseNegInf):
-				return "-inf", true
-			default:
-				return "", false
-			}
-		}
-		r := new(big.Rat)
-		if exp >= 0 {
-			r.SetInt(new(big.Int).Mul(coeff, pow10(exp)))
-		} else {
-			r.SetFrac(coeff, pow10(-exp))
-		}
-		return r.RatString(), true
-	default:
-		return "", false
-	}
-}
-
-func numericToInt64(v any) (int64, bool) {
-	switch v := v.(type) {
-	case int32:
-		return int64(v), true
-	case int64:
-		return v, true
-	case float64:
-		const twoTo63 = 9223372036854775808.0
-		if v == math.Trunc(v) && v >= -twoTo63 && v < twoTo63 {
-			return int64(v), true
-		}
-		return 0, false
-	case types.Decimal128:
-		coeff, exp, err := primitive.NewDecimal128(v.H, v.L).BigInt()
-		if err != nil {
-			return 0, false
-		}
-		switch {
-		case exp > 0:
-			coeff = new(big.Int).Mul(coeff, pow10(exp))
-		case exp < 0:
-			q, r := new(big.Int).QuoRem(coeff, pow10(-exp), new(big.Int))
-			if r.Sign() != 0 {
-				return 0, false
-			}
-			coeff = q
-		}
-		if !coeff.IsInt64() {
-			return 0, false
-		}
-		return coeff.Int64(), true
-	default:
-		return 0, false
-	}
+	return idxpkg.EncodeID(id), nil
 }
 
 func pow10(n int) *big.Int {
@@ -448,7 +275,7 @@ func pow10(n int) *big.Int {
 // buildKey creates a key tuple for the encoded MongoDB _id bytes.
 func buildKey(idBytes []byte) (val.Tuple, error) {
 	tb := val.NewTupleBuilder(keyDesc, nil)
-	tb.PutByteString(0, idBytes)
+	tb.PutByteString(0, idxpkg.ClampBound(idBytes))
 
 	tup, err := tb.Build(context.Background(), bufPool)
 	if err != nil {
@@ -475,16 +302,14 @@ func buildValue(ctx context.Context, ns tree.NodeStore, docBytes []byte, prior h
 }
 
 // dtblHashForCollection builds a DTBL from a prolly.Map and a
-// secondary-index AddressMap for the named collection, writes it to the
-// value store, and returns its chunk hash. Callers compute the indexAM
-// from the resolver chain (see index_resolve.go) rather than from a
-// shared dbState cache, so writes on one branch never inline another
-// branch's index AM.
+// collection's secondary indexes, writes it to the value store, and returns
+// its chunk hash. Callers compute indexes from the resolver chain (see
+// index_resolve.go) rather than from a shared dbState cache, so writes on one
+// branch never inline another branch's indexes.
 //
-// Pass the empty AM (emptyIndexAM helper, or any zero-element AM) when
-// the collection has no secondary indexes.
-func (state *dbState) dtblHashForCollection(ctx context.Context, collName string, m prolly.Map, indexAM prolly.AddressMap, artifactsHash hash.Hash) (hash.Hash, error) {
-	dtblMsg := buildDoltTableFlatbuffer(m, state.collSchemaHash, indexAM, artifactsHash)
+// Pass emptySecondaryIndexes when the collection has no secondary indexes.
+func (state *dbState) dtblHashForCollection(ctx context.Context, collName string, m prolly.Map, indexes secondaryIndexes, artifactsHash hash.Hash) (hash.Hash, error) {
+	dtblMsg := buildDoltTableFlatbuffer(m, state.collSchemaHash, indexes.tableBytes(), artifactsHash)
 	ref, err := state.vs.WriteValue(ctx, dolttypes.SerialMessage(dtblMsg))
 	if err != nil {
 		return hash.Hash{}, fmt.Errorf("writing DTBL: %w", err)

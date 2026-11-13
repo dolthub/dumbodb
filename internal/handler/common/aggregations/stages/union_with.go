@@ -64,6 +64,9 @@ func NewUnionWithStage(stage *types.Document, fetcher CollectionFetcher) (aggreg
 				if !ok {
 					return nil, unionWithWrongType(key, value, "array")
 				}
+				if err := aggregations.CheckPipelineLength(pipeline.Len()); err != nil {
+					return nil, err
+				}
 				sub.pipeline = pipeline
 			default:
 				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIDLUnknownField,
@@ -113,6 +116,7 @@ func (u *unionWith) Process(ctx context.Context, iter types.DocumentsIterator, c
 	}
 
 	fetcher := withFetchCache(u.fetcher)
+	ctx = WithJoinStages(ctx, JoinStages{})
 	var fromDocs []*types.Document
 	if u.sub.from != "" {
 		if fromDocs, err = fetcher.Fetch(ctx, u.sub.from, nil); err != nil {

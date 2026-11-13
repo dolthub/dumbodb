@@ -68,6 +68,8 @@ func (iter *addFieldsIterator) Next() (struct{}, *types.Document, error) {
 	if err != nil {
 		return unused, nil, lazyerrors.Error(err)
 	}
+	// mongod gives $set and $addFields no RecordId metadata.
+	doc.SetRecordKey(nil)
 
 	if iter.tree {
 		doc, err = operators.AddFieldsTree(doc, iter.newField)

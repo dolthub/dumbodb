@@ -30,23 +30,23 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// indexEntryMemoLen counts entries in the process-wide indexEntryMemo.
+// indexDefinitionMemoLen counts entries in the process-wide indexDefinitionMemo.
 // sync.Map has no Len; we walk it. Cheap for test sizes.
-func indexEntryMemoLen() int {
+func indexDefinitionMemoLen() int {
 	n := 0
-	indexEntryMemo.Range(func(_, _ any) bool {
+	indexDefinitionMemo.Range(func(_, _ any) bool {
 		n++
 		return true
 	})
 	return n
 }
 
-// indexEntryMemoKeys returns the set of hash.Hash keys currently in the
-// memo. Useful for cross-branch dedup assertions.
-func indexEntryMemoKeys() map[hash.Hash]struct{} {
+// indexDefinitionMemoKeys returns the hashes of the definitions currently in
+// the memo. Useful for cross-branch dedup assertions.
+func indexDefinitionMemoKeys() map[hash.Hash]struct{} {
 	out := make(map[hash.Hash]struct{})
-	indexEntryMemo.Range(func(k, _ any) bool {
-		out[k.(hash.Hash)] = struct{}{}
+	indexDefinitionMemo.Range(func(_, v any) bool {
+		out[v.(memoizedDefinition).hash] = struct{}{}
 		return true
 	})
 	return out
@@ -62,7 +62,7 @@ func TestMemo_DedupesAcrossBranches(t *testing.T) {
 	b := newTestBackend(t)
 
 	// Seed main and create an index. branch feat off main, do nothing
-	// else so feat's DTBL identifies the same IndexEntry hash as main.
+	// else so feat's DTBL holds the same definition as main.
 	mainColl := collAt(t, b, "testdb", "main", "items")
 	insertOne(t, ctx, mainColl, mustDoc(t, "_id", int32(1), "age", int32(30)))
 	createIndex(t, ctx, mainColl, "by_age", "age")
@@ -74,30 +74,30 @@ func TestMemo_DedupesAcrossBranches(t *testing.T) {
 	// the memo too, indirectly, through the resolver path used by
 	// CreateIndexes). We measure the deduplication on the *read* side
 	// by checking the memo grew by zero after the second branch's read.
-	before := indexEntryMemoLen()
+	before := indexDefinitionMemoLen()
 
 	mainNames := listIndexNames(t, ctx, mainColl)
 	if got := []string{"_id_", "by_age"}; !reflect.DeepEqual(mainNames, got) {
 		t.Fatalf("main listIndexes = %v, want %v", mainNames, got)
 	}
-	afterMain := indexEntryMemoLen()
+	afterMain := indexDefinitionMemoLen()
 
 	featNames := listIndexNames(t, ctx, collAt(t, b, "testdb", "feat", "items"))
 	if got := []string{"_id_", "by_age"}; !reflect.DeepEqual(featNames, got) {
 		t.Fatalf("feat listIndexes = %v, want %v", featNames, got)
 	}
-	afterFeat := indexEntryMemoLen()
+	afterFeat := indexDefinitionMemoLen()
 
-	// main and feat point at the SAME IndexEntry chunk, so reading from
-	// feat should not increase the memo size.
+	// main and feat hold the same definition, so reading from feat
+	// should not increase the memo size.
 	if afterFeat != afterMain {
 		t.Errorf("memo size after feat read = %d, after main read = %d; "+
 			"expected the same hash to dedupe", afterFeat, afterMain)
 	}
 
 	// And the memo grew by at most one across both reads (one entry per
-	// distinct IndexEntry hash). It may have grown by zero if the entry
-	// was already populated by the write path.
+	// distinct definition). It may have grown by zero if the entry was
+	// already populated by the write path.
 	if delta := afterFeat - before; delta < 0 || delta > 1 {
 		t.Errorf("memo growth across two reads = %d, want 0 or 1", delta)
 	}
@@ -105,8 +105,7 @@ func TestMemo_DedupesAcrossBranches(t *testing.T) {
 
 // TestMemo_DistinctEntriesForDistinctDefinitions verifies that two
 // branches with different index definitions for the same name produce
-// two distinct memo entries (content-addressed: different chunk bytes
-// -> different hashes).
+// two distinct memo entries (keyed by the hash of the encoded definition).
 func TestMemo_DistinctEntriesForDistinctDefinitions(t *testing.T) {
 	// Cannot t.Parallel: inspects global memo state.
 
@@ -134,40 +133,23 @@ func TestMemo_DistinctEntriesForDistinctDefinitions(t *testing.T) {
 	createIndex(t, ctx, featItems, "by_x", "y")
 	commitBranch(t, b, "testdb", "feat", "feat: by_x on y")
 
-	// Read each branch's persisted IndexEntry chunk hash directly.
-	mainAM := indexAMOnDisk(t, ctx, b, "testdb", "main", collName)
-	mainEntry, err := mainAM.Get(ctx, "by_x")
-	if err != nil {
-		t.Fatalf("main AM.Get(by_x): %v", err)
+	// Read each branch's persisted entry directly; reading resolves it
+	// through the memo.
+	mainEntry := secondaryIndexEntry(t, ctx, secondaryIndexesOnDisk(t, ctx, b, "testdb", "main", collName), "by_x")
+	featEntry := secondaryIndexEntry(t, ctx, secondaryIndexesOnDisk(t, ctx, b, "testdb", "feat", collName), "by_x")
+	if mainEntry == nil || featEntry == nil {
+		t.Fatalf("by_x missing: main %v, feat %v", mainEntry, featEntry)
 	}
-	featAM := indexAMOnDisk(t, ctx, b, "testdb", "feat", collName)
-	featEntry, err := featAM.Get(ctx, "by_x")
-	if err != nil {
-		t.Fatalf("feat AM.Get(by_x): %v", err)
-	}
-
-	if mainEntry == featEntry {
-		t.Fatalf("expected different IndexEntry hashes for by_x{x} vs by_x{y}; got equal %s", mainEntry.String())
+	if mainEntry.defHash == featEntry.defHash {
+		t.Fatalf("expected different definitions for by_x{x} vs by_x{y}; got equal %s", mainEntry.defHash.String())
 	}
 
-	// Resolve both. Both should be present in the memo with distinct keys.
-	state, err := b.getOrOpenDB(ctx, "testdb", false)
-	if err != nil {
-		t.Fatalf("getOrOpenDB: %v", err)
+	keys := indexDefinitionMemoKeys()
+	if _, ok := keys[definitionHash(t, mainEntry.info)]; !ok {
+		t.Errorf("memo missing main's by_x definition")
 	}
-	if _, err := resolveIndexEntry(ctx, state.ns, mainEntry); err != nil {
-		t.Fatalf("resolveIndexEntry main: %v", err)
-	}
-	if _, err := resolveIndexEntry(ctx, state.ns, featEntry); err != nil {
-		t.Fatalf("resolveIndexEntry feat: %v", err)
-	}
-
-	keys := indexEntryMemoKeys()
-	if _, ok := keys[mainEntry]; !ok {
-		t.Errorf("memo missing main's by_x entry %s", mainEntry.String())
-	}
-	if _, ok := keys[featEntry]; !ok {
-		t.Errorf("memo missing feat's by_x entry %s", featEntry.String())
+	if _, ok := keys[definitionHash(t, featEntry.info)]; !ok {
+		t.Errorf("memo missing feat's by_x definition")
 	}
 }
 
@@ -350,7 +332,7 @@ func TestReopen_NoEagerHydration(t *testing.T) {
 	// Snapshot the memo, then reopen the backend. Force the memo to
 	// capture only changes from this reopen by recording keys before
 	// and after.
-	keysBefore := indexEntryMemoKeys()
+	keysBefore := indexDefinitionMemoKeys()
 
 	bk2 := openBackendInDir(t, dir)
 	t.Cleanup(bk2.Close)
@@ -365,7 +347,7 @@ func TestReopen_NoEagerHydration(t *testing.T) {
 		t.Fatalf("getOrOpenDB: %v", err)
 	}
 
-	keysAfterOpen := indexEntryMemoKeys()
+	keysAfterOpen := indexDefinitionMemoKeys()
 	if !sameKeySet(keysBefore, keysAfterOpen) {
 		t.Errorf("memo populated at db-open without any read; got new keys: %v",
 			diffKeys(keysAfterOpen, keysBefore))
@@ -378,11 +360,20 @@ func TestReopen_NoEagerHydration(t *testing.T) {
 		t.Errorf("feat listIndexes after reopen = %v, want [_id_ by_age by_id_age]", names)
 	}
 
-	keysAfterRead := indexEntryMemoKeys()
+	keysAfterRead := indexDefinitionMemoKeys()
 	if len(keysAfterRead) <= len(keysAfterOpen) {
 		t.Errorf("memo did not grow after first read: before=%d after=%d",
 			len(keysAfterOpen), len(keysAfterRead))
 	}
+}
+
+func definitionHash(t *testing.T, info backends.IndexInfo) hash.Hash {
+	t.Helper()
+	def, err := encodeIndexDefinition(info)
+	if err != nil {
+		t.Fatalf("encodeIndexDefinition: %v", err)
+	}
+	return hash.Of(def)
 }
 
 // sameKeySet reports whether two key sets are equal.

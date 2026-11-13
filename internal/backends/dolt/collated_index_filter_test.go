@@ -115,8 +115,9 @@ func TestCollatedIndexOperatorFilters(t *testing.T) {
 	})
 
 	// Non-string operands are not collated. On s they bracket below every
-	// string key; on the binary-indexed i the collated query must not use
-	// i_idx, so it scans the whole collection.
+	// string key; on the binary-indexed i the collated query uses i_idx, as
+	// mongod does, since bounds that hold no string are the same under every
+	// collation.
 	t.Run("nonstring_operator_values", func(t *testing.T) {
 		op := must.NotFail(types.NewDocument("$gt", int32(90)))
 		sIDs := lookup(t, must.NotFail(types.NewDocument("s", op)))
@@ -135,8 +136,8 @@ func TestCollatedIndexOperatorFilters(t *testing.T) {
 
 		opI := must.NotFail(types.NewDocument("$gte", int32(10), "$lt", int32(20)))
 		iIDs := lookup(t, must.NotFail(types.NewDocument("i", opI)))
-		if len(iIDs) != n {
-			t.Errorf("binary-field numeric range candidates = %d, want %d (whole-collection scan candidates; the collated query must not use the binary index)", len(iIDs), n)
+		if len(iIDs) != 10 {
+			t.Errorf("binary-field numeric range candidates = %d, want 10 (the i_idx range)", len(iIDs))
 		}
 	})
 

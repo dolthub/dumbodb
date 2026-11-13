@@ -46,9 +46,10 @@ func TestCollection_CreateCollation(t *testing.T) {
 	require.NoError(t, err, "creating a collection with collation must not return an error")
 }
 
-// TestCollection_ListCollectionsIdIndex verifies that listCollections returns an
-// idIndex field for regular (non-view) collections (do-ch3o).
-func TestCollection_ListCollectionsIdIndex(t *testing.T) {
+// TestCollection_ListCollectionsClusteredIndex verifies that listCollections
+// reports a regular collection as clustered by _id, as MongoDB reports a
+// clustered collection: options.clusteredIndex and no idIndex.
+func TestCollection_ListCollectionsClusteredIndex(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.Collection(t)
@@ -57,40 +58,23 @@ func TestCollection_ListCollectionsIdIndex(t *testing.T) {
 	_, err := coll.InsertOne(ctx, bson.D{{Key: "x", Value: 1}})
 	require.NoError(t, err)
 
-	cursor, err := env.Client.Database("testdb").ListCollections(ctx, bson.D{})
+	cursor, err := env.Client.Database("testdb").ListCollections(ctx, bson.D{{Key: "name", Value: coll.Name()}})
 	require.NoError(t, err)
 	defer cursor.Close(ctx)
 
 	var results []bson.Raw
 	require.NoError(t, cursor.All(ctx, &results))
+	require.Len(t, results, 1)
 
-	found := false
-	for _, r := range results {
-		nameVal, ok := r.Lookup("name").StringValueOK()
-		if !ok || nameVal != coll.Name() {
-			continue
-		}
-		found = true
+	_, hasIDIndex := results[0].Lookup("idIndex").DocumentOK()
+	require.False(t, hasIDIndex, "a clustered collection reports no idIndex")
 
-		// idIndex must be present for a regular collection.
-		idIndex, ok := r.Lookup("idIndex").DocumentOK()
-		require.True(t, ok, "idIndex must be a document in listCollections output")
-
-		// idIndex must have v=2, key={_id:1}, name="_id_".
-		v := idIndex.Lookup("v").Int32()
-		require.Equal(t, int32(2), v, "idIndex.v must be 2")
-
-		keyDoc, ok := idIndex.Lookup("key").DocumentOK()
-		require.True(t, ok, "idIndex.key must be a document")
-		idField := keyDoc.Lookup("_id").Int32()
-		require.Equal(t, int32(1), idField, "idIndex.key._id must be 1")
-
-		idxName, ok := idIndex.Lookup("name").StringValueOK()
-		require.True(t, ok, "idIndex.name must be a string")
-		require.Equal(t, "_id_", idxName, "idIndex.name must be '_id_'")
-	}
-
-	require.True(t, found, "collection %q not found in listCollections output", coll.Name())
+	spec, ok := results[0].Lookup("options", "clusteredIndex").DocumentOK()
+	require.True(t, ok, "options.clusteredIndex must be a document")
+	require.Equal(t, int32(2), spec.Lookup("v").Int32())
+	require.Equal(t, int32(1), spec.Lookup("key", "_id").Int32())
+	require.Equal(t, "_id_", spec.Lookup("name").StringValue())
+	require.True(t, spec.Lookup("unique").Boolean())
 }
 
 // TestCursor_CollationCaseInsensitive verifies that find with a case-insensitive

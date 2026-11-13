@@ -196,6 +196,8 @@ func ProjectInclusionTree(doc, spec *types.Document) (*types.Document, error) {
 		}
 		out = reordered
 	}
+	// The record key stays behind: a reshaped document has no RecordId, as on
+	// mongod, and carrying it would expose an _id a view hides.
 	out.SetRecordID(doc.RecordID())
 	return out, nil
 }

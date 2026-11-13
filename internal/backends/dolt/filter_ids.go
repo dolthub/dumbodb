@@ -30,12 +30,16 @@ func ResolveFilterToDocIDHashes(filter *types.Document) (ids []hash.Hash, fullCo
 		return nil, true, nil
 	}
 
+	// A regex matches a pattern, not one _id.
+	if _, isRegex := idVal.(types.Regex); isRegex {
+		return nil, true, nil
+	}
 	if _, isDoc := idVal.(*types.Document); !isDoc {
-		h, hashErr := hashID(idVal)
+		h, hashErr := idKey(idVal)
 		if hashErr != nil {
 			return nil, false, hashErr
 		}
-		return []hash.Hash{hashFromArray(h)}, false, nil
+		return []hash.Hash{keyLockID(h)}, false, nil
 	}
 
 	idDoc := idVal.(*types.Document)
@@ -57,20 +61,20 @@ func ResolveFilterToDocIDHashes(filter *types.Document) (ids []hash.Hash, fullCo
 		if getErr != nil {
 			return nil, false, getErr
 		}
-		if _, isDoc := v.(*types.Document); isDoc {
+		switch v.(type) {
+		case *types.Document, types.Regex:
 			return nil, true, nil
 		}
-		h, hashErr := hashID(v)
+		h, hashErr := idKey(v)
 		if hashErr != nil {
 			return nil, false, hashErr
 		}
-		ids = append(ids, hashFromArray(h))
+		ids = append(ids, keyLockID(h))
 	}
 	return ids, false, nil
 }
 
-func hashFromArray(b [20]byte) hash.Hash {
-	var h hash.Hash
-	copy(h[:], b[:])
-	return h
+// keyLockID is the lock identity of the document with primary key key.
+func keyLockID(key []byte) hash.Hash {
+	return hash.Of(key)
 }

@@ -16,6 +16,7 @@ package catalog
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -48,6 +49,15 @@ func TestPreflightCollectionBuildsSupportedPlan(t *testing.T) {
 	index := plan.Indexes[1]
 	if !index.Unique || !index.Sparse || index.PartialFilterExpression != partial || index.MatchesPartialFilter == nil {
 		t.Fatalf("supported index = %+v", index)
+	}
+}
+
+func TestPreflightCollectionAcceptsIDClustering(t *testing.T) {
+	options := must.NotFail(types.NewDocument("clusteredIndex", must.NotFail(types.NewDocument(
+		"v", int32(2), "key", must.NotFail(types.NewDocument("_id", int32(1))), "name", "_id_", "unique", true,
+	))))
+	if _, err := PreflightCollection("sales", "orders", options, nil); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -100,6 +110,7 @@ func TestPreflightCollectionRejectsEveryUnsupportedClass(t *testing.T) {
 		{name: "storage engine", index: testGateIndex("storage", "value", int32(1), "storageEngine", must.NotFail(types.NewDocument())), option: "storageEngine"},
 		{name: "collation", index: testGateIndex("collated", "value", int32(1), "collation", must.NotFail(types.NewDocument("locale", "en"))), option: "collation"},
 		{name: "unfinished", index: testGateIndex("building", "value", int32(1), "buildUUID", "build"), option: "buildUUID"},
+		{name: "over 32 key fields", index: wideGateIndex(33), option: "key"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -126,4 +137,13 @@ func testGateIndex(name, field string, direction any, options ...any) *types.Doc
 	values := []any{"v", int32(2), "name", name, "key", must.NotFail(types.NewDocument(field, direction))}
 	values = append(values, options...)
 	return must.NotFail(types.NewDocument(values...))
+}
+
+// wideGateIndex is an ascending index spec on n fields.
+func wideGateIndex(n int) *types.Document {
+	key := types.MakeDocument(n)
+	for i := range n {
+		key.Set(fmt.Sprintf("f%d", i), int32(1))
+	}
+	return must.NotFail(types.NewDocument("v", int32(2), "name", "wide", "key", key))
 }

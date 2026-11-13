@@ -49,7 +49,7 @@ type FindAndModifyParams struct {
 	Collation    *types.Document `dumbo:"collation,opt"`
 	ArrayFilters *types.Array    `dumbo:"arrayFilters,opt"`
 
-	Hint                     string          `dumbo:"hint,ignored"`
+	Hint                     any             `dumbo:"hint,opt"`
 	WriteConcern             *types.Document `dumbo:"writeConcern,opt"`
 	BypassDocumentValidation bool            `dumbo:"bypassDocumentValidation,opt"`
 	BypassEmptyTsReplacement bool            `dumbo:"bypassEmptyTsReplacement,ignored"`

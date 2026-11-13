@@ -15,7 +15,10 @@
 package dolt
 
 import (
+	"bytes"
 	"context"
+	"slices"
+	"strings"
 
 	"github.com/dolthub/dolt/go/store/prolly"
 	"github.com/dolthub/dolt/go/store/prolly/tree"
@@ -24,24 +27,27 @@ import (
 	idxpkg "github.com/dolthub/dumbodb/internal/index"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // streamIndexRanges serves params' filter by reading its index ranges lazily,
 // so a downstream limit stops the reads. It declines when no index serves the
 // filter or the ranges are not worth reading (indexStreamWorthReading).
-func streamIndexRanges(ctx context.Context, state *dbState, primary prolly.Map, idxInfos []backends.IndexInfo, idxMaps []prolly.Map, params *backends.QueryParams) (types.DocumentsIterator, bool, error) {
-	if params.Filter.Len() == 0 || params.Filter.Has("$or") {
-		return nil, false, nil
+func streamIndexRanges(ctx context.Context, state *dbState, primary prolly.Map, idxInfos []backends.IndexInfo, idxMaps []prolly.Map, params *backends.QueryParams) (types.DocumentsIterator, backends.IndexInfo, bool, error) {
+	// Without a filter only a hint picks an index: its whole range.
+	hinted := params.Hint != nil && !backends.HintIsNatural(params.Hint)
+	if (params.Filter.Len() == 0 && !hinted) || params.Filter.Has("$or") {
+		return nil, backends.IndexInfo{}, false, nil
 	}
-	choice, ok := chooseIndexRange(idxInfos, params.Filter, params.Hint, params.Collation)
+	choice, ok := chooseIndexRange(idxInfos, params.Filter, params.Hint, params.Collation, params.Fields)
 	if !ok {
-		return nil, false, nil
+		return nil, backends.IndexInfo{}, false, nil
 	}
 	info, idxMap := idxInfos[choice.mapIdx], idxMaps[choice.mapIdx]
 	ids := newIndexIDStream(ctx, idxMap, choice.ranges(), false, info.Multikey)
 	worth, err := indexStreamWorthReading(ctx, primary, idxMaps, choice, info, params, ids)
 	if err != nil || !worth {
-		return nil, false, err
+		return nil, backends.IndexInfo{}, false, err
 	}
 	return &indexRangeIter{
 		ctx:     ctx,
@@ -49,17 +55,20 @@ func streamIndexRanges(ctx context.Context, state *dbState, primary prolly.Map, 
 		primary: primary,
 		ids:     ids,
 		fields:  params.Fields,
+		covered: coveredRead(info, params),
 		release: pinRoots(state, primary, idxMap),
-	}, true, nil
+	}, info, true, nil
 }
 
 // indexStreamWorthReading reports whether streaming choice's ranges, one point
-// lookup per entry, beats a collection scan: always under a hint, or under a
-// limit when every filter field is a key of the index so each entry read is
-// a match; otherwise only when the ranges hold at most half the collection.
-// It reads ahead into ids to size a narrow range.
+// lookup per entry, beats a collection scan: always under a hint, for a sparse
+// index (see anySparseIndex), when the read is covered by the index so it
+// looks nothing up, or under a limit when every filter field is a key of the
+// index so each entry read is a match; otherwise only when the ranges hold at
+// most half the collection. It reads ahead into ids to size a narrow range.
 func indexStreamWorthReading(ctx context.Context, primary prolly.Map, idxMaps []prolly.Map, choice indexRangeChoice, info backends.IndexInfo, params *backends.QueryParams, ids *indexIDStream) (bool, error) {
-	if params.Hint != nil || (params.LimitHint > 0 && filterFieldsAreIndexKeys(params.Filter, info)) {
+	if params.Hint != nil || info.Sparse || coveredKeysFor(info, params.Fields) != nil ||
+		(params.LimitHint > 0 && filterFieldsAreIndexKeys(params.Filter, info)) {
 		return true, nil
 	}
 	return indexRangesWithinHalf(primary, ids.holdsAtMost, func() (uint64, error) {
@@ -87,32 +96,124 @@ func pinRoots(state *dbState, maps ...prolly.Map) func() {
 // indexRangeIter fetches the documents of an index id stream, one point
 // lookup per id as it is read.
 type indexRangeIter struct {
-	ctx     context.Context
-	ns      tree.NodeStore
-	primary prolly.Map
-	ids     *indexIDStream
-	fields  []string
+	recordKeys recordKeyCache
+	ctx        context.Context
+	ns         tree.NodeStore
+	primary    prolly.Map
+	ids        *indexIDStream
+	fields     []string
+	// covered, when set, builds documents from their index entries.
+	covered *coveredKeys
 	release func()
 }
 
 func (it *indexRangeIter) Next() (struct{}, *types.Document, error) {
 	for {
-		id, err := it.ids.next()
+		e, err := it.ids.next()
 		if err != nil {
 			return struct{}{}, nil, err
 		}
-		if id == nil {
+		if e.id == nil {
 			return struct{}{}, nil, iterator.ErrIteratorDone
 		}
-		doc, err := lookupDocFromPrimary(it.ctx, it.primary, it.ns, id, it.fields)
+		doc, err := entryDocument(it.ctx, it.primary, it.ns, e, it.fields, it.covered, it.recordKeys.wanted(it.ctx))
 		if err != nil {
 			return struct{}{}, nil, err
 		}
 		if doc != nil {
-			doc.SetRecordID(keyBytesToRecordID(id))
 			return struct{}{}, doc, nil
 		}
 	}
+}
+
+// entryDocument returns the document of index entry e: built from the entry
+// when covered can, otherwise fetched, nil when it is gone.
+func entryDocument(ctx context.Context, primary prolly.Map, ns tree.NodeStore, e indexEntry, fields []string, covered *coveredKeys, wantKeys bool) (*types.Document, error) {
+	doc, ok := covered.document(e)
+	if !ok {
+		var err error
+		if doc, err = lookupDocFromPrimary(ctx, primary, ns, e.id, fields); err != nil || doc == nil {
+			return nil, err
+		}
+	}
+	doc.SetRecordID(keyBytesToRecordID(e.id))
+	if wantKeys {
+		doc.SetRecordKey(bytes.Clone(e.id))
+	}
+	return doc, nil
+}
+
+// indexEntry is an index entry as streams yield it: its encoded values, their
+// type tags, and its document's primary id, nil after the last entry.
+type indexEntry struct {
+	values, tags, id []byte
+	// gapKeys are the keys examined outside the ranges before this entry.
+	gapKeys int
+}
+
+// coveredKeys builds a document's requested fields from its index entry, as
+// MongoDB's PROJECTION_COVERED reads no document.
+type coveredKeys struct {
+	keys   int
+	fields []string
+	// fetchNull reads the document for a null key, as MongoDB does when the
+	// filter tests for null: the key cannot tell null from a missing field.
+	fetchNull bool
+	// positions holds each field's position among the index keys.
+	positions []int
+}
+
+// coveredKeysFor returns the coveredKeys for reading fields, top-level fields
+// the caller reads, from info's entries, or nil when some field is not a key
+// or info is multikey.
+func coveredKeysFor(info backends.IndexInfo, fields []string) *coveredKeys {
+	if len(fields) == 0 || info.Multikey {
+		return nil
+	}
+	// Geo, hashed and text keys hold no value the field had.
+	for _, k := range info.Key {
+		if isGeoKey(k) || k.Hashed || k.Text {
+			return nil
+		}
+	}
+	c := &coveredKeys{keys: len(info.Key), fields: fields}
+	for _, f := range fields {
+		pos := slices.IndexFunc(info.Key, func(k backends.IndexKeyPair) bool { return k.Field == f })
+		if pos < 0 || strings.Contains(f, ".") {
+			return nil
+		}
+		c.positions = append(c.positions, pos)
+	}
+	return c
+}
+
+// document builds e's document, or reports false when its entry cannot
+// restore every field. A null key cannot tell a null from a missing field.
+func (c *coveredKeys) document(e indexEntry) (*types.Document, bool) {
+	if c == nil || len(e.tags) != c.keys {
+		return nil, false
+	}
+	split, ok := idxpkg.SplitKeyValues(e.values, c.keys)
+	if !ok {
+		return nil, false
+	}
+	doc := types.MakeDocument(len(c.fields))
+	for i, f := range c.fields {
+		// A null key stands for null or a missing field, and a covered read
+		// reports null for both, as MongoDB's does.
+		v, ok := idxpkg.DecodeValue(split[c.positions[i]], e.tags[c.positions[i]])
+		switch v.(type) {
+		case types.UndefinedType:
+			ok = false
+		case types.NullType:
+			ok = ok && !c.fetchNull
+		}
+		if !ok {
+			return nil, false
+		}
+		doc.Set(f, v)
+	}
+	return doc, true
 }
 
 func (it *indexRangeIter) Close() {
@@ -125,20 +226,32 @@ func (it *indexRangeIter) Close() {
 // indexIDStream yields the primary ids of index ranges lazily, in index order
 // or reversed, counting each index key as it is consumed.
 type indexIDStream struct {
-	ctx     context.Context
-	idxMap  prolly.Map
-	ranges  [][2][]byte
-	reverse bool
-	current *idxpkg.RangeIDIter
-	// buffered holds ids read ahead by holdsAtMost, yielded before current's.
-	buffered [][]byte
+	examined examinedCounter
+	ctx      context.Context
+	idxMap   prolly.Map
+	ranges   [][2][]byte
+	reverse  bool
+	current  *idxpkg.RangeIDIter
+	// buffered holds entries read ahead by holdsAtMost, yielded before
+	// current's.
+	buffered []indexEntry
 	// seen holds the ids already yielded when an id can repeat: a multikey
 	// index, or more than one range.
 	seen map[string]struct{}
+	gaps *intervalGaps
+	// reading is the range current reads.
+	reading [2][]byte
+	// gapKeys are keys examined outside the ranges, carried by the next
+	// entry read.
+	gapKeys int
+	// noGapKeys leaves keys outside the ranges uncounted, as mongod's SBE
+	// scan of an aggregate's count does.
+	noGapKeys bool
 }
 
 func newIndexIDStream(ctx context.Context, idxMap prolly.Map, ranges [][2][]byte, reverse, multikey bool) *indexIDStream {
-	s := &indexIDStream{ctx: ctx, idxMap: idxMap, ranges: ranges, reverse: reverse}
+	s := &indexIDStream{ctx: ctx, idxMap: idxMap, ranges: ranges, reverse: reverse, gaps: newIntervalGaps(ctx, idxMap, ranges, reverse),
+		noGapKeys: backends.IsSBEScan(ctx)}
 	if multikey || len(ranges) > 1 {
 		s.seen = make(map[string]struct{})
 	}
@@ -149,49 +262,56 @@ func newIndexIDStream(ctx context.Context, idxMap prolly.Map, ranges [][2][]byte
 // end within n.
 func (s *indexIDStream) holdsAtMost(n int) (bool, error) {
 	for len(s.buffered) <= n {
-		id, err := s.readID()
-		if err != nil || id == nil {
-			return id == nil, err
+		e, err := s.readEntry()
+		if err != nil || e.id == nil {
+			s.gapKeys += e.gapKeys
+			return e.id == nil, err
 		}
-		s.buffered = append(s.buffered, id)
+		s.buffered = append(s.buffered, e)
 	}
 	return false, nil
 }
 
-// next returns the next id not yet yielded, or nil after the last.
-func (s *indexIDStream) next() ([]byte, error) {
+// next returns the next entry whose id is not yet yielded, with a nil id
+// after the last.
+func (s *indexIDStream) next() (indexEntry, error) {
 	for {
-		var id []byte
+		var e indexEntry
 		if len(s.buffered) > 0 {
-			id = s.buffered[0]
+			e = s.buffered[0]
 			s.buffered = s.buffered[1:]
 		} else {
 			var err error
-			if id, err = s.readID(); err != nil {
-				return nil, err
+			if e, err = s.readEntry(); err != nil {
+				return indexEntry{}, err
 			}
 		}
-		if id == nil {
-			return nil, nil
+		if !s.noGapKeys {
+			s.examined.keys(s.ctx, e.gapKeys)
 		}
-		countKeysExamined(1)
+		if e.id == nil {
+			return e, nil
+		}
+		s.examined.keys(s.ctx, 1)
 		if s.seen == nil {
-			return id, nil
+			s.examined.entries(s.ctx, 1)
+			return e, nil
 		}
-		if _, dup := s.seen[string(id)]; !dup {
-			s.seen[string(id)] = struct{}{}
-			return id, nil
+		if _, dup := s.seen[string(e.id)]; !dup {
+			s.seen[string(e.id)] = struct{}{}
+			s.examined.entries(s.ctx, 1)
+			return e, nil
 		}
 	}
 }
 
-// readID reads the next entry's primary id across the ranges, or nil after
-// the last.
-func (s *indexIDStream) readID() ([]byte, error) {
+// readEntry reads the next entry across the ranges, with a nil id after the
+// last.
+func (s *indexIDStream) readEntry() (indexEntry, error) {
 	for {
 		if s.current == nil {
 			if len(s.ranges) == 0 {
-				return nil, nil
+				return s.takeGapKeys(indexEntry{}), nil
 			}
 			var r [2][]byte
 			if s.reverse {
@@ -201,14 +321,128 @@ func (s *indexIDStream) readID() ([]byte, error) {
 			}
 			current, err := idxpkg.NewRangeIDIter(s.ctx, s.idxMap, r[0], r[1], s.reverse)
 			if err != nil {
-				return nil, err
+				return indexEntry{}, err
 			}
-			s.current = current
+			s.current, s.reading = current, r
 		}
-		id, err := s.current.Next(s.ctx)
+		values, tags, id, err := s.current.NextEntry(s.ctx)
 		if err != nil || id != nil {
-			return id, err
+			return s.takeGapKeys(indexEntry{values: values, tags: tags, id: id}), err
 		}
 		s.current = nil
+		outside, err := s.gaps.after(s.ctx, s.reading, s.ranges)
+		if err != nil {
+			return indexEntry{}, err
+		}
+		if outside {
+			s.gapKeys++
+		}
 	}
+}
+
+func (s *indexIDStream) takeGapKeys(e indexEntry) indexEntry {
+	e.gapKeys, s.gapKeys = s.gapKeys, 0
+	return e
+}
+
+// coveredRead is coveredKeysFor the fields params reads. A null key stands
+// for null or a missing field; the read reports null only when params' filter
+// cannot tell the two apart, and otherwise fetches the document.
+func coveredRead(info backends.IndexInfo, params *backends.QueryParams) *coveredKeys {
+	if leadingKeyUnfiltered(info, params.Filter) {
+		return nil
+	}
+	c := coveredKeysFor(info, params.Fields)
+	if c != nil {
+		c.fetchNull = !nullBlindFilter(params.Filter)
+	}
+	return c
+}
+
+// leadingKeyUnfiltered reports whether filter constrains documents without
+// naming the index's leading field. mongod then reads the whole index and
+// fetches each document to filter it, so the read is not covered; with no
+// filter at all, it is, and a missing field reads as the key's null.
+func leadingKeyUnfiltered(info backends.IndexInfo, filter *types.Document) bool {
+	return filter.Len() > 0 && len(info.Key) > 0 && !filter.Has(info.Key[0].Field)
+}
+
+// nullBlindFilter reports whether filter treats a null field and a missing
+// one alike: it holds only comparisons ($eq, $ne, ranges, $in, $nin) with
+// values other than null and arrays, joined by $and or $or.
+func nullBlindFilter(filter *types.Document) bool {
+	if filter == nil {
+		return true
+	}
+	for _, k := range filter.Keys() {
+		v := must.NotFail(filter.Get(k))
+		switch k {
+		case "$and", "$or":
+			arr, ok := v.(*types.Array)
+			if !ok {
+				return false
+			}
+			for i := 0; i < arr.Len(); i++ {
+				sub, ok := must.NotFail(arr.Get(i)).(*types.Document)
+				if !ok || !nullBlindFilter(sub) {
+					return false
+				}
+			}
+			continue
+		}
+		if strings.HasPrefix(k, "$") {
+			return false
+		}
+		ops, ok := v.(*types.Document)
+		if !ok {
+			if !nullBlindValue(v) {
+				return false
+			}
+			continue
+		}
+		if ops.Len() == 0 || !strings.HasPrefix(ops.Keys()[0], "$") {
+			// An embedded document equality.
+			continue
+		}
+		for _, op := range ops.Keys() {
+			ov := must.NotFail(ops.Get(op))
+			switch op {
+			case "$eq", "$ne", "$gt", "$gte", "$lt", "$lte":
+				if !nullBlindValue(ov) {
+					return false
+				}
+			case "$in", "$nin":
+				arr, ok := ov.(*types.Array)
+				if !ok {
+					return false
+				}
+				for i := 0; i < arr.Len(); i++ {
+					if !nullBlindValue(must.NotFail(arr.Get(i))) {
+						return false
+					}
+				}
+			default:
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// nullBlindValue reports whether comparing with v gives a null field and a
+// missing one the same result.
+func nullBlindValue(v any) bool {
+	switch v.(type) {
+	case types.NullType, *types.Array:
+		return false
+	}
+	return true
+}
+
+func isNull(v any) bool {
+	switch v.(type) {
+	case nil, types.NullType:
+		return true
+	}
+	return false
 }

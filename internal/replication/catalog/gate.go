@@ -114,7 +114,11 @@ func applyCollectionOptions(database, collection string, options *types.Document
 		case "expireAfterSeconds":
 			return invalidOption(database, collection, "", option, "TTL conflicts with historical storage")
 		case "clusteredIndex":
-			return invalidOption(database, collection, "", option, "clustered collections are unsupported")
+			// Every collection is clustered by _id; only that clustering is
+			// accepted.
+			if !isIDClustering(value) {
+				return invalidOption(database, collection, "", option, "only clustering by {_id: 1}, unique, is supported")
+			}
 		case "changeStreamPreAndPostImages":
 			return invalidOption(database, collection, "", option, "change-stream pre-image retention is unsupported")
 		default:
@@ -133,6 +137,9 @@ func preflightIndex(database, collection string, document *types.Document) (back
 	keyDocument, ok := keyValue.(*types.Document)
 	if !ok || keyDocument.Len() == 0 {
 		return backends.IndexInfo{}, invalidOption(database, collection, name, "key", "non-empty key document is required")
+	}
+	if keyDocument.Len() > backends.MaxIndexKeyFields {
+		return backends.IndexInfo{}, invalidOption(database, collection, name, "key", "an index key pattern holds at most 32 fields")
 	}
 	index := backends.IndexInfo{Name: name}
 	keyIter := keyDocument.Iterator()
@@ -230,4 +237,22 @@ func simpleCollation(document *types.Document) bool {
 
 func invalidOption(database, collection, index, option, reason string) error {
 	return &UnsupportedFeatureError{Database: database, Collection: collection, Index: index, Option: option, Reason: reason}
+}
+
+func isIDClustering(value any) bool {
+	spec, ok := value.(*types.Document)
+	if !ok {
+		return false
+	}
+	key, _ := spec.Get("key")
+	keyDoc, ok := key.(*types.Document)
+	if !ok || keyDoc.Len() != 1 || keyDoc.Keys()[0] != "_id" {
+		return false
+	}
+	unique, _ := spec.Get("unique")
+	switch dir, _ := keyDoc.Get("_id"); dir {
+	case int32(1), int64(1), float64(1):
+		return unique == true
+	}
+	return false
 }

@@ -197,6 +197,7 @@ func (gl *graphLookup) Process(ctx context.Context, iter types.DocumentsIterator
 	}
 
 	fetcher := withFetchCache(gl.fetcher)
+	ctx = WithJoinStages(ctx, JoinStages{N: 1})
 	var src graphSource
 	if fetcher.IndexedField(ctx, gl.from, gl.connectToField) {
 		src = &indexedGraphSource{fetcher: fetcher, from: gl.from, connectToField: gl.connectToField}

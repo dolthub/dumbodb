@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/FerretDB/wire"
 
@@ -84,10 +85,24 @@ func (h *Handler) MsgCount(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMs
 	collParam := backends.ListCollectionsParams{Name: params.Collection}
 	cList, err := db.ListCollections(connCtx, &collParam)
 	if err != nil {
-		return nil, lazyerrors.Error(err)
+		return nil, handleMaxTimeMSError(err, params.MaxTimeMS, "count")
 	}
 
 	isView := len(cList.Collections) > 0 && cList.Collections[0].IsView
+	if params.Hint != nil {
+		if len(cList.Collections) > 0 {
+			params.Hint = clusteredHint(params.Hint, cList.Collections[0].ClusteredIndexName)
+		}
+		if err = checkHintType(params.Hint); err == nil && !isView {
+			err = validateHintExists(connCtx, c, params.Hint, "count")
+		}
+		if err == nil && isView {
+			err = validateViewHint(connCtx, db, &cList.Collections[0], params.Hint, "count", params.Filter.Len() > 0)
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
 	if isView {
 		if params.Collation, err = viewReadCollation(params.Collation, cList.Collections[0].Collation); err != nil {
 			return nil, err
@@ -104,7 +119,10 @@ func (h *Handler) MsgCount(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMs
 		closer := iterator.NewMultiCloser()
 		defer closer.Close()
 
-		iter, verr := viewSourceIterator(connCtx, db, view.Name, view.ViewOn, view.ViewPipeline, cmp, closer, h.DisablePushdown)
+		// mongod runs the count as the view's stages, its $match, $skip and
+		// $limit, and a $group and $project that count.
+		iter, verr := viewSourceIterator(connCtx, db, view.Name, view.ViewOn, view.ViewPipeline, cmp, closer, h.DisablePushdown,
+			viewPipelineLength(2+boolInt(params.Filter.Len() > 0)+boolInt(params.Skip > 0)+boolInt(params.Limit != 0)))
 		if verr != nil {
 			return nil, verr
 		}
@@ -135,12 +153,41 @@ func (h *Handler) MsgCount(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMs
 		)
 	}
 
+	n, err := h.execCount(connCtx, c, params, cmp)
+	if err != nil {
+		return nil, err
+	}
+
+	return documentOpMsg(
+		must.NotFail(types.NewDocument(
+			"n", n,
+			"ok", float64(1),
+		)),
+	)
+}
+
+// execCount counts the documents of collection c that match params, by the
+// fastest path available. cmp is params' collation comparator, nil when simple.
+func (h *Handler) execCount(ctx context.Context, c backends.Collection, params *common.CountParams, cmp *collation.Comparator) (int32, error) {
+	n, _, err := h.execCountReading(ctx, c, params, cmp)
+	return n, err
+}
+
+// execCountReading is execCount that also returns, when it fetched documents,
+// how many matched before the skip: what explain's FETCH returns. It is zero
+// when the count came from an index.
+func (h *Handler) execCountReading(ctx context.Context, c backends.Collection, params *common.CountParams, cmp *collation.Comparator) (n, read int32, err error) {
+	ctx = backends.WithCountScan(ctx)
+	// A hinted index decides which documents are counted (a sparse one holds
+	// only some), so a hint skips the unfiltered shortcut.
+	hinted := params.Hint != nil && !backends.HintIsNatural(params.Hint)
+
 	// Fast path: unfiltered count. The backend can return the entry count from
 	// tree metadata in O(1) instead of scanning every document.
-	if params.Filter.Len() == 0 {
-		countRes, err := c.Count(connCtx, &backends.CountParams{})
+	if params.Filter.Len() == 0 && !hinted {
+		countRes, err := c.Count(ctx, &backends.CountParams{})
 		if err != nil {
-			return nil, lazyerrors.Error(err)
+			return 0, 0, lazyerrors.Error(err)
 		}
 
 		total := countRes.Count
@@ -154,22 +201,24 @@ func (h *Handler) MsgCount(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMs
 			total = params.Limit
 		}
 
-		return documentOpMsg(
-			must.NotFail(types.NewDocument(
-				"n", int32(total),
-				"ok", float64(1),
-			)),
-		)
+		return int32(total), 0, nil
 	}
 
 	// Fast path: ask the backend whether it can satisfy the filtered count
 	// without fetching documents (e.g. via a covering single-field index).
 	// The backend signals success via Filtered=true; otherwise we fall
 	// through to the scan path below.
-	if !h.DisablePushdown && cmp == nil {
-		countRes, cerr := c.Count(connCtx, &backends.CountParams{Filter: params.Filter, Collation: params.Collation})
+	// A hint still allows the index count when it names the index the count
+	// would read; the backend declines any other. Unfiltered, a hint counts
+	// the index's entries.
+	if !h.DisablePushdown && (cmp == nil || filterCollationFree(params.Filter)) && (params.Filter.Len() > 0 || hinted) {
+		stop := int64(0)
+		if params.Limit > 0 {
+			stop = params.Skip + params.Limit
+		}
+		countRes, cerr := c.Count(ctx, &backends.CountParams{Filter: params.Filter, Collation: params.Collation, Stop: stop, Hint: params.Hint})
 		if cerr != nil {
-			return nil, lazyerrors.Error(cerr)
+			return 0, 0, handleMaxTimeMSError(cerr, params.MaxTimeMS, "count")
 		}
 		if countRes.Filtered {
 			total := countRes.Count
@@ -183,34 +232,31 @@ func (h *Handler) MsgCount(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMs
 				total = params.Limit
 			}
 
-			return documentOpMsg(
-				must.NotFail(types.NewDocument(
-					"n", int32(total),
-					"ok", float64(1),
-				)),
-			)
+			return int32(total), 0, nil
 		}
 	}
 
 	var qp backends.QueryParams
 	qp.Collated = cmp != nil
+	qp.Hint = params.Hint
 	if !h.DisablePushdown {
 		qp.Filter = params.Filter
 	}
 
-	queryRes, err := c.Query(connCtx, &qp)
+	queryRes, err := c.Query(ctx, &qp)
 	if err != nil {
-		return nil, lazyerrors.Error(err)
+		return 0, 0, handleMaxTimeMSError(err, params.MaxTimeMS, "count")
 	}
 
-	iter := iterator.WithContext(connCtx, queryRes.Iter)
+	iter := iterator.WithContext(ctx, queryRes.Iter)
 
 	closer := iterator.NewMultiCloser(queryRes.Iter)
 	defer closer.Close()
 
 	iter = common.FilterIteratorColl(iter, closer, params.Filter, cmp)
 
-	iter = common.SkipIterator(iter, closer, params.Skip)
+	matched := &countingIterator{DocumentsIterator: iter}
+	iter = common.SkipIterator(matched, closer, params.Skip)
 
 	iter = common.LimitIterator(iter, closer, params.Limit)
 
@@ -222,16 +268,38 @@ func (h *Handler) MsgCount(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMs
 	}
 
 	if err != nil {
-		return nil, handleMaxTimeMSError(err, params.MaxTimeMS, "count")
+		return 0, 0, handleMaxTimeMSError(err, params.MaxTimeMS, "count")
 	}
 
 	count, _ := res.Get("count")
-	n, _ := count.(int32)
+	n, _ = count.(int32)
+	return n, matched.n, nil
+}
 
-	return documentOpMsg(
-		must.NotFail(types.NewDocument(
-			"n", n,
-			"ok", float64(1),
-		)),
-	)
+// filterCollationFree reports whether filter compares no string, so an index
+// of any collation counts it as the query's collation would.
+func filterCollationFree(filter *types.Document) bool {
+	if filter.Len() == 0 {
+		return false
+	}
+	for _, k := range filter.Keys() {
+		if strings.HasPrefix(k, "$") || !backends.CollationFree(must.NotFail(filter.Get(k))) {
+			return false
+		}
+	}
+	return true
+}
+
+// countingIterator counts the documents it yields.
+type countingIterator struct {
+	types.DocumentsIterator
+	n int32
+}
+
+func (it *countingIterator) Next() (struct{}, *types.Document, error) {
+	zero, doc, err := it.DocumentsIterator.Next()
+	if err == nil {
+		it.n++
+	}
+	return zero, doc, err
 }

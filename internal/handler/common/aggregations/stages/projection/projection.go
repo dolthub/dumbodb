@@ -249,6 +249,7 @@ func ValidateProjectionShape(projection *types.Document) (*types.Document, bool,
 
 // ProjectDocument applies projection to the copy of the document.
 func ProjectDocument(doc, projection *types.Document, inclusion bool) (*types.Document, error) {
+	defer doc.ShowRecordKey()()
 	if inclusion && operators.SpecHasComputedPath(projection, true) {
 		return operators.ProjectInclusionTree(doc, projection)
 	}

@@ -70,6 +70,9 @@ func (h *Handler) MsgDistinct(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 		return nil, lazyerrors.Error(err)
 	}
 	if viewInfo != nil && viewInfo.IsView {
+		if err = validateViewHint(connCtx, db, viewInfo, params.Hint, "distinct", params.Filter.Len() > 0); err != nil {
+			return nil, err
+		}
 		if params.Collation, err = viewReadCollation(params.Collation, viewInfo.Collation); err != nil {
 			return nil, err
 		}
@@ -78,7 +81,10 @@ func (h *Handler) MsgDistinct(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 		closer := iterator.NewMultiCloser()
 		defer closer.Close()
 
-		iter, verr := viewSourceIterator(connCtx, db, viewInfo.Name, viewInfo.ViewOn, viewInfo.ViewPipeline, cmp, closer, h.DisablePushdown)
+		// mongod runs the distinct as the view's stages, its $match, and a
+		// $replaceRoot, $unwind and $group.
+		iter, verr := viewSourceIterator(connCtx, db, viewInfo.Name, viewInfo.ViewOn, viewInfo.ViewPipeline, cmp, closer, h.DisablePushdown,
+			viewPipelineLength(3+boolInt(params.Filter.Len() > 0)))
 		if verr != nil {
 			return nil, verr
 		}
@@ -106,48 +112,74 @@ func (h *Handler) MsgDistinct(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 		return nil, lazyerrors.Error(err)
 	}
 
+	if params.Hint != nil {
+		params.Hint = clusteredHint(params.Hint, recordedClusteredName(connCtx, db, params.Collection))
+		if err = checkHintType(params.Hint); err == nil {
+			err = checkCompoundNaturalHint(params.Hint, "distinct")
+		}
+		// mongod overlooks a bad $natural value on a missing collection.
+		if err == nil && !(backends.HintIsNatural(params.Hint) && collectionMissing(connCtx, c)) {
+			err = validateHintExists(connCtx, c, params.Hint, "distinct")
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	params.Collation = h.effectiveCollation(connCtx, db, params.Collection, params.Collation)
 
 	cmp := collation.Parse(params.Collation).Comparator()
 
+	distinct, err := h.execDistinct(connCtx, c, params, cmp)
+	if err != nil {
+		return nil, err
+	}
+
+	return documentOpMsg(
+		must.NotFail(types.NewDocument(
+			"values", distinct,
+			"ok", float64(1),
+		)),
+	)
+}
+
+// execDistinct returns the distinct values of params.Key among the documents
+// of collection c that match params, by the fastest path available. cmp is
+// params' collation comparator, nil when simple.
+func (h *Handler) execDistinct(ctx context.Context, c backends.Collection, params *common.DistinctParams, cmp *collation.Comparator) (*types.Array, error) {
 	// With no filter, MongoDB answers distinct from an index led by the key
 	// (DISTINCT_SCAN) and returns its index keys rather than document values.
+	hinted := params.Hint != nil && !backends.HintIsNatural(params.Hint)
 	if params.Filter.Len() == 0 && cmp == nil {
-		idx, err := distinctScanIndex(connCtx, c, params.Key)
+		idx, err := distinctScanIndex(ctx, c, params.Key)
 		if err != nil {
-			return nil, lazyerrors.Error(err)
+			return nil, handleMaxTimeMSError(err, params.MaxTimeMS, "distinct")
+		}
+		// A hint to another index rules out the scan of this one.
+		if idx != nil && hinted && backends.MatchHintedIndex(params.Hint, []backends.IndexInfo{*idx}) != idx.Name {
+			idx = nil
 		}
 		if idx != nil {
-			distinct, err := distinctFromIndexKeys(connCtx, c, params.Key, idx)
+			distinct, err := distinctFromIndexKeys(ctx, c, params.Key, idx)
 			if err != nil {
-				return nil, lazyerrors.Error(err)
+				return nil, handleMaxTimeMSError(err, params.MaxTimeMS, "distinct")
 			}
-			return documentOpMsg(
-				must.NotFail(types.NewDocument(
-					"values", distinct,
-					"ok", float64(1),
-				)),
-			)
+			return distinct, nil
 		}
 	}
 
-	if cmp == nil && params.Filter.Len() == 1 && params.Filter.Keys()[0] == params.Key && !h.DisablePushdown {
+	if cmp == nil && !hinted && params.Filter.Len() == 1 && params.Filter.Keys()[0] == params.Key && !h.DisablePushdown {
 		if ds, ok := c.(backends.DistinctScanner); ok {
-			res, err := ds.DistinctScan(connCtx, &backends.DistinctParams{Key: params.Key, Filter: params.Filter})
+			res, err := ds.DistinctScan(ctx, &backends.DistinctParams{Key: params.Key, Filter: params.Filter})
 			if err != nil {
-				return nil, lazyerrors.Error(err)
+				return nil, handleMaxTimeMSError(err, params.MaxTimeMS, "distinct")
 			}
 			if res != nil {
 				distinct, err := common.DedupDistinctValues(res.Values)
 				if err != nil {
-					return nil, lazyerrors.Error(err)
+					return nil, handleMaxTimeMSError(err, params.MaxTimeMS, "distinct")
 				}
-				return documentOpMsg(
-					must.NotFail(types.NewDocument(
-						"values", distinct,
-						"ok", float64(1),
-					)),
-				)
+				return distinct, nil
 			}
 		}
 	}
@@ -157,6 +189,7 @@ func (h *Handler) MsgDistinct(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 
 	var qp backends.QueryParams
 	qp.Collated = cmp != nil
+	qp.Hint = params.Hint
 	if fields, ok := common.FilterRootFields(params.Filter); ok {
 		keyRoot, _, _ := strings.Cut(params.Key, ".")
 		qp.Fields = append(fields, keyRoot)
@@ -165,26 +198,21 @@ func (h *Handler) MsgDistinct(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 		qp.Filter = params.Filter
 	}
 
-	queryRes, err := c.Query(connCtx, &qp)
+	queryRes, err := c.Query(ctx, &qp)
 	if err != nil {
-		return nil, lazyerrors.Error(err)
+		return nil, handleMaxTimeMSError(err, params.MaxTimeMS, "distinct")
 	}
 
 	closer.Add(queryRes.Iter)
 
-	iter := common.FilterIteratorColl(iterator.WithContext(connCtx, queryRes.Iter), closer, params.Filter, cmp)
+	iter := common.FilterIteratorColl(iterator.WithContext(ctx, queryRes.Iter), closer, params.Filter, cmp)
 
 	distinct, err := common.FilterDistinctValues(iter, params.Key, cmp)
 	if err != nil {
 		return nil, handleMaxTimeMSError(err, params.MaxTimeMS, "distinct")
 	}
 
-	return documentOpMsg(
-		must.NotFail(types.NewDocument(
-			"values", distinct,
-			"ok", float64(1),
-		)),
-	)
+	return distinct, nil
 }
 
 // distinctScanIndex returns the index MongoDB would use for an unfiltered,

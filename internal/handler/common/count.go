@@ -33,8 +33,9 @@ type CountParams struct {
 
 	Fields any `dumbo:"fields,ignored"` // legacy MongoDB shell adds it, but it is never actually used
 
-	MaxTimeMS      int64           `dumbo:"maxTimeMS,opt,wholePositiveNumber"`
-	Hint           any             `dumbo:"hint,ignored"`
+	MaxTimeMSValue any             `dumbo:"maxTimeMS,opt"`
+	MaxTimeMS      int64           `dumbo:"-"`
+	Hint           any             `dumbo:"hint,opt"`
 	ReadConcern    *types.Document `dumbo:"readConcern,ignored"`
 	Comment        string          `dumbo:"comment,ignored"`
 	LSID           any             `dumbo:"lsid,ignored"`
@@ -50,6 +51,9 @@ func GetCountParams(document *types.Document, l *slog.Logger) (*CountParams, err
 	var count CountParams
 
 	err := handlerparams.ExtractParams(document, "count", &count, l)
+	if err == nil {
+		count.MaxTimeMS, err = handlerparams.CommandMaxTimeMS(count.MaxTimeMSValue)
+	}
 	if err != nil {
 		return nil, err
 	}

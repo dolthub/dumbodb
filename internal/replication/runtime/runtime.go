@@ -51,6 +51,52 @@ type Runtime struct {
 	recovery              *recovery.Recovery
 	counterOperationKinds func(oplog.Entry) ([]string, error)
 	memberOptions         []transport.MemberOptions
+	// beforeApplyForTest runs before each entry applies, in tests.
+	beforeApplyForTest func(oplog.Entry)
+	// fetchForTest replaces the steady fetcher's run, in tests.
+	fetchForTest func(context.Context, *oplog.Buffer) error
+	// interrupted is set when a failure that broke no continuity left the
+	// member RECOVERING; the next steady pass returns it to SECONDARY.
+	interrupted bool
+	// interruption numbers the continuity loss interrupted marked.
+	interruption uint64
+	// failures counts retries since an entry last applied, lengthening the
+	// wait before the next.
+	failures int
+}
+
+// maxRetryDelay caps the wait between retries of a failure that recurs.
+const maxRetryDelay = time.Minute
+
+// retryDelay is the wait before retry n, counting from 0: one second,
+// doubling to maxRetryDelay.
+func retryDelay(n int) time.Duration {
+	if n >= 6 {
+		return maxRetryDelay
+	}
+	return min(time.Second<<n, maxRetryDelay)
+}
+
+// markInterrupted marks continuity lost after a failure that broke none, so
+// the member stops advertising itself as current until steady replication
+// resumes.
+func (r *Runtime) markInterrupted() {
+	r.interruption = r.manager.MarkInterrupted()
+	r.interrupted = true
+}
+
+// resumeAfterInterruption returns a member left RECOVERING by
+// markInterrupted to SECONDARY, once an entry applies again, so a failure
+// that recurs keeps it RECOVERING. A continuity loss the fetcher marked since
+// keeps it RECOVERING too, for the recovery that loss starts.
+func (r *Runtime) resumeAfterInterruption() {
+	if !r.interrupted {
+		return
+	}
+	r.interrupted = false
+	if _, err := r.manager.ResumeSteady(r.interruption); err != nil {
+		r.logger.Warn("resuming steady replication", "err", err)
+	}
 }
 
 func New(
@@ -168,7 +214,7 @@ func (r *Runtime) Run(ctx context.Context) {
 				r.retry(ctx, "oplog history recovered", errors.Join(err, recoveryErr))
 				continue
 			}
-			_ = r.manager.MarkContinuityLost(false)
+			r.markInterrupted()
 			r.retry(ctx, "steady replication stopped", err)
 		}
 	}
@@ -267,7 +313,11 @@ func (r *Runtime) runSteady(ctx context.Context) error {
 	}
 	fetchContext, cancelFetch := context.WithCancel(ctx)
 	fetchDone := make(chan error, 1)
-	go func() { fetchDone <- fetcher.Run(fetchContext) }()
+	fetch := fetcher.Run
+	if r.fetchForTest != nil {
+		fetch = func(ctx context.Context) error { return r.fetchForTest(ctx, buffer) }
+	}
+	go func() { fetchDone <- fetch(fetchContext) }()
 	fetchStopped := false
 	defer func() {
 		cancelFetch()
@@ -289,7 +339,9 @@ func (r *Runtime) runSteady(ctx context.Context) error {
 		if state == topology.StateRemoved {
 			return oplog.ErrSourceChanged
 		}
-		if state == topology.StateRecovering || state == topology.StateStartup2 {
+		// RECOVERING set by markInterrupted lasts until an entry applies;
+		// set by the fetcher, it waits for the fetcher to report the loss.
+		if (state == topology.StateRecovering && !r.interrupted) || state == topology.StateStartup2 {
 			select {
 			case err := <-fetchDone:
 				fetchStopped = true
@@ -328,10 +380,27 @@ func (r *Runtime) runSteady(ctx context.Context) error {
 		if err := r.applyEntry(ctx, applier, entries[0]); err != nil {
 			return err
 		}
+		r.failures = 0
+		if r.interrupted {
+			// A loss the fetcher found since wins over the resume.
+			select {
+			case err := <-fetchDone:
+				fetchStopped = true
+				if errors.Is(err, io.EOF) {
+					return nil
+				}
+				return err
+			default:
+				r.resumeAfterInterruption()
+			}
+		}
 	}
 }
 
 func (r *Runtime) applyEntry(ctx context.Context, applier *oplog.Applier, entry oplog.Entry) error {
+	if r.beforeApplyForTest != nil {
+		r.beforeApplyForTest(entry)
+	}
 	if entry.Operation == "n" {
 		if err := applier.Apply(ctx, entry); err != nil {
 			return err
@@ -470,6 +539,11 @@ func (r *Runtime) stopOnPanic(err error) bool {
 
 func (r *Runtime) stopReplication(stage, classification, message, logMessage string, logArgs ...any) {
 	r.manager.SetRuntimePhase("failed")
+	// A member that applies nothing more must not report itself as a
+	// current SECONDARY, which hello's secondary reads.
+	if err := r.manager.MarkContinuityLost(false); err != nil {
+		r.logger.Error("marking replication continuity lost", "err", err)
+	}
 	failure := control.ReplicationFailure{
 		Stage: stage, Classification: classification, Message: message, Retryable: false,
 	}
@@ -491,7 +565,8 @@ func (r *Runtime) retry(ctx context.Context, message string, err error) {
 		r.logger.Error("recording replication failure", "err", recordErr)
 	}
 	r.logger.Warn(message, "err", err)
-	timer := time.NewTimer(time.Second)
+	timer := time.NewTimer(retryDelay(r.failures))
+	r.failures++
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():

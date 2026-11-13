@@ -18,9 +18,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/FerretDB/wire"
+	"github.com/google/uuid"
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/collation"
@@ -139,11 +141,20 @@ func (h *Handler) MsgCreateIndexes(connCtx context.Context, msg *wire.OpMsg) (*w
 	// An index created without an explicit collation inherits the collection's
 	// default collation.
 	var collectionCollation *types.Document
-	if cInfo, cerr := lookupCollectionInfo(connCtx, db, collection); cerr == nil && cInfo != nil && cInfo.Collation != nil {
-		collectionCollation = cInfo.Collation
-		for i := range toCreate {
-			if toCreate[i].Collation == nil {
-				toCreate[i].Collation = cInfo.Collation
+	cInfo, cerr := lookupCollectionInfo(connCtx, db, collection)
+	if cerr != nil {
+		cInfo = nil
+	}
+	if cInfo != nil {
+		if err = checkClusteredIndexName(command, cInfo.ClusteredIndexName, toCreate); err != nil {
+			return nil, err
+		}
+		if cInfo.Collation != nil {
+			collectionCollation = cInfo.Collation
+			for i := range toCreate {
+				if toCreate[i].Collation == nil {
+					toCreate[i].Collation = cInfo.Collation
+				}
 			}
 		}
 	}
@@ -185,8 +196,41 @@ func (h *Handler) MsgCreateIndexes(connCtx context.Context, msg *wire.OpMsg) (*w
 		numIndexesBefore = 1
 	}
 
+	// A clustered collection's clustered index is not counted, in the reply
+	// or toward the limit.
+	if !createCollection && cInfo != nil && cInfo.ClusteredIndexName != "" {
+		numIndexesBefore--
+	}
+
+	// An existing collection with room for an index starts a build, which
+	// fails naming the collection's UUID.
+	buildingIn := ""
+	if !createCollection && cInfo != nil && numIndexesBefore < maxIndexes {
+		buildingIn = cInfo.UUID
+	}
+
 	requested := len(toCreate)
+	// A request that cannot fit, whatever already exists, is refused before
+	// its specs are compared pairwise.
+	if len(toCreate) > maxIndexes {
+		existingNames := make(map[string]struct{}, len(beforeCreate.Indexes))
+		for _, idx := range beforeCreate.Indexes {
+			existingNames[idx.Name] = struct{}{}
+		}
+		fresh := make([]backends.IndexInfo, 0, len(toCreate))
+		for _, idx := range toCreate {
+			if _, ok := existingNames[idx.Name]; !ok {
+				fresh = append(fresh, idx)
+			}
+		}
+		if err = checkIndexCount(command, dbName, collection, numIndexesBefore, fresh, buildingIn); err != nil {
+			return nil, err
+		}
+	}
 	if toCreate, err = validateIndexesForCreation(command, beforeCreate.Indexes, toCreate); err != nil {
+		return nil, err
+	}
+	if err = checkIndexCount(command, dbName, collection, numIndexesBefore, toCreate, buildingIn); err != nil {
 		return nil, err
 	}
 
@@ -414,6 +458,9 @@ func processIndex(command string, indexDoc *types.Document, ignoreUnknownIndexOp
 			// ignore deprecated options
 
 		case "sparse":
+			if err := idIndexOptionError(command, index, indexDoc, "sparse"); err != nil {
+				return nil, err
+			}
 			v := must.NotFail(indexDoc.Get("sparse"))
 			if sparse, ok := v.(bool); ok && sparse {
 				index.Sparse = true
@@ -424,6 +471,9 @@ func processIndex(command string, indexDoc *types.Document, ignoreUnknownIndexOp
 			// Index options  -- accepted but not stored in the backend for now.
 
 		case "partialFilterExpression":
+			if err := idIndexOptionError(command, index, indexDoc, "partialFilterExpression"); err != nil {
+				return nil, err
+			}
 			// Store the partial filter expression so that unique enforcement can
 			// exclude documents that don't satisfy the filter.
 			if pfe, ok := must.NotFail(indexDoc.Get("partialFilterExpression")).(*types.Document); ok {
@@ -615,6 +665,142 @@ func sameCollation(a, b *types.Document) bool {
 	return collation.Parse(a).Identity() == collation.Parse(b).Identity()
 }
 
+// indexConflict returns mongod's error for creating idx beside other, or
+// whether the two are identical, so idx need not be created. Indexes on one
+// key differ when their unique, sparse, partialFilterExpression or collation
+// do; other options, such as hidden, do not make them different indexes.
+func indexConflict(command string, idx, other backends.IndexInfo, sameRequest bool) (bool, error) {
+	if idx.Name != other.Name && !slices.EqualFunc(idx.Key, other.Key, func(a, b backends.IndexKeyPair) bool { return a == b }) {
+		return false, nil
+	}
+	sameKey := formatIndexKey(idx.Key) == formatIndexKey(other.Key)
+	equivalent := sameKey && idx.Unique == other.Unique && idx.Sparse == other.Sparse &&
+		sameBSON(idx.PartialFilterExpression, other.PartialFilterExpression) && sameCollation(idx.Collation, other.Collation)
+	sameOptions := equivalent && idx.Hidden == other.Hidden
+	specs := func() string {
+		return fmt.Sprintf("Requested index: %s, existing index: %s", conflictSpec(idx), conflictSpec(other))
+	}
+	switch {
+	case idx.Name == other.Name && sameOptions:
+		return true, nil
+	case idx.Name == other.Name && equivalent:
+		return false, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIndexOptionsConflict,
+			"An equivalent index already exists with the same name but different options. "+specs(), command)
+	case idx.Name == other.Name:
+		return false, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIndexKeySpecsConflict,
+			"An existing index has the same name as the requested index."+
+				" When index names are not specified, they are auto generated and can cause conflicts."+
+				" Please refer to our documentation. "+specs(), command)
+	case sameOptions || equivalent && sameRequest:
+		return false, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIndexOptionsConflict,
+			"Index already exists with a different name: "+other.Name, command)
+	case equivalent:
+		return false, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIndexOptionsConflict,
+			"An equivalent index already exists with a different name and options. "+specs(), command)
+	}
+	return false, nil
+}
+
+// maxIndexes is the most indexes a collection may hold, its _id index
+// included, as on mongod.
+const maxIndexes = 64
+
+// checkIndexCount returns mongod's error when creating toCreate beside
+// existing indexes would pass maxIndexes, naming the first index past it.
+// A build started in the collection with UUID buildingIn, when not empty,
+// reports it as a failed build.
+func checkIndexCount(command, dbName, collection string, existing int, toCreate []backends.IndexInfo, buildingIn string) error {
+	if existing+len(toCreate) <= maxIndexes {
+		return nil
+	}
+	first := toCreate[max(maxIndexes-existing, 0)]
+	msg := fmt.Sprintf("add index fails, too many indexes for %s.%s key:{ %s }", dbName, collection, formatIndexKey(first.Key))
+	if buildingIn != "" {
+		msg = fmt.Sprintf("Index build failed: %s: Collection %s.%s ( %s ) :: caused by :: %s", uuid.NewString(), dbName, collection, buildingIn, msg)
+	}
+	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCannotCreateIndex, msg, command)
+}
+
+// conflictSpec is idx's spec as mongod prints it in an index conflict.
+func conflictSpec(idx backends.IndexInfo) string {
+	var b strings.Builder
+	b.WriteString("{ v: 2")
+	if idx.Hidden {
+		b.WriteString(", hidden: true")
+	}
+	if idx.Unique {
+		b.WriteString(", unique: true")
+	}
+	fmt.Fprintf(&b, ", key: { %s }, name: %q", formatIndexKey(idx.Key), idx.Name)
+	if idx.Sparse {
+		b.WriteString(", sparse: true")
+	}
+	if idx.PartialFilterExpression != nil {
+		b.WriteString(", partialFilterExpression: " + types.FormatAnyValue(idx.PartialFilterExpression))
+	}
+	if idx.Collation != nil {
+		b.WriteString(", collation: " + resolvedCollationString(idx.Collation))
+	}
+	b.WriteString(" }")
+	return b.String()
+}
+
+// idIndexOptionError returns mongod's error for option, which an _id index
+// spec may not hold, in indexDoc when index is on _id alone.
+func idIndexOptionError(command string, index backends.IndexInfo, indexDoc *types.Document, option string) error {
+	if len(index.Key) != 1 || index.Key[0].Field != "_id" {
+		return nil
+	}
+	spec := strings.TrimSuffix(types.FormatAnyValue(indexDoc), " }") + ", v: 2 }"
+	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidIndexSpecificationOption,
+		fmt.Sprintf("The field '%s' is not valid for an _id index specification. Specification: %s", option, spec), command)
+}
+
+// indexSpecString is idx's spec as mongod prints it in an error: its key,
+// name and options, then v and a collation.
+func indexSpecString(idx backends.IndexInfo) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "{ key: { %s }, name: %q", formatIndexKey(idx.Key), idx.Name)
+	if idx.Unique {
+		b.WriteString(", unique: true")
+	}
+	if idx.Sparse {
+		b.WriteString(", sparse: true")
+	}
+	if idx.PartialFilterExpression != nil {
+		b.WriteString(", partialFilterExpression: " + types.FormatAnyValue(idx.PartialFilterExpression))
+	}
+	if idx.Hidden {
+		b.WriteString(", hidden: true")
+	}
+	b.WriteString(", v: 2")
+	if idx.Collation != nil {
+		b.WriteString(", collation: " + resolvedCollationString(idx.Collation))
+	}
+	b.WriteString(" }")
+	return b.String()
+}
+
+// checkClusteredIndexName returns mongod's error for an index named like the
+// collection's clustered index, other than one on _id, which is that index.
+func checkClusteredIndexName(command, clusteredName string, toCreate []backends.IndexInfo) error {
+	if clusteredName == "" || clusteredName == backends.DefaultIndexName {
+		return nil
+	}
+	for _, idx := range toCreate {
+		key := formatIndexKey(idx.Key)
+		if idx.Name != clusteredName || key == "_id: 1" {
+			continue
+		}
+		spec := indexSpecString(idx)
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIndexNameMatchesClusteredIndex, fmt.Sprintf(
+			"Error in specification %s :: caused by :: Cannot create an index where the name matches the clusteredIndex but the key "+
+				"does not - indexSpec: %s, clusteredIndex: { v: 2, key: { _id: 1 }, name: %q, unique: true }",
+			spec, spec, clusteredName), command)
+	}
+	return nil
+}
+
 // validateIndexesForCreation filters duplicates out of toCreate and returns an
 // error if any index conflicts with an existing one or has an invalid spec.
 func validateIndexesForCreation(command string, existing, toCreate []backends.IndexInfo) ([]backends.IndexInfo, error) {
@@ -632,6 +818,20 @@ func validateIndexesForCreation(command string, existing, toCreate []backends.In
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCannotCreateIndex, msg, command)
 		}
 
+		if strings.Contains(newIdx.Name, "\x00") {
+			msg := fmt.Sprintf(
+				"Error in specification { key: { %s }, name: \"%s\", v: 2 } :: caused by :: index name cannot contain NUL bytes",
+				newKey, newIdx.Name,
+			)
+
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCannotCreateIndex, msg, command)
+		}
+
+		// "*" means every index to dropIndexes.
+		if newIdx.Name == "*" {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue, "The index name '*' is not valid.", command)
+		}
+
 		if newIdx.Name == backends.DefaultIndexName && newKey != "_id: 1" {
 			msg := fmt.Sprintf(
 				"The index name '_id_' is reserved for the _id index, which must have key pattern {_id: 1},"+
@@ -647,63 +847,29 @@ func validateIndexesForCreation(command string, existing, toCreate []backends.In
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue, msg, command)
 		}
 
+		// mongod checks the name before the key's field count.
+		if len(newIdx.Key) > backends.MaxIndexKeyFields {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrTooManyCompoundKeys, "too many compound keys", command)
+		}
+
 		// Compare against earlier entries in the same request.
 		for j := i - 1; j >= 0; j-- {
-			otherKey := formatIndexKey(toCreate[j].Key)
-			otherName := toCreate[j].Name
-
-			if otherName == newIdx.Name && otherKey == newKey {
-				msg := fmt.Sprintf("Identical index already exists: %s", otherName)
-
+			if identical, err := indexConflict(command, newIdx, toCreate[j], true); err != nil {
+				return nil, err
+			} else if identical {
+				msg := fmt.Sprintf("Identical index already exists: %s", toCreate[j].Name)
 				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIndexAlreadyExists, msg, command)
-			}
-
-			if newIdx.Name == otherName {
-				msg := fmt.Sprintf(
-					"An existing index has the same name as the requested index."+
-						" When index names are not specified, they are auto generated and can cause conflicts."+
-						" Please refer to our documentation. Requested index: { v: 2, key: { %s }, name: %q },"+
-						" existing index: { v: 2, key: { %s }, name: %q }",
-					newKey, newIdx.Name, otherKey, otherName,
-				)
-
-				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIndexKeySpecsConflict, msg, command)
-			}
-
-			if newKey == otherKey && sameCollation(newIdx.Collation, toCreate[j].Collation) {
-				msg := fmt.Sprintf(
-					"Index already exists with a different name: %s", otherName,
-				)
-
-				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIndexOptionsConflict, msg, command)
 			}
 		}
 
-		identical := false
+		identical := newKey == "_id: 1"
 		for _, existingIdx := range existing {
-			existingKey := formatIndexKey(existingIdx.Key)
-
-			if (newIdx.Name == existingIdx.Name && newKey == existingKey && sameCollation(newIdx.Collation, existingIdx.Collation)) || newKey == "_id: 1" {
-				// Fully identical indexes are ignored, no need to attempt to create them.
-				identical = true
+			if identical {
 				break
 			}
-
-			if newIdx.Name == existingIdx.Name {
-				msg := fmt.Sprintf(
-					"An existing index has the same name as the requested index."+
-						" When index names are not specified, they are auto generated and can cause conflicts."+
-						" Please refer to our documentation. Requested index: { v: 2, key: { %s }, name: %q },"+
-						" existing index: { v: 2, key: { %s }, name: %q }",
-					newKey, newIdx.Name, existingKey, existingIdx.Name,
-				)
-
-				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIndexKeySpecsConflict, msg, command)
-			}
-
-			if newKey == existingKey && sameCollation(newIdx.Collation, existingIdx.Collation) {
-				msg := fmt.Sprintf("Index already exists with a different name: %s", existingIdx.Name)
-				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIndexOptionsConflict, msg, command)
+			var err error
+			if identical, err = indexConflict(command, newIdx, existingIdx, false); err != nil {
+				return nil, err
 			}
 		}
 		if !identical {

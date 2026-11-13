@@ -16,191 +16,179 @@ package dolt
 
 import (
 	"context"
-	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
 
-	"github.com/FerretDB/wire/wirebson"
+	"github.com/dolthub/dolt/go/gen/fb/serial"
 	"github.com/dolthub/dolt/go/store/hash"
+	"github.com/dolthub/dolt/go/store/prolly"
 	"github.com/dolthub/dolt/go/store/prolly/tree"
+	dolttypes "github.com/dolthub/dolt/go/store/types"
+	"github.com/dolthub/dolt/go/store/val"
 
 	"github.com/dolthub/dumbodb/internal/backends"
-	"github.com/dolthub/dumbodb/internal/bson"
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// indexEntryDoc is the on-disk shape for a single secondary index
-// entry (stored as a BSON chunk): the IndexInfo metadata plus the
-// 20-byte hash of the index's prolly.Map root.
-type indexEntryDoc struct {
-	Name             string         `json:"name"`
-	Keys             []indexKeyJSON `json:"keys"`
-	Unique           bool           `json:"unique,omitempty"`
-	Sparse           bool           `json:"sparse,omitempty"`
-	PartialBSONHex   string         `json:"partial,omitempty"`   // hex-encoded BSON of PartialFilterExpression
-	CollationBSONHex string         `json:"collation,omitempty"` // hex-encoded BSON of the collation spec
-	Hidden           bool           `json:"hidden,omitempty"`    // index invisible to the query planner
-	Lossy            bool           `json:"lossy,omitempty"`     // index stored a value with no faithful encoding
-	Multikey         bool           `json:"multikey,omitempty"`  // index expanded an array value into per-element entries
-	MapRoot          string         `json:"map_root"`            // hex-encoded 20-byte hash
+// secondaryIndexes is a collection's DTBL secondary_indexes field: a prolly
+// map from index name to the index's definition and the root of its index
+// map. The root is an address field, so chunk walks (GC, push, clone, backup)
+// reach the index map.
+type secondaryIndexes struct {
+	ns tree.NodeStore
+	m  prolly.Map
 }
 
-type indexKeyJSON struct {
-	Field       string `json:"field"`
-	Descending  bool   `json:"desc,omitempty"`
-	Text        bool   `json:"text,omitempty"`
-	Geo2D       bool   `json:"geo2d,omitempty"`
-	Geo2DSphere bool   `json:"geo2dsphere,omitempty"`
-	Hashed      bool   `json:"hashed,omitempty"`
+var secondaryIndexKeyDesc = val.NewTupleDescriptor(val.Type{Enc: val.StringEnc, Nullable: false})
+
+// The root is stored as BytesAddrEnc, the encoding chunk walks follow; it
+// addresses an index map, not a blob.
+func secondaryIndexValDescFor(ns tree.NodeStore) *val.TupleDesc {
+	return val.NewTupleDescriptorWithArgs(
+		val.TupleDescriptorArgs{ValueStore: ns},
+		val.Type{Enc: val.BytesAdaptiveEnc, Nullable: false},
+		val.Type{Enc: val.BytesAddrEnc, Nullable: false},
+	)
 }
 
-func indexInfoToEntry(idx backends.IndexInfo, mapRoot hash.Hash) (indexEntryDoc, error) {
-	keys := make([]indexKeyJSON, len(idx.Key))
-	for i, k := range idx.Key {
-		keys[i] = indexKeyJSON{
-			Field:       k.Field,
-			Descending:  k.Descending,
-			Text:        k.Text,
-			Geo2D:       k.Geo2D,
-			Geo2DSphere: k.Geo2DSphere,
-			Hashed:      k.Hashed,
+// secondaryIndexValReadDesc only locates fields; see storedValueReadDesc.
+var secondaryIndexValReadDesc = val.NewTupleDescriptor(
+	val.Type{Enc: val.BytesAdaptiveEnc, Nullable: false},
+	val.Type{Enc: val.BytesAddrEnc, Nullable: false},
+)
+
+func newSecondaryIndexes(ctx context.Context, ns tree.NodeStore) (secondaryIndexes, error) {
+	m, err := prolly.NewMapFromTuples(ctx, ns, secondaryIndexKeyDesc, secondaryIndexValDescFor(ns))
+	if err != nil {
+		return secondaryIndexes{}, err
+	}
+	return secondaryIndexes{ns: ns, m: m}, nil
+}
+
+// errUnsupportedLayout marks tables an older version wrote: secondary_indexes
+// as an AddressMap (before dolthub/dumbodb#190), or a primary map keyed by
+// _id hashes (before dolthub/dumbodb#207), which a table's schema records.
+var errUnsupportedLayout = errors.New("a storage layout this version does not read")
+
+func secondaryIndexesFromBytes(ns tree.NodeStore, b []byte) (secondaryIndexes, error) {
+	if id := serial.GetFileID(b); id != serial.ProllyTreeNodeFileID {
+		return secondaryIndexes{}, fmt.Errorf("secondary indexes stored as %q, %w; recreate the database", id, errUnsupportedLayout)
+	}
+	node, _, err := tree.NodeFromBytes(b)
+	if err != nil {
+		return secondaryIndexes{}, fmt.Errorf("parsing secondary indexes node: %w", err)
+	}
+	return secondaryIndexes{ns: ns, m: prolly.NewMap(node, ns, secondaryIndexKeyDesc, secondaryIndexValDescFor(ns))}, nil
+}
+
+func (s secondaryIndexes) Count() (int, error) {
+	return s.m.Count()
+}
+
+// IterAll calls cb with each index in name order.
+func (s secondaryIndexes) IterAll(ctx context.Context, cb func(name string, entry *resolvedIndexEntry) error) error {
+	iter, err := s.m.IterAll(ctx)
+	if err != nil {
+		return err
+	}
+	for {
+		k, v, err := iter.Next(ctx)
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		name, _ := secondaryIndexKeyDesc.GetString(0, k)
+		def, root, err := readSecondaryIndexValue(ctx, s.ns, v)
+		if err != nil {
+			return fmt.Errorf("reading secondary index %q: %w", name, err)
+		}
+		entry, err := resolveIndexEntry(def, root)
+		if err != nil {
+			return fmt.Errorf("decoding secondary index %q: %w", name, err)
+		}
+		if err := cb(name, entry); err != nil {
+			return err
 		}
 	}
-	pfHex, err := docToHex(idx.PartialFilterExpression)
-	if err != nil {
-		return indexEntryDoc{}, fmt.Errorf("encoding partial filter: %w", err)
-	}
-	collHex, err := docToHex(idx.Collation)
-	if err != nil {
-		return indexEntryDoc{}, fmt.Errorf("encoding collation: %w", err)
-	}
-	return indexEntryDoc{
-		Name:             idx.Name,
-		Keys:             keys,
-		Unique:           idx.Unique,
-		Sparse:           idx.Sparse,
-		PartialBSONHex:   pfHex,
-		CollationBSONHex: collHex,
-		Hidden:           idx.Hidden,
-		Lossy:            idx.Lossy,
-		Multikey:         idx.Multikey,
-		MapRoot:          hex.EncodeToString(mapRoot[:]),
-	}, nil
 }
 
-// docToHex encodes an optional document as hex-encoded BSON; a nil document
-// yields "".
-func docToHex(doc *types.Document) (string, error) {
-	if doc == nil {
-		return "", nil
-	}
-	wdoc, err := bson.FromDocument(doc)
-	if err != nil {
-		return "", err
-	}
-	b, err := wdoc.Encode()
-	if err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(b), nil
+// tableBytes returns the secondary_indexes field for a DTBL.
+func (s secondaryIndexes) tableBytes() []byte {
+	return []byte(tree.ValueFromNode(s.m.Node()).(dolttypes.SerialMessage))
 }
 
-// hexToDoc decodes hex-encoded BSON produced by docToHex; "" yields nil.
-func hexToDoc(h string) (*types.Document, error) {
-	if h == "" {
-		return nil, nil
-	}
-	b, err := hex.DecodeString(h)
+// secondaryIndexesFromRoots builds the secondary indexes of infos, whose index
+// maps are written at roots.
+func secondaryIndexesFromRoots(ctx context.Context, ns tree.NodeStore, infos []backends.IndexInfo, roots []hash.Hash) (secondaryIndexes, error) {
+	s, err := newSecondaryIndexes(ctx, ns)
 	if err != nil {
-		return nil, err
+		return secondaryIndexes{}, err
 	}
-	return bson.ToDocument(wirebson.RawDocument(b))
-}
-
-// entryToIndexInfo rebuilds MatchesPartialFilter to call
-// backends.MatchPartialFilter against the decoded BSON. The handler layer
-// registers the underlying predicate (FilterDocument) at init time, which keeps
-// the backend free of a circular dependency on handler/common.
-func entryToIndexInfo(d indexEntryDoc) (backends.IndexInfo, hash.Hash, error) {
-	keys := make([]backends.IndexKeyPair, len(d.Keys))
-	for i, k := range d.Keys {
-		keys[i] = backends.IndexKeyPair{
-			Field:       k.Field,
-			Descending:  k.Descending,
-			Text:        k.Text,
-			Geo2D:       k.Geo2D,
-			Geo2DSphere: k.Geo2DSphere,
-			Hashed:      k.Hashed,
+	mut := s.m.Mutate()
+	valDesc := secondaryIndexValDescFor(ns)
+	for i, idx := range infos {
+		def, err := encodeIndexDefinition(idx)
+		if err != nil {
+			return secondaryIndexes{}, fmt.Errorf("encoding definition of %q: %w", idx.Name, err)
+		}
+		kb := val.NewTupleBuilder(secondaryIndexKeyDesc, nil)
+		if err := kb.PutString(0, idx.Name); err != nil {
+			return secondaryIndexes{}, err
+		}
+		k, err := kb.Build(ctx, bufPool)
+		if err != nil {
+			return secondaryIndexes{}, err
+		}
+		vb := val.NewTupleBuilder(valDesc, ns)
+		if err := vb.PutAdaptiveBytesFromInline(ctx, 0, def); err != nil {
+			return secondaryIndexes{}, err
+		}
+		vb.PutBytesAddr(1, roots[i])
+		v, err := vb.Build(ctx, bufPool)
+		if err != nil {
+			return secondaryIndexes{}, err
+		}
+		if err := mut.Put(ctx, k, v); err != nil {
+			return secondaryIndexes{}, err
 		}
 	}
-	pf, err := hexToDoc(d.PartialBSONHex)
-	if err != nil {
-		return backends.IndexInfo{}, hash.Hash{}, fmt.Errorf("decoding partial filter: %w", err)
+	if s.m, err = mut.Map(ctx); err != nil {
+		return secondaryIndexes{}, err
 	}
-	coll, err := hexToDoc(d.CollationBSONHex)
-	if err != nil {
-		return backends.IndexInfo{}, hash.Hash{}, fmt.Errorf("decoding collation: %w", err)
-	}
-	rootBytes, err := hex.DecodeString(d.MapRoot)
-	if err != nil {
-		return backends.IndexInfo{}, hash.Hash{}, fmt.Errorf("decoding map root hex: %w", err)
-	}
-	if len(rootBytes) != hash.ByteLen {
-		return backends.IndexInfo{}, hash.Hash{}, fmt.Errorf("invalid map root length %d (want %d)", len(rootBytes), hash.ByteLen)
-	}
-	var root hash.Hash
-	copy(root[:], rootBytes)
-	info := backends.IndexInfo{
-		Name:                    d.Name,
-		Key:                     keys,
-		Unique:                  d.Unique,
-		Sparse:                  d.Sparse,
-		PartialFilterExpression: pf,
-		Collation:               coll,
-		Hidden:                  d.Hidden,
-		Lossy:                   d.Lossy,
-		Multikey:                d.Multikey,
-	}
-	if pf != nil {
-		captured := pf
-		info.MatchesPartialFilter = func(doc *types.Document) (bool, error) {
-			return backends.MatchPartialFilter(doc, captured)
-		}
-	}
-	return info, root, nil
+	return s, nil
 }
 
-func writeIndexEntryChunk(ctx context.Context, ns tree.NodeStore, entry indexEntryDoc) (hash.Hash, error) {
-	doc, err := indexEntryToDocument(entry)
-	if err != nil {
-		return hash.Hash{}, err
+func readSecondaryIndexValue(ctx context.Context, ns tree.NodeStore, v val.Tuple) (def []byte, root hash.Hash, err error) {
+	if rootLen := len(secondaryIndexValReadDesc.GetField(1, v)); rootLen != hash.ByteLen {
+		return nil, hash.Hash{}, fmt.Errorf("invalid index map root length %d", rootLen)
 	}
-	stored, err := docToBSON(doc)
+	root, _ = secondaryIndexValReadDesc.GetBytesAddr(1, v)
+	stored, ok, err := secondaryIndexValReadDesc.GetBytesAdaptiveValue(ctx, 0, ns, v)
 	if err != nil {
-		return hash.Hash{}, fmt.Errorf("encoding index entry BSON: %w", err)
+		return nil, hash.Hash{}, err
 	}
-	addr, err := ns.WriteBytes(ctx, stored)
-	if err != nil {
-		return hash.Hash{}, fmt.Errorf("writing index entry chunk: %w", err)
+	if !ok {
+		return nil, hash.Hash{}, fmt.Errorf("value missing definition")
 	}
-	return addr, nil
+	switch stored := stored.(type) {
+	case []byte:
+		return stored, root, nil
+	case *val.ByteArray:
+		def, err := appendBlobBytes(ctx, ns, stored.Addr, nil)
+		return def, root, err
+	default:
+		return nil, hash.Hash{}, fmt.Errorf("unexpected definition value %T", stored)
+	}
 }
 
-func readIndexEntryChunk(ctx context.Context, ns tree.NodeStore, h hash.Hash) (indexEntryDoc, error) {
-	stored, err := ns.ReadBytes(ctx, h)
-	if err != nil {
-		return indexEntryDoc{}, fmt.Errorf("reading index entry chunk: %w", err)
-	}
-	doc, err := bsonToDoc(stored)
-	if err != nil {
-		return indexEntryDoc{}, fmt.Errorf("decoding index entry BSON: %w", err)
-	}
-	return documentToIndexEntry(doc)
-}
-
-// indexEntryToDocument: field names match the historical JSON keys.
-func indexEntryToDocument(entry indexEntryDoc) (*types.Document, error) {
-	keys := types.MakeArray(len(entry.Keys))
-	for _, k := range entry.Keys {
+// encodeIndexDefinition encodes idx as BSON in canonical form, keys sorted at
+// every level, so a definition has the same bytes however it was written.
+func encodeIndexDefinition(idx backends.IndexInfo) ([]byte, error) {
+	keys := types.MakeArray(len(idx.Key))
+	for _, k := range idx.Key {
 		kd, err := types.NewDocument(
 			"field", k.Field,
 			"desc", k.Descending,
@@ -210,76 +198,89 @@ func indexEntryToDocument(entry indexEntryDoc) (*types.Document, error) {
 			"hashed", k.Hashed,
 		)
 		if err != nil {
-			return nil, fmt.Errorf("encoding index key pair: %w", err)
+			return nil, err
 		}
 		keys.Append(kd)
 	}
 	doc, err := types.NewDocument(
-		"name", entry.Name,
+		"name", idx.Name,
 		"keys", keys,
-		"unique", entry.Unique,
-		"sparse", entry.Sparse,
-		"partial", entry.PartialBSONHex,
-		"collation", entry.CollationBSONHex,
-		"hidden", entry.Hidden,
-		"lossy", entry.Lossy,
-		"multikey", entry.Multikey,
-		"map_root", entry.MapRoot,
+		"unique", idx.Unique,
+		"sparse", idx.Sparse,
+		"hidden", idx.Hidden,
+		"lossy", idx.Lossy,
+		"multikey", idx.Multikey,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("encoding index entry document: %w", err)
+		return nil, err
 	}
-	return doc, nil
+	if idx.Multikey && idx.MultikeyFieldsKnown {
+		doc.Set("multikeyFields", int64(idx.MultikeyFields))
+	}
+	if idx.PartialFilterExpression != nil {
+		doc.Set("partial", idx.PartialFilterExpression)
+	}
+	if idx.Collation != nil {
+		doc.Set("collation", idx.Collation)
+	}
+	return doc.AppendBSONSortedKeys(nil), nil
 }
 
-func documentToIndexEntry(doc *types.Document) (indexEntryDoc, error) {
-	var entry indexEntryDoc
-	getString := func(key string) string {
-		v, err := doc.Get(key)
-		if err != nil {
-			return ""
-		}
-		s, _ := v.(string)
-		return s
-	}
+// decodeIndexDefinition decodes an encodeIndexDefinition document.
+// MatchesPartialFilter calls backends.MatchPartialFilter, whose predicate the
+// handler layer registers at init, keeping the backend free of a dependency
+// on handler/common.
+func decodeIndexDefinition(doc *types.Document) (backends.IndexInfo, error) {
 	getBool := func(d *types.Document, key string) bool {
-		v, err := d.Get(key)
-		if err != nil {
-			return false
-		}
+		v, _ := d.Get(key)
 		b, _ := v.(bool)
 		return b
 	}
-	entry.Name = getString("name")
-	entry.Unique = getBool(doc, "unique")
-	entry.Sparse = getBool(doc, "sparse")
-	entry.PartialBSONHex = getString("partial")
-	entry.CollationBSONHex = getString("collation")
-	entry.Hidden = getBool(doc, "hidden")
-	entry.Lossy = getBool(doc, "lossy")
-	entry.Multikey = getBool(doc, "multikey")
-	entry.MapRoot = getString("map_root")
-
+	getDoc := func(key string) *types.Document {
+		v, _ := doc.Get(key)
+		d, _ := v.(*types.Document)
+		return d
+	}
+	nameVal, _ := doc.Get("name")
+	name, _ := nameVal.(string)
+	info := backends.IndexInfo{
+		Name:     name,
+		Unique:   getBool(doc, "unique"),
+		Sparse:   getBool(doc, "sparse"),
+		Hidden:   getBool(doc, "hidden"),
+		Lossy:    getBool(doc, "lossy"),
+		Multikey: getBool(doc, "multikey"),
+	}
+	if getBool(doc, "multikey") {
+		// A mask of another type is unknown, so every field reads as
+		// multikey and its documents are deduplicated.
+		mask, _ := doc.Get("multikeyFields")
+		if m, ok := mask.(int64); ok {
+			info.MultikeyFields, info.MultikeyFieldsKnown = uint64(m), true
+		}
+	} else {
+		info.MultikeyFieldsKnown = true
+	}
 	keysVal, err := doc.Get("keys")
 	if err != nil {
-		return indexEntryDoc{}, fmt.Errorf("index entry document missing keys")
+		return backends.IndexInfo{}, fmt.Errorf("index definition missing keys")
 	}
 	arr, ok := keysVal.(*types.Array)
 	if !ok {
-		return indexEntryDoc{}, fmt.Errorf("index entry keys is %T, want array", keysVal)
+		return backends.IndexInfo{}, fmt.Errorf("index definition keys is %T, want array", keysVal)
 	}
 	for i := 0; i < arr.Len(); i++ {
 		kv, _ := arr.Get(i)
 		kd, ok := kv.(*types.Document)
 		if !ok {
-			return indexEntryDoc{}, fmt.Errorf("index entry key %d is %T, want document", i, kv)
+			return backends.IndexInfo{}, fmt.Errorf("index definition key %d is %T, want document", i, kv)
 		}
-		fieldVal, ferr := kd.Get("field")
-		if ferr != nil {
-			return indexEntryDoc{}, fmt.Errorf("index entry key %d missing field", i)
+		fieldVal, err := kd.Get("field")
+		if err != nil {
+			return backends.IndexInfo{}, fmt.Errorf("index definition key %d missing field", i)
 		}
 		field, _ := fieldVal.(string)
-		entry.Keys = append(entry.Keys, indexKeyJSON{
+		info.Key = append(info.Key, backends.IndexKeyPair{
 			Field:       field,
 			Descending:  getBool(kd, "desc"),
 			Text:        getBool(kd, "text"),
@@ -288,5 +289,12 @@ func documentToIndexEntry(doc *types.Document) (indexEntryDoc, error) {
 			Hashed:      getBool(kd, "hashed"),
 		})
 	}
-	return entry, nil
+	info.PartialFilterExpression = getDoc("partial")
+	info.Collation = getDoc("collation")
+	if pf := info.PartialFilterExpression; pf != nil {
+		info.MatchesPartialFilter = func(doc *types.Document) (bool, error) {
+			return backends.MatchPartialFilter(doc, pf)
+		}
+	}
+	return info, nil
 }

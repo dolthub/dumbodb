@@ -23,11 +23,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/dolthub/dolt/go/gen/fb/serial"
 	doltref "github.com/dolthub/dolt/go/libraries/doltcore/ref"
-	"github.com/dolthub/dolt/go/store/hash"
-	"github.com/dolthub/dolt/go/store/prolly"
-	"github.com/dolthub/dolt/go/store/prolly/tree"
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -163,12 +159,12 @@ func indexedCount(t *testing.T, ctx context.Context, coll backends.Collection, f
 	return res.Count
 }
 
-// indexAMOnDisk reads the per-collection secondary_indexes AddressMap
-// from the branch's DTBL chunk, bypassing all in-memory dbState caches.
-// This is the authoritative "what does the on-disk DTBL say" probe and
-// is the only way TestWrite_OnFeat_DoesNotCorruptMainDTBL can detect the
-// cross-branch corruption bug.
-func indexAMOnDisk(t *testing.T, ctx context.Context, b *Backend, dbName, branch, collName string) prolly.AddressMap {
+// secondaryIndexesOnDisk reads the per-collection secondary indexes from
+// the branch's DTBL chunk, bypassing all in-memory dbState caches. This is
+// the authoritative "what does the on-disk DTBL say" probe and is the only
+// way TestWrite_OnFeat_DoesNotCorruptMainDTBL can detect the cross-branch
+// corruption bug.
+func secondaryIndexesOnDisk(t *testing.T, ctx context.Context, b *Backend, dbName, branch, collName string) secondaryIndexes {
 	t.Helper()
 
 	state, err := b.getOrOpenDB(ctx, dbName, false)
@@ -197,49 +193,38 @@ func indexAMOnDisk(t *testing.T, ctx context.Context, b *Backend, dbName, branch
 		t.Fatalf("collection %q has no DTBL on branch %q", collName, branch)
 	}
 
-	chunk, err := state.cs.Get(ctx, dtblHash)
+	indexes, err := secondaryIndexesForDTBL(ctx, state.cs, state.ns, dtblHash)
 	if err != nil {
-		t.Fatalf("cs.Get DTBL: %v", err)
+		t.Fatalf("secondaryIndexesForDTBL: %v", err)
 	}
-	if serial.GetFileID(chunk.Data()) != serial.TableFileID {
-		t.Fatalf("DTBL chunk has unexpected file id")
-	}
-
-	tbl, err := serial.TryGetRootAsTable(chunk.Data(), serial.MessagePrefixSz)
-	if err != nil {
-		t.Fatalf("parsing DTBL: %v", err)
-	}
-
-	idxBytes := tbl.SecondaryIndexesBytes()
-	if len(idxBytes) == 0 {
-		empty, eerr := prolly.NewEmptyAddressMap(state.ns)
-		if eerr != nil {
-			t.Fatalf("NewEmptyAddressMap: %v", eerr)
-		}
-		return empty
-	}
-
-	amNode, _, err := tree.NodeFromBytes(idxBytes)
-	if err != nil {
-		t.Fatalf("NodeFromBytes: %v", err)
-	}
-	idxAM, err := prolly.NewAddressMap(amNode, state.ns)
-	if err != nil {
-		t.Fatalf("NewAddressMap: %v", err)
-	}
-	return idxAM
+	return indexes
 }
 
-// indexNamesInAM returns the sorted slice of names in an index AddressMap.
-func indexNamesInAM(t *testing.T, ctx context.Context, am prolly.AddressMap) []string {
+// secondaryIndexEntry returns the entry of the index named name, nil when
+// indexes has none.
+func secondaryIndexEntry(t *testing.T, ctx context.Context, indexes secondaryIndexes, name string) *resolvedIndexEntry {
+	t.Helper()
+	var found *resolvedIndexEntry
+	if err := indexes.IterAll(ctx, func(n string, entry *resolvedIndexEntry) error {
+		if n == name {
+			found = entry
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("IterAll: %v", err)
+	}
+	return found
+}
+
+// secondaryIndexNames returns the sorted names of indexes.
+func secondaryIndexNames(t *testing.T, ctx context.Context, indexes secondaryIndexes) []string {
 	t.Helper()
 	var names []string
-	err := am.IterAll(ctx, func(name string, _ hash.Hash) error {
+	if err := indexes.IterAll(ctx, func(name string, _ *resolvedIndexEntry) error {
 		names = append(names, name)
 		return nil
-	})
-	if err != nil {
-		t.Fatalf("am.IterAll: %v", err)
+	}); err != nil {
+		t.Fatalf("IterAll: %v", err)
 	}
 	sort.Strings(names)
 	return names
