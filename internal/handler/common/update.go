@@ -289,6 +289,31 @@ func (s *seededPaths) add(key string) error {
 	return nil
 }
 
+// seedsValue reports whether a filter value gives its path a value: a
+// literal, a sub-document, $eq or a one-element $in.
+func seedsValue(val any) bool {
+	switch v := val.(type) {
+	case types.Regex:
+		return false
+	case *types.Document:
+		if v.Len() == 0 || !strings.HasPrefix(v.Keys()[0], "$") {
+			return true
+		}
+		if v.Len() != 1 {
+			return false
+		}
+		switch v.Keys()[0] {
+		case "$eq":
+			return true
+		case "$in":
+			in, ok := must.NotFail(v.Get("$in")).(*types.Array)
+			return ok && in.Len() == 1
+		}
+		return false
+	}
+	return true
+}
+
 func seedFromFilter(doc, filter *types.Document, seeded *seededPaths, replacement bool) error {
 	iter := filter.Iterator()
 	defer iter.Close()
@@ -321,7 +346,7 @@ func seedFromFilter(doc, filter *types.Document, seeded *seededPaths, replacemen
 		}
 
 		if replacement && key != "_id" {
-			if strings.HasPrefix(key, "_id.") {
+			if strings.HasPrefix(key, "_id.") && seedsValue(val) {
 				return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrNotExactValueField,
 					fmt.Sprintf("field at '_id' must be exactly specified, field at sub-path '%s'found", key), "update")
 			}
