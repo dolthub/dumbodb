@@ -92,7 +92,7 @@ func validateViewPipeline(dbName, viewName string, pipeline *types.Array) error 
 		return nil
 	}
 	prefix := fmt.Sprintf("Invalid pipeline for view %s.%s :: caused by :: ", dbName, viewName)
-	if err := stages.CheckParseFailingStages(pipeline); err != nil {
+	if err := stages.CheckViewPipelineStages(pipeline); err != nil {
 		var cerr *handlererrors.CommandError
 		if errors.As(err, &cerr) {
 			return cerr.WithMessage(prefix + cerr.Err().Error())
@@ -108,12 +108,19 @@ func validateViewPipeline(dbName, viewName string, pipeline *types.Array) error 
 			continue
 		}
 		var err error
-		switch stage.Command() {
-		case "$lookup":
-			_, err = stages.NewLookupStage(stage.DeepCopy(), noFetch)
-		case "$unionWith":
+		switch name := stage.Command(); {
+		case stages.IsSearchStage(name), name == "$documents", name == "$listLocalSessions",
+			name == "$listClusterCatalog", name == "$querySettings":
+		case name == "$currentOp":
+			err = stages.CheckCurrentOpSpec(stage)
+		case name == "$lookup":
+			var lookup *types.Document
+			if lookup, err = viewLookupWithoutSearch(stage, prefix); err == nil {
+				_, err = stages.NewLookupStage(lookup, noFetch)
+			}
+		case name == "$unionWith":
 			_, err = stages.NewUnionWithStage(stage.DeepCopy(), noFetch)
-		case "$facet":
+		case name == "$facet":
 			_, err = stages.NewFacetStage(stage.DeepCopy(), noFetch)
 		default:
 			if stages.FailsParsing(stage) {
@@ -129,14 +136,58 @@ func validateViewPipeline(dbName, viewName string, pipeline *types.Array) error 
 		if !ok || stage.Len() != 1 {
 			continue
 		}
-		if name := stage.Command(); name == "$out" || name == "$merge" {
+		name := stage.Command()
+		if name == "$out" || name == "$merge" {
 			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrOptionNotSupportedOnView,
 				fmt.Sprintf("%sThe aggregation stage %s in location %d of the pipeline cannot be used in the view "+
 					"definition of %s.%s because it writes to disk", prefix, name, i, dbName, viewName),
 				"create")
 		}
+		err := stages.ViewNamespaceError(stage, i)
+		if err == nil && i > 0 && stages.IsSearchStage(name) {
+			err = handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCollStatsIsNotFirstStage,
+				name+" is only valid as the first stage in a pipeline", name)
+		}
+		var cerr *handlererrors.CommandError
+		if errors.As(err, &cerr) {
+			return cerr.WithMessage(prefix + cerr.Err().Error())
+		}
 	}
 	return nil
+}
+
+// viewLookupWithoutSearch returns a copy of a view's $lookup stage without the
+// $search and $searchMeta stages of its sub-pipeline, which a view may hold,
+// or mongod's error for a $vectorSearch there.
+func viewLookupWithoutSearch(stage *types.Document, prefix string) (*types.Document, error) {
+	stage = stage.DeepCopy()
+	spec, _ := must.NotFail(stage.Get("$lookup")).(*types.Document)
+	if spec == nil {
+		return stage, nil
+	}
+	v, _ := spec.Get("pipeline")
+	pipeline, _ := v.(*types.Array)
+	if pipeline == nil {
+		return stage, nil
+	}
+	kept := types.MakeArray(pipeline.Len())
+	for i := range pipeline.Len() {
+		sub := must.NotFail(pipeline.Get(i))
+		if d, ok := sub.(*types.Document); ok && stages.IsSearchStage(d.Command()) {
+			switch {
+			case d.Command() == "$vectorSearch":
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrLookupSubPipelineWrites,
+					prefix+"$vectorSearch is not allowed within a $lookup's sub-pipeline", "$lookup (stage)")
+			case i > 0:
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCollStatsIsNotFirstStage,
+					prefix+d.Command()+" is only valid as the first stage in a pipeline", d.Command())
+			}
+			continue
+		}
+		kept.Append(sub)
+	}
+	spec.Set("pipeline", kept)
+	return stage, nil
 }
 
 type foreignViewDepthKey struct{}

@@ -42,7 +42,10 @@ func newSearch(stage *types.Document) (aggregations.Stage, error) {
 
 // newCurrentOp rejects $currentOp outside {aggregate: 1} on admin, which
 // msg_aggregate.go handles.
-func newCurrentOp(*types.Document) (aggregations.Stage, error) {
+func newCurrentOp(stage *types.Document) (aggregations.Stage, error) {
+	if err := CheckCurrentOpSpec(stage); err != nil {
+		return nil, err
+	}
 	return nil, handlererrors.NewCommandErrorMsgWithArgument(
 		handlererrors.ErrInvalidNamespace,
 		"$currentOp must be run against the 'admin' database with {aggregate: 1}",
@@ -252,6 +255,75 @@ var parseFailingStages = map[string]newStageFunc{
 	"$searchMeta":                 newSearch,
 	"$shardedDataDistribution":    newShardedDataDistribution,
 	"$vectorSearch":               newSearch,
+}
+
+// CheckViewPipelineStages is CheckParseFailingStages for a view definition,
+// which may hold the search stages.
+func CheckViewPipelineStages(pipeline *types.Array) error {
+	if pipeline == nil {
+		return nil
+	}
+	for i := range pipeline.Len() {
+		stage, ok := must.NotFail(pipeline.Get(i)).(*types.Document)
+		if !ok || stage.Len() != 1 {
+			continue
+		}
+		name := stage.Command()
+		if IsSearchStage(name) {
+			continue
+		}
+		if newStage, fails := parseFailingStages[name]; fails {
+			_, err := newStage(stage)
+			return err
+		}
+		if FailsParsing(stage) {
+			return nil
+		}
+	}
+	return nil
+}
+
+// IsSearchStage reports whether name is an Atlas Search stage.
+func IsSearchStage(name string) bool {
+	switch name {
+	case "$search", "$searchMeta", "$vectorSearch":
+		return true
+	}
+	return false
+}
+
+// CheckCurrentOpSpec returns mongod's error for a $currentOp specification
+// that is not an object.
+func CheckCurrentOpSpec(stage *types.Document) error {
+	if _, ok := must.NotFail(stage.Get("$currentOp")).(*types.Document); !ok {
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrTypeMismatch,
+			"$currentOp options must be specified in an object, but found: "+handlerparams.AliasFromType(must.NotFail(stage.Get("$currentOp"))),
+			"$currentOp (stage)")
+	}
+	return nil
+}
+
+// ViewNamespaceError returns mongod's error for a stage at position i of a
+// view definition that runs only on {aggregate: 1}, or nil.
+func ViewNamespaceError(stage *types.Document, i int) error {
+	var err error
+	switch stage.Command() {
+	case "$documents":
+		msg := "'$documents' cannot be used in a view definition"
+		if i == 0 {
+			msg = "'$documents' can only be run with {aggregate: 1}"
+		}
+		err = handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace, msg, "$documents (stage)")
+	case "$currentOp":
+		_, err = newCurrentOp(stage)
+	case "$listLocalSessions":
+		_, err = newListLocalSessions(stage)
+	case "$listClusterCatalog":
+		_, err = newListClusterCatalog(stage)
+	case "$querySettings":
+		_, err = newQuerySettings(stage)
+	}
+	return err
 }
 
 // CheckParseFailingStages returns the error of the first stage of pipeline

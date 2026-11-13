@@ -789,6 +789,11 @@ func (h *Handler) aggregateDatabase(connCtx context.Context, document *types.Doc
 		)
 	}
 
+	if stageName == "$currentOp" {
+		if err := stages.CheckCurrentOpSpec(firstStage); err != nil {
+			return nil, err
+		}
+	}
 	if stageName == "$currentOp" && dbName != "admin" {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrInvalidNamespace,
