@@ -201,7 +201,7 @@ statements:
 			u.PipelineStages, err = common.ParseUpdatePipeline(u.Pipeline)
 			var ce *handlererrors.CommandError
 			pipelineMalformed = errors.As(err, &ce) && (ce.Code() == handlererrors.ErrStageInvalid ||
-				ce.Code() == handlererrors.ErrStageUnrecognized || ce.Code() == handlererrors.ErrTypeMismatch)
+				ce.Code() == handlererrors.ErrStageUnrecognized || hasNonDocumentElement(u.Pipeline))
 		}
 		if err != nil {
 			// MongoDB reports an update's invalid filter or pipeline as a write
@@ -295,6 +295,17 @@ statements:
 	}
 
 	return matched, modified, &upserted, writeErrors, nil
+}
+
+// hasNonDocumentElement reports whether an update pipeline has an element
+// that is not a stage document.
+func hasNonDocumentElement(pipeline *types.Array) bool {
+	for i := range pipeline.Len() {
+		if _, ok := must.NotFail(pipeline.Get(i)).(*types.Document); !ok {
+			return true
+		}
+	}
+	return false
 }
 
 // statementWriteError returns the write error an update statement's failed
