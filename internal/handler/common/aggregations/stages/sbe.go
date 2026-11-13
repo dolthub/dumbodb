@@ -22,6 +22,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
+	"github.com/dolthub/dumbodb/internal/handler/commonpath"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
@@ -103,6 +104,9 @@ func sbePrefix(specs []*types.Document, isView func(string) bool) (int, int) {
 						return end, i
 					}
 				}
+				if lookupPathHasIndex(d, "localField") || lookupPathHasIndex(d, "foreignField") {
+					return end, i
+				}
 			}
 			sawLookup = true
 		default:
@@ -110,6 +114,19 @@ func sbePrefix(specs []*types.Document, isView func(string) bool) (int, int) {
 		}
 	}
 	return end, len(specs)
+}
+
+// lookupPathHasIndex reports whether a $lookup path field has an array index
+// component, which keeps mongod from running the $lookup in SBE.
+func lookupPathHasIndex(spec *types.Document, field string) bool {
+	path, _ := spec.Get(field)
+	s, _ := path.(string)
+	for _, part := range strings.Split(s, ".") {
+		if commonpath.IsArrayIndexComponent(part) {
+			return true
+		}
+	}
+	return false
 }
 
 func isZeroSkip(spec *types.Document) bool {
