@@ -733,6 +733,9 @@ const (
 	// ErrSplitEmptyDelimiter indicates an empty $split delimiter.
 	ErrSplitEmptyDelimiter = ErrorCode(40087) // Location40087
 
+	// ErrDottedFieldInSubObject indicates a dotted field name inside an object of a $set specification.
+	ErrDottedFieldInSubObject = ErrorCode(40183) // Location40183
+
 	// $arrayToObject input errors.
 	ErrArrayToObjectInput           = ErrorCode(40386) // Location40386
 	ErrArrayToObjectObjectsExpected = ErrorCode(40391) // Location40391

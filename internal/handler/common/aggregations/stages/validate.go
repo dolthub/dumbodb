@@ -160,6 +160,11 @@ func pathCollision(paths []string) (string, string, bool) {
 // checkAddFieldsCollisions returns mongod's error for a $set or $addFields
 // specification that writes one path within another.
 func checkAddFieldsCollisions(stage string, spec *types.Document) error {
+	if name, ok := dottedSubObjectField(spec, true); ok {
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDottedFieldInSubObject,
+			fmt.Sprintf("Invalid %s :: caused by :: cannot use dotted field name '%s' in a sub object: %s",
+				stage, name, types.FormatAnyValue(spec)), stage+" (stage)")
+	}
 	path, other, ok := pathCollision(addFieldsPaths("", spec))
 	if !ok {
 		return nil
@@ -167,6 +172,22 @@ func checkAddFieldsCollisions(stage string, spec *types.Document) error {
 	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrAddFieldsPathCollision,
 		fmt.Sprintf("Invalid %s :: caused by :: specification contains two conflicting paths. Cannot specify both '%s' and '%s': %s",
 			stage, path, other, types.FormatAnyValue(spec)), stage+" (stage)")
+}
+
+// dottedSubObjectField returns the first dotted field name inside an object
+// literal of a $set or $addFields specification.
+func dottedSubObjectField(spec *types.Document, top bool) (string, bool) {
+	for _, k := range spec.Keys() {
+		if !top && strings.Contains(k, ".") {
+			return k, true
+		}
+		if d, ok := must.NotFail(spec.Get(k)).(*types.Document); ok && !operators.IsOperator(d) {
+			if name, found := dottedSubObjectField(d, false); found {
+				return name, true
+			}
+		}
+	}
+	return "", false
 }
 
 // addFieldsPaths returns the paths a $set or $addFields specification

@@ -15,11 +15,40 @@
 package clientconn
 
 import (
+	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 )
+
+// stageDuplicateField matches a field repeated directly in a stage
+// specification that mongod parses as a set of paths.
+var stageDuplicateField = regexp.MustCompile(`\.\$(set|addFields|project|setWindowFields\.output)\.([^.]+)$`)
+
+// duplicateFieldError returns the error for a command repeating the field at
+// path: mongod's error for a stage whose specification names the same path
+// twice, and FailedToParse otherwise.
+func duplicateFieldError(path string) error {
+	if m := stageDuplicateField.FindStringSubmatch(path); m != nil {
+		switch m[1] {
+		case "set", "addFields":
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrAddFieldsPathCollision,
+				fmt.Sprintf("Invalid $%s :: caused by :: specification contains two conflicting paths. Cannot specify both '%s' and '%s'",
+					m[1], m[2], m[2]), "$"+m[1]+" (stage)")
+		case "project":
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrUnsetPathOverwrite,
+				"Invalid $project :: caused by :: Path collision at "+m[2], "$project (stage)")
+		default:
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrWindowOutputPathCollision,
+				"$setWindowFields 'output' specification contains two conflicting paths", "$setWindowFields (stage)")
+		}
+	}
+	return handlererrors.NewCommandErrorMsg(handlererrors.ErrFailedToParse,
+		fmt.Sprintf("BSON field '%s' is a duplicate field", path))
+}
 
 // commandDuplicateField returns the dotted path of the first field a command
 // repeats, at any depth, and whether there was one.
