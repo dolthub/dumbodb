@@ -26,6 +26,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	stageProjection "github.com/dolthub/dumbodb/internal/handler/common/aggregations/stages/projection"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -163,6 +164,8 @@ func (h *Handler) findAndModifyDocument(ctx context.Context, params *common.Find
 	params.Collation = h.effectiveCollation(ctx, db, params.Collection, params.Collation)
 
 	cmp := collation.Parse(params.Collation).Comparator()
+	operators.BindCollation(params.Query, cmp)
+	operators.BindCollation(params.Pipeline, cmp)
 
 	params.Hint = clusteredHint(params.Hint, recordedClusteredName(ctx, db, params.Collection))
 	if err = checkHintType(params.Hint); err != nil {

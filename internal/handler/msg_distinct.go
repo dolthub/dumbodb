@@ -79,6 +79,7 @@ func (h *Handler) MsgDistinct(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 			return nil, err
 		}
 		cmp := collation.Parse(params.Collation).Comparator()
+		operators.BindCollation(params.Filter, cmp)
 
 		closer := iterator.NewMultiCloser()
 		defer closer.Close()
@@ -131,6 +132,7 @@ func (h *Handler) MsgDistinct(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 	params.Collation = h.effectiveCollation(connCtx, db, params.Collection, params.Collation)
 
 	cmp := collation.Parse(params.Collation).Comparator()
+	operators.BindCollation(params.Filter, cmp)
 
 	distinct, err := h.execDistinct(connCtx, c, params, cmp)
 	if err != nil {

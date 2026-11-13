@@ -257,7 +257,7 @@ func (d *Document) Annotation() any {
 
 // Annotate attaches v to d as state of the command that owns d, such as the
 // collation its expression compares under. v is not a field: it is not
-// encoded, compared or copied.
+// encoded or compared, and DeepCopy carries it.
 func (d *Document) Annotate(v any) {
 	if d.extra == nil {
 		if v == nil {

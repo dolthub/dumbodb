@@ -140,11 +140,17 @@ func deepCopy(value any) any {
 			}
 		}
 
-		return &Document{
+		copied := &Document{
 			fields:   fields,
 			keys:     maps.Clone(value.keys),
 			recordID: value.recordID,
 		}
+		// A copy of a command's expression keeps the state the command
+		// attached to it.
+		if value.extra != nil && value.extra.annotation != nil {
+			copied.Annotate(*value.extra.annotation)
+		}
+		return copied
 
 	case *Array:
 		s := make([]any, len(value.s))
