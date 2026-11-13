@@ -139,6 +139,10 @@ func MoveSkipsBeforeTransforms(pipeline *types.Array) *types.Array {
 		if command(stages[i]) != "$skip" {
 			continue
 		}
+		// An invalid $skip stays, so the stages are parsed in their order.
+		if _, err := newSkip(stages[i].(*types.Document)); err != nil {
+			continue
+		}
 		for j := i; j > 0; j-- {
 			switch command(stages[j-1]) {
 			case "$project", "$addFields", "$set", "$unset":
