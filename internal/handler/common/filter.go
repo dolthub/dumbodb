@@ -55,24 +55,59 @@ func FilterDocument(doc, filter *types.Document) (bool, error) {
 // FilterDocumentColl is FilterDocument with an optional collation comparator.
 // When cmp is nil, string comparison is binary (identical to FilterDocument).
 func FilterDocumentColl(doc, filter *types.Document, cmp *collation.Comparator) (bool, error) {
-	// Top-level filters are ANDed together. Like mongod, which orders a
-	// query's predicates by cost, it checks $expr last, so a predicate that
-	// fails first spares the expression's evaluation and its errors.
+	if filter.Len() == 0 {
+		return true, nil
+	}
+	if filter.Len() == 1 && !isLogicalOperator(filter.Command()) {
+		// One condition has no order to choose.
+		return filterInWrittenOrder(doc, filter, cmp)
+	}
+	plan := filterPlanFor(filter)
+
+	// Top-level filters are ANDed together, the deferred ones last.
+	for pass := 0; pass < 2; pass++ {
+		if pass == 1 && plan.deferred == nil {
+			break
+		}
+		iter := filter.Iterator()
+		for i := 0; ; i++ {
+			filterKey, filterValue, err := iter.Next()
+			if err != nil {
+				iter.Close()
+				if errors.Is(err, iterator.ErrIteratorDone) {
+					break
+				}
+				return false, lazyerrors.Error(err)
+			}
+			if plan.isDeferred(i) != (pass == 1) {
+				continue
+			}
+			matches, err := filterDocumentPair(doc, filterKey, filterValue, cmp)
+			if err != nil {
+				iter.Close()
+				return false, lazyerrors.Error(err)
+			}
+			if !matches {
+				iter.Close()
+				return false, nil
+			}
+		}
+	}
+	return true, nil
+}
+
+// filterInWrittenOrder checks every condition of filter in written order.
+func filterInWrittenOrder(doc, filter *types.Document, cmp *collation.Comparator) (bool, error) {
 	iter := filter.Iterator()
 	defer iter.Close()
 
-	var deferred []int
-	for i := 0; ; i++ {
+	for {
 		filterKey, filterValue, err := iter.Next()
 		if err != nil {
 			if errors.Is(err, iterator.ErrIteratorDone) {
-				break
+				return true, nil
 			}
 			return false, lazyerrors.Error(err)
-		}
-		if filterKey == "$expr" || clausesUseExpr(filterKey, filterValue) {
-			deferred = append(deferred, i)
-			continue
 		}
 		matches, err := filterDocumentPair(doc, filterKey, filterValue, cmp)
 		if err != nil {
@@ -82,20 +117,129 @@ func FilterDocumentColl(doc, filter *types.Document, cmp *collation.Comparator) 
 			return false, nil
 		}
 	}
-	if len(deferred) == 0 {
-		return true, nil
+}
+
+// filterPlan is the order in which a filter's conditions are checked. Like
+// mongod, which orders a query's predicates by cost unless an index on _id
+// serves the query, conditions using $expr are deferred, so a predicate that
+// fails first spares the expression's evaluation and its errors.
+type filterPlan struct {
+	n        int
+	deferred map[int]bool
+}
+
+func (p *filterPlan) isDeferred(i int) bool {
+	return p.deferred != nil && p.deferred[i]
+}
+
+var (
+	filterPlans identitycache.Cache[types.Document, *filterPlan]
+	clausePlans identitycache.Cache[types.Array, *[]int]
+)
+
+// filterPlanFor returns filter's plan, planning it as a whole query when it
+// is not part of one already planned.
+func filterPlanFor(filter *types.Document) *filterPlan {
+	if p, ok := filterPlans.Get(filter); ok && p.n == filter.Len() {
+		return p
 	}
+	return planFilter(filter, keepsWrittenOrder(filter))
+}
+
+func planFilter(filter *types.Document, keep bool) *filterPlan {
+	p := &filterPlan{n: filter.Len()}
 	keys, values := filter.Keys(), filter.Values()
-	for _, i := range deferred {
-		matches, err := filterDocumentPair(doc, keys[i], values[i], cmp)
-		if err != nil {
-			return false, lazyerrors.Error(err)
+	for i, k := range keys {
+		switch k {
+		case "$and", "$or", "$nor":
+			if clauses, ok := values[i].(*types.Array); ok {
+				planClauses(clauses, keep)
+			}
 		}
-		if !matches {
-			return false, nil
+		if !keep && (k == "$expr" || clausesUseExpr(k, values[i])) {
+			if p.deferred == nil {
+				p.deferred = map[int]bool{}
+			}
+			p.deferred[i] = true
 		}
 	}
-	return true, nil
+	filterPlans.Put(filter, p)
+	return p
+}
+
+// planClauses plans the clauses of a logical operator and the order to check
+// them in, those using $expr last unless keep is set.
+func planClauses(clauses *types.Array, keep bool) {
+	var order []int
+	if !keep {
+		order = exprClausesLast(clauses)
+	}
+	for i := range clauses.Len() {
+		if clause, ok := must.NotFail(clauses.Get(i)).(*types.Document); ok {
+			planFilter(clause, keep)
+		}
+	}
+	clausePlans.Put(clauses, &order)
+}
+
+// clauseOrderFor returns the order in which to check clauses, or nil for
+// their written order.
+func clauseOrderFor(clauses *types.Array) []int {
+	if order, ok := clausePlans.Get(clauses); ok && (*order == nil || len(*order) == clauses.Len()) {
+		return *order
+	}
+	return exprClausesLast(clauses)
+}
+
+// keepsWrittenOrder reports whether mongod would answer the query with an
+// index on _id, checking the rest of the filter in written order: the filter
+// has a condition on _id that the index serves, directly or in a top-level
+// $and.
+func keepsWrittenOrder(filter *types.Document) bool {
+	keys, values := filter.Keys(), filter.Values()
+	for i, k := range keys {
+		switch k {
+		case "_id":
+			if indexableCondition(values[i]) {
+				return true
+			}
+		case "$and":
+			clauses, _ := values[i].(*types.Array)
+			for j := range clauses.Len() {
+				if clause, ok := must.NotFail(clauses.Get(j)).(*types.Document); ok {
+					if v, err := clause.Get("_id"); err == nil && indexableCondition(v) {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
+func indexableCondition(v any) bool {
+	if _, isRegex := v.(types.Regex); isRegex {
+		return false
+	}
+	cond, ok := v.(*types.Document)
+	if !ok || cond.Len() == 0 || !strings.HasPrefix(cond.Keys()[0], "$") {
+		return true
+	}
+	for _, op := range cond.Keys() {
+		switch op {
+		case "$regex", "$options", "$elemMatch", "$size", "$all":
+			return false
+		case "$exists":
+			if !IsTruthy(must.NotFail(cond.Get(op))) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func isLogicalOperator(key string) bool {
+	return key == "$and" || key == "$or" || key == "$nor"
 }
 
 // clausesUseExpr reports whether a logical operator's clauses use $expr.
@@ -134,7 +278,7 @@ func filterUsesExpr(filter *types.Document) bool {
 func exprClausesLast(exprs *types.Array) []int {
 	var withExpr []int
 	for i := range exprs.Len() {
-		if filterUsesExpr(must.NotFail(exprs.Get(i)).(*types.Document)) {
+		if clause, ok := must.NotFail(exprs.Get(i)).(*types.Document); ok && filterUsesExpr(clause) {
 			withExpr = append(withExpr, i)
 		}
 	}
@@ -440,7 +584,10 @@ func filterOperator(doc *types.Document, operator string, filterValue any, cmp *
 			}
 		}
 
-		order := exprClausesLast(exprs)
+		var order []int
+		if exprs.Len() > 1 {
+			order = clauseOrderFor(exprs)
+		}
 		for k := range exprs.Len() {
 			i := k
 			if order != nil {
@@ -489,7 +636,10 @@ func filterOperator(doc *types.Document, operator string, filterValue any, cmp *
 			}
 		}
 
-		order := exprClausesLast(exprs)
+		var order []int
+		if exprs.Len() > 1 {
+			order = clauseOrderFor(exprs)
+		}
 		for k := range exprs.Len() {
 			i := k
 			if order != nil {
@@ -538,7 +688,10 @@ func filterOperator(doc *types.Document, operator string, filterValue any, cmp *
 			}
 		}
 
-		order := exprClausesLast(exprs)
+		var order []int
+		if exprs.Len() > 1 {
+			order = clauseOrderFor(exprs)
+		}
 		for k := range exprs.Len() {
 			i := k
 			if order != nil {
