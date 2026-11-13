@@ -65,7 +65,7 @@ type tsResult struct {
 
 // evaluateTimestampParam resolves the operator parameter.
 // Returns (result, nil) on success. When a field path resolves to a missing
-// field, result.missing is true and the caller should return nil without error.
+// field, result.missing is true and the operator's result is null.
 // Returns an error only when the argument is definitively not a Timestamp.
 func evaluateTimestampParam(opName string, param any, doc *types.Document) (tsResult, error) {
 	val, missing, err := EvalOperand(param, doc)
