@@ -192,7 +192,7 @@ func (a *nAccumulator) UseSBE() error {
 }
 
 func (a *nAccumulator) New() Accumulation {
-	return &nState{spec: a}
+	return &nState{spec: a, mem: keptMemory{sbe: a.n.sbe}}
 }
 
 type nState struct {

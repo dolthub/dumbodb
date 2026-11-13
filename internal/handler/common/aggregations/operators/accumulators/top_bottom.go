@@ -146,7 +146,7 @@ func (a *topBottomAccumulator) UseSBE() error {
 }
 
 func (a *topBottomAccumulator) New() Accumulation {
-	return &topBottomState{spec: a}
+	return &topBottomState{spec: a, mem: keptMemory{sbe: a.n.sbe}}
 }
 
 // compareKeys compares two documents' sort keys in sortBy order.
