@@ -1101,6 +1101,10 @@ const (
 	// were used in a context that does not sort (e.g. a $match stage or count).
 	ErrGeoNearNotAllowedInContext = ErrorCode(5626500) // Location5626500
 
+	// ErrCollStatsExpectedEmptyObject indicates a $collStats option that takes
+	// no settings was given some.
+	ErrCollStatsExpectedEmptyObject = ErrorCode(31170) // Location31170
+
 	// ErrFilterUnknownArgument indicates an unrecognized $filter parameter.
 	ErrFilterUnknownArgument = ErrorCode(28647) // Location28647
 
