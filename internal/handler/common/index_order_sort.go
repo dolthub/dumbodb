@@ -683,6 +683,14 @@ func conditionAdmitter(v any, cmp *collation.Comparator) func(any) bool {
 		reduced := types.MakeDocument(ops.Len())
 		for _, op := range rangeOperatorOrder {
 			if ov, err := ops.Get(op); err == nil {
+				// mongod's bounds for $gt MinKey and $lt MaxKey include
+				// that key.
+				switch {
+				case op == "$gt" && ov == types.MinKey:
+					op = "$gte"
+				case op == "$lt" && ov == types.MaxKey:
+					op = "$lte"
+				}
 				reduced.Set(op, ov)
 				break
 			}
