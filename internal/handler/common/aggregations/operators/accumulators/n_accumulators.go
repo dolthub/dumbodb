@@ -80,6 +80,16 @@ func classifyN(expr any) nKind {
 	return kind
 }
 
+// checkBucketAuto returns mongod's error for an n that is not constant in
+// $bucketAuto, which evaluates n against a group key it does not have.
+func (a *nArg) checkBucketAuto() error {
+	if a.kind == nConstant {
+		return nil
+	}
+	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketAutoGroupKeyRef,
+		"Can't refer to the group key in $bucketAuto", a.op)
+}
+
 // useSBE switches n to SBE's validation, reporting an invalid constant n.
 func (a *nArg) useSBE() error {
 	a.sbe = true

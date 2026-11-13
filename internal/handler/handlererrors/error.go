@@ -851,6 +851,9 @@ const (
 	// ErrMergeOnFieldMissing indicates a $merge 'on' field that is missing or null.
 	ErrMergeOnFieldMissing = ErrorCode(51132) // Location51132
 
+	// ErrBucketAutoGroupKeyRef indicates an N accumulator in $bucketAuto whose n is not constant.
+	ErrBucketAutoGroupKeyRef = ErrorCode(4544714) // Location4544714
+
 	// ErrMergeStageNoMatchingDocument indicates $merge whenNotMatched: fail found no match.
 	ErrMergeStageNoMatchingDocument = ErrorCode(13113) // MergeStageNoMatchingDocument
 

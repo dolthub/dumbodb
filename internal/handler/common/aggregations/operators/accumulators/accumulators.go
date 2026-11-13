@@ -60,6 +60,20 @@ type SBEAccumulator interface {
 	UseSBE() error
 }
 
+// UseBucketAuto prepares acc for $bucketAuto, which evaluates $first on every
+// document and has no group key for an N accumulator's n to read.
+func UseBucketAuto(acc Accumulator) error {
+	switch acc := acc.(type) {
+	case *firstAccumulator:
+		acc.evaluateAll = true
+	case *nAccumulator:
+		return acc.n.checkBucketAuto()
+	case *topBottomAccumulator:
+		return acc.n.checkBucketAuto()
+	}
+	return nil
+}
+
 // UseSBE calls UseSBE on acc when it is an SBEAccumulator.
 func UseSBE(acc Accumulator) error {
 	if s, ok := acc.(SBEAccumulator); ok {
