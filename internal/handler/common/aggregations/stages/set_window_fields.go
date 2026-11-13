@@ -163,14 +163,26 @@ func newSetWindowFields(stage *types.Document) (aggregations.Stage, error) {
 	if err = operators.CheckFieldPaths(outputDoc); err != nil {
 		return nil, err
 	}
-	for _, field := range outputDoc.Keys() {
-		if err = operators.CheckFieldPaths("$" + field); err != nil {
-			return nil, err
-		}
-	}
 	if _, _, conflict := pathCollision(outputDoc.Keys()); conflict {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrWindowOutputPathCollision,
 			"$setWindowFields 'output' specification contains two conflicting paths", "$setWindowFields (stage)")
+	}
+	for _, field := range outputDoc.Keys() {
+		switch {
+		case field == "":
+			err = handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrEmptyFieldPath,
+				"FieldPath cannot be constructed with empty string", "$setWindowFields (stage)")
+		case strings.HasPrefix(field, "$"):
+			err = handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFieldPathInvalidName,
+				"Consider using $getField or $setField for a field path with '.' or '$'. :: caused by :: "+
+					"FieldPath field names may not start with '$', given '"+strings.SplitN(field, ".", 2)[0]+"'.",
+				"$setWindowFields (stage)")
+		default:
+			err = operators.CheckFieldPaths("$" + field)
+		}
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	iter := outputDoc.Iterator()
