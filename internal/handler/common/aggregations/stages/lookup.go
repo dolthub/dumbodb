@@ -1090,8 +1090,24 @@ func exprReadsField(expr any, field string) bool {
 			}
 		}
 	case *types.Document:
-		if v.Command() == "$literal" {
+		switch v.Command() {
+		case "$literal":
 			return false
+		case "$getField":
+			// Without input it reads $$CURRENT.
+			spec, ok := must.NotFail(v.Get("$getField")).(*types.Document)
+			if !ok || !spec.Has("input") {
+				return true
+			}
+		case "$let":
+			// Rebinding CURRENT changes what every path reads.
+			if spec, ok := must.NotFail(v.Get("$let")).(*types.Document); ok {
+				if vars, _ := spec.Get("vars"); vars != nil {
+					if vars, ok := vars.(*types.Document); ok && vars.Has("CURRENT") {
+						return true
+					}
+				}
+			}
 		}
 		for _, k := range v.Keys() {
 			if exprReadsField(must.NotFail(v.Get(k)), field) {
