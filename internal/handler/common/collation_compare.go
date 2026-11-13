@@ -183,8 +183,8 @@ func arrayStringKeys(v any, cmp *collation.Comparator) any {
 	return v
 }
 
-// lessFuncCollated returns a sort comparator that orders string fields under
-// cmp and falls back to standard ordering for non-string values.
+// lessFuncCollated returns a sort comparator that orders strings under cmp,
+// also inside documents and arrays.
 func lessFuncCollated(sortPath types.Path, sortType types.SortType, cmp *collation.Comparator) func(a, b *types.Document) bool {
 	return func(a, b *types.Document) bool {
 		aField := commonpath.SortKeyValue(a, sortPath)
@@ -204,6 +204,6 @@ func lessFuncCollated(sortPath types.Path, sortType types.SortType, cmp *collati
 			return sign > 0
 		}
 
-		return types.CompareOrderForSort(aField, bField, sortType) == types.Less
+		return types.CompareOrderForSort(cmp.KeyValue(aField), cmp.KeyValue(bField), sortType) == types.Less
 	}
 }
