@@ -21,6 +21,15 @@ import (
 
 type firstAccumulator struct {
 	arg operand
+	// evaluateAll evaluates every document, as SBE and $bucketAuto do,
+	// reporting errors from documents after the first.
+	evaluateAll bool
+}
+
+// UseSBE implements SBEAccumulator.
+func (f *firstAccumulator) UseSBE() error {
+	f.evaluateAll = true
+	return nil
 }
 
 func newFirst(args ...any) (Accumulator, error) {
@@ -52,6 +61,10 @@ type firstState struct {
 
 func (s *firstState) Accumulate(doc *types.Document) error {
 	if s.seen {
+		if s.spec.evaluateAll {
+			_, _, err := s.spec.arg.evaluate(doc)
+			return err
+		}
 		return nil
 	}
 

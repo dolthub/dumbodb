@@ -155,6 +155,9 @@ func newBucketAuto(stage *types.Document) (aggregations.Stage, error) {
 			if accErr != nil {
 				return nil, lazyerrors.Error(accErr)
 			}
+			if accErr = accumulators.UseBucketAuto(acc); accErr != nil {
+				return nil, accErr
+			}
 
 			ba.output = append(ba.output, bucketOutput{field: field, accumulator: acc})
 		}
