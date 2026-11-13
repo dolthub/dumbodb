@@ -380,10 +380,13 @@ func MarkSBELookups(pipeline []aggregations.Stage, specs []*types.Document, isVi
 	}
 }
 
-// WrapSBEStages makes the first n stages report expression errors as mongod's
-// SBE engine does.
-func WrapSBEStages(pipeline []aggregations.Stage, n int) {
+// WrapSBEStages makes the first n stages, built from specs, evaluate and
+// report expression errors as mongod's SBE engine does.
+func WrapSBEStages(pipeline []aggregations.Stage, specs []*types.Document, n int) {
 	for i := 0; i < n && i < len(pipeline); i++ {
+		if i < len(specs) {
+			operators.MarkSBE(specs[i])
+		}
 		pipeline[i] = &sbeStage{inner: pipeline[i]}
 	}
 }
@@ -535,20 +538,21 @@ var sbeOperatorErrors = map[sbeOperatorError]struct {
 	{"$dateFromParts", 40515}:                        {handlererrors.ErrSBEInput7157917, "'year' must evaluate to an integer"},
 	{"$concatArrays", 28664}:                         {handlererrors.ErrSBEInput7158000, "$concatArrays only supports arrays"},
 	{"$setUnion", handlererrors.ErrSetUnionNotArray}: {handlererrors.ErrSBEInput7158100, "All operands of $setUnion must be arrays."},
-	{"$setDifference", handlererrors.ErrSetDifferenceFirstNotArray}:  {handlererrors.ErrSBEInput7158100, "All operands of $setDifference must be arrays."},
-	{"$setDifference", handlererrors.ErrSetDifferenceSecondNotArray}: {handlererrors.ErrSBEInput7158100, "All operands of $setDifference must be arrays."},
-	{"$setEquals", handlererrors.ErrSetEqualsNotArray}:               {handlererrors.ErrSBEInput7158100, "All operands of $setEquals must be arrays."},
-	{"$setIntersection", handlererrors.ErrSetIntersectionNotArray}:   {handlererrors.ErrSBEInput7158100, "All operands of $setIntersection must be arrays."},
-	{"$setIsSubset", handlererrors.ErrSetIsSubsetFirstNotArray}:      {handlererrors.ErrSBEInput7158100, "All operands of $setIsSubset must be arrays."},
-	{"$setIsSubset", handlererrors.ErrSetIsSubsetSecondNotArray}:     {handlererrors.ErrSBEInput7158100, "All operands of $setIsSubset must be arrays."},
-	{"$reverseArray", 16020}:                                         {handlererrors.ErrSBEInput7158002, "$reverseArray argument must be an array"},
-	{"$objectToArray", 16020}:                                        {handlererrors.ErrSBEInput5153215, "$objectToArray requires an object input"},
-	{"$arrayToObject", 40386}:                                        {handlererrors.ErrSBEInput5153200, "$arrayToObject requires an array input"},
-	{"$sortArray", 2942504}:                                          {handlererrors.ErrSBEInput7158001, "$sortArray input argument must be an array"},
-	{"$anyElementTrue", handlererrors.ErrAnyElementTrueNotArray}:     {handlererrors.ErrSBEInput7158300, "$anyElementTrue's argument must be an array"},
-	{"$tsSecond", handlererrors.ErrTsSecondNotTimestamp}:             {handlererrors.ErrSBEInput7157900, "$tsSecond expects argument of type timestamp"},
-	{"$tsIncrement", handlererrors.ErrTsIncrementNotTimestamp}:       {handlererrors.ErrSBEInput7157901, "$tsIncrement expects argument of type timestamp"},
-	{"$bsonSize", 31393}:                                             {handlererrors.ErrSBEInput7158301, "$bsonSize requires a document input"},
+	{"$setDifference", handlererrors.ErrSetDifferenceFirstNotArray}:     {handlererrors.ErrSBEInput7158100, "All operands of $setDifference must be arrays."},
+	{"$setDifference", handlererrors.ErrSetDifferenceSecondNotArray}:    {handlererrors.ErrSBEInput7158100, "All operands of $setDifference must be arrays."},
+	{"$setEquals", handlererrors.ErrSetEqualsNotArray}:                  {handlererrors.ErrSBEInput7158100, "All operands of $setEquals must be arrays."},
+	{"$setIntersection", handlererrors.ErrSetIntersectionNotArray}:      {handlererrors.ErrSBEInput7158100, "All operands of $setIntersection must be arrays."},
+	{"$setIsSubset", handlererrors.ErrSetIsSubsetFirstNotArray}:         {handlererrors.ErrSBEInput7158100, "All operands of $setIsSubset must be arrays."},
+	{"$setIsSubset", handlererrors.ErrSetIsSubsetFirstNotArrayVariable}: {handlererrors.ErrSBEInput7158100, "All operands of $setIsSubset must be arrays."},
+	{"$setIsSubset", handlererrors.ErrSetIsSubsetSecondNotArray}:        {handlererrors.ErrSBEInput7158100, "All operands of $setIsSubset must be arrays."},
+	{"$reverseArray", 16020}:                                     {handlererrors.ErrSBEInput7158002, "$reverseArray argument must be an array"},
+	{"$objectToArray", 16020}:                                    {handlererrors.ErrSBEInput5153215, "$objectToArray requires an object input"},
+	{"$arrayToObject", 40386}:                                    {handlererrors.ErrSBEInput5153200, "$arrayToObject requires an array input"},
+	{"$sortArray", 2942504}:                                      {handlererrors.ErrSBEInput7158001, "$sortArray input argument must be an array"},
+	{"$anyElementTrue", handlererrors.ErrAnyElementTrueNotArray}: {handlererrors.ErrSBEInput7158300, "$anyElementTrue's argument must be an array"},
+	{"$tsSecond", handlererrors.ErrTsSecondNotTimestamp}:         {handlererrors.ErrSBEInput7157900, "$tsSecond expects argument of type timestamp"},
+	{"$tsIncrement", handlererrors.ErrTsIncrementNotTimestamp}:   {handlererrors.ErrSBEInput7157901, "$tsIncrement expects argument of type timestamp"},
+	{"$bsonSize", 31393}:                                         {handlererrors.ErrSBEInput7158301, "$bsonSize requires a document input"},
 }
 
 type sbeOperatorError struct {

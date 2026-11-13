@@ -128,10 +128,12 @@ func NewOperator(doc *types.Document) (Operator, error) {
 		if err = parseNested(nestedExpressions(operator, args)); err != nil {
 			return nil, AsNestedError(err)
 		}
-		if collated, ok := op.(collatedOperator); ok {
-			if cmp := CollationOf(doc); cmp != nil {
-				collated.setCollation(cmp)
-			}
+		ctx := contextOf(doc)
+		if collated, ok := op.(collatedOperator); ok && ctx.cmp != nil {
+			collated.setCollation(ctx.cmp)
+		}
+		if sbeOp, ok := op.(sbeOperator); ok && ctx.sbe {
+			sbeOp.useSBE()
 		}
 		return op, nil
 	case unsupported:

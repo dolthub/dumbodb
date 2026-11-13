@@ -23,6 +23,13 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
+// engine records whether mongod runs an operator in SBE.
+type engine struct {
+	sbe bool
+}
+
+func (e *engine) useSBE() { e.sbe = true }
+
 // evalSetOperand evaluates an operand of a set operator: an array, a nullish
 // value, or another type, named as mongod names it.
 //
@@ -77,6 +84,7 @@ func toSet(arr *types.Array, cmp *collation.Comparator) ([]any, error) {
 type setUnionOp struct {
 	args []any
 	collated
+	engine
 }
 
 func newSetUnion(args ...any) (Operator, error) {
@@ -95,11 +103,17 @@ func (op *setUnionOp) Process(doc *types.Document) (any, error) {
 		}
 
 		if nullish {
+			if !op.sbe {
+				return types.Null, nil
+			}
 			sawNull = true
 			continue
 		}
 
 		if arr == nil {
+			if !op.sbe {
+				return nil, op.notArrayError(typeName)
+			}
 			if notArray == "" {
 				notArray = typeName
 			}
@@ -131,11 +145,15 @@ func (op *setUnionOp) Process(doc *types.Document) (any, error) {
 	case sawNull:
 		return types.Null, nil
 	case notArray != "":
-		return nil, setOperandError(handlererrors.ErrSetUnionNotArray, "$setUnion",
-			"All operands of $setUnion must be arrays. One argument is of type: "+notArray)
+		return nil, op.notArrayError(notArray)
 	}
 
 	return sliceToArray(result), nil
+}
+
+func (op *setUnionOp) notArrayError(typeName string) error {
+	return setOperandError(handlererrors.ErrSetUnionNotArray, "$setUnion",
+		"All operands of $setUnion must be arrays. One argument is of type: "+typeName)
 }
 
 var _ Operator = (*setUnionOp)(nil)
@@ -143,10 +161,16 @@ var _ Operator = (*setUnionOp)(nil)
 type setIntersectionOp struct {
 	args []any
 	collated
+	engine
 }
 
 func newSetIntersection(args ...any) (Operator, error) {
 	return &setIntersectionOp{args: args}, nil
+}
+
+func (op *setIntersectionOp) notArrayError(typeName string) error {
+	return setOperandError(handlererrors.ErrSetIntersectionNotArray, "$setIntersection",
+		"All operands of $setIntersection must be arrays. One argument is of type: "+typeName)
 }
 
 func (op *setIntersectionOp) Process(doc *types.Document) (any, error) {
@@ -161,11 +185,17 @@ func (op *setIntersectionOp) Process(doc *types.Document) (any, error) {
 		}
 
 		if nullish {
+			if !op.sbe {
+				return types.Null, nil
+			}
 			sawNull = true
 			continue
 		}
 
 		if arr == nil {
+			if !op.sbe {
+				return nil, op.notArrayError(typeName)
+			}
 			if notArray == "" {
 				notArray = typeName
 			}
@@ -206,8 +236,7 @@ func (op *setIntersectionOp) Process(doc *types.Document) (any, error) {
 	case sawNull:
 		return types.Null, nil
 	case notArray != "":
-		return nil, setOperandError(handlererrors.ErrSetIntersectionNotArray, "$setIntersection",
-			"All operands of $setIntersection must be arrays. One argument is of type: "+notArray)
+		return nil, op.notArrayError(notArray)
 	}
 
 	return sliceToArray(candidates), nil
@@ -288,6 +317,7 @@ var _ Operator = (*setDifferenceOp)(nil)
 type setEqualsOp struct {
 	args []any
 	collated
+	engine
 }
 
 func newSetEquals(args ...any) (Operator, error) {
@@ -309,7 +339,7 @@ func (op *setEqualsOp) Process(doc *types.Document) (any, error) {
 			return nil, err
 		}
 
-		if nullish {
+		if nullish && op.sbe {
 			return types.Null, nil
 		}
 
@@ -365,6 +395,7 @@ type setIsSubsetOp struct {
 	set1Arg any
 	set2Arg any
 	collated
+	engine
 }
 
 func newSetIsSubset(args ...any) (Operator, error) {
@@ -399,11 +430,15 @@ func (op *setIsSubsetOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
+	firstNotArray := handlererrors.ErrSetIsSubsetFirstNotArray
+	if !isConstantExpression(op.set2Arg) {
+		firstNotArray = handlererrors.ErrSetIsSubsetFirstNotArrayVariable
+	}
 	switch {
-	case null1 || null2:
+	case op.sbe && (null1 || null2):
 		return types.Null, nil
 	case arr1 == nil:
-		return nil, setOperandError(handlererrors.ErrSetIsSubsetFirstNotArray, "$setIsSubset",
+		return nil, setOperandError(firstNotArray, "$setIsSubset",
 			"both operands of $setIsSubset must be arrays. First argument is of type: "+type1)
 	case arr2 == nil:
 		return nil, setOperandError(handlererrors.ErrSetIsSubsetSecondNotArray, "$setIsSubset",
