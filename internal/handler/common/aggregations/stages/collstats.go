@@ -57,8 +57,11 @@ func newCollStats(stage *types.Document) (aggregations.Stage, error) {
 
 	var cs collStats
 
-	// Return error on invalid type of count.
-	cs.count = fields.Has("count")
+	var present bool
+	if present, err = collStatsOption(fields, "count", true); err != nil {
+		return nil, err
+	}
+	cs.count = present
 
 	if v, getErr := fields.Get("latencyStats"); getErr == nil && v != types.Null {
 		spec, ok := v.(*types.Document)
@@ -83,9 +86,14 @@ func newCollStats(stage *types.Document) (aggregations.Stage, error) {
 		cs.latencyStats = true
 	}
 
-	cs.queryExecStats = fields.Has("queryExecStats")
+	if cs.queryExecStats, err = collStatsOption(fields, "queryExecStats", true); err != nil {
+		return nil, err
+	}
 
-	if fields.Has("storageStats") {
+	if present, err = collStatsOption(fields, "storageStats", false); err != nil {
+		return nil, err
+	}
+	if present {
 		cs.storageStats = new(storageStats)
 
 		storageStatsFields := must.NotFail(fields.Get("storageStats")).(*types.Document)
@@ -106,6 +114,27 @@ func newCollStats(stage *types.Document) (aggregations.Stage, error) {
 	}
 
 	return &cs, nil
+}
+
+// collStatsOption reports whether $collStats asks for the option name: an
+// object does, null and absence do not, and anything else is TypeMismatch.
+// An option that takes no settings must be an empty object.
+func collStatsOption(fields *types.Document, name string, mustBeEmpty bool) (bool, error) {
+	v, err := fields.Get(name)
+	if err != nil || v == types.Null {
+		return false, nil
+	}
+	spec, ok := v.(*types.Document)
+	if !ok {
+		return false, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrTypeMismatch,
+			fmt.Sprintf("BSON field '$collStats.%s' is the wrong type '%s', expected type 'object'",
+				name, handlerparams.AliasFromType(v)), "$collStats (stage)")
+	}
+	if mustBeEmpty && spec.Len() > 0 {
+		return false, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCollStatsExpectedEmptyObject,
+			"expected an empty object, but got "+types.FormatAnyValue(spec), "$collStats (stage)")
+	}
+	return true, nil
 }
 
 // Process implements Stage interface.
