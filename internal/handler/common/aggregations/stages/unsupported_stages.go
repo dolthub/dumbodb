@@ -118,7 +118,10 @@ func newChangeStreamSplitLargeEvent(*types.Document) (aggregations.Stage, error)
 
 // newQuerySettings is mongod's error for $querySettings on a collection; on
 // {aggregate: 1} it returns no settings, as DumboDB has none.
-func newQuerySettings(*types.Document) (aggregations.Stage, error) {
+func newQuerySettings(stage *types.Document) (aggregations.Stage, error) {
+	if err := CheckQuerySettingsSpec(stage); err != nil {
+		return nil, err
+	}
 	return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace,
 		"'$querySettings' can only be run with {aggregate: 1}", "$querySettings (stage)")
 }
@@ -130,7 +133,19 @@ func newListClusterCatalog(*types.Document) (aggregations.Stage, error) {
 
 // newInhibitOptimization builds $_internalInhibitOptimization, which only
 // stops mongod's optimizer and passes documents through.
-func newInhibitOptimization(*types.Document) (aggregations.Stage, error) {
+func newInhibitOptimization(stage *types.Document) (aggregations.Stage, error) {
+	v := must.NotFail(stage.Get("$_internalInhibitOptimization"))
+	spec, ok := v.(*types.Document)
+	if !ok {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrTypeMismatch,
+			"$_internalInhibitOptimization must take a nested object but found: $_internalInhibitOptimization: "+
+				types.FormatAnyValue(v), "$_internalInhibitOptimization (stage)")
+	}
+	if spec.Len() > 0 {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFailedToParse,
+			"$_internalInhibitOptimization must take an empty object but found: "+types.FormatAnyValue(spec),
+			"$_internalInhibitOptimization (stage)")
+	}
 	return passThroughStage{}, nil
 }
 
@@ -170,13 +185,16 @@ func CheckQueryStatsSpec(stage *types.Document) error {
 			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIDLUnknownField,
 				fmt.Sprintf("BSON field '$queryStats.%s' is an unknown field.", key), "$queryStats (stage)")
 		}
+		if _, isNull := val.(types.NullType); isNull {
+			continue
+		}
 		ti, ok := val.(*types.Document)
 		if !ok {
 			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrTypeMismatch,
 				fmt.Sprintf("BSON field '$queryStats.transformIdentifiers' is the wrong type '%s', expected type 'object'",
 					handlerparams.AliasFromType(val)), "$queryStats (stage)")
 		}
-		algorithm, hasKey := "", false
+		algorithm, hasKey, keyLen := "", false, 0
 		for _, k := range ti.Keys() {
 			tv := must.NotFail(ti.Get(k))
 			switch k {
@@ -194,12 +212,18 @@ func CheckQueryStatsSpec(stage *types.Document) error {
 				}
 				algorithm = s
 			case "hmacKey":
-				if _, ok := tv.(types.Binary); !ok {
+				key, ok := tv.(types.Binary)
+				if !ok {
 					return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrTypeMismatch,
 						fmt.Sprintf("BSON field '$queryStats.transformIdentifiers.hmacKey' is the wrong type '%s', expected type 'binData'",
 							handlerparams.AliasFromType(tv)), "$queryStats (stage)")
 				}
-				hasKey = true
+				if key.Subtype != binarySensitive {
+					return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrTypeMismatch,
+						fmt.Sprintf("BSON field '$queryStats.transformIdentifiers.hmacKey' is the wrong binData type '%s', expected type 'sensitive'",
+							binarySubtypeName(key.Subtype)), "$queryStats (stage)")
+				}
+				hasKey, keyLen = true, len(key.B)
 			default:
 				return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIDLUnknownField,
 					fmt.Sprintf("BSON field '$queryStats.transformIdentifiers.%s' is an unknown field.", k), "$queryStats (stage)")
@@ -213,6 +237,59 @@ func CheckQueryStatsSpec(stage *types.Document) error {
 			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFailedToParse,
 				"The 'hmacKey' parameter of the $queryStats stage must be specified when applying the hmac-sha-256 algorithm",
 				"$queryStats (stage)")
+		}
+		if keyLen < 32 {
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
+				fmt.Sprintf("hmacKey must be greater than or equal to 32 bytes, found length: %d", keyLen), "$queryStats (stage)")
+		}
+	}
+	return nil
+}
+
+// binarySensitive is the binData subtype mongod requires of an hmacKey.
+const binarySensitive = types.BinarySubtype(0x08)
+
+// binarySubtypeName is mongod's name for a binData subtype.
+func binarySubtypeName(subtype types.BinarySubtype) string {
+	switch subtype {
+	case types.BinaryGeneric:
+		return "general"
+	case types.BinaryFunction:
+		return "function"
+	case types.BinaryGenericOld:
+		return "binary"
+	case types.BinaryUUIDOld:
+		return "uuid_old"
+	case types.BinaryUUID:
+		return "uuid"
+	case types.BinaryMD5:
+		return "md5"
+	case types.BinaryEncrypted:
+		return "encrypt"
+	case types.BinaryUser:
+		return "user"
+	}
+	return fmt.Sprintf("%d", subtype)
+}
+
+// CheckQuerySettingsSpec returns mongod's error for a $querySettings
+// specification its parser refuses.
+func CheckQuerySettingsSpec(stage *types.Document) error {
+	spec, ok := must.NotFail(stage.Get("$querySettings")).(*types.Document)
+	if !ok {
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrQuerySettingsNotObject,
+			"$querySettings stage expects a document as argument", "$querySettings (stage)")
+	}
+	for _, key := range spec.Keys() {
+		v := must.NotFail(spec.Get(key))
+		if key != "showDebugQueryShape" {
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIDLUnknownField,
+				fmt.Sprintf("BSON field '$querySettings.%s' is an unknown field.", key), "$querySettings (stage)")
+		}
+		if _, ok := v.(bool); !ok {
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrTypeMismatch,
+				"Field 'showDebugQueryShape' should be a boolean value, but found: "+handlerparams.AliasFromType(v),
+				"$querySettings (stage)")
 		}
 	}
 	return nil
