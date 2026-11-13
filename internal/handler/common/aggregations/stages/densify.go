@@ -373,6 +373,10 @@ type densifyPartitionState struct {
 	key   *types.Document
 	next  any
 	first *types.Document
+	// rawMin is set while next is the full bounds' minimum as given, which a
+	// fill before the next document of the partition converts to the step's
+	// type; the fill at the end of the input does not.
+	rawMin bool
 }
 
 type densifyIterator struct {
@@ -445,6 +449,9 @@ func (it *densifyIterator) arrive(doc *types.Document) error {
 	if state.first == nil {
 		state.first = doc
 	}
+	if state.rawMin {
+		state.next, state.rawMin = it.minInStepType(), false
+	}
 	if isNew {
 		switch d.bounds {
 		case densifyBoundsPartition:
@@ -452,16 +459,19 @@ func (it *densifyIterator) arrive(doc *types.Document) error {
 		case densifyBoundsExplicit:
 			state.next = d.lower
 		case densifyBoundsFull:
-			state.next = it.min
 			afterMin, err := it.advance(it.min)
 			if err != nil {
 				return err
 			}
-			if types.CompareOrder(v, afterMin, types.Ascending) == types.Equal {
+			if types.CompareOrder(v, it.min, types.Ascending) == types.Greater &&
+				types.CompareOrder(v, afterMin, types.Ascending) != types.Greater {
 				// mongod passes a new partition's first value through when it is
-				// one step above the minimum, and fills from the minimum later.
+				// at most one step above the minimum, and fills from the minimum
+				// later.
+				state.next, state.rawMin = it.min, true
 				return nil
 			}
+			state.next = it.minInStepType()
 		}
 	}
 	it.gen, it.genUntil, it.genOrEq, it.genTmpl = state, v, false, doc
@@ -584,6 +594,26 @@ func (d *densify) fieldValue(doc *types.Document) (any, bool, error) {
 func pathsOverlap(a, b types.Path) bool {
 	as, bs := a.String(), b.String()
 	return as == bs || strings.HasPrefix(as, bs+".") || strings.HasPrefix(bs, as+".")
+}
+
+// minInStepType returns the minimum a new partition's fill starts from under
+// full bounds: mongod adds step times zero, which widens it to the step's type
+// and gives it a decimal step's exponent.
+func (it *densifyIterator) minInStepType() any {
+	if _, isDate := it.min.(time.Time); isDate {
+		return it.min
+	}
+	switch step := it.d.step.(type) {
+	case float64:
+		return aggregations.SumNumbers(it.min, float64(0))
+	case int64:
+		return aggregations.SumNumbers(it.min, int64(0))
+	case types.Decimal128:
+		negated := step
+		negated.H ^= 1 << 63
+		return aggregations.SumNumbers(it.min, aggregations.SumNumbers(step, negated))
+	}
+	return it.min
 }
 
 func (it *densifyIterator) advance(cur any) (any, error) {
