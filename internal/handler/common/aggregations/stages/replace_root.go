@@ -16,6 +16,7 @@ package stages
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
@@ -61,7 +62,7 @@ func newReplaceRootStage(stage *types.Document, fold bool) (aggregations.Stage, 
 		)
 	}
 
-	if err := operators.CheckFieldPaths(newRootVal); err != nil {
+	if err := checkNewRoot(newRootVal); err != nil {
 		return nil, err
 	}
 	if fold {
@@ -86,7 +87,7 @@ func newReplaceWithStage(stage *types.Document, fold bool) (aggregations.Stage, 
 	if err != nil {
 		return nil, err
 	}
-	if err = operators.CheckFieldPaths(newRootVal); err != nil {
+	if err = checkNewRoot(newRootVal); err != nil {
 		return nil, err
 	}
 
@@ -97,6 +98,17 @@ func newReplaceWithStage(stage *types.Document, fold bool) (aggregations.Stage, 
 	}
 
 	return &replaceRoot{newRoot: newRootVal}, nil
+}
+
+// checkNewRoot returns the error mongod raises while parsing a replacement
+// expression.
+func checkNewRoot(newRoot any) error {
+	if doc, ok := newRoot.(*types.Document); ok && operators.IsOperator(doc) {
+		if err := operators.CheckExpressionShape(doc); err != nil {
+			return err
+		}
+	}
+	return operators.CheckFieldPaths(newRoot)
 }
 
 func (r *replaceRoot) Process(_ context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
@@ -147,6 +159,10 @@ func evaluateReplaceExpression(expr any, doc *types.Document) (*types.Document, 
 						"$replaceRoot (stage)",
 					)
 				}
+				var cmdErr *handlererrors.CommandError
+				if errors.As(opErr, &cmdErr) {
+					return nil, opErr
+				}
 
 				return nil, handlererrors.NewCommandErrorMsgWithArgument(
 					handlererrors.ErrOperationFailed,
@@ -157,6 +173,11 @@ func evaluateReplaceExpression(expr any, doc *types.Document) (*types.Document, 
 
 			val, opErr := op.Process(doc)
 			if opErr != nil {
+				// mongod reports an expression's own error unwrapped.
+				var cmdErr *handlererrors.CommandError
+				if errors.As(opErr, &cmdErr) {
+					return nil, opErr
+				}
 				return nil, handlererrors.NewCommandErrorMsgWithArgument(
 					handlererrors.ErrOperationFailed,
 					fmt.Sprintf("'newRoot' expression for $replaceRoot failed: %s", opErr.Error()),
