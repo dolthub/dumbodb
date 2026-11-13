@@ -22,6 +22,7 @@ import (
 
 type minAccumulator struct {
 	arg operand
+	sbe bool
 }
 
 func newMin(args ...any) (Accumulator, error) {
@@ -41,22 +42,34 @@ func newMin(args ...any) (Accumulator, error) {
 	return &minAccumulator{arg: arg}, nil
 }
 
+// UseSBE implements SBEAccumulator: SBE keeps the last of tied values.
+func (m *minAccumulator) UseSBE() error {
+	m.sbe = true
+	return nil
+}
+
+// UseSBE implements SBEAccumulator: SBE keeps the last of tied values.
+func (m *maxAccumulator) UseSBE() error {
+	m.sbe = true
+	return nil
+}
+
 func (m *minAccumulator) New() Accumulation {
-	return &extremeState{arg: m.arg, want: types.Less}
+	return &extremeState{arg: m.arg, want: types.Less, lastTie: m.sbe}
 }
 
 func (m *maxAccumulator) New() Accumulation {
-	return &extremeState{arg: m.arg, want: types.Greater}
+	return &extremeState{arg: m.arg, want: types.Greater, lastTie: m.sbe}
 }
 
 // NewCollated returns an accumulation that orders strings under cmp.
 func (m *minAccumulator) NewCollated(cmp *collation.Comparator) Accumulation {
-	return &extremeState{arg: m.arg, want: types.Less, cmp: cmp}
+	return &extremeState{arg: m.arg, want: types.Less, lastTie: m.sbe, cmp: cmp}
 }
 
 // NewCollated returns an accumulation that orders strings under cmp.
 func (m *maxAccumulator) NewCollated(cmp *collation.Comparator) Accumulation {
-	return &extremeState{arg: m.arg, want: types.Greater, cmp: cmp}
+	return &extremeState{arg: m.arg, want: types.Greater, lastTie: m.sbe, cmp: cmp}
 }
 
 // extremeState folds the running $min or $max. want is the comparison result
@@ -66,6 +79,8 @@ type extremeState struct {
 	want   types.CompareResult
 	result any
 	cmp    *collation.Comparator
+	// lastTie replaces the running value with an equal one, as SBE does.
+	lastTie bool
 }
 
 func (s *extremeState) Accumulate(doc *types.Document) error {
@@ -84,7 +99,7 @@ func (s *extremeState) Accumulate(doc *types.Document) error {
 		return nil
 	}
 
-	if types.CompareOrder(s.cmp.KeyValue(val), s.cmp.KeyValue(s.result), types.Ascending) == s.want {
+	if c := types.CompareOrder(s.cmp.KeyValue(val), s.cmp.KeyValue(s.result), types.Ascending); c == s.want || (s.lastTie && c == types.Equal) {
 		s.result = val
 	}
 
@@ -101,6 +116,7 @@ func (s *extremeState) Result() (any, error) {
 
 type maxAccumulator struct {
 	arg operand
+	sbe bool
 }
 
 func newMax(args ...any) (Accumulator, error) {
@@ -126,5 +142,7 @@ var (
 
 	_ CollatedAccumulator = (*minAccumulator)(nil)
 	_ CollatedAccumulator = (*maxAccumulator)(nil)
+	_ SBEAccumulator      = (*minAccumulator)(nil)
+	_ SBEAccumulator      = (*maxAccumulator)(nil)
 	_ Accumulation        = (*extremeState)(nil)
 )
