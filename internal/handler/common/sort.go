@@ -93,11 +93,22 @@ func SortDocuments(docs []*types.Document, sortDoc *types.Document) error {
 	// Decorate-sort-undecorate: extract all sort keys for each doc once
 	// up front, then sort indices into that table. This drops per-compare
 	// GetByPath calls (~2*N*log N) to N.
+	// mongod assumes _id is never an array, as in stored documents, so a
+	// sort on _id alone compares whole values, arrays included.
+	wholeID := nKeys == 1 && !isMeta[0] && sortDoc.Command() == "_id"
 	keys := make([][]any, len(docs))
 	for di, d := range docs {
 		row := make([]any, nKeys)
 		for k := 0; k < nKeys; k++ {
 			if isMeta[k] {
+				continue
+			}
+			if wholeID {
+				id, err := d.Get("_id")
+				if err != nil {
+					id = types.Null
+				}
+				row[k] = must.NotFail(types.NewArray(id))
 				continue
 			}
 			row[k] = commonpath.SortKeyValue(d, paths[k])
