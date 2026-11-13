@@ -1450,6 +1450,10 @@ func makeOutWriter(b backends.Backend, currentDB string) stages.OutWriter { //no
 			return lazyerrors.Error(err)
 		}
 
+		if err = copyOutTargetIndexes(ctx, db, collName, tmp); err != nil {
+			return err
+		}
+
 		var batch []*types.Document
 		var batchBytes int
 		flush := func() error {
@@ -1458,7 +1462,7 @@ func makeOutWriter(b backends.Backend, currentDB string) stages.OutWriter { //no
 			}
 			_, insertErr := tmp.InsertAll(ctx, &backends.InsertAllParams{Docs: batch})
 			batch, batchBytes = nil, 0
-			return insertErr
+			return outWriteError(dbName, collName, insertErr)
 		}
 
 		for {
@@ -1491,6 +1495,56 @@ func makeOutWriter(b backends.Backend, currentDB string) stages.OutWriter { //no
 
 		return nil
 	}
+}
+
+// copyOutTargetIndexes creates the indexes of an existing $out target on the
+// temporary collection that replaces it, as mongod keeps them.
+func copyOutTargetIndexes(ctx context.Context, db backends.Database, collName string, tmp backends.Collection) error {
+	target, err := db.Collection(collName)
+	if err != nil {
+		return lazyerrors.Error(err)
+	}
+	res, err := target.ListIndexes(ctx, new(backends.ListIndexesParams))
+	if err != nil {
+		if backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist) ||
+			backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseDoesNotExist) {
+			return nil
+		}
+		return lazyerrors.Error(err)
+	}
+	var indexes []backends.IndexInfo
+	for _, idx := range res.Indexes {
+		if idx.Name != backends.DefaultIndexName {
+			indexes = append(indexes, idx)
+		}
+	}
+	if len(indexes) == 0 {
+		return nil
+	}
+	if _, err = tmp.CreateIndexes(ctx, &backends.CreateIndexesParams{Indexes: indexes}); err != nil {
+		return lazyerrors.Error(err)
+	}
+	return nil
+}
+
+// outWriteError returns mongod's error for a $out write that breaks a unique
+// index of the target, or err itself.
+func outWriteError(dbName, collName string, err error) error {
+	if err == nil {
+		return nil
+	}
+	var be *backends.Error
+	if !errors.As(err, &be) || be.Code() != backends.ErrorCodeInsertDuplicateID {
+		return err
+	}
+	msg := fmt.Sprintf("E11000 duplicate key error collection: %s.%s", dbName, collName)
+	if be.DupIndex() != "" {
+		msg += " index: " + be.DupIndex()
+	}
+	if k := be.DupKey(); k != nil {
+		msg += " dup key: " + types.FormatAnyValue(k)
+	}
+	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDuplicateKeyInsert, msg, "$out")
 }
 
 // mergeWriteError returns mongod's error for a $merge write that breaks a
