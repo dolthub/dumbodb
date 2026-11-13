@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -768,6 +769,10 @@ func (s *setWindowFields) computeWindowValues(partition []*types.Document, wof w
 
 	case "$sum", "$avg", "$min", "$max", "$first", "$last", "$push", "$addToSet",
 		"$stdDevPop", "$stdDevSamp":
+		if (wof.operator == "$sum" || wof.operator == "$avg") && wof.frame != nil && !wof.frame.lower.unbounded {
+			return s.removableSumValues(partition, wof)
+		}
+
 		for i := range partition {
 			window := s.windowDocs(wof.frame, i, partition)
 
@@ -964,6 +969,78 @@ func (s *setWindowFields) windowDocs(frame *windowFrame, i int, partition []*typ
 	lo, hi := s.windowBounds(frame, i, n)
 
 	return partition[lo:hi]
+}
+
+// windowSpan returns the window of the document at position i as partition
+// indexes [lo, hi); lo == hi for an empty window.
+func (s *setWindowFields) windowSpan(frame *windowFrame, i int, partition []*types.Document) (int, int) {
+	if frame.frameType != windowFrameRange {
+		return s.windowBounds(frame, i, len(partition))
+	}
+
+	docs := s.windowDocsRange(frame, i, partition)
+	if len(docs) == 0 {
+		return 0, 0
+	}
+
+	lo := slices.Index(partition, docs[0])
+
+	return lo, lo + len(docs)
+}
+
+// removableSumValues computes $sum or $avg over windows with a lower bound as
+// mongod does: one running state per partition, each document added as it
+// enters the window and removed as it leaves, adds first.
+func (s *setWindowFields) removableSumValues(partition []*types.Document, wof windowOutputField) ([]any, error) {
+	vals := make([]any, len(partition))
+	inputs := make([]any, len(partition))
+	present := make([]bool, len(partition))
+	sum := aggregations.NewRemovableSum()
+
+	var lo, hi int
+	for i := range partition {
+		wlo, whi := s.windowSpan(wof.frame, i, partition)
+		if whi <= wlo {
+			wlo, whi = hi, hi
+		}
+
+		for j := max(hi, wlo); j < whi; j++ {
+			v, missing, err := windowInput(wof.expression, partition[j])
+			if err != nil {
+				return nil, err
+			}
+			if !missing {
+				inputs[j], present[j] = v, true
+				sum.Add(v)
+			}
+		}
+
+		for j := lo; j < min(wlo, hi); j++ {
+			if present[j] {
+				sum.Remove(inputs[j])
+				inputs[j] = nil
+			}
+		}
+
+		lo, hi = wlo, whi
+
+		if wof.operator == "$avg" {
+			vals[i] = sum.Avg()
+		} else {
+			vals[i] = sum.Sum()
+		}
+	}
+
+	return vals, nil
+}
+
+// windowInput evaluates a window function's input for one document; no
+// expression counts the document as 1.
+func windowInput(expression any, doc *types.Document) (any, bool, error) {
+	if expression == nil {
+		return int32(1), false, nil
+	}
+	return operators.EvalOperand(expression, doc)
 }
 
 // windowDocsRange computes the window slice for a range-based frame at position i.
@@ -1233,9 +1310,17 @@ func applyAccumulator(op string, expression any, window []*types.Document) (any,
 
 	switch op {
 	case "$sum":
-		return aggregations.SumNumbers(values...), nil
+		sum := aggregations.NewNumberSum()
+		for _, v := range values {
+			sum.Add(v)
+		}
+		return sum.Result(), nil
 	case "$avg":
-		return avgWindowValues(values), nil
+		avg := aggregations.NewNumberAvg()
+		for _, v := range values {
+			avg.Add(v)
+		}
+		return avg.Result(), nil
 	case "$min":
 		return minWindowValue(values), nil
 	case "$max":
@@ -1298,12 +1383,7 @@ func applyAccumulator(op string, expression any, window []*types.Document) (any,
 func collectWindowValues(expression any, window []*types.Document) ([]any, error) {
 	values := make([]any, 0, len(window))
 	for _, doc := range window {
-		if expression == nil {
-			// No expression; treat as 1 for $sum compatibility.
-			values = append(values, int32(1))
-			continue
-		}
-		val, missing, err := operators.EvalOperand(expression, doc)
+		val, missing, err := windowInput(expression, doc)
 		if err != nil {
 			return nil, err
 		}
@@ -1312,32 +1392,6 @@ func collectWindowValues(expression any, window []*types.Document) ([]any, error
 		}
 	}
 	return values, nil
-}
-
-// avgWindowValues computes the average of numeric values; returns null for empty.
-func avgWindowValues(values []any) any {
-	var sum float64
-	var count int
-
-	for _, v := range values {
-		switch n := v.(type) {
-		case float64:
-			sum += n
-			count++
-		case int32:
-			sum += float64(n)
-			count++
-		case int64:
-			sum += float64(n)
-			count++
-		}
-	}
-
-	if count == 0 {
-		return types.Null
-	}
-
-	return sum / float64(count)
 }
 
 // minWindowValue returns the minimum value; returns null for empty.
