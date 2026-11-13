@@ -443,6 +443,17 @@ const (
 	ErrSBEAddTwoDates            = ErrorCode(7157722) // Location7157722
 
 	// Classic engine expression errors.
+	ErrAllElementsTrueNotArray     = ErrorCode(17040) // Location17040
+	ErrAnyElementTrueNotArray      = ErrorCode(17041) // Location17041
+	ErrSetIsSubsetSecondNotArray   = ErrorCode(17042) // Location17042
+	ErrSetUnionNotArray            = ErrorCode(17043) // Location17043
+	ErrSetEqualsNotArray           = ErrorCode(17044) // Location17044
+	ErrSetEqualsTooFewArgs         = ErrorCode(17045) // Location17045
+	ErrSetIntersectionNotArray     = ErrorCode(17047) // Location17047
+	ErrSetDifferenceFirstNotArray  = ErrorCode(17048) // Location17048
+	ErrSetDifferenceSecondNotArray = ErrorCode(17049) // Location17049
+	ErrSetIsSubsetFirstNotArray    = ErrorCode(17310) // Location17310
+	ErrSetIsSubsetConstantNotArray = ErrorCode(17311) // Location17311
 	ErrSwitchNotObject             = ErrorCode(40060) // Location40060
 	ErrSwitchBranchesNotArray      = ErrorCode(40061) // Location40061
 	ErrSwitchBranchNotObject       = ErrorCode(40062) // Location40062
