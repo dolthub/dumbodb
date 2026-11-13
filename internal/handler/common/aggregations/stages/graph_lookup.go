@@ -19,10 +19,10 @@ import (
 	"errors"
 	"fmt"
 	stdsort "sort"
-	"strings"
 
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
@@ -49,7 +49,7 @@ import (
 //	} }
 type graphLookup struct {
 	from                    string
-	startWith               any             // field-path expression ("$field") or literal
+	startWith               any // field-path expression ("$field") or literal
 	connectFromField        string
 	connectToField          string
 	as                      string
@@ -86,6 +86,10 @@ func NewGraphLookupStage(stage *types.Document, fetcher CollectionFetcher) (aggr
 			"$graphLookup requires a 'startWith' option",
 			"$graphLookup (stage)",
 		)
+	}
+
+	if err = checkStartWith(startWithVal); err != nil {
+		return nil, err
 	}
 
 	connectFromField, err := requireStringField(specDoc, "connectFromField", "$graphLookup")
@@ -258,7 +262,10 @@ func (gl *graphLookup) traverse(ctx context.Context, doc *types.Document, src gr
 	// ordering: depth-0 first, then depth-N, depth-(N-1), ..., depth-1.
 	var levelResults [][]*types.Document
 
-	frontier := evaluateStartWith(gl.startWith, doc)
+	frontier, err := evaluateStartWith(gl.startWith, doc)
+	if err != nil {
+		return nil, err
+	}
 	currentDepth := int64(0)
 
 	for len(frontier) > 0 {
@@ -462,59 +469,29 @@ func (idx *graphIndex) levelMatches(_ context.Context, keys map[string]bool, _ [
 	return matches, nil
 }
 
-// evaluateStartWith evaluates the startWith expression against an input document,
-// returning the initial set of values for the graph frontier.
-//
-// "$fieldName" references are resolved from doc; arrays are flattened one level;
-// all other values are used as-is.
-func evaluateStartWith(startWith any, doc *types.Document) []any {
-	switch sw := startWith.(type) {
-	case string:
-		if strings.HasPrefix(sw, "$") {
-			fieldName := strings.TrimPrefix(sw, "$")
-			val := getFieldValue(doc, fieldName)
-
-			if val == nil {
-				return nil
-			}
-
-			if arr, ok := val.(*types.Array); ok {
-				return arrayElements(arr)
-			}
-
-			return []any{val}
+// checkStartWith returns the error mongod raises while parsing the startWith
+// expression. mongod does not fold its constants.
+func checkStartWith(startWith any) error {
+	if doc, ok := startWith.(*types.Document); ok && operators.IsOperator(doc) {
+		if err := operators.CheckExpressionShape(doc); err != nil {
+			return err
 		}
-
-		return []any{sw}
-
-	case *types.Array:
-		result := make([]any, 0, sw.Len())
-		arrIter := sw.Iterator()
-
-		defer arrIter.Close()
-
-		for {
-			_, elem, err := arrIter.Next()
-			if errors.Is(err, iterator.ErrIteratorDone) {
-				break
-			}
-
-			if err != nil {
-				break
-			}
-
-			result = append(result, evaluateStartWith(elem, doc)...)
-		}
-
-		return result
-
-	default:
-		if startWith == nil {
-			return nil
-		}
-
-		return []any{startWith}
 	}
+	return operators.CheckFieldPaths(startWith)
+}
+
+// evaluateStartWith evaluates the startWith expression against an input
+// document, returning the initial set of values for the graph frontier: the
+// elements of an array, nothing for a missing value, or the value itself.
+func evaluateStartWith(startWith any, doc *types.Document) ([]any, error) {
+	v, missing, err := operators.EvalOperand(startWith, doc)
+	if err != nil || missing {
+		return nil, err
+	}
+	if arr, ok := v.(*types.Array); ok {
+		return arrayElements(arr), nil
+	}
+	return []any{v}, nil
 }
 
 func arrayElements(arr *types.Array) []any {
