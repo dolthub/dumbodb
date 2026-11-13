@@ -47,7 +47,6 @@ func (m *mergeObjectsAccumulator) New() Accumulation {
 type mergeObjectsState struct {
 	spec   *mergeObjectsAccumulator
 	result *types.Document
-	mem    keptMemory
 }
 
 // Accumulate merges the operand's fields into the result. Missing and null
@@ -63,15 +62,9 @@ func (s *mergeObjectsState) Accumulate(doc *types.Document) error {
 	case types.NullType, types.UndefinedType:
 		return nil
 	case *types.Document:
+		// mongod does not limit the memory $mergeObjects keeps.
 		for _, k := range src.Keys() {
-			if old, err := s.result.Get(k); err == nil {
-				s.mem.release(old)
-			}
-			v := must.NotFail(src.Get(k))
-			s.result.Set(k, v)
-			if err := s.mem.keep(v, "$mergeObjects"); err != nil {
-				return err
-			}
+			s.result.Set(k, must.NotFail(src.Get(k)))
 		}
 		return nil
 	default:
