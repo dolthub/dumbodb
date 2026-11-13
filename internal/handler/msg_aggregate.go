@@ -225,7 +225,9 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		case "$merge":
 			// $merge requires database read/write access to merge into a collection.
 			mergeWriter := makeMergeWriter(h.b, dbName)
-			s, err = stages.NewMergeStage(d, dbName, mergeWriter)
+			if s, err = stages.NewMergeStage(d, dbName, mergeWriter); err == nil {
+				err = checkMergeOnIndex(connCtx, h.b, s)
+			}
 
 		case "$indexStats":
 			// $indexStats requires collection access to retrieve index metadata.
@@ -1491,6 +1493,94 @@ func makeOutWriter(b backends.Backend, currentDB string) stages.OutWriter { //no
 	}
 }
 
+// mergeWriteError returns mongod's error for a $merge write that breaks a
+// unique index, or err itself.
+func mergeWriteError(params *stages.MergeParams, err error) error {
+	if err == nil {
+		return nil
+	}
+	var be *backends.Error
+	if !errors.As(err, &be) || be.Code() != backends.ErrorCodeInsertDuplicateID {
+		return lazyerrors.Error(err)
+	}
+	msg := fmt.Sprintf("$merge failed due to a DuplicateKey error :: caused by :: E11000 duplicate key error collection: %s.%s",
+		params.DBName, params.CollName)
+	if be.DupIndex() != "" {
+		msg += " index: " + be.DupIndex()
+	}
+	if k := be.DupKey(); k != nil {
+		msg += " dup key: " + types.FormatAnyValue(k)
+	}
+	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDuplicateKeyInsert, msg, "$merge")
+}
+
+// mergeChangesID reports whether merging incoming into the matched existing
+// document would change its _id.
+func mergeChangesID(existing, incoming *types.Document) bool {
+	id, err := incoming.Get("_id")
+	if err != nil {
+		return false
+	}
+	return !types.Identical(id, must.NotFail(existing.Get("_id")))
+}
+
+func mergeImmutableIDError(cause string) error {
+	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrImmutableField,
+		"$merge failed to update the matching document, did you attempt to modify the _id or the shard key? :: caused by :: "+cause,
+		"$merge (stage)")
+}
+
+// checkMergeOnIndex returns mongod's error when $merge's 'on' fields other than
+// _id alone are not exactly the fields of a unique, non-partial index with the
+// simple collation on the target collection.
+func checkMergeOnIndex(ctx context.Context, b backends.Backend, stage aggregations.Stage) error {
+	dbName, collName, on, ok := stages.MergeTarget(stage)
+	if !ok || len(on) == 0 || (len(on) == 1 && on[0] == "_id") {
+		return nil
+	}
+
+	noIndex := handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrMergeOnNoUniqueIndex,
+		"Cannot find index to verify that join fields will be unique", "$merge")
+
+	db, err := b.Database(dbName)
+	if err != nil {
+		return lazyerrors.Error(err)
+	}
+	coll, err := db.Collection(collName)
+	if err != nil {
+		return lazyerrors.Error(err)
+	}
+	res, err := coll.ListIndexes(ctx, new(backends.ListIndexesParams))
+	if err != nil {
+		if backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist) ||
+			backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseDoesNotExist) {
+			return noIndex
+		}
+		return lazyerrors.Error(err)
+	}
+
+	onFields := make(map[string]bool, len(on))
+	for _, f := range on {
+		onFields[f] = true
+	}
+	for _, idx := range res.Indexes {
+		if !idx.Unique || idx.PartialFilterExpression != nil || idx.Collation != nil || len(idx.Key) != len(onFields) {
+			continue
+		}
+		matches := true
+		for _, k := range idx.Key {
+			if !onFields[k.Field] {
+				matches = false
+				break
+			}
+		}
+		if matches {
+			return nil
+		}
+	}
+	return noIndex
+}
+
 // makeMergeWriter returns a MergeFunc callback that merges documents into the
 // target collection according to the $merge semantics.
 func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //nolint:unparam // currentDB used by caller
@@ -1521,7 +1611,7 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 						}
 					}
 					_, insertErr := coll.InsertAll(ctx, &backends.InsertAllParams{Docs: params.Docs})
-					return insertErr
+					return mergeWriteError(params, insertErr)
 				}
 
 				return nil
@@ -1569,6 +1659,10 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 			if matched {
 				switch params.WhenMatched {
 				case "merge":
+					if mergeChangesID(entry.doc, incoming) {
+						return mergeImmutableIDError("Performing an update on the path '_id' would modify the immutable field '_id'")
+					}
+
 					// Merge fields from incoming into existing.
 					merged := entry.doc
 					for _, k := range incoming.Keys() {
@@ -1579,6 +1673,12 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 					toUpdate = append(toUpdate, merged)
 
 				case "replace":
+					if mergeChangesID(entry.doc, incoming) {
+						return mergeImmutableIDError(fmt.Sprintf(
+							"After applying the update, the (immutable) field '_id' was found to have been altered to _id: %s",
+							types.FormatAnyValue(must.NotFail(incoming.Get("_id")))))
+					}
+
 					// Replace existing doc (preserving its _id if incoming lacks one).
 					if _, idErr := incoming.Get("_id"); idErr != nil {
 						id := must.NotFail(entry.doc.Get("_id"))
@@ -1592,8 +1692,8 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 
 				case "fail":
 					return handlererrors.NewCommandErrorMsgWithArgument(
-						handlererrors.ErrBadValue,
-						"$merge with whenMatched: 'fail' found a matching document",
+						handlererrors.ErrDuplicateKeyInsert,
+						"$merge with whenMatched: fail found an existing document with the same values for the 'on' fields",
 						"$merge (stage)",
 					)
 				}
@@ -1610,8 +1710,8 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 
 				case "fail":
 					return handlererrors.NewCommandErrorMsgWithArgument(
-						handlererrors.ErrBadValue,
-						"$merge with whenNotMatched: 'fail' found an unmatched document",
+						handlererrors.ErrMergeStageNoMatchingDocument,
+						"$merge could not find a matching document in the target collection for at least one document in the source collection",
 						"$merge (stage)",
 					)
 				}
@@ -1620,13 +1720,13 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 
 		if len(toInsert) > 0 {
 			if _, err = coll.InsertAll(ctx, &backends.InsertAllParams{Docs: toInsert}); err != nil {
-				return lazyerrors.Error(err)
+				return mergeWriteError(params, err)
 			}
 		}
 
 		if len(toUpdate) > 0 {
 			if _, err = coll.UpdateAll(ctx, &backends.UpdateAllParams{Docs: toUpdate}); err != nil {
-				return lazyerrors.Error(err)
+				return mergeWriteError(params, err)
 			}
 		}
 
