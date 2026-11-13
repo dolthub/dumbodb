@@ -1267,8 +1267,14 @@ func resolveStatsView(ctx context.Context, p *stagesStatsParams) error {
 		return nil
 	}
 	if !p.subPipeline {
-		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCommandNotSupportedOnView,
-			fmt.Sprintf("Namespace %s.%s is a view, not a collection", p.dbName, p.cName), "aggregate")
+		// A view has latency statistics of its own, but no storage.
+		for stat := range p.statistics {
+			if stat != stages.StatisticLatency {
+				return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCommandNotSupportedOnView,
+					fmt.Sprintf("Namespace %s.%s is a view, not a collection", p.dbName, p.cName), "aggregate")
+			}
+		}
+		return nil
 	}
 	base, viewStages, _, err := resolveViewChain(ctx, p.db, info.Name, info.ViewOn, info.ViewPipeline, nil)
 	if err != nil {
