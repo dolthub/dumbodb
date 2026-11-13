@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
@@ -49,36 +50,45 @@ type letOp struct {
 }
 
 func newLet(args ...any) (Operator, error) {
-	if len(args) != 1 {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$let",
-			"$let requires a document argument")
+	var doc *types.Document
+	if len(args) == 1 {
+		doc, _ = args[0].(*types.Document)
+	}
+	if doc == nil {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrLetNotObject,
+			"$let only supports an object as its argument", "$let")
 	}
 
-	doc, ok := args[0].(*types.Document)
-	if !ok {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$let",
-			"$let requires a document argument")
+	op := new(letOp)
+	var hasVars, hasIn bool
+	for _, k := range doc.Keys() {
+		v := must.NotFail(doc.Get(k))
+		switch k {
+		case "vars":
+			vars, ok := v.(*types.Document)
+			if !ok {
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrExpectedObject,
+					"invalid parameter: expected an object (vars)", "$let")
+			}
+			op.varsDoc, hasVars = vars, true
+		case "in":
+			op.inExpr, hasIn = v, true
+		default:
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrLetUnknownParameter,
+				"Unrecognized parameter to $let: "+k, "$let")
+		}
 	}
 
-	varsVal, err := doc.Get("vars")
-	if err != nil {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$let",
-			"Missing 'vars' parameter to $let")
+	switch {
+	case !hasVars:
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrLetMissingVars,
+			"Missing 'vars' parameter to $let", "$let")
+	case !hasIn:
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrLetMissingIn,
+			"Missing 'in' parameter to $let", "$let")
 	}
 
-	varsDoc, ok := varsVal.(*types.Document)
-	if !ok {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$let",
-			"'vars' must be a document in $let")
-	}
-
-	inExpr, err := doc.Get("in")
-	if err != nil {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$let",
-			"Missing 'in' parameter to $let")
-	}
-
-	return &letOp{varsDoc: varsDoc, inExpr: inExpr}, nil
+	return op, nil
 }
 
 func (op *letOp) Process(doc *types.Document) (any, error) {
