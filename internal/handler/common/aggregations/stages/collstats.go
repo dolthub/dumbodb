@@ -60,7 +60,7 @@ func newCollStats(stage *types.Document) (aggregations.Stage, error) {
 	// Return error on invalid type of count.
 	cs.count = fields.Has("count")
 
-	if v, getErr := fields.Get("latencyStats"); getErr == nil {
+	if v, getErr := fields.Get("latencyStats"); getErr == nil && v != types.Null {
 		spec, ok := v.(*types.Document)
 		if !ok {
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrTypeMismatch,
@@ -72,7 +72,13 @@ func newCollStats(stage *types.Document) (aggregations.Stage, error) {
 				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIDLUnknownField,
 					fmt.Sprintf("BSON field '$collStats.latencyStats.%s' is an unknown field.", k), "$collStats (stage)")
 			}
-			cs.histograms = common.IsTruthy(must.NotFail(spec.Get(k)))
+			h, isBool := must.NotFail(spec.Get(k)).(bool)
+			if !isBool {
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrTypeMismatch,
+					"Field 'histograms' should be a boolean value, but found: "+handlerparams.AliasFromType(must.NotFail(spec.Get(k))),
+					"$collStats (stage)")
+			}
+			cs.histograms = h
 		}
 		cs.latencyStats = true
 	}
