@@ -25,6 +25,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
@@ -153,6 +154,7 @@ func (h *Handler) MsgDelete(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 // The error is either a (wrapped) *handlererrors.CommandError or something fatal.
 func (h *Handler) execDelete(ctx context.Context, db backends.Database, collName string, c backends.Collection, p *common.Delete) (int32, error) { //nolint:lll // for readability
 	cmp := collation.Parse(p.Collation).Comparator()
+	operators.BindCollation(p.Filter, cmp)
 
 	common.CanonicalizeFilter(p.Filter)
 	if err := common.ValidateFilter(p.Filter, cmp); err != nil {

@@ -114,6 +114,7 @@ func (h *Handler) MsgCount(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMs
 	}
 
 	cmp := collation.Parse(params.Collation).Comparator()
+	operators.BindCollation(params.Filter, cmp)
 
 	if isView {
 		view := cList.Collections[0]

@@ -30,6 +30,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/stages"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -436,6 +437,7 @@ func (h *Handler) makeFindIter(iter types.DocumentsIterator, closer *iterator.Mu
 	// and the sort.
 	filterDoc := params.Filter
 	cmp := collation.Parse(params.Collation).Comparator()
+	operators.BindCollation(filterDoc, cmp)
 
 	iter = common.FilterIteratorColl(iter, closer, filterDoc, cmp)
 
@@ -493,7 +495,7 @@ func (h *Handler) makeFindIter(iter types.DocumentsIterator, closer *iterator.Mu
 			iter, err = project.Process(context.Background(), iter, closer)
 		}
 	} else {
-		iter, err = common.ProjectionIterator(iter, closer, params.Projection, params.Filter)
+		iter, err = common.ProjectionIteratorColl(iter, closer, params.Projection, params.Filter, collation.Parse(params.Collation).Comparator())
 	}
 	if err != nil {
 		closer.Close()

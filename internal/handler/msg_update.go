@@ -27,6 +27,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
@@ -182,6 +183,8 @@ statements:
 		u.ValidationAction = valAction
 
 		cmp := collation.Parse(u.Collation).Comparator()
+		operators.BindCollation(u.Filter, cmp)
+		operators.BindCollation(u.Pipeline, cmp)
 
 		if u.InvalidUpdate != nil {
 			ce := statementWriteError(params.DB, params.Collection, u.InvalidUpdate)
