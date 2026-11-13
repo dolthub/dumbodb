@@ -286,6 +286,10 @@ func NewLookupStage(stage *types.Document, fetcher CollectionFetcher) (aggregati
 			"$lookup (stage)",
 		)
 	}
+	if strings.IndexByte(asField, 0) >= 0 {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFieldPathNulByte,
+			"FieldPath field names may not contain '\\0'.", "$lookup (stage)")
+	}
 
 	l := &lookup{
 		from:    from,

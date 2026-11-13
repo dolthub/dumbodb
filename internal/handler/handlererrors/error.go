@@ -736,6 +736,18 @@ const (
 	// ErrDottedFieldInSubObject indicates a dotted field name inside an object of a $set specification.
 	ErrDottedFieldInSubObject = ErrorCode(40183) // Location40183
 
+	// ErrUnwindIndexEmpty indicates an empty $unwind includeArrayIndex.
+	ErrUnwindIndexEmpty = ErrorCode(28810) // Location28810
+
+	// ErrUnwindIndexDollar indicates a $unwind includeArrayIndex starting with $.
+	ErrUnwindIndexDollar = ErrorCode(28822) // Location28822
+
+	// ErrFieldPathNulByte indicates a field path with a null byte.
+	ErrFieldPathNulByte = ErrorCode(16411) // Location16411
+
+	// ErrStageCountNulByte indicates a $count field name with a null byte.
+	ErrStageCountNulByte = ErrorCode(40159) // Location40159
+
 	// $arrayToObject input errors.
 	ErrArrayToObjectInput           = ErrorCode(40386) // Location40386
 	ErrArrayToObjectObjectsExpected = ErrorCode(40391) // Location40391
