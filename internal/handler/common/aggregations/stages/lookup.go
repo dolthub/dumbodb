@@ -593,9 +593,10 @@ func splitLookupPath(field string) []string {
 }
 
 // arrayIndexElement returns arr's element at the index a path component
-// names, when the component is all digits and the index is in range.
+// names, when the component is all digits without a leading zero and the
+// index is in range.
 func arrayIndexElement(arr *types.Array, part string) (any, bool) {
-	if part == "" || len(part) > 9 {
+	if part == "" || len(part) > 9 || (len(part) > 1 && part[0] == '0') {
 		return nil, false
 	}
 	n := 0
@@ -644,10 +645,20 @@ func lookupForeignPathValues(doc *types.Document, parts []string) ([]any, bool) 
 			walk(next, parts[1:])
 		case *types.Array:
 			if elem, ok := arrayIndexElement(v, parts[0]); ok {
-				if arr, isArr := elem.(*types.Array); isArr && len(parts) == 1 {
-					out = append(out, indexedArray{arr})
-				} else {
+				switch elem := elem.(type) {
+				case *types.Array:
+					if len(parts) == 1 {
+						out = append(out, indexedArray{elem})
+					} else {
+						walk(elem, parts[1:])
+					}
+				case *types.Document:
 					walk(elem, parts[1:])
+				default:
+					// A scalar at an index ends the path without making it missing.
+					if len(parts) == 1 {
+						out = append(out, elem)
+					}
 				}
 			}
 			for i := range v.Len() {
@@ -660,7 +671,7 @@ func lookupForeignPathValues(doc *types.Document, parts []string) ([]any, bool) 
 		}
 	}
 	walk(doc, parts)
-	return out, missing || len(out) == 0
+	return out, missing
 }
 
 // foreignMatches reports whether doc matches {field: {$in: candidates}}.
