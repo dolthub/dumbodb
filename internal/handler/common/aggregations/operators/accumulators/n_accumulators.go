@@ -84,7 +84,7 @@ func classifyN(expr any) nKind {
 // checkBucketAuto returns mongod's error for an n that is not constant in
 // $bucketAuto, which evaluates n against a group key it does not have.
 func (a *nArg) checkBucketAuto() error {
-	if a.kind == nConstant {
+	if a.kind == nConstant && operators.IsConstantExpression(a.expr) {
 		return nil
 	}
 	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketAutoGroupKeyRef,
