@@ -406,6 +406,15 @@ var (
 	_ aggregations.Stage = (*merge)(nil)
 )
 
+// MergeTarget returns the target namespace and 'on' fields of a $merge stage.
+func MergeTarget(stage aggregations.Stage) (db, coll string, on []string, ok bool) {
+	m, ok := stage.(*merge)
+	if !ok {
+		return "", "", nil, false
+	}
+	return m.targetDB, m.targetColl, m.on, true
+}
+
 // checkWrittenDocument returns mongod's error for a document $merge cannot
 // write: an array 'on' field, or an _id that cannot be stored.
 func (s *merge) checkWrittenDocument(doc *types.Document) error {
@@ -417,19 +426,16 @@ func (s *merge) checkWrittenDocument(doc *types.Document) error {
 		on = []string{"_id"}
 	}
 	for _, field := range on {
-		path, err := types.NewPathFromString(field)
-		if err != nil {
-			continue
-		}
-		v, err := doc.GetByPath(path)
+		v, found, throughArray := mergeOnValue(doc, field)
 		switch v.(type) {
 		case *types.Array:
 			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrMergeOnFieldArray,
 				fmt.Sprintf("$merge write error: 'on' field '%s' is an array", field), "$merge")
 		case types.NullType, types.UndefinedType:
-			err = errors.New("null")
+			found = false
 		}
-		if err != nil && field != "_id" {
+		// A missing _id is generated on insert.
+		if throughArray || (!found && (field != "_id" || doc.Has("_id"))) {
 			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrMergeOnFieldMissing,
 				fmt.Sprintf("$merge write error: 'on' field '%s' cannot be missing, null, undefined or an array", field), "$merge")
 		}
@@ -443,6 +449,26 @@ func (s *merge) checkWrittenDocument(doc *types.Document) error {
 			"unknown operator: "+d.Keys()[0], "$merge")
 	}
 	return storedIDError(id)
+}
+
+// mergeOnValue returns the value at a dotted 'on' field, whether it exists,
+// and whether the path runs through an array before its last component.
+func mergeOnValue(doc *types.Document, field string) (v any, found, throughArray bool) {
+	parts := strings.Split(field, ".")
+	var cur any = doc
+	for i, part := range parts {
+		d, ok := cur.(*types.Document)
+		if !ok {
+			_, isArray := cur.(*types.Array)
+			return nil, false, isArray && i > 0
+		}
+		next, err := d.Get(part)
+		if err != nil {
+			return nil, false, false
+		}
+		cur = next
+	}
+	return cur, true, false
 }
 
 // storedIDError returns mongod's error for an _id that cannot be stored.

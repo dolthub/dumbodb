@@ -851,6 +851,12 @@ const (
 	// ErrMergeOnFieldMissing indicates a $merge 'on' field that is missing or null.
 	ErrMergeOnFieldMissing = ErrorCode(51132) // Location51132
 
+	// ErrMergeStageNoMatchingDocument indicates $merge whenNotMatched: fail found no match.
+	ErrMergeStageNoMatchingDocument = ErrorCode(13113) // MergeStageNoMatchingDocument
+
+	// ErrMergeOnNoUniqueIndex indicates $merge 'on' fields without a matching unique index.
+	ErrMergeOnNoUniqueIndex = ErrorCode(51183) // Location51183
+
 	// ErrDropClusteredIndex indicates dropping a clustered collection's _id
 	// index.
 	ErrDropClusteredIndex = ErrorCode(5979800) // Location5979800
