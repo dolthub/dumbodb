@@ -310,7 +310,7 @@ func (gl *graphLookup) traverse(ctx context.Context, doc *types.Document, src gr
 		for _, fromDoc := range matches {
 
 			if gl.restrictSearchWithMatch != nil {
-				matched, mErr := common.FilterDocument(fromDoc, gl.restrictSearchWithMatch)
+				matched, mErr := common.FilterDocumentColl(fromDoc, gl.restrictSearchWithMatch, gl.cmp)
 				if mErr != nil || !matched {
 					continue
 				}
