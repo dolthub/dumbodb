@@ -308,8 +308,9 @@ func (n *fieldSpecNode) addFields(v, root *types.Document) (*types.Document, err
 		child := n.children[key]
 		if empty, ok := child.expr.(*types.Document); ok && child.leaf == fieldSpecExpr && empty.Len() == 0 && len(child.keys) > 0 {
 			// An empty object beside paths within it, as {y: {}, "y.z": 1},
-			// is a new object holding those paths.
-			res, err := child.addFields(types.MakeDocument(0), root)
+			// adds nothing of its own: the paths apply to the current value.
+			cur, getErr := v.Get(key)
+			res, err := child.addFieldsValue(cur, getErr == nil, root)
 			if err != nil {
 				return nil, err
 			}
