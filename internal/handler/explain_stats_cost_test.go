@@ -59,8 +59,12 @@ func TestExplainStatsPipelineCostsOneRun(t *testing.T) {
 		return must.NotFail(types.NewDocument("aggregate", "c", "pipeline", pipeline, "cursor", must.NotFail(types.NewDocument("batchSize", int32(0)))))
 	}
 
+	// The yardstick runs the whole pipeline: a trailing $count makes the
+	// first batch drain it, as explain's execution does.
+	counted := pipeline.DeepCopy()
+	counted.Append(must.NotFail(types.NewDocument("$count", "n")))
 	start := time.Now()
-	agg := aggregate()
+	agg := must.NotFail(types.NewDocument("aggregate", "c", "pipeline", counted, "cursor", types.MakeDocument(0)))
 	agg.Set("$db", "x")
 	_, err = h.commands["aggregate"].Handler(ctx, must.NotFail(documentOpMsg(agg)))
 	require.NoError(t, err)
