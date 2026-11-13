@@ -459,6 +459,12 @@ func (it *densifyIterator) arrive(doc *types.Document) error {
 		case densifyBoundsExplicit:
 			state.next = d.lower
 		case densifyBoundsFull:
+			if types.CompareOrder(v, it.min, types.Ascending) == types.Equal {
+				// The partition starts at the minimum itself, which passes
+				// through; filling continues from its value.
+				state.next = v
+				break
+			}
 			afterMin, err := it.advance(it.min)
 			if err != nil {
 				return err
