@@ -1331,13 +1331,17 @@ func processStagesStats(ctx context.Context, closer *iterator.MultiCloser, p *st
 		collStats, err = p.c.Stats(ctx, new(backends.CollectionStatsParams))
 		if backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist) ||
 			backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseDoesNotExist) {
+			stat := "count"
+			if hasStorage {
+				stat = "storageStats"
+			}
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrNamespaceNotFound,
 				fmt.Sprintf(
 					"PlanExecutor error during aggregation :: caused by :: "+
-						"Unable to retrieve storageStats in $collStats stage :: "+
+						"Unable to retrieve %s in $collStats stage :: "+
 						"caused by :: Collection [%s.%s] not found.",
-					p.dbName, p.cName,
+					stat, p.dbName, p.cName,
 				),
 				"aggregate",
 			)
