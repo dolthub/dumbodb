@@ -289,6 +289,21 @@ func (s *seededPaths) add(key string) error {
 	return nil
 }
 
+// oneElementIn returns the array of a filter value {$in: [v]}, or nil.
+func oneElementIn(v *types.Document) *types.Array {
+	if v.Len() != 1 || v.Keys()[0] != "$in" {
+		return nil
+	}
+	in, ok := must.NotFail(v.Get("$in")).(*types.Array)
+	if !ok || in.Len() != 1 {
+		return nil
+	}
+	if _, isRegex := must.NotFail(in.Get(0)).(types.Regex); isRegex {
+		return nil
+	}
+	return in
+}
+
 // seedsValue reports whether a filter value gives its path a value: a
 // literal, a sub-document, $eq or a one-element $in.
 func seedsValue(val any) bool {
@@ -306,8 +321,7 @@ func seedsValue(val any) bool {
 		case "$eq":
 			return true
 		case "$in":
-			in, ok := must.NotFail(v.Get("$in")).(*types.Array)
-			return ok && in.Len() == 1
+			return oneElementIn(v) != nil
 		}
 		return false
 	}
@@ -368,6 +382,9 @@ func seedFromFilter(doc, filter *types.Document, seeded *seededPaths, replacemen
 				} else if innerKey == "$eq" {
 					// valDoc has $eq operator, so extract the inner value
 					val, _ = valDoc.Get("$eq")
+				} else if in := oneElementIn(valDoc); in != nil {
+					// A one-element $in is an equality.
+					val = must.NotFail(in.Get(0))
 				} else {
 					// valDoc has operators like $lt, $gt, $ne, $in, $exists, $regex
 					continue
