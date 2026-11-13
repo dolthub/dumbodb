@@ -539,10 +539,7 @@ func (c *conn) route(connCtx context.Context, reqHeader *wire.MsgHeader, reqBody
 		// findDuplicateField for why reading one is unsafe.
 		if err == nil {
 			if dup, dupOK := commandDuplicateField(typedDoc); dupOK {
-				err = handlererrors.NewCommandErrorMsg(
-					handlererrors.ErrFailedToParse,
-					fmt.Sprintf("BSON field '%s' is a duplicate field", dup),
-				)
+				err = duplicateFieldError(dup)
 			}
 		}
 
