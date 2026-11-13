@@ -854,6 +854,9 @@ const (
 	// ErrQuerySettingsNotObject indicates a $querySettings specification that is not an object.
 	ErrQuerySettingsNotObject = ErrorCode(7746800) // Location7746800
 
+	// ErrBucketAutoGroupByInvalid indicates a $bucketAuto groupBy that is neither a path nor an expression object.
+	ErrBucketAutoGroupByInvalid = ErrorCode(40239) // Location40239
+
 	// ErrBucketAutoGroupKeyRef indicates an N accumulator in $bucketAuto whose n is not constant.
 	ErrBucketAutoGroupKeyRef = ErrorCode(4544714) // Location4544714
 

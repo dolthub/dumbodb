@@ -58,7 +58,8 @@ func newFill(stage *types.Document) (aggregations.Stage, error) {
 			sortBy = val
 		case "partitionBy":
 			// mongod's IDL parser checks the type of each field as it reads it.
-			if _, isNull := val.(types.NullType); isNull {
+			switch val.(type) {
+			case types.NullType, types.UndefinedType:
 				return nil, fillWrongType("partitionBy", val, "object")
 			}
 			partitionBy = val
