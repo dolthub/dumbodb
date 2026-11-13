@@ -1688,8 +1688,9 @@ func substituteVarsInBinding(op string, spec *types.Document, vars map[string]an
 }
 
 // unboundLetVariable stands in for a let variable while the sub-pipeline is
-// parsed: references become $$CURRENT, a variable reference too, so a place
-// that needs a constant rejects it as mongod rejects the variable.
+// parsed: "$$v" becomes the field path "$v", which is not constant either, so
+// a place that needs a constant rejects it as mongod rejects the variable,
+// and mongod's messages name the variable "$v" too.
 type unboundLetVariable struct{}
 
 // checkSubPipeline parses the sub-pipeline once, before any document is read,
@@ -1754,7 +1755,7 @@ func substituteVarsInValue(val any, vars map[string]any, inExpr bool) any {
 			varName, _, dotted := strings.Cut(strings.TrimPrefix(v, "$$"), ".")
 			if resolved, ok := vars[varName]; ok {
 				if _, unbound := resolved.(unboundLetVariable); unbound {
-					return "$$CURRENT" + strings.TrimPrefix(v, "$$"+varName)
+					return strings.TrimPrefix(v, "$")
 				}
 				if dotted {
 					return must.NotFail(types.NewDocument("$let", must.NotFail(types.NewDocument(
