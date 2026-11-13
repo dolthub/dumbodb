@@ -58,9 +58,15 @@ func FilterDocumentColl(doc, filter *types.Document, cmp *collation.Comparator) 
 	if filter.Len() == 0 {
 		return true, nil
 	}
-	if filter.Len() == 1 && !isLogicalOperator(filter.Command()) {
+	if filter.Len() == 1 {
 		// One condition has no order to choose.
-		return filterInWrittenOrder(doc, filter, cmp)
+		if key := filter.Command(); !isLogicalOperator(key) {
+			matches, err := filterDocumentPair(doc, key, must.NotFail(filter.Get(key)), cmp)
+			if err != nil {
+				return false, lazyerrors.Error(err)
+			}
+			return matches, nil
+		}
 	}
 	plan := filterPlanFor(filter)
 
@@ -94,29 +100,6 @@ func FilterDocumentColl(doc, filter *types.Document, cmp *collation.Comparator) 
 		}
 	}
 	return true, nil
-}
-
-// filterInWrittenOrder checks every condition of filter in written order.
-func filterInWrittenOrder(doc, filter *types.Document, cmp *collation.Comparator) (bool, error) {
-	iter := filter.Iterator()
-	defer iter.Close()
-
-	for {
-		filterKey, filterValue, err := iter.Next()
-		if err != nil {
-			if errors.Is(err, iterator.ErrIteratorDone) {
-				return true, nil
-			}
-			return false, lazyerrors.Error(err)
-		}
-		matches, err := filterDocumentPair(doc, filterKey, filterValue, cmp)
-		if err != nil {
-			return false, lazyerrors.Error(err)
-		}
-		if !matches {
-			return false, nil
-		}
-	}
 }
 
 // filterPlan is the order in which a filter's conditions are checked. Like
