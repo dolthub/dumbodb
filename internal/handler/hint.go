@@ -180,7 +180,9 @@ func naturalDirection(v any) (int, bool) {
 // and sortFilter, which is filter, or marks it read in one scan of the index.
 // streamFilter, when set, is a filter a hinted backend read returns in index
 // order without the sort (hintedStreamFilter).
-func hintedIndexOrder(ctx context.Context, coll backends.Collection, hint any, filter, queryCollation *types.Document) (order, sortFilter, streamFilter *types.Document, err error) {
+// numToReturn is the results the query needs, which end a plan of its trial
+// (TrialBudget), 0 for mongod's default.
+func hintedIndexOrder(ctx context.Context, coll backends.Collection, hint any, filter, queryCollation *types.Document, numToReturn int) (order, sortFilter, streamFilter *types.Document, err error) {
 	if !backends.HintRequiresExistingIndex(hint) {
 		return nil, nil, nil, nil
 	}
@@ -214,22 +216,22 @@ func hintedIndexOrder(ctx context.Context, coll backends.Collection, hint any, f
 			}
 			sortFilter = filter
 			cmp := collation.Parse(queryCollation).Comparator()
-			maxWorks := 0
+			var budget *common.TrialBudget
 			for i, k := range idx.Key {
 				if !idx.KeyMultikey(i) {
 					continue
 				}
-				if maxWorks == 0 {
+				if budget == nil {
 					countRes, cerr := coll.Count(ctx, new(backends.CountParams))
 					if cerr != nil {
 						return nil, nil, nil, cerr
 					}
-					maxWorks = common.TrialWorks(countRes.Count)
+					budget = common.NewTrialBudget(countRes.Count, numToReturn)
 				}
-				rangeIter := func(cond *types.Document) (types.DocumentsIterator, error) {
-					return indexRangeIter(ctx, coll, idx, hint, k.Field, cond, queryCollation, cmp)
+				rangeIter := func(cond *types.Document) (types.DocumentsIterator, *types.Document, error) {
+					return indexRangeIter(ctx, coll, idx, hint, k.Field, cond, queryCollation)
 				}
-				if sortFilter, err = common.BoundedByTrial(sortFilter, k.Field, rangeIter, maxWorks, cmp); err != nil {
+				if sortFilter, err = common.BoundedByTrial(ctx, sortFilter, k.Field, rangeIter, budget, cmp); err != nil {
 					return nil, nil, nil, err
 				}
 			}
@@ -265,7 +267,7 @@ func hintedStreamFilter(idx backends.IndexInfo, filter, sortFilter *types.Docume
 // write's candidates, in the hinted index's order: by a fresh hinted read of
 // the stream filter when there is one, else sorted.
 func hintedFirstMatches(ctx context.Context, coll backends.Collection, hint any, filter, queryCollation *types.Document, iter types.DocumentsIterator, closer *iterator.MultiCloser, cmp *collation.Comparator) (types.DocumentsIterator, error) {
-	order, sortFilter, streamFilter, err := hintedIndexOrder(ctx, coll, hint, filter, queryCollation)
+	order, sortFilter, streamFilter, err := hintedIndexOrder(ctx, coll, hint, filter, queryCollation, 0)
 	switch {
 	case err != nil:
 		return nil, err
@@ -284,15 +286,16 @@ func hintedFirstMatches(ctx context.Context, coll backends.Collection, hint any,
 	return iter, nil
 }
 
-// indexRangeIter returns, in the hinted index's order, the documents idx
-// holds that match cond on field.
-func indexRangeIter(ctx context.Context, coll backends.Collection, idx backends.IndexInfo, hint any, field string, cond, queryCollation *types.Document, cmp *collation.Comparator) (types.DocumentsIterator, error) {
+// indexRangeIter returns, in the hinted index's order, the documents a
+// hinted read of cond on field returns, and the filter of those idx holds
+// with a key cond admits.
+func indexRangeIter(ctx context.Context, coll backends.Collection, idx backends.IndexInfo, hint any, field string, cond, queryCollation *types.Document) (types.DocumentsIterator, *types.Document, error) {
 	inRange := must.NotFail(types.NewDocument(field, cond))
 	res, err := coll.Query(ctx, &backends.QueryParams{
 		Filter: inRange, Hint: hint, Collation: queryCollation, Collated: !collation.Parse(queryCollation).IsSimple(),
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	member := types.MakeArray(3)
 	member.Append(inRange)
@@ -302,8 +305,7 @@ func indexRangeIter(ctx context.Context, coll backends.Collection, idx backends.
 	if idx.Sparse {
 		member.Append(must.NotFail(types.NewDocument(field, must.NotFail(types.NewDocument("$exists", true)))))
 	}
-	closer := iterator.NewMultiCloser(res.Iter)
-	return common.FilterIteratorColl(res.Iter, closer, must.NotFail(types.NewDocument("$and", member)), cmp), nil
+	return iterator.WithContext(ctx, res.Iter), must.NotFail(types.NewDocument("$and", member)), nil
 }
 
 // orBranchMatchesMissing reports whether filter is a lone $or with a branch

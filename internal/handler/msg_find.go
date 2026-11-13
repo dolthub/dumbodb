@@ -186,8 +186,12 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 			return nil, err
 		}
 		if params.Sort.Len() == 0 {
-			if params.Sort, params.IndexOrderFilter, _, err = hintedIndexOrder(connCtx, coll, params.Hint, params.Filter, params.Collation); err != nil {
-				return nil, err
+			hintCtx, hintCancel := withMaxTimeMS(connCtx, params.MaxTimeMS)
+			params.Sort, params.IndexOrderFilter, _, err = hintedIndexOrder(hintCtx, coll, params.Hint, params.Filter, params.Collation,
+				trialNumToReturn(params.Limit, params.BatchSize))
+			hintCancel()
+			if err != nil {
+				return nil, handleMaxTimeMSError(err, params.MaxTimeMS, "find")
 			}
 			// The backend reads the hinted index ascending, equal keys in _id
 			// order; sorting that stably gives mongod's index order.
@@ -652,6 +656,19 @@ var executorWrapSkip = map[handlererrors.ErrorCode]bool{
 	// validation error MongoDB reports at parse time, bare, rather than
 	// wrapped in "Executor error during find command".
 	handlererrors.ErrTypeMismatch: true,
+}
+
+// trialNumToReturn is the results a find's plan trial stops at: its limit or
+// batch size when smaller than mongod's default.
+func trialNumToReturn(limit, batchSize int64) int {
+	n := int64(common.TrialMaxAdvanced)
+	if limit != 0 {
+		n = min(n, max(limit, -limit))
+	}
+	if batchSize > 0 {
+		n = min(n, batchSize)
+	}
+	return int(n)
 }
 
 // withMaxTimeMS bounds ctx by maxTimeMS, if it is set.

@@ -15,6 +15,7 @@
 package common
 
 import (
+	"context"
 	"errors"
 	"slices"
 	"strings"
@@ -293,24 +294,40 @@ func boundedByFewerKeysUnderAnd(filter *types.Document, field string, keepLower 
 const (
 	trialMinWorks    = 10000
 	trialCollFrac    = 0.3
-	trialMaxAdvanced = 101
+	TrialMaxAdvanced = 101
 )
 
-// TrialWorks is the work each plan may do in mongod's plan trial over a
-// collection of count documents.
-func TrialWorks(count int64) int {
-	return max(trialMinWorks, int(trialCollFrac*float64(count)))
+// TrialBudget bounds the emulated plan trials of one query: PlanWorks is the
+// work each plan may do, Works what all of the query's trials may still do,
+// and NumToReturn the results that end a plan, as a limit does.
+type TrialBudget struct {
+	PlanWorks   int
+	Works       int
+	NumToReturn int
+}
+
+// NewTrialBudget is the budget of a query over a collection of count
+// documents, which mongod gives each plan; the query's trials share two plans'
+// worth.
+func NewTrialBudget(count int64, numToReturn int) *TrialBudget {
+	works := max(trialMinWorks, int(trialCollFrac*float64(count)))
+	if numToReturn <= 0 || numToReturn > TrialMaxAdvanced {
+		numToReturn = TrialMaxAdvanced
+	}
+	return &TrialBudget{PlanWorks: works, Works: 2 * works, NumToReturn: numToReturn}
 }
 
 // BoundedByTrial returns filter with only the bound of a two-sided range on
 // multikey field that mongod's plan trial keeps. Each bound's scan reads, in
 // index order, the documents rangeIter returns for its one-sided condition;
-// a document costs a work per distinct key it holds in range and one to fetch,
-// and advances when it matches filter. The scans take turns by work done
-// until each ends or spends maxWorks, or one returns trialMaxAdvanced
-// documents. When both end, the one with less work is kept; else the one with
-// more results per work; the upper on a tie.
-func BoundedByTrial(filter *types.Document, field string, rangeIter func(cond *types.Document) (types.DocumentsIterator, error), maxWorks int, cmp *collation.Comparator) (*types.Document, error) {
+// a member document costs a work per distinct key it holds in range and one
+// to fetch, and advances when it matches filter. Returning
+// budget.NumToReturn documents ends a scan. The scans take turns by work done
+// until both end, or the budget, charged for every document read, is spent;
+// once one ends the other runs only while it could still end with less work.
+// When both end the one with less work is kept, else the one that ended,
+// else the one with more results per work; the upper on a tie.
+func BoundedByTrial(ctx context.Context, filter *types.Document, field string, rangeIter func(cond *types.Document) (iter types.DocumentsIterator, member *types.Document, err error), budget *TrialBudget, cmp *collation.Comparator) (*types.Document, error) {
 	path, err := types.NewPathFromString(field)
 	if err != nil {
 		return filter, nil
@@ -318,31 +335,47 @@ func BoundedByTrial(filter *types.Document, field string, rangeIter func(cond *t
 	return boundedByFewerKeys(filter, field, func(lower, upper *types.Document) (bool, error) {
 		plans := [2]*trialPlan{{cond: lower}, {cond: upper}}
 		for _, p := range plans {
-			if p.iter, err = rangeIter(p.cond); err != nil {
+			if p.iter, p.member, err = rangeIter(p.cond); err != nil {
 				return false, err
 			}
 			defer p.iter.Close()
 			p.admit = conditionAdmitter(p.cond, cmp)
 		}
-		for {
+		for budget.Works > 0 {
+			if err := ctx.Err(); err != nil {
+				return false, err
+			}
+			// Once a scan ends, the other runs only while it could still end
+			// with less work.
+			ended := -1
+			for _, p := range plans {
+				if p.eof && (ended < 0 || p.works < ended) {
+					ended = p.works
+				}
+			}
 			var next *trialPlan
 			for _, p := range plans {
-				if !p.eof && p.works < maxWorks && (next == nil || p.works < next.works) {
+				if p.eof || p.cost >= budget.PlanWorks || ended >= 0 && p.works >= ended {
+					continue
+				}
+				if next == nil || p.works < next.works {
 					next = p
 				}
 			}
 			if next == nil {
 				break
 			}
-			if err := next.step(path, filter, cmp); err != nil {
+			before := next.cost
+			if err := next.step(path, filter, cmp, budget.NumToReturn); err != nil {
 				return false, err
 			}
-			if next.advanced >= trialMaxAdvanced {
-				break
-			}
+			budget.Works -= next.cost - before
 		}
-		if plans[0].eof && plans[1].eof {
+		switch {
+		case plans[0].eof && plans[1].eof:
 			return plans[0].works < plans[1].works, nil
+		case plans[0].eof || plans[1].eof:
+			return plans[0].eof, nil
 		}
 		return plans[0].productivity() > plans[1].productivity(), nil
 	}, cmp)
@@ -351,26 +384,61 @@ func BoundedByTrial(filter *types.Document, field string, rangeIter func(cond *t
 // trialPlan is one bound's scan in an emulated plan trial.
 type trialPlan struct {
 	cond     *types.Document
+	member   *types.Document
 	iter     types.DocumentsIterator
 	admit    func(any) bool
 	works    int
+	cost     int
 	advanced int
 	eof      bool
+	// keys holds the in-range keys of the documents read, ascending.
+	keys    []any
+	fetched int
 }
 
-func (p *trialPlan) step(path types.Path, filter *types.Document, cmp *collation.Comparator) error {
+func (p *trialPlan) step(path types.Path, filter *types.Document, cmp *collation.Comparator, numToReturn int) error {
 	_, doc, err := p.iter.Next()
 	if errors.Is(err, iterator.ErrIteratorDone) {
 		p.eof = true
-		p.works++
+		p.works = len(p.keys) + p.fetched + 1
+		p.cost++
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	p.works += distinctAdmittedKeys(doc, path, p.admit) + 1
+	p.cost++
+	if p.member != nil {
+		if in, ferr := FilterDocumentColl(doc, p.member, cmp); ferr != nil || !in {
+			return nil
+		}
+	}
+	docKeys := distinctAdmittedKeyValues(doc, path, p.admit)
+	if len(docKeys) == 0 {
+		return nil
+	}
+	p.cost += len(docKeys)
+	// The scan reaches doc at its least key in range, having examined every
+	// key read so far up to it and fetched each document reached.
+	first := docKeys[0]
+	for _, k := range docKeys {
+		at, _ := slices.BinarySearchFunc(p.keys, k, func(a, b any) int { return int(compareIndexOrderKeys(a, b, types.Ascending, cmp)) })
+		p.keys = slices.Insert(p.keys, at, k)
+		if compareIndexOrderKeys(k, first, types.Ascending, cmp) == types.Less {
+			first = k
+		}
+	}
+	p.fetched++
+	examined, _ := slices.BinarySearchFunc(p.keys, first, func(a, b any) int {
+		if compareIndexOrderKeys(a, b, types.Ascending, cmp) == types.Greater {
+			return 1
+		}
+		return -1
+	})
+	p.works = examined + p.fetched
 	if ok, ferr := FilterDocumentColl(doc, filter, cmp); ferr == nil && ok {
 		p.advanced++
+		p.eof = p.advanced >= numToReturn
 	}
 	return nil
 }
@@ -380,6 +448,19 @@ func (p *trialPlan) productivity() float64 {
 		return 0
 	}
 	return float64(p.advanced) / float64(p.works)
+}
+
+// distinctAdmittedKeyValues returns doc's distinct index keys on path that
+// admit accepts, as an index stores each once per document.
+func distinctAdmittedKeyValues(doc *types.Document, path types.Path, admit func(any) bool) []any {
+	var counted []any
+	for _, key := range commonpath.IndexKeyValues(doc, path) {
+		if !admit(key) || slices.ContainsFunc(counted, func(c any) bool { return types.Compare(c, key) == types.Equal }) {
+			continue
+		}
+		counted = append(counted, key)
+	}
+	return counted
 }
 
 // distinctAdmittedKeys counts doc's distinct index keys on path that admit

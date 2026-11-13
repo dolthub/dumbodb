@@ -252,7 +252,7 @@ statements:
 			// The one document updated is the first match in the hinted
 			// index's order.
 			if iter, err = hintedFirstMatches(ctx, c, u.Hint, u.Filter, u.Collation, iter, closer, cmp); err != nil {
-				return 0, 0, nil, nil, err
+				return 0, 0, nil, nil, handleMaxTimeMSError(err, params.MaxTimeMS, "update")
 			}
 			iter = common.LimitIterator(iter, closer, 1)
 		}

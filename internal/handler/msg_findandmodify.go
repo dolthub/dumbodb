@@ -203,7 +203,7 @@ func (h *Handler) findAndModifyDocument(ctx context.Context, params *common.Find
 			)
 		}
 
-		return nil, lazyerrors.Error(err)
+		return nil, handleMaxTimeMSError(err, params.MaxTimeMS, "findAndModify")
 	}
 
 	// findAndModify modifies a single document
