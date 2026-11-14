@@ -214,7 +214,7 @@ func hintedIndexOrder(ctx context.Context, coll backends.Collection, hint any, f
 			if (idx.Sparse || idx.PartialFilterExpression != nil) && orBranchMatchesMissing(filter) {
 				return order, common.AsOneIndexScan(filter), nil, nil
 			}
-			sortFilter = filter
+			sortFilter = common.WithSingleBranchesInlined(filter)
 			cmp := collation.Parse(queryCollation).Comparator()
 			var budget *common.TrialBudget
 			for i, k := range idx.Key {

@@ -748,6 +748,59 @@ func equalityOperand(v any) (any, bool) {
 	return v, true
 }
 
+// WithSingleBranchesInlined returns filter with each $and or $or of one branch
+// replaced by that branch's conditions, at any depth, as mongod's canonical
+// form does. A branch whose fields the enclosing filter already holds stays.
+// filter itself is returned when nothing changes.
+func WithSingleBranchesInlined(filter *types.Document) *types.Document {
+	out := types.MakeDocument(filter.Len())
+	changed := false
+	for _, k := range filter.Keys() {
+		v := must.NotFail(filter.Get(k))
+		if k != "$and" && k != "$or" {
+			out.Set(k, v)
+			continue
+		}
+		branches := filterBranches(v)
+		arr, _ := v.(*types.Array)
+		if branches == nil || arr == nil || len(branches) != arr.Len() {
+			out.Set(k, v)
+			continue
+		}
+		inlined := make([]*types.Document, len(branches))
+		for i, b := range branches {
+			inlined[i] = WithSingleBranchesInlined(b)
+			changed = changed || inlined[i] != b
+		}
+		if len(inlined) == 1 && !sharesKey(inlined[0], filter) && !sharesKey(inlined[0], out) {
+			for _, bk := range inlined[0].Keys() {
+				out.Set(bk, must.NotFail(inlined[0].Get(bk)))
+			}
+			changed = true
+			continue
+		}
+		rebuilt := types.MakeArray(len(inlined))
+		for _, b := range inlined {
+			rebuilt.Append(b)
+		}
+		out.Set(k, rebuilt)
+	}
+	if !changed {
+		return filter
+	}
+	return out
+}
+
+// sharesKey reports whether any key of branch is also a key of filter.
+func sharesKey(branch, filter *types.Document) bool {
+	for _, k := range branch.Keys() {
+		if filter.Has(k) {
+			return true
+		}
+	}
+	return false
+}
+
 // filterBranches returns the documents of an $and or $or operand.
 func filterBranches(v any) []*types.Document {
 	arr, ok := v.(*types.Array)

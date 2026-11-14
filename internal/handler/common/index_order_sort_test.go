@@ -39,3 +39,28 @@ func TestSortInIndexOrderTypeArrayBesideRange(t *testing.T) {
 		}
 	}
 }
+
+func TestWithSingleBranchesInlined(t *testing.T) {
+	doc := func(pairs ...any) *types.Document { return must.NotFail(types.NewDocument(pairs...)) }
+	arr := func(vals ...any) *types.Array { return must.NotFail(types.NewArray(vals...)) }
+	rangeCond := doc("$gte", int32(-1), "$lt", types.MaxKey)
+
+	for name, tc := range map[string]struct{ in, want *types.Document }{
+		"or":            {doc("$or", arr(doc("a", rangeCond))), doc("a", rangeCond)},
+		"and":           {doc("$and", arr(doc("a", rangeCond))), doc("a", rangeCond)},
+		"orOfAnd":       {doc("$or", arr(doc("$and", arr(doc("a", rangeCond, "b", int32(1)))))), doc("a", rangeCond, "b", int32(1))},
+		"insideTwo":     {doc("$or", arr(doc("$or", arr(doc("a", int32(1)))), doc("b", int32(2)))), doc("$or", arr(doc("a", int32(1)), doc("b", int32(2))))},
+		"fieldClash":    {doc("a", int32(1), "$or", arr(doc("a", int32(2)))), doc("a", int32(1), "$or", arr(doc("a", int32(2))))},
+		"branchesClash": {doc("$and", arr(doc("a", int32(1))), "$or", arr(doc("a", int32(2)))), doc("a", int32(1), "$or", arr(doc("a", int32(2))))},
+		"twoBranches":   {doc("$or", arr(doc("a", int32(1)), doc("a", int32(2)))), doc("$or", arr(doc("a", int32(1)), doc("a", int32(2))))},
+	} {
+		if got := WithSingleBranchesInlined(tc.in); !types.Identical(got, tc.want) {
+			t.Errorf("%s: got %v, want %v", name, got, tc.want)
+		}
+	}
+
+	unchanged := doc("$or", arr(doc("a", int32(1)), doc("a", int32(2))))
+	if WithSingleBranchesInlined(unchanged) != unchanged {
+		t.Errorf("an unchanged filter must be returned as is")
+	}
+}
