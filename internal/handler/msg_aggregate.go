@@ -1885,25 +1885,28 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 
 		var toInsert []*types.Document
 		var toUpdate []*types.Document
-		var pipelineErr error
+		// mongod writes a batch unordered: each document whose write fails
+		// is skipped, the others are written, and the first failure is
+		// reported.
+		var batchErr error
+		fail := func(err error) {
+			if batchErr == nil {
+				batchErr = err
+			}
+		}
 
 		for i, incoming := range params.Docs {
 			key := buildMergeKey(incoming, params.On)
 			entry, matched := existingMap[key]
 
 			if params.ApplyWhenMatched != nil {
-				// mongod writes a batch's updates unordered: each document
-				// whose update fails is skipped, the others are written, and
-				// the first failure is reported.
 				var existing *types.Document
 				if matched {
 					existing = entry.doc
 				}
 				updated, err := params.ApplyWhenMatched(ctx, existing, i)
 				if err != nil {
-					if pipelineErr == nil {
-						pipelineErr = err
-					}
+					fail(err)
 					continue
 				}
 				if matched {
@@ -1918,7 +1921,8 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 
 				case "merge":
 					if mergeChangesID(entry.doc, incoming, false) {
-						return mergeImmutableIDError("Performing an update on the path '_id' would modify the immutable field '_id'")
+						fail(mergeImmutableIDError("Performing an update on the path '_id' would modify the immutable field '_id'"))
+						continue
 					}
 
 					// Merge fields from incoming into existing.
@@ -1932,9 +1936,10 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 
 				case "replace":
 					if mergeChangesID(entry.doc, incoming, true) {
-						return mergeImmutableIDError(fmt.Sprintf(
+						fail(mergeImmutableIDError(fmt.Sprintf(
 							"After applying the update, the (immutable) field '_id' was found to have been altered to _id: %s",
-							types.FormatAnyValue(must.NotFail(incoming.Get("_id")))))
+							types.FormatAnyValue(must.NotFail(incoming.Get("_id"))))))
+						continue
 					}
 
 					// Replace existing doc (preserving its _id if incoming lacks one).
@@ -1949,11 +1954,11 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 					// Do nothing; existing document wins.
 
 				case "fail":
-					return handlererrors.NewCommandErrorMsgWithArgument(
+					fail(handlererrors.NewCommandErrorMsgWithArgument(
 						handlererrors.ErrDuplicateKeyInsert,
 						"$merge with whenMatched: fail found an existing document with the same values for the 'on' fields",
 						"$merge (stage)",
-					)
+					))
 				}
 			} else {
 				switch params.WhenNotMatched {
@@ -1967,11 +1972,11 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 					// Skip this document.
 
 				case "fail":
-					return handlererrors.NewCommandErrorMsgWithArgument(
+					fail(handlererrors.NewCommandErrorMsgWithArgument(
 						handlererrors.ErrMergeStageNoMatchingDocument,
 						"$merge could not find a matching document in the target collection for at least one document in the source collection",
 						"$merge (stage)",
-					)
+					))
 				}
 			}
 		}
@@ -1979,7 +1984,7 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 		if err = writeMergeDocuments(ctx, coll, params, toInsert, toUpdate); err != nil {
 			return err
 		}
-		return pipelineErr
+		return batchErr
 	}
 }
 
