@@ -178,3 +178,32 @@ func isBoundNow(doc *types.Document) bool {
 func CommandNow() time.Time {
 	return time.Now().UTC().Truncate(time.Millisecond)
 }
+
+// FormatExpression formats an expression for an error message as the client
+// wrote it, with each bound $$NOW shown as "$$NOW".
+func FormatExpression(expr any) string {
+	return types.FormatAnyValue(unbindNow(expr))
+}
+
+func unbindNow(v any) any {
+	switch v := v.(type) {
+	case *types.Document:
+		if isBoundNow(v) {
+			return "$$NOW"
+		}
+		out := types.MakeDocument(v.Len())
+		values := v.Values()
+		for i, k := range v.Keys() {
+			out.AppendDecoded(k, unbindNow(values[i]))
+		}
+		return out
+	case *types.Array:
+		out := types.MakeArray(v.Len())
+		for i := range v.Len() {
+			out.Append(unbindNow(must.NotFail(v.Get(i))))
+		}
+		return out
+	default:
+		return v
+	}
+}
