@@ -95,3 +95,12 @@ func TestNormalizeDuplicateFilterKeys(t *testing.T) {
 		require.Equal(t, want, types.FormatAnyValue(must.NotFail(stage.Get("$match"))))
 	})
 }
+
+// Values Go cannot compare with ==, such as Binary, must not panic.
+func TestNormalizeDuplicateFilterKeysUncomparableValues(t *testing.T) {
+	bin := types.Binary{Subtype: types.BinaryGeneric, B: []byte{1, 2, 3, 4}}
+	filter := must.NotFail(types.NewDocument("_id", bin, "a", must.NotFail(types.NewDocument("$in", must.NotFail(types.NewArray(bin))))))
+	cmd := must.NotFail(types.NewDocument("find", "c", "filter", filter))
+	require.NotPanics(t, func() { NormalizeDuplicateFilterKeys(cmd) })
+	require.Same(t, filter, must.NotFail(cmd.Get("filter")))
+}
