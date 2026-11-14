@@ -137,7 +137,8 @@ func (u *unionWith) Process(ctx context.Context, iter types.DocumentsIterator, c
 
 	// mongod runs a $unionWith sub-pipeline in SBE, after the stages of the
 	// view it reads from, unless it is nested in a $lookup sub-pipeline.
-	subSpecs := sbeSpecs(u.sub.pipeline)
+	u.sub.optimizePipeline(ctx, fetcher)
+	subSpecs := sbeSpecs(u.sub.optimized)
 	var viewSpecs []*types.Document
 	if view, ok := fetcher.ViewPipeline(ctx, u.sub.from); ok && u.sub.from != "" {
 		viewSpecs = sbeSpecs(view)

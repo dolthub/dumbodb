@@ -95,6 +95,7 @@ type cachingFetcher struct {
 	all       map[string][]*types.Document
 	indexed   map[string]bool
 	eqIndexes map[string]*equalityIndex
+	views     map[string]*types.Array
 }
 
 // ViewResolver is implemented by fetchers that can report the full pipeline
@@ -145,10 +146,18 @@ func (c *cachingFetcher) SourceExists(ctx context.Context, name string) bool {
 
 // ViewPipeline implements ViewResolver when the wrapped fetcher does.
 func (c *cachingFetcher) ViewPipeline(ctx context.Context, name string) (*types.Array, bool) {
-	if vr, ok := c.CollectionFetcher.(ViewResolver); ok {
-		return vr.ViewPipeline(ctx, name)
+	if view, ok := c.views[name]; ok {
+		return view, view != nil
 	}
-	return nil, false
+	var view *types.Array
+	if vr, ok := c.CollectionFetcher.(ViewResolver); ok {
+		var isView bool
+		if view, isView = vr.ViewPipeline(ctx, name); !isView {
+			view = nil
+		}
+	}
+	c.views[name] = view
+	return view, view != nil
 }
 
 // CollStats implements StatsFetcher when the wrapped fetcher does.
@@ -170,6 +179,7 @@ func withFetchCache(f CollectionFetcher) *cachingFetcher {
 		all:               map[string][]*types.Document{},
 		indexed:           map[string]bool{},
 		eqIndexes:         map[string]*equalityIndex{},
+		views:             map[string]*types.Array{},
 	}
 }
 
@@ -234,6 +244,9 @@ type lookup struct {
 	pipeline     *types.Array    // pipeline form (may be nil)
 	as           string
 	fetcher      CollectionFetcher
+	// optimized is pipeline as it runs on the from documents; see
+	// OptimizeSubPipeline.
+	optimized *types.Array
 	// unwind is the following $unwind of as, which this stage performs by
 	// emitting one document per match (see MarkLookupsUnwound).
 	unwind *unwind
@@ -759,6 +772,7 @@ func (l *lookup) Process(ctx context.Context, iter types.DocumentsIterator, clos
 	pipelineLen := 0
 	if l.pipeline != nil {
 		pipelineLen = l.pipeline.Len()
+		l.optimizePipeline(ctx, fetcher)
 	}
 	ctx = WithJoinStages(ctx, JoinStages{N: pipelineLen + 1, ViewLimit: l.localField == ""})
 
@@ -1280,6 +1294,15 @@ func (l *lookup) perDocCandidates(ctx context.Context, fetcher CollectionFetcher
 	return fetcher.Fetch(ctx, l.from, must.NotFail(types.NewDocument(field, value)))
 }
 
+// optimizePipeline sets optimized for the from collection or view.
+func (l *lookup) optimizePipeline(ctx context.Context, fetcher *cachingFetcher) {
+	var view *types.Array
+	if l.from != "" {
+		view, _ = fetcher.ViewPipeline(ctx, l.from)
+	}
+	l.optimized = OptimizeSubPipeline(l.pipeline, view, l.from)
+}
+
 // runPipeline runs the sub-pipeline for localDoc and returns its output.
 func (l *lookup) runPipeline(ctx context.Context, fetcher CollectionFetcher, fromDocs []*types.Document, localDoc *types.Document, validatedMatches map[int]bool) ([]*types.Document, error) {
 	iter, closer, err := l.pipelineIter(ctx, fetcher, fromDocs, localDoc, validatedMatches)
@@ -1313,7 +1336,11 @@ func (l *lookup) pipelineIter(ctx context.Context, fetcher CollectionFetcher, fr
 		return nil, nil, err
 	}
 
-	subStages := must.NotFail(iterator.ConsumeValues(l.pipeline.Iterator()))
+	pipeline := l.pipeline
+	if l.optimized != nil {
+		pipeline = l.optimized
+	}
+	subStages := must.NotFail(iterator.ConsumeValues(pipeline.Iterator()))
 	built := make([]aggregations.Stage, len(subStages))
 	specs := make([]*types.Document, len(subStages))
 	for stageIndex, stageVal := range subStages {

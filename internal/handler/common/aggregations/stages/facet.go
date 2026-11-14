@@ -264,6 +264,7 @@ func readsOnly(pipeline *types.Array) bool {
 func parsePipelineArray(arr *types.Array, fetcher CollectionFetcher) ([]aggregations.Stage, error) {
 	var stageList []aggregations.Stage
 	var specs []*types.Document
+	arr = OptimizeSkipsAndLimitsArray(arr, false)
 	subStages := must.NotFail(iterator.ConsumeValues(arr.Iterator()))
 
 	for i := 0; i < arr.Len(); i++ {
