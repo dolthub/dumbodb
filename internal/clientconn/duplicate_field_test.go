@@ -56,5 +56,5 @@ func TestCommandDuplicateFieldStillFindsNestedDuplicate(t *testing.T) {
 
 	path, found := commandDuplicateField(cmd)
 	require.True(t, found)
-	require.Equal(t, "filter.a", path)
+	require.Equal(t, []string{"filter", "a"}, path)
 }

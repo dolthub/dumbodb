@@ -805,6 +805,9 @@ const (
 	ErrGraphLookupMissingArgument     = ErrorCode(40105) // Location40105
 	ErrGraphLookupMatchNotObject      = ErrorCode(40185) // Location40185
 
+	// ErrSortDuplicateKey indicates a sort specification that repeats a key.
+	ErrSortDuplicateKey = ErrorCode(7472500) // Location7472500
+
 	// ErrStageGroupUnaryOperator indicates that $sum is a unary operator.
 	ErrStageGroupUnaryOperator = ErrorCode(40237) // Location40237
 

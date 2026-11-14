@@ -16,7 +16,6 @@ package clientconn
 
 import (
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 
@@ -24,34 +23,78 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// stageDuplicateField matches a field repeated directly in a stage
-// specification that mongod parses as a set of paths.
-var stageDuplicateField = regexp.MustCompile(`\.\$(set|addFields|project|setWindowFields\.output)\.([^.]+)$`)
-
 // duplicateFieldError returns the error for a command repeating the field at
-// path: mongod's error for a stage whose specification names the same path
-// twice, and FailedToParse otherwise.
-func duplicateFieldError(path string) error {
-	if m := stageDuplicateField.FindStringSubmatch(path); m != nil {
-		switch m[1] {
-		case "set", "addFields":
+// path, given as its keys: mongod's error where it parses the repeated keys
+// as paths or sort keys, and FailedToParse otherwise.
+func duplicateFieldError(path []string) error {
+	last := path[len(path)-1]
+
+	// The innermost pipeline stage holding the repeated key.
+	stage := -1
+	for k := len(path) - 1; k > 0; k-- {
+		if isIndex(path[k-1]) && strings.HasPrefix(path[k], "$") {
+			stage = k
+			break
+		}
+	}
+
+	if stage >= 0 {
+		name, rest := path[stage], path[stage+1:]
+		switch {
+		case (name == "$set" || name == "$addFields") && isFieldPath(rest):
+			p := strings.Join(rest, ".")
 			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrAddFieldsPathCollision,
-				fmt.Sprintf("Invalid $%s :: caused by :: specification contains two conflicting paths. Cannot specify both '%s' and '%s'",
-					m[1], m[2], m[2]), "$"+m[1]+" (stage)")
-		case "project":
+				fmt.Sprintf("Invalid %s :: caused by :: specification contains two conflicting paths. Cannot specify both '%s' and '%s'",
+					name, p, p), name+" (stage)")
+		case name == "$project" && isFieldPath(rest):
 			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrUnsetPathOverwrite,
-				"Invalid $project :: caused by :: Path collision at "+m[2], "$project (stage)")
-		default:
+				"Invalid $project :: caused by :: Path collision at "+last, "$project (stage)")
+		case name == "$sort" && len(rest) == 1:
+			return sortDuplicateError(last)
+		case name == "$setWindowFields" && len(rest) == 2 && rest[0] == "output":
 			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrWindowOutputPathCollision,
 				"$setWindowFields 'output' specification contains two conflicting paths", "$setWindowFields (stage)")
 		}
+	} else {
+		switch {
+		case len(path) == 2 && path[0] == "sort":
+			return sortDuplicateError(last)
+		case len(path) >= 2 && path[0] == "projection" && isFieldPath(path[1:]):
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrUnsetPathOverwrite,
+				"Path collision at "+last, "projection")
+		}
 	}
+
 	return handlererrors.NewCommandErrorMsg(handlererrors.ErrFailedToParse,
-		fmt.Sprintf("BSON field '%s' is a duplicate field", path))
+		fmt.Sprintf("BSON field '%s' is a duplicate field", strings.Join(path, ".")))
 }
 
-// commandDuplicateField returns the dotted path of the first field a command
-// repeats, at any depth, and whether there was one.
+func sortDuplicateError(key string) error {
+	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSortDuplicateKey,
+		fmt.Sprintf("$sort key must not contain duplicate keys (duplicate: '%s')", key), "$sort")
+}
+
+// isFieldPath reports whether keys name a path of fields, entering no
+// operator or array.
+func isFieldPath(keys []string) bool {
+	if len(keys) == 0 {
+		return false
+	}
+	for _, k := range keys {
+		if strings.HasPrefix(k, "$") || isIndex(k) {
+			return false
+		}
+	}
+	return true
+}
+
+func isIndex(key string) bool {
+	_, err := strconv.Atoi(key)
+	return err == nil
+}
+
+// commandDuplicateField returns the keys of the path to the first field a
+// command repeats, at any depth, and whether there was one.
 //
 // BSON lets a document repeat a key, so this is reachable from any client at
 // any position: a driver attaching its own lsid to a command that already
@@ -62,9 +105,9 @@ func duplicateFieldError(path string) error {
 //
 // The walk is over an already-materialized document, so it adds no decoding
 // and cannot recurse deeper than the decoder already did.
-func commandDuplicateField(doc *types.Document) (string, bool) {
+func commandDuplicateField(doc *types.Document) ([]string, bool) {
 	if doc == nil {
-		return "", false
+		return nil, false
 	}
 
 	// One exception, and only at the top level. An insert reports a duplicate
@@ -77,16 +120,35 @@ func commandDuplicateField(doc *types.Document) (string, bool) {
 		skip = "documents"
 	}
 
-	return findDuplicateField(doc, "", skip)
+	return findDuplicateField(doc, nil, skip, modifierLevel(doc.Command()))
 }
 
-func findDuplicateField(doc *types.Document, prefix, skip string) (string, bool) {
+// modifierLevel returns, for a command whose update modifiers its handler
+// checks for repeated paths itself (write error 40, as on mongod), whether a
+// path is that of a modifier's document.
+func modifierLevel(command string) func(path []string) bool {
+	switch command {
+	case "update":
+		return func(path []string) bool {
+			return len(path) == 4 && path[0] == "updates" && path[2] == "u" && strings.HasPrefix(path[3], "$")
+		}
+	case "findAndModify", "findandmodify":
+		return func(path []string) bool {
+			return len(path) == 2 && path[0] == "update" && strings.HasPrefix(path[1], "$")
+		}
+	}
+	return func([]string) bool { return false }
+}
+
+func findDuplicateField(doc *types.Document, prefix []string, skip string, modifier func([]string) bool) ([]string, bool) {
 	if doc == nil {
-		return "", false
+		return nil, false
 	}
 
-	if key, ok := doc.FindDuplicateKey(); ok {
-		return join(prefix, key), true
+	if !modifier(prefix) {
+		if key, ok := doc.FindDuplicateKey(); ok {
+			return join(prefix, key), true
+		}
 	}
 
 	// Keys and Values are read together rather than calling Get per key:
@@ -100,32 +162,31 @@ func findDuplicateField(doc *types.Document, prefix, skip string) (string, bool)
 		if !isComposite(values[i]) {
 			continue
 		}
-		if path, ok := findDuplicateInValue(values[i], join(prefix, key)); ok {
+		if path, ok := findDuplicateInValue(values[i], join(prefix, key), modifier); ok {
 			return path, true
 		}
 	}
 
-	return "", false
+	return nil, false
 }
 
-func findDuplicateInValue(value any, path string) (string, bool) {
+func findDuplicateInValue(value any, path []string, modifier func([]string) bool) ([]string, bool) {
 	switch v := value.(type) {
 	case *types.Document:
-		return findDuplicateField(v, path, "")
+		return findDuplicateField(v, path, "", modifier)
 	case *types.Array:
 		for i := 0; i < v.Len(); i++ {
 			element, err := v.Get(i)
 			if err != nil || !isComposite(element) {
 				continue
 			}
-			indexed := path + "." + strconv.Itoa(i)
-			if found, ok := findDuplicateInValue(element, indexed); ok {
+			if found, ok := findDuplicateInValue(element, join(path, strconv.Itoa(i)), modifier); ok {
 				return found, true
 			}
 		}
 	}
 
-	return "", false
+	return nil, false
 }
 
 func isComposite(value any) bool {
@@ -137,9 +198,7 @@ func isComposite(value any) bool {
 	}
 }
 
-func join(prefix, key string) string {
-	if prefix == "" {
-		return key
-	}
-	return prefix + "." + key
+// join returns prefix with key appended, sharing no storage with prefix.
+func join(prefix []string, key string) []string {
+	return append(prefix[:len(prefix):len(prefix)], key)
 }
