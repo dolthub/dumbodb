@@ -1034,6 +1034,12 @@ const (
 	// ErrArrayToObjectObjectKeyNul indicates an $arrayToObject k value with a null byte.
 	ErrArrayToObjectObjectKeyNul = ErrorCode(4940401) // Location4940401
 
+	// ErrArrayToObjectPairKeyNulSBE is ErrArrayToObjectPairKeyNul in mongod's SBE engine.
+	ErrArrayToObjectPairKeyNulSBE = ErrorCode(5153207) // Location5153207
+
+	// ErrArrayToObjectObjectKeyNulSBE is ErrArrayToObjectObjectKeyNul in mongod's SBE engine.
+	ErrArrayToObjectObjectKeyNulSBE = ErrorCode(5153214) // Location5153214
+
 	// ErrSetFieldNulByte indicates a $setField field name with a null byte.
 	ErrSetFieldNulByte = ErrorCode(9534700) // Location9534700
 
