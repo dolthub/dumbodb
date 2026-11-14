@@ -1843,53 +1843,18 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 				fmt.Sprintf("Namespace %s.%s is a view, not a collection", params.DBName, params.CollName), "$merge")
 		}
 
+		// A target that does not exist yet matches no document.
 		qRes, err := coll.Query(ctx, new(backends.QueryParams))
-		if err != nil {
-			if backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist) ||
-				backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseDoesNotExist) {
-				// Collection doesn't exist yet; all docs are "not matched".
-				docs := params.Docs
-				var pipelineErr error
-				if params.ApplyWhenMatched != nil {
-					var parsed []*types.Document
-					for i, doc := range docs {
-						if _, err := params.ApplyWhenMatched(ctx, nil, i); err != nil {
-							if pipelineErr == nil {
-								pipelineErr = err
-							}
-							continue
-						}
-						parsed = append(parsed, doc)
-					}
-					docs = parsed
-				}
-				if params.WhenNotMatched == "fail" && len(docs) > 0 {
-					return handlererrors.NewCommandErrorMsgWithArgument(
-						handlererrors.ErrMergeStageNoMatchingDocument,
-						"$merge could not find a matching document in the target collection for at least one document in the source collection",
-						"$merge (stage)",
-					)
-				}
-				if params.WhenNotMatched == "insert" && len(docs) > 0 {
-					for _, doc := range docs {
-						if !doc.Has("_id") {
-							doc.Set("_id", types.NewObjectID())
-						}
-					}
-					if _, insertErr := coll.InsertAll(ctx, &backends.InsertAllParams{Docs: docs}); insertErr != nil {
-						return mergeWriteError(params, insertErr)
-					}
-				}
-
-				return pipelineErr
-			}
-
+		if err != nil && !backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist, backends.ErrorCodeDatabaseDoesNotExist) {
 			return lazyerrors.Error(err)
 		}
 
+		// An entry is a target document or, with insertAt >= 0, a document
+		// this batch inserts, which a later document with the same key
+		// matches as mongod's sequential upserts do.
 		type existingEntry struct {
-			doc   *types.Document
-			index int
+			doc      *types.Document
+			insertAt int
 		}
 
 		// Only the target documents this batch can match are kept, so memory
@@ -1913,7 +1878,7 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 			dottedMatches = make([]*existingEntry, len(params.Docs))
 		}
 
-		for i := 0; ; i++ {
+		for qRes != nil {
 			_, existing, nextErr := qRes.Iter.Next()
 			if errors.Is(nextErr, iterator.ErrIteratorDone) {
 				break
@@ -1935,7 +1900,7 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 					}
 					if ok {
 						if entry == nil {
-							entry = &existingEntry{doc: existing, index: i}
+							entry = &existingEntry{doc: existing, insertAt: -1}
 						}
 						dottedMatches[j] = entry
 					}
@@ -1943,13 +1908,23 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 				continue
 			}
 			if key := buildMergeKey(existing, params.On); wanted[key] {
-				existingMap[key] = &existingEntry{doc: existing, index: i}
+				existingMap[key] = &existingEntry{doc: existing, insertAt: -1}
 			}
 		}
-		qRes.Iter.Close()
+		if qRes != nil {
+			qRes.Iter.Close()
+		}
 
 		var toInsert []*types.Document
 		var toUpdate []*types.Document
+		write := func(entry *existingEntry, doc *types.Document) {
+			entry.doc = doc
+			if entry.insertAt >= 0 {
+				toInsert[entry.insertAt] = doc
+				return
+			}
+			toUpdate = append(toUpdate, doc)
+		}
 		// mongod writes a batch unordered: each document whose write fails
 		// is skipped, the others are written, and the first failure is
 		// reported.
@@ -1979,8 +1954,7 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 					continue
 				}
 				if matched {
-					entry.doc = updated
-					toUpdate = append(toUpdate, updated)
+					write(entry, updated)
 					continue
 				}
 			}
@@ -2001,7 +1975,7 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 						merged.Set(k, v)
 					}
 
-					toUpdate = append(toUpdate, merged)
+					write(entry, merged)
 
 				case "replace":
 					if mergeChangesID(entry.doc, incoming, true) {
@@ -2017,7 +1991,7 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 						incoming.Set("_id", id)
 					}
 
-					toUpdate = append(toUpdate, incoming)
+					write(entry, incoming)
 
 				case "keepExisting":
 					// Do nothing; existing document wins.
@@ -2032,10 +2006,15 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 			} else {
 				switch params.WhenNotMatched {
 				case "insert":
+					// A generated _id matches no later document.
+					keyed := dottedMatches == nil && (incoming.Has("_id") || !slices.Contains(params.On, "_id"))
 					if !incoming.Has("_id") {
 						incoming.Set("_id", types.NewObjectID())
 					}
 					toInsert = append(toInsert, incoming)
+					if keyed {
+						existingMap[key] = &existingEntry{doc: incoming, insertAt: len(toInsert) - 1}
+					}
 
 				case "discard":
 					// Skip this document.
