@@ -1286,11 +1286,10 @@ func processStagesDocuments(ctx context.Context, closer *iterator.MultiCloser, p
 
 	closer.Add(queryRes.Iter)
 
-	// The leading $match stages are those mongod pushes into the query.
-	planMode := queryPlanMode(ctx, p.c, p.qp.Filter, p.qp.Hint, queryRes)
-	for _, s := range p.stages {
-		if !stages.SetPushedMatchPlan(s, planMode) {
-			break
+	if pushed, filter := stages.PushedMatches(p.stages); len(pushed) > 0 {
+		planMode := queryPlanMode(ctx, p.c, filter, p.qp.Hint, queryRes)
+		for _, s := range pushed {
+			stages.SetPushedMatchPlan(s, planMode)
 		}
 	}
 
