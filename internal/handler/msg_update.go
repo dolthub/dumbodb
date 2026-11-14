@@ -203,7 +203,8 @@ statements:
 		if err == nil && u.IsPipeline {
 			u.PipelineStages, err = common.ParseUpdatePipeline(u.Pipeline)
 			var ce *handlererrors.CommandError
-			pipelineMalformed = errors.As(err, &ce) && (ce.Code() == handlererrors.ErrStageInvalid ||
+			var malformed *common.MalformedPipelineError
+			pipelineMalformed = errors.As(err, &malformed) || errors.As(err, &ce) && (ce.Code() == handlererrors.ErrStageInvalid ||
 				ce.Code() == handlererrors.ErrStageUnrecognized || hasNonDocumentElement(u.Pipeline))
 		}
 		if err != nil {
