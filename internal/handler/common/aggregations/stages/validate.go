@@ -205,3 +205,43 @@ func addFieldsPaths(prefix string, spec *types.Document) []string {
 	}
 	return paths
 }
+
+// checkFieldPathArgument returns mongod's FieldPath error for a stage
+// argument that names a field path.
+func checkFieldPathArgument(path, stage string) error {
+	fail := func(code handlererrors.ErrorCode, msg string) error {
+		return handlererrors.NewCommandErrorMsgWithArgument(code, msg, stage+" (stage)")
+	}
+	const hint = "Consider using $getField or $setField for a field path with '.' or '$'. :: caused by :: "
+	switch {
+	case path == "":
+		return fail(handlererrors.ErrEmptyFieldPath, "FieldPath cannot be constructed with empty string")
+	case strings.HasSuffix(path, "."):
+		return fail(handlererrors.ErrInvalidFieldPath, "FieldPath must not end with a '.'.")
+	}
+	for _, name := range strings.Split(path, ".") {
+		switch {
+		case name == "":
+			return fail(handlererrors.ErrPathContainsEmptyElement, hint+"FieldPath field names may not be empty strings.")
+		case strings.HasPrefix(name, "$"):
+			return fail(handlererrors.ErrFieldPathInvalidName, hint+"FieldPath field names may not start with '$', given '"+name+"'.")
+		case strings.ContainsRune(name, 0):
+			return fail(handlererrors.ErrFieldPathNulByte, hint+"FieldPath field names may not contain '"+name+"'.")
+		}
+	}
+	return nil
+}
+
+// checkTargetNamespace returns mongod's error for a $out or $merge target
+// whose database or collection name holds a NUL byte.
+func checkTargetNamespace(db, coll, stage string) error {
+	switch {
+	case strings.ContainsRune(db, 0):
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace,
+			"namespace cannot have embedded null characters", stage+" (stage)")
+	case strings.ContainsRune(coll, 0):
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace,
+			"namespaces cannot have embedded null characters", stage+" (stage)")
+	}
+	return nil
+}

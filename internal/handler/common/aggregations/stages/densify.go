@@ -254,12 +254,8 @@ func stagePath(v any, field, stage string) (types.Path, error) {
 			"BSON field '"+field+"' is the wrong type '"+handlerparams.AliasFromType(v)+"', expected type 'string'",
 			stage)
 	}
-	for _, part := range strings.Split(s, ".") {
-		if strings.HasPrefix(part, "$") {
-			return types.Path{}, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFieldPathInvalidName,
-				"Consider using $getField or $setField for a field path with '.' or '$'. :: caused by :: "+
-					"FieldPath field names may not start with '$', given '"+s+"'.", stage)
-		}
+	if err := checkFieldPathArgument(s, strings.TrimSuffix(stage, " (stage)")); err != nil {
+		return types.Path{}, err
 	}
 	p, err := types.NewPathFromString(s)
 	if err != nil {
