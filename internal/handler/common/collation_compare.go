@@ -33,9 +33,9 @@ func signToResult(n int) types.CompareResult {
 }
 
 // collCompare compares two values like types.Compare, but compares strings,
-// alone or inside arrays, under cmp when cmp is non-nil. Strings inside
-// embedded documents compare bytewise, as collated indexes key them. It walks
-// arrays element by element, as types.Compare does, without copying them.
+// alone or inside arrays and documents, under cmp when cmp is non-nil. Field
+// names compare bytewise. It walks arrays and documents element by element,
+// as types.Compare does, without copying them.
 func collCompare(a, b any, cmp *collation.Comparator) types.CompareResult {
 	if cmp == nil {
 		return types.Compare(a, b)
@@ -48,7 +48,37 @@ func collCompare(a, b any, cmp *collation.Comparator) types.CompareResult {
 	if arr, ok := a.(*types.Array); ok {
 		return collCompareArray(arr, b, cmp)
 	}
+	if ad, ok := a.(*types.Document); ok {
+		if bd, ok := b.(*types.Document); ok {
+			return collCompareDocuments(ad, bd, cmp)
+		}
+	}
 	return types.Compare(a, b)
+}
+
+// collCompareDocuments is types.Compare for two documents under cmp: field by
+// field, each by value type order, then name, then value.
+func collCompareDocuments(a, b *types.Document, cmp *collation.Comparator) types.CompareResult {
+	aKeys, bKeys := a.Keys(), b.Keys()
+	aValues, bValues := a.Values(), b.Values()
+	for i := range aKeys {
+		if i == len(bKeys) {
+			return types.Greater
+		}
+		if result := types.CompareTypeOrder(aValues[i], bValues[i]); result != types.Equal {
+			return result
+		}
+		if result := types.Compare(aKeys[i], bKeys[i]); result != types.Equal {
+			return result
+		}
+		if result := collCompare(aValues[i], bValues[i], cmp); result != types.Equal {
+			return result
+		}
+	}
+	if len(aKeys) < len(bKeys) {
+		return types.Less
+	}
+	return types.Equal
 }
 
 // collCompareArray is types.Compare for an array against b under cmp.
@@ -121,7 +151,7 @@ func collCompareOrderOp(a, b any, order types.SortType, cmp *collation.Comparato
 	}
 	arrA, isAArray := a.(*types.Array)
 	arrB, isBArray := b.(*types.Array)
-	if cmp == nil || !isAArray && !isBArray {
+	if cmp == nil {
 		return types.CompareOrderForOperator(a, b, order)
 	}
 	if isAArray && !isBArray {

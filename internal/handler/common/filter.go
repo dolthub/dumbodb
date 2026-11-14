@@ -464,7 +464,7 @@ func filterDocumentPair(doc *types.Document, filterKey string, filterValue any, 
 
 	switch filterValue := filterValue.(type) {
 	case *types.Document:
-		if res, ok := positionalDocumentEquality(doc, filterKey, vals, filterValue); ok {
+		if res, ok := positionalDocumentEquality(doc, filterKey, vals, filterValue, fc.cmp); ok {
 			return res, nil
 		}
 		if filterSuffix == filterKey {
@@ -524,16 +524,6 @@ func filterDocumentPair(doc *types.Document, filterKey string, filterValue any, 
 	return false, nil
 }
 
-// compareKeyed compares two values like types.Compare, with every string,
-// inside documents too, compared under cmp. It keys both values, so it suits
-// one comparison per condition, not one per element.
-func compareKeyed(a, b any, cmp *collation.Comparator) types.CompareResult {
-	if cmp == nil {
-		return types.Compare(a, b)
-	}
-	return types.Compare(cmp.KeyValue(a), cmp.KeyValue(b))
-}
-
 // equalsOrHasElement is MongoDB's equality match: value equals target, or is
 // an array with an element equal to target. collCompare already compares an
 // array's elements with a scalar or document target; an array target is
@@ -559,7 +549,7 @@ func equalsOrHasElement(value, target any, cmp *collation.Comparator) bool {
 // with document operands when the path ends in an array index. MongoDB does not
 // expand the array such a path reaches, so it equals doc only if it is that
 // document. ok is false for other filters and paths.
-func positionalDocumentEquality(doc *types.Document, filterKey string, vals []any, filter *types.Document) (res, ok bool) {
+func positionalDocumentEquality(doc *types.Document, filterKey string, vals []any, filter *types.Document, cmp *collation.Comparator) (res, ok bool) {
 	// Runs per document, so rule out a path without an index suffix cheaply.
 	dot := strings.LastIndexByte(filterKey, '.')
 	if dot < 0 {
@@ -618,7 +608,7 @@ func positionalDocumentEquality(doc *types.Document, filterKey string, vals []an
 			continue
 		}
 		for _, e := range expected {
-			if types.Compare(d, e) == types.Equal {
+			if collCompare(d, e, cmp) == types.Equal {
 				return !negate, true
 			}
 		}
@@ -1111,7 +1101,7 @@ func filterFieldOperators(doc *types.Document, filterKey, filterSuffix string, e
 			// An array matches if it, or one of its elements, equals expr.
 			switch fieldValue.(type) {
 			case *types.Document, *types.Array:
-				return compareKeyed(fieldValue, expr, fc.cmp) == types.Equal, nil
+				return collCompare(fieldValue, expr, fc.cmp) == types.Equal, nil
 			}
 			return false, nil
 		}
@@ -1772,18 +1762,13 @@ func filterFieldExprAll(doc *types.Document, filterKey, filterSuffix string, fie
 		return true, nil
 	}
 
-	if _, ok := fieldValue.(*types.Document); ok {
-		// For documents we return false as $all doesn't work on documents.
-		return false, nil
-	}
-
 	// Each query element must match on its own: a regex as a regex query
 	// does, any other value as an array element or an equal scalar. Under a
 	// collation an array field is keyed once, so its strings are not
 	// collated again for every query element.
 	cmp, keyedField := fc.cmp, fieldValue
 	if _, isArray := fieldValue.(*types.Array); isArray && cmp != nil && query.Len() > 1 {
-		cmp, keyedField = nil, arrayStringKeys(fieldValue, fc.cmp)
+		cmp, keyedField = nil, fc.cmp.KeyValue(fieldValue)
 	}
 	for i := 0; i < query.Len(); i++ {
 		q := must.NotFail(query.Get(i))
@@ -1795,7 +1780,7 @@ func filterFieldExprAll(doc *types.Document, filterKey, filterSuffix string, fie
 			continue
 		}
 		if cmp == nil && fc.cmp != nil {
-			q = arrayStringKeys(q, fc.cmp)
+			q = fc.cmp.KeyValue(q)
 		}
 		if !equalsOrHasElement(keyedField, q, cmp) {
 			return false, nil
