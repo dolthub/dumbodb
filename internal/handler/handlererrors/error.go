@@ -611,6 +611,9 @@ const (
 	// ErrInRequiresArray indicates an expression $in whose second argument is not an array.
 	ErrInRequiresArray = ErrorCode(40081) // Location40081
 
+	// ErrSetEqualsConstantNotArray indicates a constant $setEquals operand that is not an array.
+	ErrSetEqualsConstantNotArray = ErrorCode(5887502) // Location5887502
+
 	// ErrStageUnwindNoPath indicates that $unwind aggregation stage is empty.
 	ErrStageUnwindNoPath = ErrorCode(28812) // Location28812
 
