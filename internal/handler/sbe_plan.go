@@ -29,13 +29,17 @@ import (
 // sbePlan is how much of a top-level pipeline mongod 8.0 runs in SBE. Both
 // aggregate and its explain take it from classifySBE.
 type sbePlan struct {
-	// specs are the leading stages given to stages.SBEPrefixLen and
-	// stages.MarkSBELookups.
+	// specs are the leading stages given to stages.TopLevelSBEPrefix.
 	specs []*types.Document
-	// groups is stages.SBEPrefixLen of specs.
+	// groups is the SBE prefix stages.TopLevelSBEPrefix gives specs.
 	groups int
 	// end is how many leading stages run in SBE, its $lookup stages included.
 	end int
+	// pushable bounds the equality $lookup stages that run in SBE.
+	pushable int
+	// distinct is the $group mongod runs as a distinct scan instead, which
+	// leaves the whole pipeline to its classic engine.
+	distinct *distinctScanGroup
 }
 
 // runsInSBE reports whether mongod runs any of the pipeline in SBE.
@@ -43,19 +47,23 @@ func (p sbePlan) runsInSBE() bool {
 	return p.end > 0
 }
 
-// classifySBE returns how much of specs, the stages of a pipeline reading an
-// existing collection, mongod runs in SBE. lookups says whether its $lookup
-// stages may run there. queryCollation is the pipeline's collation.
-func classifySBE(ctx context.Context, db backends.Database, specs []*types.Document, queryCollation *types.Document, lookups bool, isView func(string) bool) sbePlan { //nolint:lll // for readability
+// classifySBE returns how much of specs, the stages of a pipeline reading the
+// existing collection named collection, mongod runs in SBE. lookups says
+// whether its $lookup stages may run there. queryCollation is the pipeline's
+// collation.
+func classifySBE(ctx context.Context, db backends.Database, collection string, specs []*types.Document, queryCollation *types.Document, lookups bool, isView func(string) bool) sbePlan { //nolint:lll // for readability
 	if stages.IsExpressMatch(specs) {
 		return sbePlan{}
 	}
+	if ds := findDistinctScanGroup(ctx, db, collection, specs, queryCollation); ds != nil {
+		return sbePlan{distinct: ds}
+	}
 	specs = countsAsGroups(specs[:sbeCandidateLen(ctx, db, specs, queryCollation)])
-	plan := sbePlan{specs: specs, groups: stages.SBEPrefixLen(specs, isView)}
+	plan := sbePlan{specs: specs}
+	plan.groups, plan.pushable = stages.TopLevelSBEPrefix(specs, isView)
 	plan.end = plan.groups
 	if lookups {
-		pushable := stages.SBEPushableLen(specs, isView)
-		for i := plan.groups; i < pushable; i++ {
+		for i := plan.groups; i < plan.pushable; i++ {
 			if specs[i].Command() == "$lookup" {
 				plan.end = i + 1
 			}

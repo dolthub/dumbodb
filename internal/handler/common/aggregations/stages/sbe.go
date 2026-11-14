@@ -39,22 +39,24 @@ import (
 // stage before it can be pushed down with it, else 0.
 // isView, when not nil, reports whether a collection is a view; an equality
 // $lookup from a view ends the prefix.
+// A $group by _id keeping one value counts as the distinct scan mongod runs
+// it as.
 func SBEPrefixLen(specs []*types.Document, isView func(string) bool) int {
-	end, _ := sbePrefix(specs, isView)
+	end, _ := sbePrefix(specs, isView, true)
 	return end
 }
 
-// SBEPushableLen returns how many leading stages of a top-level pipeline
-// mongod could push down into SBE at all, which bounds the $lookup stages it
-// runs there.
-func SBEPushableLen(specs []*types.Document, isView func(string) bool) int {
-	_, pushable := sbePrefix(specs, isView)
-	return pushable
+// TopLevelSBEPrefix returns SBEPrefixLen of a pipeline whose caller has
+// ruled out a distinct scan $group, and how many leading stages mongod could
+// push down into SBE at all, which bounds the $lookup stages it runs there.
+func TopLevelSBEPrefix(specs []*types.Document, isView func(string) bool) (int, int) {
+	return sbePrefix(specs, isView, false)
 }
 
 // sbePrefix returns SBEPrefixLen and the number of leading stages mongod could
-// push down into SBE at all, which bounds the $lookup stages it runs there.
-func sbePrefix(specs []*types.Document, isView func(string) bool) (int, int) {
+// push down into SBE at all. idGroupsClassic counts a $group by _id keeping
+// one value as classic.
+func sbePrefix(specs []*types.Document, isView func(string) bool, idGroupsClassic bool) (int, int) {
 	var sawSort, sawProject, sawLimit, sawLookup, sawGroup bool
 	var project *types.Document
 	end := 0
@@ -65,6 +67,11 @@ func sbePrefix(specs []*types.Document, isView func(string) bool) (int, int) {
 		pushed := sawLookup || sawGroup
 		if !sbeCompatibleStage(spec) {
 			return end, i
+		}
+		if g, _ := spec.Get("$group"); idGroupsClassic && g != nil {
+			if d, ok := g.(*types.Document); ok && groupsByIDKeepingOne(d) {
+				return end, i
+			}
 		}
 		switch spec.Command() {
 		case "$match":
@@ -238,9 +245,6 @@ func sbeCompatibleStage(spec *types.Document) bool {
 		d, ok := v.(*types.Document)
 		if !ok {
 			return true
-		}
-		if groupsByIDKeepingOne(d) {
-			return false
 		}
 		for _, field := range d.Keys() {
 			val := must.NotFail(d.Get(field))
@@ -419,8 +423,14 @@ func sbeProjectPushable(spec *types.Document, afterSort bool) bool {
 // MarkSBELookups has each equality $lookup that mongod runs in SBE apply
 // SBE's limit on one document's matches.
 func MarkSBELookups(pipeline []aggregations.Stage, specs []*types.Document, isView func(string) bool) {
-	_, pushable := sbePrefix(specs, isView)
-	for i := 0; i < pushable && i < len(pipeline); i++ {
+	_, pushable := sbePrefix(specs, isView, true)
+	MarkSBELookupsBefore(pipeline, pushable)
+}
+
+// MarkSBELookupsBefore has each equality $lookup among the first n stages of
+// pipeline apply SBE's limit on one document's matches.
+func MarkSBELookupsBefore(pipeline []aggregations.Stage, n int) {
+	for i := 0; i < n && i < len(pipeline); i++ {
 		if l, ok := pipeline[i].(*lookup); ok {
 			l.sbe = true
 		}
