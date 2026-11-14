@@ -108,6 +108,9 @@ type FilterContext struct {
 	exprs        map[*types.Document]operators.Operator
 	// elementDepth counts the array elements being filtered as documents.
 	elementDepth int
+	// indexedArrays are the arrays the current path reaches through a
+	// trailing array index, which the bitwise operators test as a whole.
+	indexedArrays []*types.Array
 }
 
 // NewFilterContext returns a context for filtering under cmp with a plan of
@@ -467,6 +470,13 @@ func filterDocumentPair(doc *types.Document, filterKey string, filterValue any, 
 		if res, ok := positionalDocumentEquality(doc, filterKey, vals, filterValue, fc.cmp); ok {
 			return res, nil
 		}
+		if hasBitwiseOperator(filterValue) {
+			if indexed := indexedArrays(doc, filterKey); indexed != nil {
+				outer := fc.indexedArrays
+				fc.indexedArrays = indexed
+				defer func() { fc.indexedArrays = outer }()
+			}
+		}
 		if filterSuffix == filterKey {
 			// A top-level key has one branch, which reads the same value from
 			// doc as from a {filterKey: value} copy.
@@ -614,6 +624,57 @@ func positionalDocumentEquality(doc *types.Document, filterKey string, vals []an
 		}
 	}
 	return negate, true
+}
+
+// hasBitwiseOperator reports whether a field condition applies a bitwise
+// operator, directly or under $not.
+func hasBitwiseOperator(expr *types.Document) bool {
+	for _, op := range expr.Keys() {
+		switch op {
+		case "$bitsAllSet", "$bitsAnySet", "$bitsAllClear", "$bitsAnyClear":
+			return true
+		case "$not":
+			if inner, ok := must.NotFail(expr.Get(op)).(*types.Document); ok && hasBitwiseOperator(inner) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// indexedArrays returns the arrays a path ending in an array index reaches
+// by indexing an array, which MongoDB does not expand, or nil.
+func indexedArrays(doc *types.Document, filterKey string) []*types.Array {
+	dot := strings.LastIndexByte(filterKey, '.')
+	if dot < 0 {
+		return nil
+	}
+	index, err := strconv.Atoi(filterKey[dot+1:])
+	if err != nil || index < 0 {
+		return nil
+	}
+	path, err := types.NewPathFromString(filterKey)
+	if err != nil {
+		return nil
+	}
+	parents, err := commonpath.FindValues(doc, path.TrimSuffix(), &commonpath.FindValuesOpts{
+		FindArrayIndex:     true,
+		FindArrayDocuments: true,
+	})
+	if err != nil {
+		return nil
+	}
+	var indexed []*types.Array
+	for _, parent := range parents {
+		arr, ok := parent.(*types.Array)
+		if !ok || index >= arr.Len() {
+			continue
+		}
+		if elem, ok := must.NotFail(arr.Get(index)).(*types.Array); ok {
+			indexed = append(indexed, elem)
+		}
+	}
+	return indexed
 }
 
 // filterFieldExprBranches evaluates {field: {expr}} when a dotted path reaches
@@ -1361,28 +1422,28 @@ func filterFieldOperators(doc *types.Document, filterKey, filterSuffix string, e
 
 		case "$bitsAllClear":
 			// {field: {$bitsAllClear: value}}
-			res, err := filterFieldExprBitsOrElements(filterFieldExprBitsAllClear, fieldValue, exprValue)
+			res, err := fc.bitsOrElements(filterFieldExprBitsAllClear, fieldValue, exprValue)
 			if !res || err != nil {
 				return false, err
 			}
 
 		case "$bitsAllSet":
 			// {field: {$bitsAllSet: value}}
-			res, err := filterFieldExprBitsOrElements(filterFieldExprBitsAllSet, fieldValue, exprValue)
+			res, err := fc.bitsOrElements(filterFieldExprBitsAllSet, fieldValue, exprValue)
 			if !res || err != nil {
 				return false, err
 			}
 
 		case "$bitsAnyClear":
 			// {field: {$bitsAnyClear: value}}
-			res, err := filterFieldExprBitsOrElements(filterFieldExprBitsAnyClear, fieldValue, exprValue)
+			res, err := fc.bitsOrElements(filterFieldExprBitsAnyClear, fieldValue, exprValue)
 			if !res || err != nil {
 				return false, err
 			}
 
 		case "$bitsAnySet":
 			// {field: {$bitsAnySet: value}}
-			res, err := filterFieldExprBitsOrElements(filterFieldExprBitsAnySet, fieldValue, exprValue)
+			res, err := fc.bitsOrElements(filterFieldExprBitsAnySet, fieldValue, exprValue)
 			if !res || err != nil {
 				return false, err
 			}
@@ -1825,11 +1886,12 @@ func filterFieldExprBitsAllClear(fieldValue, maskValue any) (bool, error) {
 	}
 }
 
-// filterFieldExprBitsOrElements applies a bitwise operator to a value, or to
-// each element of an array value without descending into nested arrays.
-func filterFieldExprBitsOrElements(match func(fieldValue, maskValue any) (bool, error), fieldValue, maskValue any) (bool, error) {
+// bitsOrElements applies a bitwise operator to a value, or to each element
+// of an array value without descending into nested arrays. An array reached
+// through a trailing array index is tested whole, so it never matches.
+func (fc *FilterContext) bitsOrElements(match func(fieldValue, maskValue any) (bool, error), fieldValue, maskValue any) (bool, error) {
 	arr, ok := fieldValue.(*types.Array)
-	if !ok {
+	if !ok || slices.Contains(fc.indexedArrays, arr) {
 		return match(fieldValue, maskValue)
 	}
 	if _, err := match(nil, maskValue); err != nil {
