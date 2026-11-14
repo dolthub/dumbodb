@@ -181,3 +181,24 @@ func arrayStringKeys(v any, cmp *collation.Comparator) any {
 	}
 	return v
 }
+
+// rangeMatches reports whether a range operator's comparison of fieldValue
+// with operand under order gives want or also. An array operand also
+// matches an array field holding an array element that compares so.
+func (fc *FilterContext) rangeMatches(fieldValue, operand any, order types.SortType, want, also types.CompareResult) bool {
+	if r := collCompareOrderOp(fieldValue, operand, order, fc.cmp); r == want || r == also {
+		return true
+	}
+	fieldArr, isArray := fieldValue.(*types.Array)
+	if _, operandIsArray := operand.(*types.Array); !isArray || !operandIsArray {
+		return false
+	}
+	for i := range fieldArr.Len() {
+		if elem, ok := must.NotFail(fieldArr.Get(i)).(*types.Array); ok {
+			if r := collCompare(elem, operand, fc.cmp); r == want || r == also {
+				return true
+			}
+		}
+	}
+	return false
+}
