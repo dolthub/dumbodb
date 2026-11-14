@@ -1079,8 +1079,7 @@ func filterFieldOperators(doc *types.Document, filterKey, filterSuffix string, e
 			// and results in Less. Other values "foo" and nil which are
 			// not number type are not considered for $gt comparison.
 
-			result := collCompareOrderOp(fieldValue, exprValue, types.Descending, fc.cmp)
-			if result != types.Greater {
+			if !fc.rangeMatches(fieldValue, exprValue, types.Descending, types.Greater, types.Greater) {
 				return false, nil
 			}
 
@@ -1103,8 +1102,7 @@ func filterFieldOperators(doc *types.Document, filterKey, filterSuffix string, e
 			// Above compares the maximum number of array 41.5 to the filter 42,
 			// and results in Less. Other values "foo" and nil which are
 			// not number type are not considered for $gte comparison.
-			result := collCompareOrderOp(fieldValue, exprValue, types.Descending, fc.cmp)
-			if result != types.Equal && result != types.Greater {
+			if !fc.rangeMatches(fieldValue, exprValue, types.Descending, types.Greater, types.Equal) {
 				return false, nil
 			}
 
@@ -1128,8 +1126,7 @@ func filterFieldOperators(doc *types.Document, filterKey, filterSuffix string, e
 			// and results in Less. Other values "foo" and nil which are
 			// not number type are not considered for $lt comparison.
 
-			result := collCompareOrderOp(fieldValue, exprValue, types.Ascending, fc.cmp)
-			if result != types.Less {
+			if !fc.rangeMatches(fieldValue, exprValue, types.Ascending, types.Less, types.Less) {
 				return false, nil
 			}
 
@@ -1153,8 +1150,7 @@ func filterFieldOperators(doc *types.Document, filterKey, filterSuffix string, e
 			// and results in Less. Other values "foo" and nil which are
 			// not number type are not considered for $lt comparison.
 
-			result := collCompareOrderOp(fieldValue, exprValue, types.Ascending, fc.cmp)
-			if result != types.Equal && result != types.Less {
+			if !fc.rangeMatches(fieldValue, exprValue, types.Ascending, types.Less, types.Equal) {
 				return false, nil
 			}
 
