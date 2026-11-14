@@ -1288,28 +1288,28 @@ func filterFieldOperators(doc *types.Document, filterKey, filterSuffix string, e
 
 		case "$bitsAllClear":
 			// {field: {$bitsAllClear: value}}
-			res, err := filterFieldExprBitsAllClear(fieldValue, exprValue)
+			res, err := filterFieldExprBitsOrElements(filterFieldExprBitsAllClear, fieldValue, exprValue)
 			if !res || err != nil {
 				return false, err
 			}
 
 		case "$bitsAllSet":
 			// {field: {$bitsAllSet: value}}
-			res, err := filterFieldExprBitsAllSet(fieldValue, exprValue)
+			res, err := filterFieldExprBitsOrElements(filterFieldExprBitsAllSet, fieldValue, exprValue)
 			if !res || err != nil {
 				return false, err
 			}
 
 		case "$bitsAnyClear":
 			// {field: {$bitsAnyClear: value}}
-			res, err := filterFieldExprBitsAnyClear(fieldValue, exprValue)
+			res, err := filterFieldExprBitsOrElements(filterFieldExprBitsAnyClear, fieldValue, exprValue)
 			if !res || err != nil {
 				return false, err
 			}
 
 		case "$bitsAnySet":
 			// {field: {$bitsAnySet: value}}
-			res, err := filterFieldExprBitsAnySet(fieldValue, exprValue)
+			res, err := filterFieldExprBitsOrElements(filterFieldExprBitsAnySet, fieldValue, exprValue)
 			if !res || err != nil {
 				return false, err
 			}
@@ -1750,6 +1750,29 @@ func filterFieldExprBitsAllClear(fieldValue, maskValue any) (bool, error) {
 	default:
 		return false, nil
 	}
+}
+
+// filterFieldExprBitsOrElements applies a bitwise operator to a value, or to
+// each element of an array value without descending into nested arrays.
+func filterFieldExprBitsOrElements(match func(fieldValue, maskValue any) (bool, error), fieldValue, maskValue any) (bool, error) {
+	arr, ok := fieldValue.(*types.Array)
+	if !ok {
+		return match(fieldValue, maskValue)
+	}
+	if _, err := match(nil, maskValue); err != nil {
+		return false, err
+	}
+	for i := range arr.Len() {
+		elem := must.NotFail(arr.Get(i))
+		if _, nested := elem.(*types.Array); nested {
+			continue
+		}
+		res, err := match(elem, maskValue)
+		if res || err != nil {
+			return res, err
+		}
+	}
+	return false, nil
 }
 
 // filterFieldExprBitsAllSet handles {field: {$bitsAllSet: value}} filter.
@@ -2597,6 +2620,10 @@ func elemMatchArrayElement(elem *types.Array, filterKey, filterSuffix string, ex
 			}
 		case "$regex":
 			ok = false
+		case "$bitsAllSet", "$bitsAnySet", "$bitsAllClear", "$bitsAnyClear":
+			if _, err := getBinaryMaskParam(op, v); err != nil {
+				return false, err
+			}
 		case "$not":
 			if inner, isDoc := v.(*types.Document); isDoc {
 				matched, err := elemMatchArrayElement(elem, filterKey, filterSuffix, inner, fc)
