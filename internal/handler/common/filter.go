@@ -2576,16 +2576,11 @@ func filterFieldExprElemMatch(doc *types.Document, filterKey, filterSuffix strin
 	isPureOperator := true // all keys start with "$"
 	hasLogical := false    // contains $and, $or, or $nor
 
+	if err := checkElemMatchTopLevelOnly(expr); err != nil {
+		return false, err
+	}
 	for _, key := range expr.Keys() {
-		if slices.Contains([]string{"$text", "$where", "$expr"}, key) {
-			return false, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrBadValue,
-				fmt.Sprintf("%s can only be applied to the top-level document", key),
-				"$elemMatch",
-			)
-		}
-
-		if slices.Contains([]string{"$and", "$or", "$nor"}, key) {
+		if slices.Contains([]string{"$and", "$or", "$nor", "$alwaysTrue", "$alwaysFalse"}, key) {
 			hasLogical = true
 		}
 
@@ -2632,9 +2627,15 @@ func filterFieldExprElemMatch(doc *types.Document, filterKey, filterSuffix strin
 			}
 		} else {
 			// Logical operators ($and/$or/$nor) or field conditions: the element must be
-			// a document and satisfy the expression as a document filter.
-			elemDoc, ok := elem.(*types.Document)
-			if !ok {
+			// a document, or an array read as one keyed by index, and satisfy the
+			// expression as a document filter.
+			var elemDoc *types.Document
+			switch elem := elem.(type) {
+			case *types.Document:
+				elemDoc = elem
+			case *types.Array:
+				elemDoc = arrayAsDocument(elem)
+			default:
 				continue
 			}
 			matches, err = filterElementDocument(elemDoc, expr, fc)
@@ -2655,6 +2656,40 @@ func filterFieldExprElemMatch(doc *types.Document, filterKey, filterSuffix strin
 // filterElementDocument filters an array element as a document. Its _id is
 // an ordinary field, so the clustered top-level _id rules in filterFieldExpr
 // do not apply.
+// checkElemMatchTopLevelOnly returns mongod's error for $text, $where or
+// $expr in an $elemMatch query, directly or in its logical operators.
+func checkElemMatchTopLevelOnly(expr *types.Document) error {
+	for _, key := range expr.Keys() {
+		switch key {
+		case "$text", "$where", "$expr":
+			return handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrBadValue,
+				fmt.Sprintf("%s can only be applied to the top-level document", key),
+				"$elemMatch",
+			)
+		case "$and", "$or", "$nor":
+			clauses, _ := must.NotFail(expr.Get(key)).(*types.Array)
+			for i := range clauses.Len() {
+				if clause, ok := must.NotFail(clauses.Get(i)).(*types.Document); ok {
+					if err := checkElemMatchTopLevelOnly(clause); err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// arrayAsDocument returns arr as a document whose fields are its indexes.
+func arrayAsDocument(arr *types.Array) *types.Document {
+	doc := types.MakeDocument(arr.Len())
+	for i := range arr.Len() {
+		doc.Set(strconv.Itoa(i), must.NotFail(arr.Get(i)))
+	}
+	return doc
+}
+
 func filterElementDocument(elem, filter *types.Document, fc *FilterContext) (bool, error) {
 	fc.elementDepth++
 	defer func() { fc.elementDepth-- }()
