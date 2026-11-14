@@ -1503,16 +1503,16 @@ func collectWindowValues(expression any, window []*types.Document) ([]any, error
 
 // minWindowValue returns the minimum value; returns null for empty.
 func minWindowValue(values []any, cmp *collation.Comparator) any {
-	var result, resultKey any
+	var result *collation.Keyed
 
 	for _, v := range values {
 		if _, isNull := v.(types.NullType); isNull {
 			continue
 		}
 
-		key := cmp.KeyValue(v)
-		if result == nil || types.CompareOrder(key, resultKey, types.Ascending) == types.Less {
-			result, resultKey = v, key
+		k := &collation.Keyed{V: v}
+		if result == nil || collation.CompareKeyed(cmp, k, result, compareAscending) == types.Less {
+			result = k
 		}
 	}
 
@@ -1520,21 +1520,21 @@ func minWindowValue(values []any, cmp *collation.Comparator) any {
 		return types.Null
 	}
 
-	return result
+	return result.V
 }
 
 // maxWindowValue returns the maximum value; returns null for empty.
 func maxWindowValue(values []any, cmp *collation.Comparator) any {
-	var result, resultKey any
+	var result *collation.Keyed
 
 	for _, v := range values {
 		if _, isNull := v.(types.NullType); isNull {
 			continue
 		}
 
-		key := cmp.KeyValue(v)
-		if result == nil || types.CompareOrder(key, resultKey, types.Ascending) == types.Greater {
-			result, resultKey = v, key
+		k := &collation.Keyed{V: v}
+		if result == nil || collation.CompareKeyed(cmp, k, result, compareAscending) == types.Greater {
+			result = k
 		}
 	}
 
@@ -1542,7 +1542,7 @@ func maxWindowValue(values []any, cmp *collation.Comparator) any {
 		return types.Null
 	}
 
-	return result
+	return result.V
 }
 
 // stdDevWindowValues computes population (sample=false) or sample (sample=true) standard deviation.
@@ -2053,4 +2053,8 @@ func windowMemoryError(op string) error {
 	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrExceededMemoryLimit,
 		fmt.Sprintf("%s used too much memory and cannot spill to disk. Memory limit: %d bytes", op, windowAccumulatorMemoryLimit),
 		"$setWindowFields (stage)")
+}
+
+func compareAscending(a, b any) types.CompareResult {
+	return types.CompareOrder(a, b, types.Ascending)
 }

@@ -72,20 +72,20 @@ func (op *extremeOp) Process(doc *types.Document) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	var best, bestKey any
+	var best *collation.Keyed
 	for _, v := range values {
 		if isNullish(v) {
 			continue
 		}
-		key := op.cmp.KeyValue(v)
-		if best == nil || types.CompareOrder(key, bestKey, types.Ascending) == op.want {
-			best, bestKey = v, key
+		k := &collation.Keyed{V: v}
+		if best == nil || collation.CompareKeyed(op.cmp, k, best, compareAscending) == op.want {
+			best = k
 		}
 	}
 	if best == nil {
 		return types.Null, nil
 	}
-	return best, nil
+	return best.V, nil
 }
 
 // stdDevOp represents { $stdDevPop: <operands> } and { $stdDevSamp: <operands> }.

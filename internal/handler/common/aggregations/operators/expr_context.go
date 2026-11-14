@@ -107,5 +107,9 @@ func compareCollated(cmp *collation.Comparator, a, b any) types.CompareResult {
 	if cmp == nil {
 		return types.CompareForAggregation(a, b)
 	}
-	return types.CompareForAggregation(cmp.KeyValue(a), cmp.KeyValue(b))
+	return collation.CompareKeyed(cmp, &collation.Keyed{V: a}, &collation.Keyed{V: b}, types.CompareForAggregation)
+}
+
+func compareAscending(a, b any) types.CompareResult {
+	return types.CompareOrder(a, b, types.Ascending)
 }
