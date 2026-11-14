@@ -725,3 +725,45 @@ func sbeEquivalent(code handlererrors.ErrorCode, op, msg string) (handlererrors.
 var (
 	_ aggregations.Stage = (*sbeStage)(nil)
 )
+
+// ViewStagesInClassic reports whether mongod runs the $group, $bucket,
+// $sortByCount, $count and $lookup stages of a view's pipeline in its classic
+// engine: it parses them after the pipeline run on the view, and once that
+// holds an expression SBE cannot run, outside a $match, nothing parsed later
+// goes to SBE.
+func ViewStagesInClassic(view, user []any) bool {
+	if SBEStageIndex(view) < 0 {
+		return false
+	}
+	for _, s := range user {
+		spec, _ := s.(*types.Document)
+		if spec == nil || spec.Len() != 1 {
+			continue
+		}
+		switch spec.Command() {
+		case "$set", "$addFields", "$replaceRoot", "$replaceWith":
+			if !sbeCompatibleExpression(must.NotFail(spec.Get(spec.Command()))) {
+				return true
+			}
+		case "$project", "$group", "$bucket", "$sortByCount":
+			if !sbeCompatibleStage(spec) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// SBEStageIndex returns the position of the first stage of pipeline that
+// mongod could run in SBE inside its query plan, or -1.
+func SBEStageIndex(pipeline []any) int {
+	for i, s := range pipeline {
+		if spec, _ := s.(*types.Document); spec != nil && spec.Len() == 1 {
+			switch spec.Command() {
+			case "$group", "$bucket", "$sortByCount", "$count", "$lookup":
+				return i
+			}
+		}
+	}
+	return -1
+}

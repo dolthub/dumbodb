@@ -526,6 +526,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		collectionExists := len(cList.Collections) > 0
 		isView := cInfo.IsView
 		scanned := cName
+		var viewInClassic bool
 		if isView {
 			view := cList.Collections[0]
 			baseCollection, viewStages, rawViewStages, vErr := resolveViewChain(ctx, db, view.Name, view.ViewOn, view.ViewPipeline, collCmp)
@@ -549,6 +550,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 				cInfo = *srcInfo
 			}
 			scanned = baseCollection
+			viewInClassic = stages.ViewStagesInClassic(rawViewStages, aggregationStages)
 			c, err = db.Collection(baseCollection)
 			if err != nil {
 				closer.Close()
@@ -577,10 +579,8 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		// not run in SBE.
 		var sbe sbePlan
 		if collectionExists {
-			sbe = classifySBE(ctx, db, scanned, stagesSpecs, collDoc, !isView, collectionIsView)
-			if !isView {
-				stages.MarkSBELookupsBefore(stagesDocuments, sbe.pushable)
-			}
+			sbe = classifySBE(ctx, db, scanned, stagesSpecs, collDoc, viewInClassic, collectionIsView)
+			stages.MarkSBELookupsBefore(stagesDocuments, sbe.pushable)
 			stages.WrapSBEStages(stagesDocuments, stagesSpecs, sbe.groups)
 			c = sbe.countAsDistinctScan(c, stagesDocuments)
 		}
