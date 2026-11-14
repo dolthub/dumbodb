@@ -159,7 +159,9 @@ func autoCommitRaceLost(err error) bool {
 }
 
 // commitWithWorkingSet commits pending to ws's branch and writes ws in one
-// atomic update, provided the branch's working set still hashes to prevWSHash.
+// atomic update, provided the branch's working set still hashes to prevWSHash
+// and its HEAD is still expectedHead, the commit pending was built on (zero
+// skips that check).
 // It returns the new commit's hash. A lost race fails with
 // datas.ErrOptimisticLockFailed or datas.ErrMergeNeeded.
 func commitWithWorkingSet(
@@ -168,6 +170,7 @@ func commitWithWorkingSet(
 	pending *doltdb.PendingCommit,
 	ws *doltdb.WorkingSet,
 	prevWSHash hash.Hash,
+	expectedHead hash.Hash,
 	rsc *doltdb.ReplicationStatusController,
 ) (hash.Hash, error) {
 	headRef, err := ws.Ref().ToHeadRef()
@@ -180,6 +183,7 @@ func commitWithWorkingSet(
 			HeadRef:       headRef,
 			Root:          pending.Roots.Staged,
 			CommitOptions: pending.CommitOptions,
+			ExpectedHead:  expectedHead,
 			WorkingSetRef: ws.Ref(),
 			PrevWsHash:    prevWSHash,
 		},
@@ -235,7 +239,7 @@ func (s *dbState) tryCommitBranchWS(ctx context.Context, branch, message, author
 	}
 
 	workingRoot := current.WorkingRoot()
-	headRoot, err := headRootValueForBranch(ctx, s, branch)
+	headRoot, headAddr, err := branchHead(ctx, s, branch)
 	if err != nil {
 		return false, fmt.Errorf("commitBranchWS: reading HEAD root for %q: %w", branch, err)
 	}
@@ -269,7 +273,7 @@ func (s *dbState) tryCommitBranchWS(ctx context.Context, branch, message, author
 
 	cleanWS := current.WithStagedRoot(workingRoot).ClearMerge()
 	var rsc doltdb.ReplicationStatusController
-	if _, err := commitWithWorkingSet(ctx, s.doltDB, pending, cleanWS, forkPoint, &rsc); err != nil {
+	if _, err := commitWithWorkingSet(ctx, s.doltDB, pending, cleanWS, forkPoint, headAddr, &rsc); err != nil {
 		if autoCommitRaceLost(err) {
 			return false, fmt.Errorf("%w: %q moved while auto-committing it", backends.ErrWriteRaced, branch)
 		}

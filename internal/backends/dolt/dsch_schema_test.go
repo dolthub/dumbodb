@@ -19,10 +19,12 @@ import (
 
 	"github.com/dolthub/dolt/go/gen/fb/serial"
 	"github.com/stretchr/testify/require"
+
+	idxpkg "github.com/dolthub/dumbodb/internal/index"
 )
 
 func TestCollectionTableSchema_UsesBytesAdaptiveEnc(t *testing.T) {
-	msg := buildCollectionTableSchema()
+	msg := buildCollectionTableSchema(idxpkg.MaxKeyLength)
 
 	ts, err := serial.TryGetRootAsTableSchema(msg, serial.MessagePrefixSz)
 	require.NoError(t, err)
@@ -35,6 +37,7 @@ func TestCollectionTableSchema_UsesBytesAdaptiveEnc(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, "_id", string(c0.Name()))
 	require.Equal(t, serial.EncodingBytes, c0.Encoding(), "_id encoding must be Bytes")
+	require.Equal(t, "varbinary(1024)", string(c0.SqlType()))
 
 	ok, err = ts.TryColumns(&c1, 1)
 	require.NoError(t, err)

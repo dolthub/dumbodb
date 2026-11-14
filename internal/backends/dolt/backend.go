@@ -66,6 +66,7 @@ import (
 	dolttypes "github.com/dolthub/dolt/go/store/types"
 
 	"github.com/dolthub/dumbodb/internal/backends"
+	idxpkg "github.com/dolthub/dumbodb/internal/index"
 	"github.com/dolthub/dumbodb/internal/sqlctx"
 	"github.com/dolthub/dumbodb/internal/types"
 )
@@ -1127,7 +1128,7 @@ func (b *Backend) getOrOpenDBLocked(ctx context.Context, dbName string, create b
 
 	// Write the shared DSCH chunk once; the empty secondary indexes are
 	// memoized per-NodeStore in emptySecondaryIndexesCache (see index_resolve.go).
-	schemaMsg := buildCollectionTableSchema()
+	schemaMsg := buildCollectionTableSchema(idxpkg.MaxKeyLength)
 	schemaRef, err := vs.WriteValue(ctx, dolttypes.SerialMessage(schemaMsg))
 	if err != nil {
 		_ = doltDB.Close()

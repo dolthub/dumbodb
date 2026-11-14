@@ -78,12 +78,17 @@ repeats the last key of each child, so long keys leave few children per node:
 keys of 3000 bytes give a nearly binary tree, and every lookup reads one node
 per level. At 1024 bytes the tree measured 11 levels at 2 million entries,
 gaining a level every four- to five-fold. (A single key above about 32KB would
-also panic Dolt with "impossible node".) The encoded size can exceed
-the value's size: strings carry a terminator and escape NUL bytes, collation indexes store sort keys, and hashed
-and text indexes store the values and words themselves. The README's
-Limitations section lists these cases. The column is still declared
-`varbinary(16383)`, which `dolt sql`, `dolt diff` and `dolt fsck` read without
-trouble for keys under the cap.
+also panic Dolt with "impossible node".) The encoded size can exceed the
+value's size: strings carry a terminator and escape NUL bytes, collation
+indexes store sort keys, and hashed and text indexes store the values and words
+themselves. The README's Limitations section lists these cases.
+
+The `_id` column is declared `varbinary(1024)`, the cap, so the schema chunk
+every table references changes with it. A database written under another cap,
+such as the earlier 4096 bytes, may hold keys this version's range bounds
+cannot reach, and is refused with "a storage layout this version does not
+read; recreate the database". A replicated source document with a longer key
+stops replication with a `key_too_long` failure naming its namespace.
 
 ### Prolly trees
 

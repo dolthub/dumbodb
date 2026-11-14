@@ -19,6 +19,7 @@ import (
 	"errors"
 	"log/slog"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,6 +27,7 @@ import (
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/backends/dolt"
+	"github.com/dolthub/dumbodb/internal/index"
 	"github.com/dolthub/dumbodb/internal/replication/catalog"
 	"github.com/dolthub/dumbodb/internal/replication/control"
 	"github.com/dolthub/dumbodb/internal/replication/idlookup"
@@ -965,5 +967,26 @@ func assertCollectionCount(t *testing.T, ctx context.Context, backend backends.B
 	}
 	if count != want {
 		t.Fatalf("collection count = %d, want %d", count, want)
+	}
+}
+
+func TestApplyReportsUnstorableKey(t *testing.T) {
+	ctx := context.Background()
+	backend, applier, sourceUUID := newTestApplier(t)
+	createTestCollection(t, ctx, backend, applier, sourceUUID, "orders", "items")
+
+	if err := applier.Apply(ctx, makeOplogEntry(t, 2, "i", "orders.items", sourceUUID,
+		must.NotFail(types.NewDocument("_id", strings.Repeat("x", 1000))), nil)); err != nil {
+		t.Fatal(err)
+	}
+	entry := makeOplogEntry(t, 3, "i", "orders.items", sourceUUID,
+		must.NotFail(types.NewDocument("_id", strings.Repeat("x", index.MaxKeyLength+1))), nil)
+	err := applier.Apply(ctx, entry)
+	var unstorable *UnstorableKeyError
+	if !errors.As(err, &unstorable) || unstorable.Namespace != "orders.items" || unstorable.OpTime != entry.OpTime {
+		t.Fatalf("Apply error = %v, want *UnstorableKeyError for orders.items at %v", err, entry.OpTime)
+	}
+	if !errors.Is(err, index.ErrKeyTooLong) {
+		t.Fatalf("Apply error = %v, want it to wrap index.ErrKeyTooLong", err)
 	}
 }

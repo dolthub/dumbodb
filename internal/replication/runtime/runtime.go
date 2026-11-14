@@ -177,7 +177,7 @@ func (r *Runtime) Run(ctx context.Context) {
 		if r.store.Snapshot().InitialSyncPhase != control.InitialSyncComplete {
 			r.manager.SetRuntimePhase("initial_sync")
 			if err := r.runInitialSync(ctx, state.SyncSource); err != nil {
-				if r.stopOnPanic(err) {
+				if r.stopOnFatal(err) {
 					return
 				}
 				if failure, terminal := terminalInitialSyncFailure(err); terminal {
@@ -201,7 +201,7 @@ func (r *Runtime) Run(ctx context.Context) {
 			if errors.Is(err, oplog.ErrSourceChanged) {
 				continue
 			}
-			if r.stopOnPanic(err) {
+			if r.stopOnFatal(err) {
 				return
 			}
 			if errors.Is(err, oplog.ErrTooStale) || errors.Is(err, oplog.ErrContinuityLost) ||
@@ -239,6 +239,10 @@ func terminalInitialSyncFailure(err error) (control.InitialSyncFailure, bool) {
 			BSONType:  unsupported.BSONType,
 			Message:   unsupported.Error(),
 		}, true
+	}
+	var unstorable *initialsync.UnstorableKeyError
+	if errors.As(err, &unstorable) {
+		return control.InitialSyncFailure{Namespace: unstorable.Namespace, Message: unstorable.Error()}, true
 	}
 	var unsupportedCatalog *catalog.UnsupportedFeatureError
 	if errors.As(err, &unsupportedCatalog) && unsupportedCatalog.Database != "" && unsupportedCatalog.Collection != "" {
@@ -516,9 +520,17 @@ func (r *Runtime) waitForSource(ctx context.Context) (topology.Snapshot, error) 
 	}
 }
 
-// stopOnPanic stops replication when err carries a panic raised while
-// fetching or applying the oplog. Retrying would hit the same entry again.
-func (r *Runtime) stopOnPanic(err error) bool {
+// stopOnFatal stops replication when err carries a panic raised while
+// fetching or applying the oplog, or an entry with a key too long to store.
+// Retrying would hit the same entry again.
+func (r *Runtime) stopOnFatal(err error) bool {
+	var unstorable *oplog.UnstorableKeyError
+	if errors.As(err, &unstorable) {
+		r.stopReplication("applying oplog entry", "key_too_long", err.Error(),
+			"MongoDB replication stopped by an oplog entry with a key DumboDB cannot store",
+			"opTime", unstorable.OpTime, "ns", unstorable.Namespace, "op", unstorable.Operation, "err", err)
+		return true
+	}
 	var applyPanic *oplog.ApplyPanicError
 	if errors.As(err, &applyPanic) {
 		r.stopReplication("applying oplog entry", "apply_panic", err.Error(),

@@ -25,21 +25,38 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-func TestProcessDropIndexOptions_KeyPatternLength(t *testing.T) {
+func TestProcessDropIndexOptions_KeyPattern(t *testing.T) {
 	existing := []backends.IndexInfo{
 		{Name: "_id_", Key: []backends.IndexKeyPair{{Field: "_id"}}},
 		{Name: "a_1_b_1", Key: []backends.IndexKeyPair{{Field: "a"}, {Field: "b"}}},
 		{Name: "x_1", Key: []backends.IndexKeyPair{{Field: "x"}}},
+		{Name: "h_hashed", Key: []backends.IndexKeyPair{{Field: "h", Hashed: true}}},
+		{Name: "s_2dsphere", Key: []backends.IndexKeyPair{{Field: "s", Geo2DSphere: true}}},
+		{Name: "p_2d", Key: []backends.IndexKeyPair{{Field: "p", Geo2D: true}}},
+		{Name: "k_1_t_text_u_text", Key: []backends.IndexKeyPair{{Field: "k"}, {Field: "t", Text: true}, {Field: "u", Text: true}}},
 	}
+	doc := func(pairs ...any) *types.Document { return must.NotFail(types.NewDocument(pairs...)) }
 
 	for name, tc := range map[string]struct {
 		pattern *types.Document
 		want    string
 	}{
-		"shorter than an index": {pattern: must.NotFail(types.NewDocument("a", int32(1)))},
-		"longer than an index":  {pattern: must.NotFail(types.NewDocument("x", int32(1), "y", int32(1)))},
-		"exact compound":        {pattern: must.NotFail(types.NewDocument("a", int32(1), "b", int32(1))), want: "a_1_b_1"},
-		"exact single":          {pattern: must.NotFail(types.NewDocument("x", int32(1))), want: "x_1"},
+		"shorter than an index":  {pattern: doc("a", int32(1))},
+		"longer than an index":   {pattern: doc("x", int32(1), "y", int32(1))},
+		"exact compound":         {pattern: doc("a", int32(1), "b", int32(1)), want: "a_1_b_1"},
+		"exact single":           {pattern: doc("x", int32(1)), want: "x_1"},
+		"descending":             {pattern: doc("x", int32(-1))},
+		"hashed by ascending":    {pattern: doc("h", int32(1))},
+		"ascending by hashed":    {pattern: doc("x", "hashed")},
+		"hashed":                 {pattern: doc("h", "hashed"), want: "h_hashed"},
+		"2dsphere by ascending":  {pattern: doc("s", int32(1))},
+		"2dsphere by 2d":         {pattern: doc("s", "2d")},
+		"2dsphere":               {pattern: doc("s", "2dsphere"), want: "s_2dsphere"},
+		"2d by ascending":        {pattern: doc("p", int32(1))},
+		"2d":                     {pattern: doc("p", "2d"), want: "p_2d"},
+		"text by ascending":      {pattern: doc("k", int32(1), "t", int32(1), "u", int32(1))},
+		"text by its fields":     {pattern: doc("k", int32(1), "t", "text", "u", "text")},
+		"text by stored pattern": {pattern: doc("k", int32(1), "_fts", "text", "_ftsx", int32(1)), want: "k_1_t_text_u_text"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			toDrop, dropAll, err := processDropIndexOptions("dropIndexes", "db.c", tc.pattern, existing)

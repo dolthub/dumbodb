@@ -97,8 +97,10 @@ func openCollection(ctx context.Context, cs *nbs.GenerationalNBS, ns tree.NodeSt
 }
 
 // collectionSchemaHash addresses buildCollectionTableSchema's chunk, which
-// every table this version writes references.
-var collectionSchemaHash = hash.Of(buildCollectionTableSchema())
+// every table this version writes references. The _id column's declared
+// length is the key cap, so changing the cap changes the layout and an older
+// version's tables, whose keys may exceed it, are refused.
+var collectionSchemaHash = hash.Of(buildCollectionTableSchema(idxpkg.MaxKeyLength))
 
 // storedHash reads field, a hash stored in a chunk. A corrupt or foreign
 // chunk may hold one of another length, on which hash.New panics.
@@ -125,12 +127,12 @@ func checkTableLayout(tbl *serial.Table) error {
 // buildCollectionTableSchema builds the DSCH flatbuffer for every
 // dumbodb collection: _id varbinary PK (the KeyString of the _id) + doc longblob (BytesAdaptive,
 // spills out-of-band above the tuple-builder threshold).
-func buildCollectionTableSchema() serial.Message {
+func buildCollectionTableSchema(maxKeyLength int) serial.Message {
 	b := fb.NewBuilder(512)
 
 	// Pre-build all strings before starting any object.
 	idName := b.CreateString("_id")
-	idSqlType := b.CreateString("varbinary(16383)")
+	idSqlType := b.CreateString(fmt.Sprintf("varbinary(%d)", maxKeyLength))
 	docName := b.CreateString("doc")
 	docSqlType := b.CreateString("longblob")
 
@@ -562,15 +564,25 @@ func (state *dbState) rollbackDirtyBranchesForSession(sqlCtx *sql.Context, sess 
 // If the branch has no commits, an empty RootValue is returned.
 // The caller must hold state.mu (read or write lock).
 func headRootValueForBranch(ctx context.Context, state *dbState, branch string) (doltdb.RootValue, error) {
+	rv, _, err := branchHead(ctx, state, branch)
+	return rv, err
+}
+
+// branchHead returns branch's HEAD root and commit address, or an empty root
+// and a zero address for a branch with no HEAD.
+func branchHead(ctx context.Context, state *dbState, branch string) (doltdb.RootValue, hash.Hash, error) {
 	branchDS, err := state.datasDB.GetDataset(ctx, "refs/heads/"+branch)
 	if err != nil || !branchDS.HasHead() {
-		return doltdb.EmptyRootValue(ctx, state.doltDB.ValueReadWriter(), state.doltDB.NodeStore())
+		rv, err := doltdb.EmptyRootValue(ctx, state.doltDB.ValueReadWriter(), state.doltDB.NodeStore())
+		return rv, hash.Hash{}, err
 	}
+	headAddr, _ := branchDS.MaybeHeadAddr()
 	headValue, _, err := branchDS.MaybeHeadValue()
 	if err != nil {
-		return nil, fmt.Errorf("reading HEAD value for branch %q: %w", branch, err)
+		return nil, hash.Hash{}, fmt.Errorf("reading HEAD value for branch %q: %w", branch, err)
 	}
-	return doltdb.NewRootValue(ctx, state.doltDB.ValueReadWriter(), state.doltDB.NodeStore(), headValue)
+	rv, err := doltdb.NewRootValue(ctx, state.doltDB.ValueReadWriter(), state.doltDB.NodeStore(), headValue)
+	return rv, headAddr, err
 }
 
 // headRootAMForBranch returns the collections AddressMap from a branch HEAD's rootValue.
