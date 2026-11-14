@@ -229,7 +229,11 @@ func boundaryTypeName(v any) string {
 //
 // Once the branches of mongod's $switch outgrow a BSON object, which mongod
 // refuses after parsing the stage, only the lowest and highest boundaries
-// are kept, for the default's check.
+// are kept, for the default's check, and no expression but the highest
+// boundary is folded any more, so memory and time stay bounded: a later
+// boundary given as an expression is only checked to be constant, and the
+// size and order checks stop there. Scalar boundaries are their own folded
+// values and are still checked and charged.
 func parseBucketBoundaries(v any, size *bucketSwitchSize) ([]any, error) {
 	boundariesArr, ok := v.(*types.Array)
 	if !ok {
@@ -242,16 +246,29 @@ func parseBucketBoundaries(v any, size *bucketSwitchSize) ([]any, error) {
 	boundaries := make([]any, 0, n)
 	var first, prev any
 	var orderErr error
+	// unfolded is the position of the first boundary left unfolded, or -1.
+	unfolded := -1
 	for i := range n {
 		elem := must.NotFail(boundariesArr.Get(i))
-		v, constant, err := bucketConstant(elem)
-		if err != nil {
-			return nil, err
+		var v any
+		constant := elem == "$$REMOVE" || operators.IsConstantExpression(elem)
+		skip := unfolded >= 0 || size.exceeded() && !isScalarLiteral(elem)
+		if constant && !skip {
+			var err error
+			if v, constant, err = bucketConstant(elem); err != nil {
+				return nil, err
+			}
 		}
 		if !constant {
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketBoundaryNotConstant,
 				"The $bucket 'boundaries' field must be an array of constant values, but found value: "+
 					operators.FormatExpression(elem)+".", "$bucket (stage)")
+		}
+		if skip {
+			if unfolded < 0 {
+				unfolded = i
+			}
+			continue
 		}
 		// mongod checks the order once every boundary has folded.
 		if i > 0 && orderErr == nil {
@@ -278,13 +295,35 @@ func parseBucketBoundaries(v any, size *bucketSwitchSize) ([]any, error) {
 			"$bucket (stage)",
 		)
 	}
+	last := prev
+	if unfolded >= 0 {
+		var err error
+		if last, _, err = bucketConstant(must.NotFail(boundariesArr.Get(n - 1))); err != nil {
+			return nil, err
+		}
+		if unfolded == n-1 && orderErr == nil {
+			orderErr = checkBucketBoundaryOrder(n-1, prev, last)
+		}
+	}
 	if orderErr != nil {
 		return nil, orderErr
 	}
 	if !size.exceeded() {
 		return boundaries, nil
 	}
-	return []any{first, prev}, nil
+	return []any{first, last}, nil
+}
+
+// isScalarLiteral reports whether v, as an expression, is a literal scalar,
+// which folds to itself without building anything.
+func isScalarLiteral(v any) bool {
+	switch v := v.(type) {
+	case *types.Document, *types.Array:
+		return false
+	case string:
+		return !strings.HasPrefix(v, "$")
+	}
+	return true
 }
 
 // checkBucketBoundaryOrder returns mongod's error for boundaries i-1 and i
