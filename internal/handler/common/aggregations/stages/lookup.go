@@ -97,6 +97,13 @@ type cachingFetcher struct {
 	indexed   map[string]bool
 	eqIndexes map[string]*equalityIndex
 	views     map[string]*types.Array
+	// viewCollations holds CheckViewCollation's answers.
+	viewCollations map[viewCollationKey]error
+}
+
+type viewCollationKey struct {
+	name string
+	cmp  *collation.Comparator
 }
 
 // ViewResolver is implemented by fetchers that can report the full pipeline
@@ -115,10 +122,19 @@ type ViewCollationChecker interface {
 // CheckViewCollation implements ViewCollationChecker when the wrapped fetcher
 // does.
 func (c *cachingFetcher) CheckViewCollation(ctx context.Context, name string, cmp *collation.Comparator) error {
-	if vc, ok := c.CollectionFetcher.(ViewCollationChecker); ok {
-		return vc.CheckViewCollation(ctx, name, cmp)
+	key := viewCollationKey{name: name, cmp: cmp}
+	if err, ok := c.viewCollations[key]; ok {
+		return err
 	}
-	return nil
+	var err error
+	if vc, ok := c.CollectionFetcher.(ViewCollationChecker); ok {
+		err = vc.CheckViewCollation(ctx, name, cmp)
+	}
+	if c.viewCollations == nil {
+		c.viewCollations = map[viewCollationKey]error{}
+	}
+	c.viewCollations[key] = err
+	return err
 }
 
 // checkViewCollation returns mongod's error when a stage under cmp reads a
