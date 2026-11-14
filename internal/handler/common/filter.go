@@ -2416,7 +2416,7 @@ func filterFieldExprElemMatch(doc *types.Document, filterKey, filterSuffix strin
 	hasLogical := false    // contains $and, $or, or $nor
 
 	for _, key := range expr.Keys() {
-		if slices.Contains([]string{"$text", "$where"}, key) {
+		if slices.Contains([]string{"$text", "$where", "$expr"}, key) {
 			return false, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrBadValue,
 				fmt.Sprintf("%s can only be applied to the top-level document", key),
