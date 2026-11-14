@@ -137,6 +137,40 @@ func checkFacetDatabaseStage(stage *types.Document, name, reportedName string, c
 	return nil
 }
 
+// parseStageOfflineFunc is parseStageOffline, set in init to break the
+// initialization cycle through Stages and newFacet.
+var parseStageOfflineFunc func(*types.Document) error
+
+func init() {
+	parseStageOfflineFunc = parseStageOffline
+}
+
+// parseFacetStagesBefore parses the stages of the $facet branches ahead of
+// stage i of branch field, returning the first parse error.
+func parseFacetStagesBefore(spec *types.Document, field string, i int) error {
+	for _, k := range spec.Keys() {
+		pipeline, ok := must.NotFail(spec.Get(k)).(*types.Array)
+		if !ok {
+			return nil
+		}
+		n := pipeline.Len()
+		if k == field {
+			n = i
+		}
+		for j := range n {
+			if sub, ok := must.NotFail(pipeline.Get(j)).(*types.Document); ok {
+				if err := parseStageOfflineFunc(sub); err != nil {
+					return err
+				}
+			}
+		}
+		if k == field {
+			return nil
+		}
+	}
+	return nil
+}
+
 // parseStageOffline parses a stage without reading any collection, for its
 // parse errors only.
 func parseStageOffline(stage *types.Document) error {
@@ -226,6 +260,10 @@ func newFacet(stage *types.Document) (aggregations.Stage, error) {
 			case "$queryStats":
 				// Its specification and namespace are checked before its
 				// place; {aggregate: 1} on admin checks its place itself.
+				// mongod parses the stages ahead of it first.
+				if err := parseFacetStagesBefore(spec, field, i); err != nil {
+					return nil, err
+				}
 				_, err := newQueryStats(stage)
 				return nil, err
 			case "$changeStreamSplitLargeEvent":
