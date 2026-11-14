@@ -799,7 +799,17 @@ func checkDatabasePipelineStages(pipeline *types.Array, dbName string) error {
 					return err
 				}
 			}
-		case "$documents", "$currentOp", "$listLocalSessions":
+		case "$currentOp":
+			if err := stages.CheckCurrentOpSpec(stage); err != nil {
+				return err
+			}
+			if dbName != "admin" {
+				return currentOpNamespaceError()
+			}
+			if err := stages.CheckCurrentOpOptions(stage); err != nil {
+				return err
+			}
+		case "$documents", "$listLocalSessions":
 		default:
 			if stages.FailsParsing(stage) {
 				_, err := stages.NewStage(stage.DeepCopy())
@@ -883,15 +893,6 @@ func (h *Handler) aggregateDatabase(connCtx context.Context, document *types.Doc
 	}
 	if err = checkDatabaseStagePositions(pipeline); err != nil {
 		return nil, err
-	}
-
-	if stageName == "$currentOp" {
-		if err := stages.CheckCurrentOpSpec(firstStage); err != nil {
-			return nil, err
-		}
-		if dbName != "admin" {
-			return nil, currentOpNamespaceError()
-		}
 	}
 
 	switch stageName {
