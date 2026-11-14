@@ -34,6 +34,7 @@ func TestOptimizeSkipsAndLimits(t *testing.T) {
 	sort := must.NotFail(types.NewDocument("$sort", must.NotFail(types.NewDocument("a", int32(1)))))
 	lookup := must.NotFail(types.NewDocument("$lookup", types.MakeDocument(0)))
 	group := must.NotFail(types.NewDocument("$group", types.MakeDocument(0)))
+	sample := must.NotFail(types.NewDocument("$sample", must.NotFail(types.NewDocument("size", int32(5)))))
 	skip := func(n any) *types.Document { return must.NotFail(types.NewDocument("$skip", n)) }
 	limit := func(n any) *types.Document { return must.NotFail(types.NewDocument("$limit", n)) }
 
@@ -84,6 +85,14 @@ func TestOptimizeSkipsAndLimits(t *testing.T) {
 		"SortKeepsAdjacentLimit": {
 			pipeline: []any{group, sort, limit(int32(5)), set},
 			expected: "$group $sort $limit:5 $set",
+		},
+		"SampleBeforeLookupAndTransforms": {
+			pipeline: []any{group, lookup, set, sample, skip(int32(2))},
+			expected: "$group $sample $lookup $skip:2 $set",
+		},
+		"SampleAfterSkip": {
+			pipeline: []any{group, set, skip(int32(1)), sample},
+			expected: "$group $skip:1 $sample $set",
 		},
 		"SortLimitOverflow": {
 			pipeline: []any{group, sort, set, skip(int64(1 << 62)), skip(int64(1 << 62)), limit(int64(1 << 62))},
