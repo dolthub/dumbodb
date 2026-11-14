@@ -21,7 +21,6 @@ import (
 	"math"
 	stdsort "sort"
 	"strconv"
-	"strings"
 
 	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
@@ -149,7 +148,7 @@ func NewGraphLookupStage(stage *types.Document, fetcher CollectionFetcher) (aggr
 				return nil, fail(handlererrors.ErrGraphLookupNotString, fmt.Sprintf(
 					"expected string as argument for %s, found: %s", key, handlerparams.AliasFromType(v)))
 			}
-			if err = checkGraphLookupFieldPath(str); err != nil {
+			if err = checkFieldPathArgument(str, "$graphLookup"); err != nil {
 				return nil, err
 			}
 			switch key {
@@ -235,32 +234,6 @@ func graphLookupMaxDepth(v any) (int64, error) {
 		return fail(handlererrors.ErrGraphLookupMaxDepthNotIntegral, fmt.Sprintf("maxDepth could not be represented as a long long: %d", asLong))
 	}
 	return int64(f), nil
-}
-
-// checkGraphLookupFieldPath returns mongod's FieldPath error for a
-// $graphLookup path argument.
-func checkGraphLookupFieldPath(path string) error {
-	fail := func(code handlererrors.ErrorCode, msg string) error {
-		return handlererrors.NewCommandErrorMsgWithArgument(code, msg, "$graphLookup (stage)")
-	}
-	const hint = "Consider using $getField or $setField for a field path with '.' or '$'. :: caused by :: "
-	switch {
-	case path == "":
-		return fail(handlererrors.ErrEmptyFieldPath, "FieldPath cannot be constructed with empty string")
-	case strings.HasSuffix(path, "."):
-		return fail(handlererrors.ErrInvalidFieldPath, "FieldPath must not end with a '.'.")
-	}
-	for _, name := range strings.Split(path, ".") {
-		switch {
-		case name == "":
-			return fail(handlererrors.ErrPathContainsEmptyElement, hint+"FieldPath field names may not be empty strings.")
-		case strings.HasPrefix(name, "$"):
-			return fail(handlererrors.ErrFieldPathInvalidName, hint+"FieldPath field names may not start with '$', given '"+name+"'.")
-		case strings.ContainsRune(name, 0):
-			return fail(handlererrors.ErrFieldPathNulByte, hint+"FieldPath field names may not contain '\\0', given '"+name+"'.")
-		}
-	}
-	return nil
 }
 
 func (gl *graphLookup) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability

@@ -218,7 +218,7 @@ func parseMergeInto(spec *types.Document, s *merge) error {
 		)
 	}
 
-	return nil
+	return checkTargetNamespace(s.targetDB, s.targetColl, "$merge")
 }
 
 // parseMergeOn extracts the optional "on" field from the $merge spec document.
@@ -231,12 +231,8 @@ func parseMergeOn(spec *types.Document, s *merge) error {
 
 	switch v := onVal.(type) {
 	case string:
-		if v == "" {
-			return handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrBadValue,
-				"$merge 'on' field name cannot be empty",
-				"$merge (stage)",
-			)
+		if err := checkFieldPathArgument(v, "$merge"); err != nil {
+			return err
 		}
 
 		s.on = []string{v}
@@ -251,12 +247,15 @@ func parseMergeOn(spec *types.Document, s *merge) error {
 			}
 
 			fieldStr, ok := elem.(string)
-			if !ok || fieldStr == "" {
+			if !ok {
 				return handlererrors.NewCommandErrorMsgWithArgument(
 					handlererrors.ErrBadValue,
 					"$merge 'on' array elements must be non-empty strings",
 					"$merge (stage)",
 				)
+			}
+			if err := checkFieldPathArgument(fieldStr, "$merge"); err != nil {
+				return err
 			}
 
 			fields = append(fields, fieldStr)
