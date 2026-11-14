@@ -1244,6 +1244,12 @@ const (
 	// ErrFilterInputNotArray indicates a $filter input that is not an array.
 	ErrFilterInputNotArray = ErrorCode(28651) // Location28651
 
+	// ErrMapInputNotArray indicates a $map input that is not an array.
+	ErrMapInputNotArray = ErrorCode(16883) // Location16883
+
+	// ErrReduceInputNotArray indicates a $reduce input that is not an array.
+	ErrReduceInputNotArray = ErrorCode(40080) // Location40080
+
 	// ErrFilterLimitNotInt32 indicates a $filter limit that is not a 32-bit integer.
 	ErrFilterLimitNotInt32 = ErrorCode(327391) // Location327391
 
