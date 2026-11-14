@@ -2127,35 +2127,27 @@ func mergeOnFilter(incoming *types.Document, on []string) *types.Document {
 	return filter
 }
 
-// This key is used to match incoming documents against existing documents in $merge.
+// buildMergeKey returns a key under which documents whose 'on' fields hold
+// equal values, such as 1, NumberLong(1) and NumberDecimal("1.0"), are the
+// same, and distinct values never collide.
 func buildMergeKey(doc *types.Document, fields []string) string {
-	if len(fields) == 1 {
-		v, err := doc.Get(fields[0])
-		if err != nil {
-			return ""
-		}
-
-		return mergeKeyValue(v)
-	}
-
-	key := ""
-
+	var b strings.Builder
 	for _, f := range fields {
-		v, err := doc.Get(f)
-		if err != nil {
-			key += "|<missing>"
-			continue
+		var v any
+		if path, err := types.NewPathFromString(f); err == nil {
+			v, _ = doc.GetByPath(path)
 		}
-
-		key += "|" + mergeKeyValue(v)
+		if v == nil {
+			b.WriteString("<missing>")
+		} else {
+			writeMergeKeyValue(&b, v)
+		}
+		b.WriteByte('|')
 	}
-
-	return key
+	return b.String()
 }
 
-// mergeKeyValue returns a key for v under which values that compare equal,
-// such as 1, NumberLong(1) and NumberDecimal("1.0"), are the same.
-func mergeKeyValue(v any) string {
+func writeMergeKeyValue(b *strings.Builder, v any) {
 	var r *big.Rat
 	switch n := v.(type) {
 	case int32:
@@ -2165,39 +2157,54 @@ func mergeKeyValue(v any) string {
 	case float64:
 		switch {
 		case math.IsNaN(n):
-			return "n:NaN"
+			b.WriteString("n:NaN")
+			return
 		case math.IsInf(n, 1):
-			return "n:Infinity"
+			b.WriteString("n:Infinity")
+			return
 		case math.IsInf(n, -1):
-			return "n:-Infinity"
+			b.WriteString("n:-Infinity")
+			return
 		}
 		r = new(big.Rat).SetFloat64(n)
 	case types.Decimal128:
 		d := aggregations.DecimalToAPD(n)
 		if d.Form != apd.Finite {
-			return "n:" + d.String()
+			b.WriteString("n:" + d.String())
+			return
 		}
 		var ok bool
 		if r, ok = new(big.Rat).SetString(d.Text('f')); !ok {
-			return fmt.Sprintf("%v", v)
+			fmt.Fprintf(b, "%#v", v)
+			return
 		}
+	case string:
+		b.WriteString("s:" + strconv.Quote(n))
+		return
 	case *types.Document:
-		key := "{"
+		b.WriteByte('{')
 		values := n.Values()
 		for i, k := range n.Keys() {
-			key += strconv.Quote(k) + ":" + mergeKeyValue(values[i]) + ","
+			b.WriteString(strconv.Quote(k))
+			b.WriteByte(':')
+			writeMergeKeyValue(b, values[i])
+			b.WriteByte(',')
 		}
-		return key + "}"
+		b.WriteByte('}')
+		return
 	case *types.Array:
-		key := "["
+		b.WriteByte('[')
 		for i := range n.Len() {
-			key += mergeKeyValue(must.NotFail(n.Get(i))) + ","
+			writeMergeKeyValue(b, must.NotFail(n.Get(i)))
+			b.WriteByte(',')
 		}
-		return key + "]"
+		b.WriteByte(']')
+		return
 	default:
-		return fmt.Sprintf("%T:%v", v, v)
+		fmt.Fprintf(b, "%T:%#v", v, v)
+		return
 	}
-	return "n:" + r.RatString()
+	b.WriteString("n:" + r.RatString())
 }
 
 // checkOutMergeFinal returns mongod's error for $out or $merge before the last
