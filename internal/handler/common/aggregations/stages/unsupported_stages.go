@@ -408,7 +408,7 @@ func CheckViewPipelineStages(pipeline *types.Array) error {
 			continue
 		}
 		name := stage.Command()
-		if IsSearchStage(name) {
+		if IsSearchStage(name) || name == "$listSearchIndexes" {
 			continue
 		}
 		if newStage, fails := parseFailingStages[name]; fails {

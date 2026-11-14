@@ -132,7 +132,7 @@ func validateViewPipeline(dbName, viewName string, pipeline *types.Array) error 
 		}
 		var err error
 		switch name := stage.Command(); {
-		case stages.IsSearchStage(name):
+		case isViewSearchStage(name):
 			err = checkSearchSpec(stage)
 		case name == "$documents", name == "$listLocalSessions",
 			name == "$listClusterCatalog", name == "$querySettings":
@@ -186,7 +186,7 @@ func validateViewPipeline(dbName, viewName string, pipeline *types.Array) error 
 		}
 		name := stage.Command()
 		err := stages.ViewNamespaceError(stage, i)
-		if err == nil && i > 0 && stages.IsSearchStage(name) {
+		if err == nil && i > 0 && isViewSearchStage(name) {
 			err = handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCollStatsIsNotFirstStage,
 				name+" is only valid as the first stage in a pipeline", name)
 		}
@@ -198,16 +198,57 @@ func validateViewPipeline(dbName, viewName string, pipeline *types.Array) error 
 	return nil
 }
 
+// isViewSearchStage reports whether name is an Atlas Search stage, which a
+// view definition holds without mongot.
+func isViewSearchStage(name string) bool {
+	return stages.IsSearchStage(name) || name == "$listSearchIndexes"
+}
+
 // checkSearchSpec returns mongod's error for an Atlas Search stage whose
-// specification is not an object.
+// specification does not parse.
 func checkSearchSpec(stage *types.Document) error {
 	name := stage.Command()
 	spec := must.NotFail(stage.Get(name))
+	if name == "$listSearchIndexes" {
+		return checkListSearchIndexesSpec(spec)
+	}
 	if _, ok := spec.(*types.Document); ok {
 		return nil
 	}
 	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFailedToParse,
 		fmt.Sprintf("%s value must be an object. Found: %s", name, handlerparams.AliasFromType(spec)), name)
+}
+
+// checkListSearchIndexesSpec returns mongod's error for a $listSearchIndexes
+// specification that does not parse.
+func checkListSearchIndexesSpec(spec any) error {
+	fail := func(code handlererrors.ErrorCode, msg string) error {
+		return handlererrors.NewCommandErrorMsgWithArgument(code, msg, "$listSearchIndexes (stage)")
+	}
+	doc, ok := spec.(*types.Document)
+	if !ok {
+		return fail(handlererrors.ErrFailedToParse,
+			"The $listSearchIndexes stage specification must be an object. Found: "+handlerparams.AliasFromType(spec))
+	}
+	var set int
+	for _, key := range doc.Keys() {
+		v := must.NotFail(doc.Get(key))
+		if key != "id" && key != "name" {
+			return fail(handlererrors.ErrIDLUnknownField, "BSON field '$listSearchIndexes."+key+"' is an unknown field.")
+		}
+		switch v.(type) {
+		case types.NullType:
+		case string:
+			set++
+		default:
+			return fail(handlererrors.ErrTypeMismatch, fmt.Sprintf(
+				"BSON field '$listSearchIndexes.%s' is the wrong type '%s', expected type 'string'", key, handlerparams.AliasFromType(v)))
+		}
+	}
+	if set == 2 {
+		return fail(handlererrors.ErrInvalidOptions, "Cannot set both 'name' and 'id' for $listSearchIndexes.")
+	}
+	return nil
 }
 
 // subPipeline is a sub-pipeline of a stage, under its key in the stage's
@@ -258,7 +299,7 @@ func stageWithoutSearch(stage *types.Document) (*types.Document, error) {
 			sub := must.NotFail(p.Get(i))
 			d, ok := sub.(*types.Document)
 			if ok && d.Len() == 1 {
-				if stages.IsSearchStage(d.Command()) {
+				if isViewSearchStage(d.Command()) {
 					if err := checkSearchSpec(d); err != nil {
 						return nil, err
 					}
@@ -288,7 +329,7 @@ func checkSearchPlacement(pipeline *types.Array, nested, inFacet, inLookup bool)
 			continue
 		}
 		name := stage.Command()
-		if stages.IsSearchStage(name) {
+		if isViewSearchStage(name) {
 			switch {
 			case inFacet:
 				return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrStageNotAllowedInFacet,
@@ -311,7 +352,7 @@ func checkSearchPlacement(pipeline *types.Array, nested, inFacet, inLookup bool)
 			}
 		}
 		for _, sp := range subs {
-			if inFacet && holdsSearch(sp.pipeline, stages.IsSearchStage) {
+			if inFacet && holdsSearch(sp.pipeline, isViewSearchStage) {
 				return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrStageNotAllowedInFacet,
 					name+" is not allowed to be used within a $facet stage", "$facet (stage)")
 			}
