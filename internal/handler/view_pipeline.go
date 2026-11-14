@@ -148,6 +148,8 @@ func validateViewPipeline(dbName, viewName string, pipeline *types.Array) error 
 			if unionWith, err = stageWithoutSearch(stage); err == nil {
 				_, err = stages.NewUnionWithStage(unionWith, noFetch)
 			}
+		case name == "$graphLookup":
+			_, err = stages.NewGraphLookupStage(stage.DeepCopy(), noFetch)
 		case name == "$facet":
 			var facet *types.Document
 			if facet, err = stageWithoutSearch(stage); err == nil {

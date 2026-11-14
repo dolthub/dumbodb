@@ -796,6 +796,15 @@ const (
 	ErrSortByCountString         = ErrorCode(40148) // Location40148
 	ErrSortByCountType           = ErrorCode(40149) // Location40149
 
+	// $graphLookup specification errors.
+	ErrGraphLookupMaxDepthNotNumeric  = ErrorCode(40100) // Location40100
+	ErrGraphLookupMaxDepthNegative    = ErrorCode(40101) // Location40101
+	ErrGraphLookupMaxDepthNotIntegral = ErrorCode(40102) // Location40102
+	ErrGraphLookupNotString           = ErrorCode(40103) // Location40103
+	ErrGraphLookupUnknownArgument     = ErrorCode(40104) // Location40104
+	ErrGraphLookupMissingArgument     = ErrorCode(40105) // Location40105
+	ErrGraphLookupMatchNotObject      = ErrorCode(40185) // Location40185
+
 	// ErrStageGroupUnaryOperator indicates that $sum is a unary operator.
 	ErrStageGroupUnaryOperator = ErrorCode(40237) // Location40237
 
