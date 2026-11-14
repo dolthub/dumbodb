@@ -708,9 +708,6 @@ var dbLevelSourceStages = map[string]struct{}{
 	"$listClusterCatalog": {},
 }
 
-// checkDatabasePipelineStages returns the error mongod reports while it parses
-// the stages of an {aggregate: 1} pipeline, before it checks that each stage
-// may run without a collection.
 // checkDatabaseStagePositions returns mongod's error for a stage that must
 // come first, which it checks after each stage parses and the first stage is
 // found to run without a collection.
@@ -734,6 +731,9 @@ func checkDatabaseStagePositions(pipeline *types.Array) error {
 	return nil
 }
 
+// checkDatabasePipelineStages returns the error mongod reports while it parses
+// the stages of an {aggregate: 1} pipeline, before it checks that each stage
+// may run without a collection.
 func checkDatabasePipelineStages(pipeline *types.Array, dbName string) error {
 	for i := range pipeline.Len() {
 		stage, ok := must.NotFail(pipeline.Get(i)).(*types.Document)

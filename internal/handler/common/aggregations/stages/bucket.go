@@ -74,8 +74,6 @@ type bucketOutput struct {
 	accumulator accumulators.Accumulator
 }
 
-// parseBucketBoundaries returns $bucket's boundaries, which must be at
-// least two sorted values of one type.
 // bucketConstant folds a $bucket boundary or default, as mongod does.
 // constant is false when v is not a constant expression; value is nil when it
 // folds to the missing value.
@@ -101,6 +99,8 @@ func boundaryTypeName(v any) string {
 	return handlerparams.AliasFromType(v)
 }
 
+// parseBucketBoundaries returns $bucket's boundaries, which must be at
+// least two sorted values of one type.
 func parseBucketBoundaries(v any) ([]any, error) {
 	boundariesArr, ok := v.(*types.Array)
 	if !ok {

@@ -841,7 +841,7 @@ func filterSampleRate(rate any) (bool, error) {
 	return rand.Float64() < x, nil
 }
 
-// filterExprOperator uses $expr operator to allow usage of aggregation expression.
+// exprOperator uses $expr operator to allow usage of aggregation expression.
 // It returns boolean indicating filter has matched.
 //
 // $expr is primary used by operators such as $gt and $cond which return boolean result.
