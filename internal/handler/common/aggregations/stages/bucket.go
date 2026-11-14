@@ -91,6 +91,35 @@ func bucketConstant(v any) (value any, constant bool, err error) {
 	return folded, true, nil
 }
 
+// bucketMaxSwitchSize is the largest BSON object mongod builds; it
+// desugars $bucket into a $group on a $switch holding the folded boundaries
+// and default, which must fit in one.
+const bucketMaxSwitchSize = 16*1024*1024 + 16*1024
+
+// bucketSwitchSize is the BSON size of the folded constants of mongod's
+// $switch for $bucket: each branch reads its lower and upper boundary and
+// returns its lower one.
+type bucketSwitchSize struct {
+	total    int
+	exceeded bool
+}
+
+// add charges a folded value that appears n times in the $switch.
+func (s *bucketSwitchSize) add(v any, n int) {
+	if v != nil {
+		s.total += n * types.BSONValueSize(v)
+	}
+	if s.total > bucketMaxSwitchSize {
+		s.exceeded = true
+	}
+}
+
+func (s *bucketSwitchSize) err() error {
+	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBSONObjectTooLarge, fmt.Sprintf(
+		"BSONObj size: %d (0x%X) is invalid. Size must be between 0 and %d(16MB)", s.total, s.total, bucketMaxSwitchSize),
+		"$bucket (stage)")
+}
+
 // boundaryTypeName names a boundary's type; nil is the missing value.
 func boundaryTypeName(v any) string {
 	if v == nil {
@@ -101,7 +130,12 @@ func boundaryTypeName(v any) string {
 
 // parseBucketBoundaries returns $bucket's boundaries, which must be at
 // least two sorted values of one type.
-func parseBucketBoundaries(v any) ([]any, error) {
+//
+// Once the folded values outgrow mongod's $switch, which it refuses after
+// parsing the stage, the remaining ones are folded for their errors only
+// and only the lowest and highest boundary are kept, so memory stays
+// bounded.
+func parseBucketBoundaries(v any, size *bucketSwitchSize) ([]any, error) {
 	boundariesArr, ok := v.(*types.Array)
 	if !ok {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketBoundariesNotArray,
@@ -109,8 +143,11 @@ func parseBucketBoundaries(v any) ([]any, error) {
 			"$bucket (stage)")
 	}
 
-	boundaries := make([]any, boundariesArr.Len())
-	for i := 0; i < boundariesArr.Len(); i++ {
+	n := boundariesArr.Len()
+	boundaries := make([]any, 0, n)
+	var first, prev any
+	var orderErr error
+	for i := range n {
 		elem := must.NotFail(boundariesArr.Get(i))
 		v, constant, err := bucketConstant(elem)
 		if err != nil {
@@ -121,33 +158,61 @@ func parseBucketBoundaries(v any) ([]any, error) {
 				"The $bucket 'boundaries' field must be an array of constant values, but found value: "+
 					types.FormatAnyValue(elem)+".", "$bucket (stage)")
 		}
-		boundaries[i] = v
+		// mongod checks the order once every boundary has folded.
+		if i == 0 {
+			first = v
+		} else if orderErr == nil {
+			orderErr = checkBucketBoundaryOrder(i, prev, v)
+		}
+		prev = v
+
+		uses := 3
+		switch {
+		case n < 2:
+			uses = 0
+		case i == 0:
+			uses = 2
+		case i == n-1:
+			uses = 1
+		}
+		size.add(v, uses)
+		if !size.exceeded {
+			boundaries = append(boundaries, v)
+		}
 	}
 
-	if boundariesArr.Len() < 2 {
+	if n < 2 {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrBucketNotEnoughBoundaries,
-			fmt.Sprintf("The $bucket 'boundaries' field must have at least 2 values, but found %d value(s).", boundariesArr.Len()),
+			fmt.Sprintf("The $bucket 'boundaries' field must have at least 2 values, but found %d value(s).", n),
 			"$bucket (stage)",
 		)
 	}
-
-	for i := 1; i < len(boundaries); i++ {
-		prev, cur := boundaries[i-1], boundaries[i]
-		if prev == nil || cur == nil || !types.SameTypeClass(prev, cur) {
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketBoundaryTypes,
-				fmt.Sprintf("All values in the the 'boundaries' option to $bucket must have the same type. "+
-					"Found conflicting types %s and %s.", boundaryTypeName(prev), boundaryTypeName(cur)),
-				"$bucket (stage)")
-		}
-		if types.CompareOrder(prev, cur, types.Ascending) != types.Less {
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketBoundariesOrder,
-				fmt.Sprintf("The 'boundaries' option to $bucket must be sorted, but elements %d and %d are not in "+
-					"ascending order (%s is not less than %s).", i-1, i, types.FormatAnyValue(prev), types.FormatAnyValue(cur)),
-				"$bucket (stage)")
-		}
+	if orderErr != nil {
+		return nil, orderErr
+	}
+	if size.exceeded {
+		return []any{first, prev}, nil
 	}
 	return boundaries, nil
+}
+
+// checkBucketBoundaryOrder returns mongod's error for boundaries i-1 and i
+// that are not of one type or not ascending.
+func checkBucketBoundaryOrder(i int, prev, cur any) error {
+	if prev == nil || cur == nil || !types.SameTypeClass(prev, cur) {
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketBoundaryTypes,
+			fmt.Sprintf("All values in the the 'boundaries' option to $bucket must have the same type. "+
+				"Found conflicting types %s and %s.", boundaryTypeName(prev), boundaryTypeName(cur)),
+			"$bucket (stage)")
+	}
+	if types.CompareOrder(prev, cur, types.Ascending) != types.Less {
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketBoundariesOrder,
+			fmt.Sprintf("The 'boundaries' option to $bucket must be sorted, but elements %d and %d are not in "+
+				"ascending order (%s is not less than %s).", i-1, i, types.FormatAnyValue(prev), types.FormatAnyValue(cur)),
+			"$bucket (stage)")
+	}
+	return nil
 }
 
 func newBucket(stage *types.Document) (aggregations.Stage, error) {
@@ -170,7 +235,8 @@ func newBucket(stage *types.Document) (aggregations.Stage, error) {
 	var groupByVal, defaultVal any
 	var boundaries []any
 	var hasDefault bool
-	var output []bucketOutput
+	var outputDoc *types.Document
+	var size bucketSwitchSize
 	for _, key := range spec.Keys() {
 		val := must.NotFail(spec.Get(key))
 		switch key {
@@ -182,7 +248,7 @@ func newBucket(stage *types.Document) (aggregations.Stage, error) {
 			}
 			groupByVal = val
 		case "boundaries":
-			if boundaries, err = parseBucketBoundaries(val); err != nil {
+			if boundaries, err = parseBucketBoundaries(val, &size); err != nil {
 				return nil, err
 			}
 		case "default":
@@ -190,6 +256,7 @@ func newBucket(stage *types.Document) (aggregations.Stage, error) {
 			if defaultVal, constant, err = bucketConstant(val); err != nil {
 				return nil, err
 			}
+			size.add(defaultVal, 1)
 			if !constant {
 				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketDefaultNotConstant,
 					"The $bucket 'default' field must be a constant expression, but found: "+types.FormatAnyValue(val)+".",
@@ -197,21 +264,10 @@ func newBucket(stage *types.Document) (aggregations.Stage, error) {
 			}
 			hasDefault = defaultVal != nil
 		case "output":
-			outputDoc, ok := val.(*types.Document)
-			if !ok {
+			if outputDoc, ok = val.(*types.Document); !ok {
 				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketOutputNotObject,
 					"The $bucket 'output' field must be an object, but found type: "+handlerparams.AliasFromType(val)+".",
 					"$bucket (stage)")
-			}
-			if err := operators.CheckFieldPaths(outputDoc); err != nil {
-				return nil, err
-			}
-			for _, field := range outputDoc.Keys() {
-				acc, err := accumulators.NewAccumulator("$bucket", field, must.NotFail(outputDoc.Get(field)))
-				if err != nil {
-					return nil, lazyerrors.Error(err)
-				}
-				output = append(output, bucketOutput{field: field, accumulator: acc})
 			}
 		default:
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketUnknownOption,
@@ -226,11 +282,37 @@ func newBucket(stage *types.Document) (aggregations.Stage, error) {
 		)
 	}
 
+	if hasDefault {
+		if err := checkBucketDefaultOutside(defaultVal, boundaries); err != nil {
+			return nil, err
+		}
+	}
+
+	// mongod then builds its $group on a $switch, which must fit in a BSON
+	// object, and parses that group's expressions.
+	if size.exceeded {
+		return nil, size.err()
+	}
+
 	if err := operators.CheckFieldPaths(groupByVal); err != nil {
 		return nil, err
 	}
 	if err := operators.CheckConstantSubexpressions(groupByVal); err != nil {
 		return nil, err
+	}
+
+	var output []bucketOutput
+	if outputDoc != nil {
+		if err := operators.CheckFieldPaths(outputDoc); err != nil {
+			return nil, err
+		}
+		for _, field := range outputDoc.Keys() {
+			acc, err := accumulators.NewAccumulator("$bucket", field, must.NotFail(outputDoc.Get(field)))
+			if err != nil {
+				return nil, lazyerrors.Error(err)
+			}
+			output = append(output, bucketOutput{field: field, accumulator: acc})
+		}
 	}
 
 	b := &bucket{
@@ -246,18 +328,21 @@ func newBucket(stage *types.Document) (aggregations.Stage, error) {
 		b.boundaryKeys[i] = b.cmp.KeyValue(boundary)
 	}
 
-	if hasDefault {
-		lower, upper := boundaries[0], boundaries[len(boundaries)-1]
-		if types.SameTypeClass(defaultVal, lower) &&
-			types.CompareOrder(defaultVal, lower, types.Ascending) != types.Less &&
-			types.CompareOrder(defaultVal, upper, types.Ascending) == types.Less {
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketDefaultInRange,
-				"The $bucket 'default' field must be less than the lowest boundary or greater than or equal to "+
-					"the highest boundary.", "$bucket (stage)")
-		}
-	}
-
 	return b, nil
+}
+
+// checkBucketDefaultOutside returns mongod's error for a $bucket default
+// that falls within the boundaries.
+func checkBucketDefaultOutside(defaultVal any, boundaries []any) error {
+	lower, upper := boundaries[0], boundaries[len(boundaries)-1]
+	if types.SameTypeClass(defaultVal, lower) &&
+		types.CompareOrder(defaultVal, lower, types.Ascending) != types.Less &&
+		types.CompareOrder(defaultVal, upper, types.Ascending) == types.Less {
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketDefaultInRange,
+			"The $bucket 'default' field must be less than the lowest boundary or greater than or equal to "+
+				"the highest boundary.", "$bucket (stage)")
+	}
+	return nil
 }
 
 func (b *bucket) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
