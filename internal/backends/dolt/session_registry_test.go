@@ -59,9 +59,8 @@ func TestBackend_NewSessionCanVisitGCRoots(t *testing.T) {
 	require.NoError(t, err)
 
 	sess := shadow.Session()
-	err = sess.VisitGCRoots(context.Background(), "admin", func(hash.Hash) bool {
+	err = sess.VisitGCRoots(context.Background(), "admin", func(hash.Hash) {
 		t.Fatalf("VisitGCRoots called keep() on a fresh session with no dbStates")
-		return false
 	})
 	require.NoError(t, err)
 }

@@ -1042,7 +1042,7 @@ func (b *Backend) getOrOpenDBLocked(ctx context.Context, dbName string, create b
 
 				headFileID := serial.GetFileID([]byte(headMsg))
 				switch headFileID {
-				case serial.RootValueFileID:
+				case serial.RootValueFileID, serial.DumboRootValueFileID:
 					// RTVL format: prefer the working set  -- it holds the latest state
 					// after writes that don't create commits (HEAD stays at last explicit
 					// commit). Fall back to HEAD rootValue if the working set is missing.
@@ -1309,9 +1309,15 @@ func migrateADRMtoSTRT(ctx context.Context, cs *nbs.GenerationalNBS, vs *dolttyp
 	return nil
 }
 
-// buildRootValueFlatbuffer builds an RTVL (RootValue) flatbuffer wrapping the
-// given collections AddressMap as the tables field. The RTVL is the chunk type
-// that dolt expects at commit.rootValue, working_root_addr, and staged_root_addr.
+func isRootValueFileID(fileID string) bool {
+	return fileID == serial.DumboRootValueFileID || fileID == serial.RootValueFileID
+}
+
+// buildRootValueFlatbuffer builds a RootValue flatbuffer wrapping the given
+// collections AddressMap as the tables field. It carries the DBRV file id so
+// DoltHub can tell a DumboDB repository from a Dolt one; dolt reads DBRV as an
+// RTVL. Databases written before DBRV still hold RTVL roots, so readers must
+// accept both (see isRootValueFileID).
 //
 // Layout: feature_version=7, collation=utf8mb4_0900_bin, tables=ADRM bytes,
 // foreign_key_addr=[0;20] (no foreign keys).
@@ -1326,7 +1332,7 @@ func buildRootValueFlatbuffer(am prolly.AddressMap) serial.Message {
 	serial.RootValueAddCollation(builder, serial.Collationutf8mb4_0900_bin)
 	serial.RootValueAddTables(builder, tablesOff)
 	serial.RootValueAddForeignKeyAddr(builder, fkOff)
-	return serial.FinishMessage(builder, serial.RootValueEnd(builder), []byte(serial.RootValueFileID))
+	return serial.FinishMessage(builder, serial.RootValueEnd(builder), []byte(serial.DumboRootValueFileID))
 }
 
 // buildStoreRootFlatbuffer builds a StoreRoot (STRT) flatbuffer with the
@@ -3269,7 +3275,7 @@ func readAMFromWorkingSet(ctx context.Context, doltDB datas.Database, cs *nbs.Ge
 		return prolly.AddressMap{}, fmt.Errorf("reading working root chunk: %w", err)
 	}
 	fileID := serial.GetFileID(workingChunk.Data())
-	if fileID != serial.RootValueFileID {
+	if !isRootValueFileID(fileID) {
 		return prolly.AddressMap{}, fmt.Errorf("unexpected working root file ID %q", fileID)
 	}
 	rtvl, err := serial.TryGetRootAsRootValue(workingChunk.Data(), serial.MessagePrefixSz)

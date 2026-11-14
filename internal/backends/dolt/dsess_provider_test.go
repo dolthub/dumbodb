@@ -60,7 +60,9 @@ func TestSessionLookupDbStateResolvesRealDb(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, found, "admin database should be resolvable via LookupDbState")
 	require.NotNil(t, state)
-	require.NotNil(t, state.WorkingRoot(), "branchState must have a working root")
+	root, err := state.WorkingRoot(sqlCtx)
+	require.NoError(t, err)
+	require.NotNil(t, root, "branchState must have a working root")
 }
 
 func TestProviderSurface(t *testing.T) {
