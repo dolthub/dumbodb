@@ -527,10 +527,21 @@ var sbeOperatorErrors = map[sbeOperatorError]struct {
 	{"$dateToString", 18533}:                         {handlererrors.ErrSBEInput4997903, "$dateToString parameter 'format' must be a string"},
 	{"$dateToString", 40485}:                         {handlererrors.ErrSBEInput4997908, "$dateToString parameter 'timezone' must be a valid timezone"},
 	{"$dateToParts", 40485}:                          {handlererrors.ErrSBEInput7157913, "$dateToParts timezone must be a valid timezone"},
+	{"$dateDiff", 40485}:                             {handlererrors.ErrSBEInput7157920, "$dateDiff parameter 'timezone' must be a valid timezone"},
+	{"$dateDiff", 5439016}:                           {handlererrors.ErrSBEInput7157926, "$dateDiff parameter 'startOfWeek' must be a valid day of the week"},
+	{"$dateTrunc", 5439018}:                          {handlererrors.ErrSBEInput7157940, "$dateTrunc parameter 'binSize' must be coercible to a positive 64-bit integer"},
+	{"$dateTrunc", 5439016}:                          {handlererrors.ErrSBEInput7157944, "$dateTrunc parameter 'startOfWeek' must be a valid day of the week"},
+	{"$replaceOne", 51744}:                           {handlererrors.ErrSBEInput7158302, "$replaceOne requires that 'replacement' be a string"},
+	{"$regexMatch", 51106}:                           {handlererrors.ErrSBEInput5126603, "$regexMatch: regex flags must have either string or null type"},
+	{"$regexFind", 51106}:                            {handlererrors.ErrSBEInput5126603, "$regexFind: regex flags must have either string or null type"},
+	{"$regexFindAll", 51106}:                         {handlererrors.ErrSBEInput5126603, "$regexFindAll: regex flags must have either string or null type"},
+	{"$arrayToObject", 40398}:                        {handlererrors.ErrSBEInput5153201, "Input to $arrayToObject should be either an array or object"},
+	{"$indexOfBytes", 40097}:                         {handlererrors.ErrSBEInput7158004, "$indexOfBytes start index must be positive"},
+	{"$indexOfCP", 40097}:                            {handlererrors.ErrSBEInput7158004, "$indexOfCP start index must be positive"},
 	{"$indexOfBytes", 40092}:                         {handlererrors.ErrSBEInput7158009, "$indexOfBytes substring must resolve to a string"},
 	{"$indexOfCP", 40094}:                            {handlererrors.ErrSBEInput7158009, "$indexOfCP substring must resolve to a string"},
-	{"$indexOfBytes", 40096}:                         {handlererrors.ErrSBEInput7158003, "$indexOfBytes starting index must be numeric type"},
-	{"$indexOfCP", 40096}:                            {handlererrors.ErrSBEInput7158003, "$indexOfCP starting index must be numeric type"},
+	{"$indexOfBytes", 40096}:                         {handlererrors.ErrSBEInput7158003, "$indexOfBytes start index must resolve to a number"},
+	{"$indexOfCP", 40096}:                            {handlererrors.ErrSBEInput7158003, "$indexOfCP start index must resolve to a number"},
 	{"$range", 34443}:                                {handlererrors.ErrSBEInput7157711, "$range only supports numeric types for start"},
 	{"$range", 34447}:                                {handlererrors.ErrSBEInput7157713, "$range only supports numeric types for step"},
 	{"$range", 34449}:                                {handlererrors.ErrSBEInput7157717, "$range requires a non-zero step value"},
@@ -599,6 +610,15 @@ func sbeEquivalent(code handlererrors.ErrorCode, op, msg string) (handlererrors.
 	if e, ok := sbeOperatorErrors[sbeOperatorError{op, code}]; ok {
 		if e.code == handlererrors.ErrSBEInput7157921 && strings.Contains(msg, "'endDate'") {
 			return handlererrors.ErrSBEInput7157922, "$dateDiff parameter 'endDate' must be coercible to date", true
+		}
+		// The index operators report the ending index under its own codes.
+		if (op == "$indexOfBytes" || op == "$indexOfCP") && strings.Contains(msg, "ending index") {
+			switch e.code {
+			case handlererrors.ErrSBEInput7158003:
+				return handlererrors.ErrSBEInput7158005, op + " end index must resolve to a number", true
+			case handlererrors.ErrSBEInput7158004:
+				return handlererrors.ErrSBEInput7158006, op + " end index must be positive", true
+			}
 		}
 		return e.code, e.msg, true
 	}
