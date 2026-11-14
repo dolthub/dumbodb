@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -242,6 +243,36 @@ func checkTargetNamespace(db, coll, stage string) error {
 	case strings.ContainsRune(coll, 0):
 		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace,
 			"namespaces cannot have embedded null characters", stage+" (stage)")
+	}
+	return nil
+}
+
+// CheckWriteTarget returns mongod's error for a $out or $merge target in a
+// system collection or an internal database.
+func CheckWriteTarget(stage aggregations.Stage) error {
+	var db, coll, name string
+	var special, internal handlererrors.ErrorCode
+	switch s := stage.(type) {
+	case *out:
+		db, coll, name = s.targetDB, s.targetColl, "$out"
+		special, internal = handlererrors.ErrOutSpecialCollection, handlererrors.ErrOutInternalDatabase
+	case *merge:
+		db, coll, name = s.targetDB, s.targetColl, "$merge"
+		special, internal = handlererrors.ErrMergeSpecialCollection, handlererrors.ErrMergeInternalDatabase
+	default:
+		return nil
+	}
+	verb := "Can't "
+	if name == "$merge" {
+		verb = "Cannot "
+	}
+	switch {
+	case strings.HasPrefix(coll, "system."):
+		return handlererrors.NewCommandErrorMsgWithArgument(special,
+			verb+name+" to special collection: "+coll, name+" (stage)")
+	case db == "admin" || db == "local" || db == "config":
+		return handlererrors.NewCommandErrorMsgWithArgument(internal,
+			verb+name+" to internal database: "+db, name+" (stage)")
 	}
 	return nil
 }
