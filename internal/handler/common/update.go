@@ -246,7 +246,48 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 // processFilterEqualityCondition copies the fields with equality condition from
 // filter to doc. A replacement takes only the _id equality, as in mongod.
 func processFilterEqualityCondition(doc, filter *types.Document, replacement bool) error {
+	if filterAlwaysFalse(filter) {
+		// mongod simplifies the whole query to $alwaysFalse, which seeds
+		// nothing.
+		return nil
+	}
 	return seedFromFilter(doc, filter, newSeededPaths(), replacement)
+}
+
+// filterAlwaysFalse reports whether mongod's query optimizer simplifies
+// filter to $alwaysFalse: it holds $alwaysFalse, an $in with no values, an
+// $and with such a clause or an $or whose every clause is one.
+func filterAlwaysFalse(filter *types.Document) bool {
+	for _, key := range filter.Keys() {
+		val := must.NotFail(filter.Get(key))
+		switch key {
+		case "$alwaysFalse":
+			return true
+		case "$and", "$or":
+			clauses, ok := val.(*types.Array)
+			if !ok || clauses.Len() == 0 {
+				continue
+			}
+			falseClauses := 0
+			for i := range clauses.Len() {
+				if clause, ok := must.NotFail(clauses.Get(i)).(*types.Document); ok && filterAlwaysFalse(clause) {
+					falseClauses++
+				}
+			}
+			if key == "$and" && falseClauses > 0 || falseClauses == clauses.Len() {
+				return true
+			}
+		default:
+			if cond, ok := val.(*types.Document); ok && isOperatorDocument(cond) {
+				if in, err := cond.Get("$in"); err == nil {
+					if values, ok := in.(*types.Array); ok && values.Len() == 0 {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
 }
 
 // seededPaths holds the paths an upsert has seeded so far. mongod refuses a
@@ -362,15 +403,25 @@ func seedFromFilter(doc, filter *types.Document, seeded *seededPaths, replacemen
 		if key[0] == '$' {
 			// The clauses of $and, and the clause of a one-clause $or, are
 			// equalities of the query itself; other operators seed nothing.
+			// mongod drops the clauses of an $or that are always false first.
 			clauses, ok := val.(*types.Array)
-			if !ok || (key != "$and" && !(key == "$or" && clauses.Len() == 1)) {
+			if !ok || key != "$and" && key != "$or" {
 				continue
 			}
+			var seedClauses []*types.Document
 			for i := range clauses.Len() {
-				if clause, ok := must.NotFail(clauses.Get(i)).(*types.Document); ok {
-					if err = seedFromFilter(doc, clause, seeded, replacement); err != nil {
-						return err
-					}
+				clause, ok := must.NotFail(clauses.Get(i)).(*types.Document)
+				if !ok || key == "$or" && filterAlwaysFalse(clause) {
+					continue
+				}
+				seedClauses = append(seedClauses, clause)
+			}
+			if key == "$or" && len(seedClauses) != 1 {
+				continue
+			}
+			for _, clause := range seedClauses {
+				if err = seedFromFilter(doc, clause, seeded, replacement); err != nil {
+					return err
 				}
 			}
 			continue
