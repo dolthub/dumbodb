@@ -214,6 +214,14 @@ func hintedIndexOrder(ctx context.Context, coll backends.Collection, hint any, f
 			if (idx.Sparse || idx.PartialFilterExpression != nil) && orBranchMatchesMissing(filter) {
 				return order, common.AsOneIndexScan(filter), nil, nil
 			}
+			// mongod bounds a hinted partial index only by a query that
+			// implies its filter expression; otherwise it reads every key.
+			if idx.PartialFilterExpression != nil {
+				implied, known := common.QueryImpliesPartialFilter(filter, idx.PartialFilterExpression)
+				if known && !implied {
+					return order, common.AsOneIndexScan(filter), nil, nil
+				}
+			}
 			sortFilter = common.WithSingleBranchesInlined(filter)
 			cmp := collation.Parse(queryCollation).Comparator()
 			var budget *common.TrialBudget
