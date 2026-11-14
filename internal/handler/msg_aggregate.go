@@ -149,7 +149,9 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		return nil, lazyerrors.Error(err)
 	}
 
+	targetIsView := false
 	if target, lookupErr := lookupCollectionInfo(connCtx, db, cName); lookupErr == nil && target != nil && target.IsView {
+		targetIsView = true
 		opCollation, _ := document.Get("collation")
 		opCollationDoc, _ := opCollation.(*types.Document)
 		viewCollation, vErr := viewReadCollation(opCollationDoc, target.Collation)
@@ -189,13 +191,17 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 	if err = stages.LiteParsePipeline(pipeline); err != nil {
 		return nil, err
 	}
-	pipeline = stages.MoveSkipsBeforeTransforms(operators.BindNowInPipeline(pipeline, operators.CommandNow()))
+	pipeline = operators.BindNowInPipeline(pipeline, operators.CommandNow())
 
-	aggregationStages := aggregations.MoveMatchesAhead(must.NotFail(iterator.ConsumeValues(pipeline.Iterator())))
+	aggregationStages := must.NotFail(iterator.ConsumeValues(pipeline.Iterator()))
+	expandedLength := aggregations.ExpandedLength(aggregationStages)
+	// A view's stages come first, so its pipeline is optimized with them.
+	aggregationStages = stages.OptimizeSkipsAndLimits(aggregations.MoveMatchesAhead(
+		stages.OptimizeSkipsAndLimits(aggregationStages, !targetIsView)), !targetIsView)
 	for _, v := range aggregationStages {
 		operators.BindCollation(v, collCmp)
 	}
-	if err = aggregations.CheckExpandedPipelineLength(aggregations.ExpandedLength(aggregationStages)); err != nil {
+	if err = aggregations.CheckExpandedPipelineLength(expandedLength); err != nil {
 		return nil, err
 	}
 	stagesDocuments := make([]aggregations.Stage, 0, len(aggregationStages))
@@ -518,7 +524,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 				closer.Close()
 				return nil, handleMaxTimeMSError(vErr, maxTimeMS, "aggregate")
 			}
-			if err = viewPipelineLength(aggregations.ExpandedLength(aggregationStages) +
+			if err = viewPipelineLength(expandedLength +
 				aggregations.ExpandedLength(rawViewStages) - len(rawViewStages))(len(rawViewStages)); err != nil {
 				closer.Close()
 				return nil, err
@@ -550,6 +556,9 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 				specs = append(specs, d)
 			}
 			stagesSpecs = append(specs, stagesSpecs...)
+			if len(stagesDocuments) == len(stagesSpecs) {
+				stagesDocuments, stagesSpecs = stages.OptimizeSkipsAndLimitsInStages(stagesDocuments, stagesSpecs, true)
+			}
 			stages.MarkLookupsUnwound(stagesDocuments, stagesSpecs)
 		}
 
@@ -795,7 +804,7 @@ func (h *Handler) aggregateDatabase(connCtx context.Context, document *types.Doc
 	if err = stages.LiteParsePipeline(pipeline); err != nil {
 		return nil, err
 	}
-	pipeline = stages.MoveSkipsBeforeTransforms(operators.BindNowInPipeline(pipeline, operators.CommandNow()))
+	pipeline = stages.OptimizeSkipsAndLimitsArray(operators.BindNowInPipeline(pipeline, operators.CommandNow()), false)
 	if cd, ok := getOrNilDocument(document, "collation"); ok {
 		operators.BindCollation(pipeline, collation.Parse(cd).Comparator())
 	}
