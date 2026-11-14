@@ -1151,7 +1151,10 @@ var _ Operator = (*objectToArrayOp)(nil)
 
 // arrayToObjectOp represents { $arrayToObject: <array-expr> }.
 // Converts an array of {k, v} documents to a single document.
-type arrayToObjectOp struct{ arg any }
+type arrayToObjectOp struct {
+	arg any
+	engine
+}
 
 func newArrayToObject(args ...any) (Operator, error) {
 	if len(args) != 1 {
@@ -1206,8 +1209,11 @@ func (op *arrayToObjectOp) Process(doc *types.Document) (any, error) {
 						handlerparams.AliasFromType(key))
 			}
 			if strings.IndexByte(key.(string), 0) >= 0 {
-				return nil, arrayToObjectError(handlererrors.ErrArrayToObjectPairKeyNul,
-					"Key field cannot contain an embedded null byte")
+				code := handlererrors.ErrArrayToObjectPairKeyNul
+				if op.sbe {
+					code = handlererrors.ErrArrayToObjectPairKeyNulSBE
+				}
+				return nil, arrayToObjectError(code, "Key field cannot contain an embedded null byte")
 			}
 		case *types.Document:
 			if pairs {
@@ -1233,8 +1239,11 @@ func (op *arrayToObjectOp) Process(doc *types.Document) (any, error) {
 						handlerparams.AliasFromType(key))
 			}
 			if strings.IndexByte(key.(string), 0) >= 0 {
-				return nil, arrayToObjectError(handlererrors.ErrArrayToObjectObjectKeyNul,
-					"Key field cannot contain an embedded null byte")
+				code := handlererrors.ErrArrayToObjectObjectKeyNul
+				if op.sbe {
+					code = handlererrors.ErrArrayToObjectObjectKeyNulSBE
+				}
+				return nil, arrayToObjectError(code, "Key field cannot contain an embedded null byte")
 			}
 		default:
 			switch {
