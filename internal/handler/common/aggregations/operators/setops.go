@@ -331,6 +331,22 @@ func newSetEquals(args ...any) (Operator, error) {
 			fmt.Sprintf("$setEquals needs at least two arguments had: %d", len(args)), "$setEquals")
 	}
 
+	// mongod's optimizer checks each constant operand up front.
+	for i, arg := range args {
+		if !isConstantExpression(arg) {
+			continue
+		}
+		v, _, err := foldConstant(arg, nil)
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := v.(*types.Array); !ok {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSetEqualsConstantNotArray,
+				fmt.Sprintf("All operands of $setEquals must be arrays. %d-th argument is of type: %s", i+1, handlerparams.AliasFromType(v)),
+				"$setEquals")
+		}
+	}
+
 	return &setEqualsOp{args: args}, nil
 }
 
@@ -400,7 +416,8 @@ func newSetIsSubset(args ...any) (Operator, error) {
 			fmt.Sprintf("Expression $setIsSubset takes exactly 2 arguments. %d were passed in.", len(args)))
 	}
 
-	if isConstantExpression(args[1]) {
+	// A fully constant $setIsSubset folds with the unoptimized codes.
+	if isConstantExpression(args[1]) && !isConstantExpression(args[0]) {
 		v, _, err := foldConstant(args[1], nil)
 		if err != nil {
 			return nil, err
@@ -426,9 +443,11 @@ func (op *setIsSubsetOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	firstNotArray := handlererrors.ErrSetIsSubsetFirstNotArray
-	if !isConstantExpression(op.set2Arg) {
-		firstNotArray = handlererrors.ErrSetIsSubsetFirstNotArrayVariable
+	// mongod's optimized form, with only the second operand constant, has
+	// its own code for the first.
+	firstNotArray := handlererrors.ErrSetIsSubsetFirstNotArrayVariable
+	if isConstantExpression(op.set2Arg) && !isConstantExpression(op.set1Arg) {
+		firstNotArray = handlererrors.ErrSetIsSubsetFirstNotArray
 	}
 	switch {
 	case op.sbe && (null1 || null2):
