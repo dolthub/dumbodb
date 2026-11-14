@@ -16,6 +16,7 @@ package handler
 
 import (
 	"context"
+	"slices"
 	"strings"
 
 	"github.com/dolthub/dumbodb/internal/backends"
@@ -436,30 +437,70 @@ func recordedClusteredName(ctx context.Context, db backends.Database, collection
 	return ""
 }
 
-// queryPlanMode is the plan mongod answers a query on c with: an index scan
-// when the backend reads an index, when an index is hinted, or when the
-// filter uses $expr and has a condition an index of c can serve. The order of
-// a filter's conditions differs only when it uses $expr, so the indexes are
-// read only then.
+// queryPlanMode is the plan mongod answers a query on c with. The order of a
+// filter's conditions differs between plans only when it uses $expr, so the
+// indexes are read only then: a hinted index, or else the first index whose
+// leading field filter constrains, gives an index scan on that field. The
+// filter must constrain the field in a way an index can serve unless the
+// backend reads an index; a hinted index read in full, or one read only for
+// its order, is filtered as a collection scan.
 func queryPlanMode(ctx context.Context, c backends.Collection, filter *types.Document, hint any, res *backends.QueryResult) common.PlanMode {
 	switch {
-	case res != nil && res.IndexScan:
-		return common.PlanIndexScan
-	case backends.HintIsNatural(hint) || !common.FilterUsesExpr(filter):
+	case backends.HintIsNatural(hint):
+		return common.PlanCollectionScan
+	case !common.FilterUsesExpr(filter):
+		if hintNamesIndex(hint) || res != nil && res.IndexScan {
+			return common.PlanIndexScan
+		}
 		return common.PlanCollectionScan
 	case hintNamesIndex(hint):
-		return common.PlanIndexScan
+		field, ok := hintedLeadingField(ctx, c, hint)
+		switch {
+		case !ok:
+			return common.PlanIndexScan
+		case common.ConstrainsField(filter, field):
+			return common.PlanIndexScanOn(field)
+		}
+		return common.PlanCollectionScan
 	}
 	list, err := c.ListIndexes(ctx, new(backends.ListIndexesParams))
 	if err != nil {
 		return common.PlanCollectionScan
 	}
+	var fields []string
 	for _, idx := range list.Indexes {
-		if len(idx.Key) > 0 && idx.PartialFilterExpression == nil && common.IndexablePredicateOn(filter, idx.Key[0].Field) {
-			return common.PlanIndexScan
+		if len(idx.Key) > 0 && idx.PartialFilterExpression == nil && common.ConstrainsField(filter, idx.Key[0].Field) &&
+			!slices.Contains(fields, idx.Key[0].Field) {
+			fields = append(fields, idx.Key[0].Field)
 		}
 	}
-	return common.PlanCollectionScan
+	switch len(fields) {
+	case 0:
+		return common.PlanCollectionScan
+	case 1:
+		return common.PlanIndexScanOn(fields[0])
+	}
+	// mongod tries each candidate index, and an error under any of them
+	// fails the query.
+	return common.PlanIndexScan
+}
+
+// hintedLeadingField returns the leading field of the index hint names on c.
+func hintedLeadingField(ctx context.Context, c backends.Collection, hint any) (string, bool) {
+	if h, ok := hint.(*types.Document); ok && h.Len() > 0 {
+		return h.Keys()[0], true
+	}
+	list, err := c.ListIndexes(ctx, new(backends.ListIndexesParams))
+	if err != nil {
+		return "", false
+	}
+	name := backends.MatchHintedIndex(hint, list.Indexes)
+	for _, idx := range list.Indexes {
+		if idx.Name == name && len(idx.Key) > 0 {
+			return idx.Key[0].Field, true
+		}
+	}
+	return "", false
 }
 
 // hintNamesIndex reports whether hint names an index, by name or key pattern.
