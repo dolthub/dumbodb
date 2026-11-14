@@ -1756,9 +1756,28 @@ func substituteVarsInBinding(op string, spec *types.Document, vars map[string]an
 
 // unboundLetVariable stands in for a let variable while the sub-pipeline is
 // parsed: "$$v" becomes the field path "$v", which is not constant either, so
-// a place that needs a constant rejects it as mongod rejects the variable,
-// and mongod's messages name the variable "$v" too.
+// a place that needs a constant rejects it as mongod rejects the variable;
+// nameLetVariables restores the variable's name in those messages.
 type unboundLetVariable struct{}
+
+// nameLetVariables returns err with the stand-in field paths of the let
+// variables in its constant-expression messages written as the variables.
+func (l *lookup) nameLetVariables(err error) error {
+	var cerr *handlererrors.CommandError
+	if l.letVars == nil || !errors.As(err, &cerr) {
+		return err
+	}
+	switch cerr.Code() {
+	case handlererrors.ErrBucketDefaultNotConstant, handlererrors.ErrBucketBoundaryNotConstant:
+	default:
+		return err
+	}
+	msg := cerr.Err().Error()
+	for _, name := range l.letVars.Keys() {
+		msg = strings.ReplaceAll(msg, `"$`+name+`"`, `"$$`+name+`"`)
+	}
+	return cerr.WithMessage(msg)
+}
 
 // checkSubPipeline parses the sub-pipeline once, before any document is read,
 // so its errors surface as in mongod.
@@ -1794,7 +1813,7 @@ func (l *lookup) checkSubPipeline() error {
 				substituted.Command()+" is not allowed within a $lookup's sub-pipeline", "$lookup (stage)")
 		}
 		if _, err := newSubPipelineStage(substituted, l.fetcher, false); err != nil {
-			return err
+			return l.nameLetVariables(err)
 		}
 	}
 	return nil
