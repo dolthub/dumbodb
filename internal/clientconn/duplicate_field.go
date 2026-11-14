@@ -15,80 +15,17 @@
 package clientconn
 
 import (
-	"fmt"
 	"strconv"
 	"strings"
 
-	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
 // duplicateFieldError returns the error for a command repeating the field at
-// path, given as its keys: mongod's error where it parses the repeated keys
-// as paths or sort keys, and FailedToParse otherwise.
+// path, given as its keys.
 func duplicateFieldError(path []string) error {
-	last := path[len(path)-1]
-
-	// The innermost pipeline stage holding the repeated key.
-	stage := -1
-	for k := len(path) - 1; k > 0; k-- {
-		if isIndex(path[k-1]) && strings.HasPrefix(path[k], "$") {
-			stage = k
-			break
-		}
-	}
-
-	if stage >= 0 {
-		name, rest := path[stage], path[stage+1:]
-		switch {
-		case (name == "$set" || name == "$addFields") && isFieldPath(rest):
-			p := strings.Join(rest, ".")
-			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrAddFieldsPathCollision,
-				fmt.Sprintf("Invalid %s :: caused by :: specification contains two conflicting paths. Cannot specify both '%s' and '%s'",
-					name, p, p), name+" (stage)")
-		case name == "$project" && isFieldPath(rest):
-			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrUnsetPathOverwrite,
-				"Invalid $project :: caused by :: Path collision at "+last, "$project (stage)")
-		case name == "$sort" && len(rest) == 1:
-			return sortDuplicateError(last)
-		case name == "$listClusterCatalog" && len(rest) == 1:
-			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIDLDuplicateField,
-				fmt.Sprintf("BSON field '$listClusterCatalog.%s' is a duplicate field", last), "$listClusterCatalog (stage)")
-		case name == "$setWindowFields" && len(rest) == 2 && rest[0] == "output":
-			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrWindowOutputPathCollision,
-				"$setWindowFields 'output' specification contains two conflicting paths", "$setWindowFields (stage)")
-		}
-	} else {
-		switch {
-		case len(path) == 2 && path[0] == "sort":
-			return sortDuplicateError(last)
-		case len(path) >= 2 && path[0] == "projection" && isFieldPath(path[1:]):
-			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrUnsetPathOverwrite,
-				"Path collision at "+last, "projection")
-		}
-	}
-
-	return handlererrors.NewCommandErrorMsg(handlererrors.ErrFailedToParse,
-		fmt.Sprintf("BSON field '%s' is a duplicate field", strings.Join(path, ".")))
-}
-
-func sortDuplicateError(key string) error {
-	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSortDuplicateKey,
-		fmt.Sprintf("$sort key must not contain duplicate keys (duplicate: '%s')", key), "$sort")
-}
-
-// isFieldPath reports whether keys name a path of fields, entering no
-// operator or array.
-func isFieldPath(keys []string) bool {
-	if len(keys) == 0 {
-		return false
-	}
-	for _, k := range keys {
-		if strings.HasPrefix(k, "$") || isIndex(k) {
-			return false
-		}
-	}
-	return true
+	return common.DuplicateFieldError(path)
 }
 
 func isIndex(key string) bool {
@@ -128,12 +65,15 @@ func commandDuplicateField(doc *types.Document) ([]string, bool) {
 
 // modifierLevel returns, for a command whose update modifiers its handler
 // checks for repeated paths itself (write error 40, as on mongod), whether a
-// path is that of a modifier's document.
+// path is that of a modifier's document or lies in an update pipeline.
 func modifierLevel(command string) func(path []string) bool {
 	switch command {
 	case "update":
+		// An update pipeline is checked by the handler too, which reports
+		// its repeated fields as the statement's write error.
 		return func(path []string) bool {
-			return len(path) == 4 && path[0] == "updates" && path[2] == "u" && strings.HasPrefix(path[3], "$")
+			return len(path) >= 4 && path[0] == "updates" && path[2] == "u" &&
+				(strings.HasPrefix(path[3], "$") && len(path) == 4 || isIndex(path[3]))
 		}
 	case "findAndModify", "findandmodify":
 		return func(path []string) bool {

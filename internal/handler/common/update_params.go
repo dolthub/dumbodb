@@ -16,6 +16,7 @@ package common
 
 import (
 	"log/slog"
+	"strconv"
 
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
@@ -147,6 +148,13 @@ func GetUpdateParams(document *types.Document, l *slog.Logger) (*UpdateParams, e
 
 			case *types.Array:
 				update.IsPipeline = true
+				if path, dup := findDuplicatePath(u, []string{"updates", strconv.Itoa(i), "u"}); dup {
+					// Reading a repeated field panics, so the pipeline is
+					// left unread.
+					update.InvalidUpdate = DuplicateFieldError(path)
+					update.Pipeline = types.MakeArray(0)
+					continue
+				}
 				update.Pipeline = operators.BindNowInPipeline(u, now)
 
 			default:
