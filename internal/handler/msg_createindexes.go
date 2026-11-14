@@ -191,7 +191,7 @@ func (h *Handler) MsgCreateIndexes(connCtx context.Context, msg *wire.OpMsg) (*w
 
 	visibleBefore := clientVisibleIndexes(connCtx, db, collection, beforeCreate.Indexes)
 	numIndexesBefore := len(visibleBefore)
-	if len(visibleBefore) != len(beforeCreate.Indexes) {
+	if cInfo != nil && cInfo.IsTimeSeries {
 		// A time-series collection: mongod builds its indexes on the buckets,
 		// where _id is control.min._id and control.max._id.
 		for _, idx := range toCreate {

@@ -134,7 +134,7 @@ func parseBucketBoundaries(v any) ([]any, error) {
 
 	for i := 1; i < len(boundaries); i++ {
 		prev, cur := boundaries[i-1], boundaries[i]
-		if prev == nil || cur == nil || canonicalType(prev) != canonicalType(cur) {
+		if prev == nil || cur == nil || !types.SameTypeClass(prev, cur) {
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketBoundaryTypes,
 				fmt.Sprintf("All values in the the 'boundaries' option to $bucket must have the same type. "+
 					"Found conflicting types %s and %s.", boundaryTypeName(prev), boundaryTypeName(cur)),
@@ -248,7 +248,7 @@ func newBucket(stage *types.Document) (aggregations.Stage, error) {
 
 	if hasDefault {
 		lower, upper := boundaries[0], boundaries[len(boundaries)-1]
-		if canonicalType(defaultVal) == canonicalType(lower) &&
+		if types.SameTypeClass(defaultVal, lower) &&
 			types.CompareOrder(defaultVal, lower, types.Ascending) != types.Less &&
 			types.CompareOrder(defaultVal, upper, types.Ascending) == types.Less {
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketDefaultInRange,
@@ -431,14 +431,4 @@ func isGroupExpression(v any) bool {
 		return v.Len() > 0 && strings.HasPrefix(v.Keys()[0], "$")
 	}
 	return false
-}
-
-// canonicalType names v's type, with all numbers one type, as mongod's
-// canonical type order does.
-func canonicalType(v any) string {
-	switch v.(type) {
-	case int32, int64, float64, types.Decimal128:
-		return "number"
-	}
-	return handlerparams.AliasFromType(v)
 }
