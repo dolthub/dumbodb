@@ -1805,11 +1805,7 @@ func filterFieldExprBitsAllClear(fieldValue, maskValue any) (bool, error) {
 		return (^uint64(value) & bitmask) == bitmask, nil
 
 	case types.Binary:
-		return false, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrNotImplemented,
-			"BinData() not supported yet",
-			"$bitsAllClear",
-		)
+		return binaryBitTest("$bitsAllClear", value.B, maskValue, bitmask), nil
 
 	case int32:
 		return (^uint64(value) & bitmask) == bitmask, nil
@@ -1868,11 +1864,7 @@ func filterFieldExprBitsAllSet(fieldValue, maskValue any) (bool, error) {
 		return (uint64(value) & bitmask) == bitmask, nil
 
 	case types.Binary:
-		return false, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrNotImplemented,
-			"BinData() not supported yet",
-			"$bitsAllSet",
-		)
+		return binaryBitTest("$bitsAllSet", value.B, maskValue, bitmask), nil
 
 	case int32:
 		return (uint64(value) & bitmask) == bitmask, nil
@@ -1908,11 +1900,7 @@ func filterFieldExprBitsAnyClear(fieldValue, maskValue any) (bool, error) {
 		return (^uint64(value) & bitmask) != 0, nil
 
 	case types.Binary:
-		return false, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrNotImplemented,
-			"BinData() not supported yet",
-			"$bitsAnyClear",
-		)
+		return binaryBitTest("$bitsAnyClear", value.B, maskValue, bitmask), nil
 
 	case int32:
 		return (^uint64(value) & bitmask) != 0, nil
@@ -1948,11 +1936,7 @@ func filterFieldExprBitsAnySet(fieldValue, maskValue any) (bool, error) {
 		return (uint64(value) & bitmask) != 0, nil
 
 	case types.Binary:
-		return false, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrNotImplemented,
-			"BinData() not supported yet",
-			"$bitsAnySet",
-		)
+		return binaryBitTest("$bitsAnySet", value.B, maskValue, bitmask), nil
 
 	case int32:
 		return (uint64(value) & bitmask) != 0, nil
@@ -1983,6 +1967,57 @@ func isInvalidBitwiseValue(value float64) bool {
 		math.IsInf(value, 0) ||
 		value >= math.MaxInt64 ||
 		value < math.MinInt64
+}
+
+// binaryBitTest applies a bitwise query operator to BinData, whose bit p is
+// bit p%8 of byte p/8; bits past its end are clear.
+func binaryBitTest(operator string, data []byte, maskValue any, bitmask uint64) bool {
+	var set, clear bool
+	for _, p := range bitPositions(maskValue, bitmask) {
+		if p/8 < uint64(len(data)) && data[p/8]&(1<<(p%8)) != 0 {
+			set = true
+		} else {
+			clear = true
+		}
+	}
+	switch operator {
+	case "$bitsAllSet":
+		return !clear
+	case "$bitsAnySet":
+		return set
+	case "$bitsAllClear":
+		return !set
+	default:
+		return clear
+	}
+}
+
+// bitPositions returns the bit positions a validated bitwise operator mask
+// tests; bitmask is the mask getBinaryMaskParam returned for it.
+func bitPositions(maskValue any, bitmask uint64) []uint64 {
+	var positions []uint64
+	switch mask := maskValue.(type) {
+	case *types.Array:
+		for i := range mask.Len() {
+			p, _ := handlerparams.GetWholeNumberParam(must.NotFail(mask.Get(i)))
+			positions = append(positions, uint64(p))
+		}
+	case types.Binary:
+		for i, b := range mask.B {
+			for bit := range 8 {
+				if b&(1<<bit) != 0 {
+					positions = append(positions, uint64(i*8+bit))
+				}
+			}
+		}
+	default:
+		for bit := range 64 {
+			if bitmask&(1<<bit) != 0 {
+				positions = append(positions, uint64(bit))
+			}
+		}
+	}
+	return positions
 }
 
 // decimal128ToInt64 converts d to int64 for the bitwise operators. ok is
