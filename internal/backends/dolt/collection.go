@@ -2489,9 +2489,9 @@ func wrapScanPlan(params *backends.ExplainParams, scan *explainStage, sorted boo
 		fetch.input = &explainStage{stage: "SKIP", input: scan.input, amount: params.Skip}
 		node, skipped = &fetch, true
 	}
-	// An aggregate's projection runs under its skip and limit, and under a
-	// sort that has no limit to absorb.
-	if projStage != "" && params.Command == "aggregate" && (!sortPresent || params.Limit == 0) {
+	// An aggregate's projection runs under a sort that has no limit to
+	// absorb, else over its skip and under its limit.
+	if projStage != "" && params.Command == "aggregate" && sortPresent && params.Limit == 0 {
 		node = &explainStage{stage: projStage, input: node}
 		projStage = ""
 	}
@@ -2500,6 +2500,10 @@ func wrapScanPlan(params *backends.ExplainParams, scan *explainStage, sorted boo
 	}
 	if params.Skip > 0 && !skipped {
 		node = &explainStage{stage: "SKIP", input: node, amount: params.Skip}
+	}
+	if projStage != "" && params.Command == "aggregate" && !sortPresent {
+		node = &explainStage{stage: projStage, input: node}
+		projStage = ""
 	}
 	// A scan that sorts its index keys also absorbs the limit.
 	keysSorted := scan.input != nil && scan.input.stage == "SORT"
