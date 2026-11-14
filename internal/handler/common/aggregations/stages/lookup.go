@@ -249,8 +249,9 @@ type lookup struct {
 	// OptimizeSubPipeline.
 	optimized *types.Array
 	// pushedPlan is the plan of the query the sub-pipeline's leading $match
-	// stages are pushed into, once known.
-	pushedPlan *common.PlanMode
+	// stages are pushed into, nil when it cannot matter: without $expr.
+	pushedPlan      *common.PlanMode
+	pushedPlanKnown bool
 	// unwind is the following $unwind of as, which this stage performs by
 	// emitting one document per match (see MarkLookupsUnwound).
 	unwind *unwind
@@ -1322,11 +1323,15 @@ func (l *lookup) pipelineIter(ctx context.Context, fetcher CollectionFetcher, fr
 // an index scan when an index serves one of its fields, the foreign field of
 // a localField join included, else a collection scan.
 func (l *lookup) setPushedMatchPlans(ctx context.Context, fetcher CollectionFetcher, built []aggregations.Stage) {
-	pushed, filter := PushedMatches(built)
-	if len(pushed) == 0 || !common.FilterUsesExpr(filter) {
+	if l.pushedPlanKnown && l.pushedPlan == nil {
 		return
 	}
-	if l.pushedPlan == nil {
+	pushed, filter := PushedMatches(built)
+	if !l.pushedPlanKnown {
+		l.pushedPlanKnown = true
+		if len(pushed) == 0 || !common.FilterUsesExpr(filter) {
+			return
+		}
 		var indexed []string
 		for _, field := range filterFields(filter, nil) {
 			if common.ConstrainsField(filter, field) && fetcher.IndexedField(ctx, l.from, field) {

@@ -554,6 +554,8 @@ func findFirstElemMatchElement(arr *types.Array, condition *types.Document) (any
 		}
 	}
 
+	fc := NewFilterContext(nil, PlanCollectionScan)
+	matchFilter := must.NotFail(types.NewDocument("__v__", condition))
 	for {
 		_, elem, err := iter.Next()
 		if errors.Is(err, iterator.ErrIteratorDone) {
@@ -569,12 +571,11 @@ func findFirstElemMatchElement(arr *types.Array, condition *types.Document) (any
 		if isOperatorCondition {
 			// Wrap scalar/array element in a document with a dummy key to apply operator filter.
 			wrapDoc := must.NotFail(types.NewDocument("__v__", elem))
-			matchFilter := must.NotFail(types.NewDocument("__v__", condition))
-			matches, err = FilterDocument(wrapDoc, matchFilter)
+			matches, err = fc.Match(wrapDoc, matchFilter)
 		} else {
 			// Element must be a document to match field conditions.
 			if elemDoc, ok := elem.(*types.Document); ok {
-				matches, err = FilterDocument(elemDoc, condition)
+				matches, err = fc.Match(elemDoc, condition)
 			}
 		}
 
