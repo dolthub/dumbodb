@@ -169,20 +169,14 @@ func UpperBoundInclusive(fieldValue any) []byte {
 //
 // The limit bounds the prolly tree's fan-out, not a single node: Dolt splits
 // nodes near 4KB, and an internal node repeats its children's last keys, so
-// long keys leave few children per node. Dolt allows at most 15 levels; past
-// that an insert panics in the chunker. Keys of 3000 bytes overflowed after
-// about 15,000 entries. Measured at 1024 bytes (2026-11-13), with values of the
-// same size: 10 levels at 400,000 entries and 11 at 2 million, one more level
-// every four- to five-fold, so 15 levels takes hundreds of millions of entries.
+// long keys leave few children per node and make the tree deep. Keys of 3000
+// bytes give nearly binary trees. Measured at 1024 bytes (2026-11-13), with
+// values of the same size: 10 levels at 400,000 entries and 11 at 2 million,
+// one more level every four- to five-fold.
 const MaxKeyLength = 1024
 
 // ErrKeyTooLong reports a key longer than MaxKeyLength.
 var ErrKeyTooLong = errors.New("key too large to index")
-
-// ErrTreeTooTall reports a write that would grow a collection's or index's
-// tree past the levels Dolt supports, which only keys averaging near
-// MaxKeyLength can do.
-var ErrTreeTooTall = tree.ErrTreeTooTall
 
 // ErrCannotExtractGeoKeys reports a value a 2dsphere index cannot hold.
 var ErrCannotExtractGeoKeys = errors.New("Can't extract geo keys")

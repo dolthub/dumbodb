@@ -73,15 +73,12 @@ Table (DTBL)         schema -> TableSchema (DSCH)
 Primary keys (`KeyString(_id)`) and secondary index keys (the indexed values'
 KeyStrings, then the `_id`'s) are capped at 1024 encoded bytes
 (`index.MaxKeyLength`); a longer key fails the write with `KeyTooLong` (17280).
-The cap protects the tree's depth. Dolt splits nodes near 4KB, and an internal
-node repeats the last key of each child, so long keys leave few children per
-node. Dolt allows at most 15 levels and panics in the chunker past that: keys of
-3000 bytes overflow after about 15,000 entries. At 1024 bytes the tree measured
-11 levels at 2 million entries, gaining a level every four- to five-fold, so
-15 levels takes hundreds of millions of entries. A write past the limit fails
-with Dolt's `tree.ErrTreeTooTall` (`index.ErrTreeTooTall`), reported to clients
-as `OperationFailed` (96). (A single key above about
-32KB would also panic Dolt with "impossible node".) The encoded size can exceed
+The cap keeps trees shallow. Dolt splits nodes near 4KB, and an internal node
+repeats the last key of each child, so long keys leave few children per node:
+keys of 3000 bytes give a nearly binary tree, and every lookup reads one node
+per level. At 1024 bytes the tree measured 11 levels at 2 million entries,
+gaining a level every four- to five-fold. (A single key above about 32KB would
+also panic Dolt with "impossible node".) The encoded size can exceed
 the value's size: strings carry a terminator and escape NUL bytes, collation indexes store sort keys, and hashed
 and text indexes store the values and words themselves. The README's
 Limitations section lists these cases. The column is still declared

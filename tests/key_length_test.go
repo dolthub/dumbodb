@@ -96,8 +96,8 @@ func TestKeyLength(t *testing.T) {
 }
 
 // TestKeyLength_ManyKeysAtLimit inserts enough keys at the length limit to
-// grow the primary and secondary trees deep, which overflowed Dolt's 15-level
-// limit when the cap was 4096 bytes.
+// grow the primary and secondary trees deep, which panicked Dolt when the cap
+// was 4096 bytes.
 func TestKeyLength_ManyKeysAtLimit(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()

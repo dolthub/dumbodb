@@ -25,9 +25,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestTreeTooTall writes keys far over MaxKeyLength, which Dolt arranges into
-// a binary tree, until the tree is too tall to grow.
-func TestTreeTooTall(t *testing.T) {
+// TestTallTree writes keys far over MaxKeyLength, which Dolt arranges into a
+// nearly binary tree, past the 15 levels Dolt once allowed.
+func TestTallTree(t *testing.T) {
 	ctx := context.Background()
 	m, err := NewEmptyMap(ctx, tree.NewTestNodeStore())
 	require.NoError(t, err)
@@ -36,7 +36,8 @@ func TestTreeTooTall(t *testing.T) {
 	kb := val.NewTupleBuilder(idxKeyDesc, nil)
 	vb := val.NewTupleBuilder(idxValDesc, nil)
 	const batch = 1000
-	for start := 0; start < 100*batch; start += batch {
+	const count = 40 * batch
+	for start := 0; start < count; start += batch {
 		mut := m.Mutate()
 		for i := start; i < start+batch; i++ {
 			kb.PutByteString(0, []byte(fmt.Sprintf("%08d", i)+pad))
@@ -47,10 +48,11 @@ func TestTreeTooTall(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, mut.Put(ctx, key, value))
 		}
-		if m, err = mut.Map(ctx); err != nil {
-			require.ErrorIs(t, err, ErrTreeTooTall)
-			return
-		}
+		m, err = mut.Map(ctx)
+		require.NoError(t, err)
 	}
-	t.Fatalf("tree reached %d levels without passing the limit", m.Height())
+	require.Greater(t, m.Height(), 15)
+	n, err := m.Count()
+	require.NoError(t, err)
+	require.Equal(t, count, n)
 }
