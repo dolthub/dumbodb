@@ -614,6 +614,12 @@ const (
 	// ErrSetEqualsConstantNotArray indicates a constant $setEquals operand that is not an array.
 	ErrSetEqualsConstantNotArray = ErrorCode(5887502) // Location5887502
 
+	// ErrZipInputsNotArray indicates $zip inputs that are not an array of expressions.
+	ErrZipInputsNotArray = ErrorCode(34461) // Location34461
+
+	// ErrZipInputNotArray indicates a $zip input that is not an array.
+	ErrZipInputNotArray = ErrorCode(34468) // Location34468
+
 	// ErrStageUnwindNoPath indicates that $unwind aggregation stage is empty.
 	ErrStageUnwindNoPath = ErrorCode(28812) // Location28812
 
