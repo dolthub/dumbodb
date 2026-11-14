@@ -72,29 +72,73 @@ var notAllowedInFacet = map[string]bool{
 
 // CheckFacetQueryStats returns mongod's error for a $queryStats in a $facet of
 // {aggregate: 1} on admin, where its namespace is right but its place is not.
+// The branches are parsed in order, so an earlier branch's error comes first.
 func CheckFacetQueryStats(stage *types.Document) error {
 	spec, ok := must.NotFail(stage.Get("$facet")).(*types.Document)
 	if !ok {
 		return nil
 	}
-	for _, v := range spec.Values() {
-		pipeline, ok := v.(*types.Array)
+	for _, k := range spec.Keys() {
+		pipeline, ok := must.NotFail(spec.Get(k)).(*types.Array)
 		if !ok {
 			return nil
 		}
+		q := -1
 		for i := range pipeline.Len() {
-			sub, ok := must.NotFail(pipeline.Get(i)).(*types.Document)
-			if !ok || sub.Command() != "$queryStats" {
-				continue
+			if sub, ok := must.NotFail(pipeline.Get(i)).(*types.Document); ok && sub.Command() == "$queryStats" {
+				q = i
+				break
 			}
-			if err := CheckQueryStatsSpec(sub); err != nil {
+		}
+		before := pipeline
+		if q >= 0 {
+			before = types.MakeArray(q)
+			for i := range q {
+				before.Append(must.NotFail(pipeline.Get(i)))
+			}
+		}
+		for i := range before.Len() {
+			sub := must.NotFail(before.Get(i))
+			branch := must.NotFail(types.NewDocument(k, must.NotFail(types.NewArray(sub))))
+			if _, err := newFacet(must.NotFail(types.NewDocument("$facet", branch))); err != nil {
 				return err
 			}
-			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrStageNotAllowedInFacet,
-				"$queryStats is not allowed to be used within a $facet stage", "$facet (stage)")
+			if d, ok := sub.(*types.Document); ok {
+				if err := parseStageOffline(d); err != nil {
+					return err
+				}
+			}
 		}
+		if q < 0 {
+			continue
+		}
+		if err := CheckQueryStatsSpec(must.NotFail(pipeline.Get(q)).(*types.Document)); err != nil {
+			return err
+		}
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrStageNotAllowedInFacet,
+			"$queryStats is not allowed to be used within a $facet stage", "$facet (stage)")
 	}
 	return nil
+}
+
+// parseStageOffline parses a stage without reading any collection, for its
+// parse errors only.
+func parseStageOffline(stage *types.Document) error {
+	noFetch := FetcherFunc(func(context.Context, string, *types.Document) ([]*types.Document, error) { return nil, nil })
+	var err error
+	switch stage.Command() {
+	case "$lookup":
+		_, err = NewLookupStage(stage.DeepCopy(), noFetch)
+	case "$graphLookup":
+		_, err = NewGraphLookupStage(stage.DeepCopy(), noFetch)
+	case "$unionWith":
+		_, err = NewUnionWithStage(stage.DeepCopy(), noFetch)
+	default:
+		if FailsParsing(stage) {
+			_, err = NewStage(stage.DeepCopy())
+		}
+	}
+	return err
 }
 
 // newFacet creates a new $facet stage.
