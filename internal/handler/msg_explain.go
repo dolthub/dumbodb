@@ -302,7 +302,12 @@ func cloneExecutionStage(node *types.Document, run explainRun, root, aboveMatch 
 		d.Set("keyPattern", v)
 	}
 	if childDoc != nil {
-		d.Set("inputStage", cloneExecutionStage(childDoc, run, false, aboveMatch))
+		input := cloneExecutionStage(childDoc, run, false, aboveMatch)
+		// A projection under a sort passes up every match.
+		if child, _ := childDoc.Get("stage"); stage == "SORT" && aboveMatch && isProjectionStage(child) {
+			input.Set("nReturned", run.matched)
+		}
+		d.Set("inputStage", input)
 	}
 	if childArr != nil {
 		out := types.MakeArray(childArr.Len())
@@ -320,6 +325,14 @@ func cloneExecutionStage(node *types.Document, run explainRun, root, aboveMatch 
 		d.Set("inputStages", out)
 	}
 	return d
+}
+
+func isProjectionStage(stage any) bool {
+	switch stage {
+	case "PROJECTION_SIMPLE", "PROJECTION_DEFAULT", "PROJECTION_COVERED":
+		return true
+	}
+	return false
 }
 
 // explainableCommands are the commands, by canonical name, that MongoDB 8.0
