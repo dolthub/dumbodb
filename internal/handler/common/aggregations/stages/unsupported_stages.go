@@ -129,6 +129,51 @@ func newQuerySettings(stage *types.Document) (aggregations.Stage, error) {
 		"'$querySettings' can only be run with {aggregate: 1}", "$querySettings (stage)")
 }
 
+// ListClusterCatalogSpec is a parsed $listClusterCatalog specification.
+type ListClusterCatalogSpec struct {
+	Shards                 bool
+	BalancingConfiguration bool
+}
+
+// ParseListClusterCatalogSpec parses a $listClusterCatalog stage, checking its
+// fields in order as mongod's IDL parser does.
+func ParseListClusterCatalogSpec(stage *types.Document) (*ListClusterCatalogSpec, error) {
+	const arg = "$listClusterCatalog (stage)"
+	v := must.NotFail(stage.Get("$listClusterCatalog"))
+	spec, ok := v.(*types.Document)
+	if !ok {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrListClusterCatalogNotObject,
+			"$listClusterCatalog must take an object but found: $listClusterCatalog: "+types.FormatAnyValue(v), arg)
+	}
+	var res ListClusterCatalogSpec
+	seen := map[string]bool{}
+	values := spec.Values()
+	for i, key := range spec.Keys() {
+		var dst *bool
+		switch key {
+		case "shards":
+			dst = &res.Shards
+		case "balancingConfiguration":
+			dst = &res.BalancingConfiguration
+		default:
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIDLUnknownField,
+				fmt.Sprintf("BSON field '$listClusterCatalog.%s' is an unknown field.", key), arg)
+		}
+		if seen[key] {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIDLDuplicateField,
+				fmt.Sprintf("BSON field '$listClusterCatalog.%s' is a duplicate field", key), arg)
+		}
+		seen[key] = true
+		b, ok := values[i].(bool)
+		if !ok {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrTypeMismatch,
+				fmt.Sprintf("Field '%s' should be a boolean value, but found: %s", key, handlerparams.AliasFromType(values[i])), arg)
+		}
+		*dst = b
+	}
+	return &res, nil
+}
+
 func newListClusterCatalog(*types.Document) (aggregations.Stage, error) {
 	return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrListClusterCatalogOnCollection,
 		"The $listClusterCatalog stage must run on a database, not a collection.", "$listClusterCatalog (stage)")
