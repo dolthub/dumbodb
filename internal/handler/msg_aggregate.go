@@ -1876,6 +1876,18 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 
 		existingMap := make(map[string]*existingEntry, len(params.Docs))
 
+		// A dotted 'on' field is matched as mongod's update query matches
+		// it, so a path may also reach into the target's arrays.
+		var onFilters []*types.Document
+		var dottedMatches []*existingEntry
+		if mergeOnDotted(params.On) {
+			onFilters = make([]*types.Document, len(params.Docs))
+			for i, incoming := range params.Docs {
+				onFilters[i] = mergeOnFilter(incoming, params.On)
+			}
+			dottedMatches = make([]*existingEntry, len(params.Docs))
+		}
+
 		for i := 0; ; i++ {
 			_, existing, nextErr := qRes.Iter.Next()
 			if errors.Is(nextErr, iterator.ErrIteratorDone) {
@@ -1884,6 +1896,26 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 			if nextErr != nil {
 				qRes.Iter.Close()
 				return lazyerrors.Error(nextErr)
+			}
+			if onFilters != nil {
+				var entry *existingEntry
+				for j, filter := range onFilters {
+					if dottedMatches[j] != nil {
+						continue
+					}
+					ok, err := common.FilterDocument(existing, filter)
+					if err != nil {
+						qRes.Iter.Close()
+						return lazyerrors.Error(err)
+					}
+					if ok {
+						if entry == nil {
+							entry = &existingEntry{doc: existing, index: i}
+						}
+						dottedMatches[j] = entry
+					}
+				}
+				continue
 			}
 			if key := buildMergeKey(existing, params.On); wanted[key] {
 				existingMap[key] = &existingEntry{doc: existing, index: i}
@@ -1906,6 +1938,10 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 		for i, incoming := range params.Docs {
 			key := buildMergeKey(incoming, params.On)
 			entry, matched := existingMap[key]
+			if dottedMatches != nil {
+				entry = dottedMatches[i]
+				matched = entry != nil
+			}
 
 			if params.ApplyWhenMatched != nil {
 				var existing *types.Document
@@ -2032,6 +2068,32 @@ func wrapAggregateExecutorError(err error) error {
 		cmdErr.Code(),
 		"PlanExecutor error during aggregation :: caused by :: "+inner,
 	)
+}
+
+// mergeOnDotted reports whether any $merge 'on' field is a dotted path.
+func mergeOnDotted(on []string) bool {
+	for _, field := range on {
+		if strings.Contains(field, ".") {
+			return true
+		}
+	}
+	return false
+}
+
+// mergeOnFilter returns the equality query on the 'on' fields of incoming
+// with which mongod finds the target document to update.
+func mergeOnFilter(incoming *types.Document, on []string) *types.Document {
+	filter := types.MakeDocument(len(on))
+	for _, field := range on {
+		var v any = types.Null
+		if path, err := types.NewPathFromString(field); err == nil {
+			if got, err := incoming.GetByPath(path); err == nil {
+				v = got
+			}
+		}
+		filter.Set(field, must.NotFail(types.NewDocument("$eq", v)))
+	}
+	return filter
 }
 
 // This key is used to match incoming documents against existing documents in $merge.
