@@ -18,16 +18,22 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	stdsort "sort"
+	"strconv"
+	"strings"
 
 	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
+	"github.com/dolthub/dumbodb/internal/util/must"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 // graphLookup represents the $graphLookup aggregation stage.
@@ -67,134 +73,194 @@ func NewGraphLookupStage(stage *types.Document, fetcher CollectionFetcher) (aggr
 		return nil, err
 	}
 
+	fail := func(code handlererrors.ErrorCode, msg string) error {
+		return handlererrors.NewCommandErrorMsgWithArgument(code, msg, "$graphLookup (stage)")
+	}
+
 	specDoc, ok := spec.(*types.Document)
 	if !ok {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrFailedToParse,
-			fmt.Sprintf("$graphLookup specification must be an object, got %s", types.FormatAnyValue(spec)),
-			"$graphLookup (stage)",
-		)
+		return nil, fail(handlererrors.ErrFailedToParse,
+			"the $graphLookup stage specification must be an object, but found "+handlerparams.AliasFromType(spec))
 	}
 
-	from, err := requireStringField(specDoc, "from", "$graphLookup")
+	// mongod reads 'from' first, then the other fields in order.
+	fromVal, err := specDoc.Get("from")
 	if err != nil {
-		return nil, err
+		return nil, fail(handlererrors.ErrFailedToParse,
+			"missing 'from' option to $graphLookup stage specification: "+types.FormatAnyValue(specDoc))
 	}
-
-	startWithVal, err := specDoc.Get("startWith")
-	if err != nil {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrFailedToParse,
-			"$graphLookup requires a 'startWith' option",
-			"$graphLookup (stage)",
-		)
-	}
-
-	if err = checkStartWith(startWithVal); err != nil {
-		return nil, err
-	}
-
-	connectFromField, err := requireStringField(specDoc, "connectFromField", "$graphLookup")
-	if err != nil {
-		return nil, err
-	}
-
-	connectToField, err := requireStringField(specDoc, "connectToField", "$graphLookup")
-	if err != nil {
-		return nil, err
-	}
-
-	asField, err := requireStringField(specDoc, "as", "$graphLookup")
-	if err != nil {
-		return nil, err
+	from, ok := fromVal.(string)
+	if !ok {
+		if fromDoc, isDoc := fromVal.(*types.Document); isDoc {
+			db, _ := fromDoc.Get("db")
+			coll, _ := fromDoc.Get("coll")
+			return nil, fail(handlererrors.ErrFailedToParse, fmt.Sprintf(
+				"$graphLookup with syntax {from: {db:<>, coll:<>},..} is not supported for db: %v and coll: %v", db, coll))
+		}
+		return nil, fail(handlererrors.ErrFailedToParse,
+			"$graphLookup 'from' field must be a string, but found "+handlerparams.AliasFromType(fromVal))
 	}
 
 	gl := &graphLookup{
-		cmp:              operators.CollationOf(stage),
-		from:             from,
-		startWith:        startWithVal,
-		connectFromField: connectFromField,
-		connectToField:   connectToField,
-		as:               asField,
-		maxDepth:         -1,
-		fetcher:          fetcher,
+		cmp:      operators.CollationOf(stage),
+		from:     from,
+		maxDepth: -1,
+		fetcher:  fetcher,
 	}
 
-	if specDoc.Has("maxDepth") {
-		maxDepthVal, _ := specDoc.Get("maxDepth")
-
-		switch v := maxDepthVal.(type) {
-		case int32:
-			gl.maxDepth = int64(v)
-		case int64:
-			gl.maxDepth = v
-		case float64:
-			gl.maxDepth = int64(v)
+	var hasStartWith bool
+	for _, key := range specDoc.Keys() {
+		v := must.NotFail(specDoc.Get(key))
+		switch key {
+		case "from":
+		case "startWith":
+			if err = checkStartWith(v); err != nil {
+				return nil, err
+			}
+			gl.startWith, hasStartWith = v, true
+		case "maxDepth":
+			if gl.maxDepth, err = graphLookupMaxDepth(v); err != nil {
+				return nil, err
+			}
+		case "restrictSearchWithMatch":
+			match, isDoc := v.(*types.Document)
+			if !isDoc {
+				return nil, fail(handlererrors.ErrGraphLookupMatchNotObject,
+					"restrictSearchWithMatch must be an object, found "+handlerparams.AliasFromType(v))
+			}
+			common.CanonicalizeFilter(match)
+			if filterHasText(match) {
+				err = handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
+					"$text is not allowed in this context", "$graphLookup (stage)")
+			} else if err = validateMatch(match); err == nil {
+				err = common.ValidateFilter(match, gl.cmp)
+			}
+			if err != nil {
+				var cerr *handlererrors.CommandError
+				if errors.As(err, &cerr) {
+					return nil, cerr.WithMessage("Failed to parse 'restrictSearchWithMatch' option to $graphLookup :: caused by :: " + cerr.Err().Error())
+				}
+				return nil, err
+			}
+			gl.restrictSearchWithMatch = match
+		case "as", "connectFromField", "connectToField", "depthField":
+			str, isString := v.(string)
+			if !isString {
+				return nil, fail(handlererrors.ErrGraphLookupNotString, fmt.Sprintf(
+					"expected string as argument for %s, found: %s", key, handlerparams.AliasFromType(v)))
+			}
+			if err = checkGraphLookupFieldPath(str); err != nil {
+				return nil, err
+			}
+			switch key {
+			case "as":
+				gl.as = str
+			case "connectFromField":
+				gl.connectFromField = str
+			case "connectToField":
+				gl.connectToField = str
+			case "depthField":
+				gl.depthField = str
+			}
 		default:
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrFailedToParse,
-				fmt.Sprintf("$graphLookup 'maxDepth' must be a number, got %s", types.FormatAnyValue(maxDepthVal)),
-				"$graphLookup (stage)",
-			)
-		}
-
-		if gl.maxDepth < 0 {
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrFailedToParse,
-				"$graphLookup 'maxDepth' must be non-negative",
-				"$graphLookup (stage)",
-			)
+			return nil, fail(handlererrors.ErrGraphLookupUnknownArgument, "Unknown argument to $graphLookup: "+key)
 		}
 	}
 
-	if specDoc.Has("depthField") {
-		gl.depthField, err = requireStringField(specDoc, "depthField", "$graphLookup")
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	if specDoc.Has("restrictSearchWithMatch") {
-		rswmVal, _ := specDoc.Get("restrictSearchWithMatch")
-
-		rswmDoc, ok := rswmVal.(*types.Document)
-		if !ok {
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrFailedToParse,
-				fmt.Sprintf("$graphLookup 'restrictSearchWithMatch' must be an object, got %s", types.FormatAnyValue(rswmVal)),
-				"$graphLookup (stage)",
-			)
-		}
-
-		common.CanonicalizeFilter(rswmDoc)
-		gl.restrictSearchWithMatch = rswmDoc
+	if !hasStartWith || gl.as == "" || gl.connectFromField == "" || gl.connectToField == "" {
+		return nil, fail(handlererrors.ErrGraphLookupMissingArgument,
+			"$graphLookup requires 'from', 'as', 'startWith', 'connectFromField', and 'connectToField' to be specified.")
 	}
 
 	return gl, nil
 }
 
-// requireStringField extracts a required string field from a document, returning a
-// structured command error on failure.
-func requireStringField(doc *types.Document, field, stageName string) (string, error) {
-	val, err := doc.Get(field)
-	if err != nil {
-		return "", handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrFailedToParse,
-			fmt.Sprintf("%s requires a '%s' option", stageName, field),
-			stageName+" (stage)",
-		)
+// filterHasText reports whether filter holds $text, at the top level or in a
+// logical operator's clauses.
+func filterHasText(filter *types.Document) bool {
+	for _, k := range filter.Keys() {
+		switch k {
+		case "$text":
+			return true
+		case "$and", "$or", "$nor":
+			clauses, ok := must.NotFail(filter.Get(k)).(*types.Array)
+			if !ok {
+				continue
+			}
+			for i := range clauses.Len() {
+				if c, ok := must.NotFail(clauses.Get(i)).(*types.Document); ok && filterHasText(c) {
+					return true
+				}
+			}
+		}
 	}
+	return false
+}
 
-	s, ok := val.(string)
-	if !ok {
-		return "", handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrFailedToParse,
-			fmt.Sprintf("%s '%s' must be a string, got %s", stageName, field, types.FormatAnyValue(val)),
-			stageName+" (stage)",
-		)
+// graphLookupMaxDepth returns a $graphLookup maxDepth, which must be a
+// non-negative integral number.
+func graphLookupMaxDepth(v any) (int64, error) {
+	fail := func(code handlererrors.ErrorCode, msg string) (int64, error) {
+		return 0, handlererrors.NewCommandErrorMsgWithArgument(code, msg, "$graphLookup (stage)")
 	}
+	var f float64
+	switch n := v.(type) {
+	case int32:
+		f = float64(n)
+	case int64:
+		if n < 0 {
+			return fail(handlererrors.ErrGraphLookupMaxDepthNegative, fmt.Sprintf("maxDepth requires a nonnegative argument, found: %d", n))
+		}
+		return n, nil
+	case float64:
+		f = n
+	case types.Decimal128:
+		d, err := strconv.ParseFloat(primitive.NewDecimal128(n.H, n.L).String(), 64)
+		if err != nil {
+			return fail(handlererrors.ErrGraphLookupMaxDepthNotIntegral, "maxDepth could not be represented as a long long: "+types.FormatAnyValue(v))
+		}
+		f = d
+	default:
+		return fail(handlererrors.ErrGraphLookupMaxDepthNotNumeric, "maxDepth must be numeric, found type: "+handlerparams.AliasFromType(v))
+	}
+	// mongod's messages show the value cast to a long long.
+	asLong := int64(math.MaxInt64)
+	if f < math.MaxInt64 && f > math.MinInt64 {
+		asLong = int64(f)
+	}
+	if f < 0 || math.IsNaN(f) {
+		return fail(handlererrors.ErrGraphLookupMaxDepthNegative, fmt.Sprintf("maxDepth requires a nonnegative argument, found: %d", asLong))
+	}
+	if f != math.Trunc(f) || f >= math.MaxInt64 {
+		return fail(handlererrors.ErrGraphLookupMaxDepthNotIntegral, fmt.Sprintf("maxDepth could not be represented as a long long: %d", asLong))
+	}
+	return int64(f), nil
+}
 
-	return s, nil
+// checkGraphLookupFieldPath returns mongod's FieldPath error for a
+// $graphLookup path argument.
+func checkGraphLookupFieldPath(path string) error {
+	fail := func(code handlererrors.ErrorCode, msg string) error {
+		return handlererrors.NewCommandErrorMsgWithArgument(code, msg, "$graphLookup (stage)")
+	}
+	const hint = "Consider using $getField or $setField for a field path with '.' or '$'. :: caused by :: "
+	switch {
+	case path == "":
+		return fail(handlererrors.ErrEmptyFieldPath, "FieldPath cannot be constructed with empty string")
+	case strings.HasSuffix(path, "."):
+		return fail(handlererrors.ErrInvalidFieldPath, "FieldPath must not end with a '.'.")
+	}
+	for _, name := range strings.Split(path, ".") {
+		switch {
+		case name == "":
+			return fail(handlererrors.ErrPathContainsEmptyElement, hint+"FieldPath field names may not be empty strings.")
+		case strings.HasPrefix(name, "$"):
+			return fail(handlererrors.ErrFieldPathInvalidName, hint+"FieldPath field names may not start with '$', given '"+name+"'.")
+		case strings.ContainsRune(name, 0):
+			return fail(handlererrors.ErrFieldPathNulByte, hint+"FieldPath field names may not contain '\\0', given '"+name+"'.")
+		}
+	}
+	return nil
 }
 
 func (gl *graphLookup) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
