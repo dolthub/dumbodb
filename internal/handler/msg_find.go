@@ -30,6 +30,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/stages"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -182,7 +183,7 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 		if err = checkHintType(params.Hint); err != nil {
 			return nil, err
 		}
-		if err = validateHint(connCtx, coll, params.Hint, "find", params.Sort, false); err != nil {
+		if err = validateHint(connCtx, db, params.Collection, coll, params.Hint, "find", params.Sort, false); err != nil {
 			return nil, err
 		}
 		if params.Sort.Len() == 0 {
@@ -231,10 +232,11 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 	closer := iterator.NewMultiCloser(iterator.CloserFunc(cancel))
 
 	var srcIter types.DocumentsIterator
+	planMode := common.PlanCollectionScan
 	var sorted bool
 	if isView {
 		viewCmp := collation.Parse(params.Collation).Comparator()
-		srcIter, err = viewSourceIterator(ctx, db, viewName, viewOn, viewPipeline, viewCmp, closer, h.DisablePushdown,
+		srcIter, err = viewSourceIterator(withDBName(ctx, params.DB), db, viewName, viewOn, viewPipeline, viewCmp, closer, h.DisablePushdown,
 			viewPipelineLength(findStageCount(params)))
 	} else if near, nerr := geoNearSource(ctx, coll, params.Filter, h.DisablePushdown); nerr != nil || near != nil {
 		if err = nerr; near != nil {
@@ -245,14 +247,14 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 		if queryRes, err = coll.Query(ctx, qp); err != nil {
 			return nil, handleMaxTimeMSError(err, params.MaxTimeMS, "find")
 		}
-		srcIter, sorted = queryRes.Iter, queryRes.Sorted
+		srcIter, sorted, planMode = queryRes.Iter, queryRes.Sorted, queryPlanMode(ctx, coll, params.Filter, params.Hint, queryRes)
 	}
 
 	if err != nil {
 		return nil, handleMaxTimeMSError(err, params.MaxTimeMS, "find")
 	}
 
-	iter, err := h.makeFindIter(iterator.WithContext(ctx, srcIter), closer, params, sorted)
+	iter, err := h.makeFindIter(iterator.WithContext(ctx, srcIter), closer, params, sorted, planMode)
 	if err != nil {
 		return nil, handleMaxTimeMSError(err, params.MaxTimeMS, "find")
 	}
@@ -429,15 +431,16 @@ func geoNearSource(ctx context.Context, coll backends.Collection, filter *types.
 // limit stops reading early.
 //
 //nolint:lll // for readability
-func (h *Handler) makeFindIter(iter types.DocumentsIterator, closer *iterator.MultiCloser, params *common.FindParams, sorted bool) (types.DocumentsIterator, error) {
+func (h *Handler) makeFindIter(iter types.DocumentsIterator, closer *iterator.MultiCloser, params *common.FindParams, sorted bool, planMode common.PlanMode) (types.DocumentsIterator, error) { //nolint:lll // for readability
 	closer.Add(iter)
 
 	// A non-simple collation compares strings locale-aware in both the filter
 	// and the sort.
 	filterDoc := params.Filter
 	cmp := collation.Parse(params.Collation).Comparator()
+	operators.BindCollation(filterDoc, cmp)
 
-	iter = common.FilterIteratorColl(iter, closer, filterDoc, cmp)
+	iter = common.FilterIteratorPlan(iter, closer, filterDoc, cmp, planMode)
 
 	if params.Min != nil || params.Max != nil {
 		hintDoc, _ := params.Hint.(*types.Document)
@@ -493,7 +496,7 @@ func (h *Handler) makeFindIter(iter types.DocumentsIterator, closer *iterator.Mu
 			iter, err = project.Process(context.Background(), iter, closer)
 		}
 	} else {
-		iter, err = common.ProjectionIterator(iter, closer, params.Projection, params.Filter)
+		iter, err = common.ProjectionIteratorColl(iter, closer, params.Projection, params.Filter, collation.Parse(params.Collation).Comparator())
 	}
 	if err != nil {
 		closer.Close()

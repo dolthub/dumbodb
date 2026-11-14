@@ -240,7 +240,7 @@ func newGetField(args ...any) (Operator, error) {
 }
 
 func (op *getFieldOp) Process(doc *types.Document) (any, error) {
-	if doc == nil {
+	if doc == nil && op.input == nil {
 		return types.Null, nil
 	}
 
@@ -335,6 +335,10 @@ func newFieldMutator(args []any, opName string, remove bool) (Operator, error) {
 	name, err := constantFieldName(parsed.field, opName)
 	if err != nil {
 		return nil, err
+	}
+	if strings.IndexByte(name, 0) >= 0 {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSetFieldNulByte,
+			"$setField: 'field' cannot contain an embedded null byte", opName)
 	}
 
 	op.name = name

@@ -49,6 +49,8 @@ type collMeta struct {
 	TimeField        string
 	MetaField        string
 	Granularity      string
+	// BucketSpanSeconds is 0 unless the bucket span was set explicitly.
+	BucketSpanSeconds int32
 	// MergeMode is the collection's declared merge mode. An empty value
 	// resolves to DefaultMergeMode, which keeps catalogs written before the
 	// field existed readable.
@@ -80,6 +82,7 @@ func collMetaToDoc(collName string, m *collMeta) (*types.Document, error) {
 		"metaField", m.MetaField,
 		"granularity", m.Granularity,
 		"mergeMode", m.MergeMode,
+		"bucketSpanSeconds", m.BucketSpanSeconds,
 	)
 	if err == nil && m.ClusteredIndexName != "" {
 		doc.Set("clusteredIndexName", m.ClusteredIndexName)
@@ -129,6 +132,9 @@ func docToCollMeta(doc *types.Document) *collMeta {
 	m.TimeField = getStr("timeField")
 	m.MetaField = getStr("metaField")
 	m.Granularity = getStr("granularity")
+	if v, err := doc.Get("bucketSpanSeconds"); err == nil {
+		m.BucketSpanSeconds, _ = v.(int32)
+	}
 	m.MergeMode = getStr("mergeMode")
 	m.ClusteredIndexName = getStr("clusteredIndexName")
 	return m

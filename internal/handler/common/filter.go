@@ -39,7 +39,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
-	"github.com/dolthub/dumbodb/internal/util/identitycache"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 	"github.com/dolthub/dumbodb/internal/util/must"
@@ -54,22 +53,93 @@ func FilterDocument(doc, filter *types.Document) (bool, error) {
 
 // FilterDocumentColl is FilterDocument with an optional collation comparator.
 // When cmp is nil, string comparison is binary (identical to FilterDocument).
+// It plans the filter for this call alone; a caller that filters many
+// documents keeps a FilterContext instead.
 func FilterDocumentColl(doc, filter *types.Document, cmp *collation.Comparator) (bool, error) {
-	iter := filter.Iterator()
-	defer iter.Close()
+	return NewFilterContext(cmp, PlanCollectionScan).Match(doc, filter)
+}
 
-	for {
-		filterKey, filterValue, err := iter.Next()
-		if err != nil {
-			if errors.Is(err, iterator.ErrIteratorDone) {
-				return true, nil
-			}
+// PlanMode is the kind of plan mongod answers a query with, which decides the
+// order it checks the query's predicates in.
+type PlanMode struct {
+	kind planKind
+	// boundField is the leading field of the index an index scan reads.
+	boundField string
+}
 
-			return false, lazyerrors.Error(err)
+type planKind int
+
+const (
+	planCollectionScan planKind = iota
+	planIndexScan
+	planUnpushed
+)
+
+var (
+	// PlanCollectionScan checks $expr last.
+	PlanCollectionScan = PlanMode{kind: planCollectionScan}
+	// PlanIndexScan, when an index serves the query, checks $expr first
+	// among the clauses of $or and $nor, and in a conjunction after $ne,
+	// $not, $nin and $exists: false but before the other predicates.
+	PlanIndexScan = PlanMode{kind: planIndexScan}
+	// PlanUnpushed is a $match mongod does not push into the query layer,
+	// which checks conditions in their written order.
+	PlanUnpushed = PlanMode{kind: planUnpushed}
+)
+
+// PlanIndexScanOn is PlanIndexScan reading an index led by field. The
+// index's bounds drop documents before any other predicate is checked, so
+// the conditions on field go first.
+func PlanIndexScanOn(field string) PlanMode {
+	return PlanMode{kind: planIndexScan, boundField: field}
+}
+
+// FilterContext holds what one command's filter evaluation keeps across
+// documents: its collation, the order to check each (sub)filter's conditions
+// in and its validated $expr operators. It belongs to one command and is not
+// safe for concurrent use.
+type FilterContext struct {
+	cmp   *collation.Comparator
+	mode  PlanMode
+	plans map[*types.Document][]int
+	// clauseOrders holds each logical operator's clause order, nil for the
+	// written order.
+	clauseOrders map[*types.Array][]int
+	exprs        map[*types.Document]operators.Operator
+	// elementDepth counts the array elements being filtered as documents.
+	elementDepth int
+	// indexedArrays are the arrays the current path reaches through a
+	// trailing array index, which the bitwise operators test as a whole.
+	indexedArrays []*types.Array
+}
+
+// NewFilterContext returns a context for filtering under cmp with a plan of
+// mode.
+func NewFilterContext(cmp *collation.Comparator, mode PlanMode) *FilterContext {
+	return &FilterContext{cmp: cmp, mode: mode}
+}
+
+// Match reports whether doc satisfies filter.
+func (fc *FilterContext) Match(doc, filter *types.Document) (bool, error) {
+	n := filter.Len()
+	if n == 0 {
+		return true, nil
+	}
+
+	// Top-level conditions are ANDed together, in the plan's order. Only a
+	// $expr, at the top level or in a logical operator, can make the order
+	// observable.
+	var order []int
+	if n > 1 && hasPlannedCondition(filter) {
+		order = fc.planFor(filter)
+	}
+	for k := range n {
+		i := k
+		if order != nil {
+			i = order[k]
 		}
-
-		// top-level filters are ANDed together
-		matches, err := filterDocumentPair(doc, filterKey, filterValue, cmp)
+		key, value := filter.FieldAt(i)
+		matches, err := filterDocumentPair(doc, key, value, fc)
 		if err != nil {
 			return false, lazyerrors.Error(err)
 		}
@@ -77,10 +147,290 @@ func FilterDocumentColl(doc, filter *types.Document, cmp *collation.Comparator) 
 			return false, nil
 		}
 	}
+	return true, nil
+}
+
+// hasPlannedCondition reports whether filter has a condition whose place in
+// the plan's order can differ from its written place.
+func hasPlannedCondition(filter *types.Document) bool {
+	for i := range filter.Len() {
+		switch key, _ := filter.FieldAt(i); key {
+		case "$expr", "$and", "$or", "$nor":
+			return true
+		}
+	}
+	return false
+}
+
+// conditionRank orders a conjunction's conditions for fc's plan: lower ranks
+// are checked first, and equal ranks keep their written order.
+func (fc *FilterContext) conditionRank(key string, value any) int {
+	expr := key == "$expr" || clausesUseExpr(key, value)
+	switch fc.mode.kind {
+	case planIndexScan:
+		switch {
+		case fc.mode.boundField != "" && fc.elementDepth == 0 && constrainsByCondition(key, value, fc.mode.boundField):
+			return -1
+		case expr:
+			return 1
+		case isNegationCondition(key, value):
+			return 0
+		}
+		return 2
+	case planUnpushed:
+		return 0
+	default:
+		if expr {
+			return 1
+		}
+		return 0
+	}
+}
+
+// planFor returns the order to check filter's conditions in, or nil for the
+// written order.
+func (fc *FilterContext) planFor(filter *types.Document) []int {
+	if order, ok := fc.plans[filter]; ok {
+		return order
+	}
+	keys, values := filter.Keys(), filter.Values()
+	ranks := make([]int, len(keys))
+	sorted := true
+	for i, k := range keys {
+		ranks[i] = fc.conditionRank(k, values[i])
+		if i > 0 && ranks[i] < ranks[i-1] {
+			sorted = false
+		}
+	}
+	var order []int
+	if !sorted {
+		order = make([]int, len(keys))
+		for i := range order {
+			order[i] = i
+		}
+		slices.SortStableFunc(order, func(a, b int) int { return ranks[a] - ranks[b] })
+	}
+	if fc.plans == nil {
+		fc.plans = map[*types.Document][]int{}
+	}
+	fc.plans[filter] = order
+	return order
+}
+
+// clauseOrderFor returns the order to check the clauses of a logical
+// operator in, or nil for their written order. $and's clauses form a
+// conjunction; $or's and $nor's clauses using $expr go last in a collection
+// scan and first otherwise.
+func (fc *FilterContext) clauseOrderFor(operator string, clauses *types.Array) []int {
+	if order, ok := fc.clauseOrders[clauses]; ok {
+		return order
+	}
+	ranks := make([]int, clauses.Len())
+	sorted := true
+	for i := range clauses.Len() {
+		clause, _ := must.NotFail(clauses.Get(i)).(*types.Document)
+		switch {
+		case clause == nil:
+		case operator == "$and":
+			ranks[i] = fc.clauseRank(clause)
+		case filterUsesExpr(clause) && fc.mode.kind == planCollectionScan:
+			ranks[i] = 1
+		case filterUsesExpr(clause) && fc.mode.kind == planIndexScan:
+			ranks[i] = -1
+		}
+		if i > 0 && ranks[i] < ranks[i-1] {
+			sorted = false
+		}
+	}
+	var order []int
+	if !sorted {
+		order = make([]int, clauses.Len())
+		for i := range order {
+			order[i] = i
+		}
+		slices.SortStableFunc(order, func(a, b int) int { return ranks[a] - ranks[b] })
+	}
+	if fc.clauseOrders == nil {
+		fc.clauseOrders = map[*types.Array][]int{}
+	}
+	fc.clauseOrders[clauses] = order
+	return order
+}
+
+// clauseRank ranks a clause of $and as the conjunction's condition it holds:
+// a clause with one condition takes that condition's rank.
+func (fc *FilterContext) clauseRank(clause *types.Document) int {
+	if clause.Len() == 1 {
+		return fc.conditionRank(clause.Command(), must.NotFail(clause.Get(clause.Command())))
+	}
+	if filterUsesExpr(clause) {
+		return fc.conditionRank("$expr", nil)
+	}
+	return fc.conditionRank("", nil)
+}
+
+// isNegationCondition reports whether a field condition only rules values
+// out: $ne, $not, $nin or $exists: false, which an index plan checks before
+// $expr.
+func isNegationCondition(key string, value any) bool {
+	if strings.HasPrefix(key, "$") {
+		return false
+	}
+	cond, ok := value.(*types.Document)
+	if !ok || cond.Len() == 0 || !strings.HasPrefix(cond.Keys()[0], "$") {
+		return false
+	}
+	for _, op := range cond.Keys() {
+		switch op {
+		case "$ne", "$not", "$nin":
+		case "$exists":
+			if IsTruthy(must.NotFail(cond.Get(op))) {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// FilterUsesExpr reports whether filter has a $expr condition, at the top
+// level or in a logical operator's clauses.
+func FilterUsesExpr(filter *types.Document) bool {
+	return filter != nil && filterUsesExpr(filter)
+}
+
+// IndexablePredicateOn reports whether filter has a condition on field that
+// an index on it can serve, at the top level or in a top-level $and, as
+// mongod's planner would use the index.
+func IndexablePredicateOn(filter *types.Document, field string) bool {
+	if v, err := filter.Get(field); err == nil && indexableCondition(v) {
+		return true
+	}
+	clauses, ok := getOrNilArray(filter, "$and")
+	if !ok {
+		return false
+	}
+	for i := range clauses.Len() {
+		if clause, ok := must.NotFail(clauses.Get(i)).(*types.Document); ok && IndexablePredicateOn(clause, field) {
+			return true
+		}
+	}
+	return false
+}
+
+// ConstrainsField reports whether filter has a condition that bounds an index
+// on field: one on field itself, a top-level $and clause constraining it, or
+// an $or or $nor all of whose clauses constrain it.
+func ConstrainsField(filter *types.Document, field string) bool {
+	keys, values := filter.Keys(), filter.Values()
+	for i, key := range keys {
+		if constrainsByCondition(key, values[i], field) {
+			return true
+		}
+	}
+	return false
+}
+
+func constrainsByCondition(key string, value any, field string) bool {
+	switch key {
+	case field:
+		return boundsIndex(value)
+	case "$and", "$or", "$nor":
+	default:
+		return false
+	}
+	clauses, ok := value.(*types.Array)
+	if !ok || clauses.Len() == 0 {
+		return false
+	}
+	for i := range clauses.Len() {
+		clause, ok := must.NotFail(clauses.Get(i)).(*types.Document)
+		constrains := ok && ConstrainsField(clause, field)
+		if key == "$and" && constrains {
+			return true
+		}
+		if key != "$and" && !constrains {
+			return false
+		}
+	}
+	return key != "$and"
+}
+
+// boundsIndex reports whether a field condition gives an index on the field
+// bounds: any but a lone $size.
+func boundsIndex(cond any) bool {
+	ops, isDoc := cond.(*types.Document)
+	return !isDoc || ops.Len() != 1 || ops.Keys()[0] != "$size"
+}
+
+func getOrNilArray(doc *types.Document, key string) (*types.Array, bool) {
+	v, _ := doc.Get(key)
+	arr, ok := v.(*types.Array)
+	return arr, ok
+}
+
+// indexableCondition reports whether an index can serve a condition: a
+// value, or operators other than the negations, $exists: false, $size,
+// $all, $elemMatch and regular expressions.
+func indexableCondition(v any) bool {
+	if _, isRegex := v.(types.Regex); isRegex {
+		return false
+	}
+	cond, ok := v.(*types.Document)
+	if !ok || cond.Len() == 0 || !strings.HasPrefix(cond.Keys()[0], "$") {
+		return true
+	}
+	for _, op := range cond.Keys() {
+		switch op {
+		case "$regex", "$options", "$elemMatch", "$size", "$all", "$ne", "$nin", "$not", "$type", "$mod":
+			return false
+		case "$exists":
+			if !IsTruthy(must.NotFail(cond.Get(op))) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func isLogicalOperator(key string) bool {
+	return key == "$and" || key == "$or" || key == "$nor"
+}
+
+// clausesUseExpr reports whether a logical operator's clauses use $expr.
+func clausesUseExpr(key string, value any) bool {
+	switch key {
+	case "$and", "$or", "$nor":
+	default:
+		return false
+	}
+	clauses, ok := value.(*types.Array)
+	if !ok {
+		return false
+	}
+	for i := range clauses.Len() {
+		if clause, ok := must.NotFail(clauses.Get(i)).(*types.Document); ok && filterUsesExpr(clause) {
+			return true
+		}
+	}
+	return false
+}
+
+func filterUsesExpr(filter *types.Document) bool {
+	if filter.Has("$expr") {
+		return true
+	}
+	for _, k := range []string{"$and", "$or", "$nor"} {
+		if v, err := filter.Get(k); err == nil && clausesUseExpr(k, v) {
+			return true
+		}
+	}
+	return false
 }
 
 // filterDocumentPair handles a single filter element key/value pair {filterKey: filterValue}.
-func filterDocumentPair(doc *types.Document, filterKey string, filterValue any, cmp *collation.Comparator) (bool, error) {
+func filterDocumentPair(doc *types.Document, filterKey string, filterValue any, fc *FilterContext) (bool, error) {
 	var vals []any
 	var missing bool
 	filterSuffix := filterKey
@@ -112,18 +462,25 @@ func filterDocumentPair(doc *types.Document, filterKey string, filterValue any, 
 
 	if strings.HasPrefix(filterKey, "$") {
 		// {$operator: filterValue}
-		return filterOperator(doc, filterKey, filterValue, cmp)
+		return filterOperator(doc, filterKey, filterValue, fc)
 	}
 
 	switch filterValue := filterValue.(type) {
 	case *types.Document:
-		if res, ok := positionalDocumentEquality(doc, filterKey, vals, filterValue); ok {
+		if res, ok := positionalDocumentEquality(doc, filterKey, vals, filterValue, fc.cmp); ok {
 			return res, nil
+		}
+		if hasBitwiseOperator(filterValue) {
+			if indexed := indexedArrays(doc, filterKey); indexed != nil {
+				outer := fc.indexedArrays
+				fc.indexedArrays = indexed
+				defer func() { fc.indexedArrays = outer }()
+			}
 		}
 		if filterSuffix == filterKey {
 			// A top-level key has one branch, which reads the same value from
 			// doc as from a {filterKey: value} copy.
-			return filterFieldExpr(doc, filterKey, filterSuffix, filterValue, cmp)
+			return filterFieldExpr(doc, filterKey, filterSuffix, filterValue, fc)
 		}
 		branches := make([]*types.Document, 0, len(vals)+1)
 		for _, val := range vals {
@@ -137,10 +494,10 @@ func filterDocumentPair(doc *types.Document, filterKey string, filterValue any, 
 
 		if len(branches) == 1 {
 			// {field: {expr}} or {field: {document}}
-			return filterFieldExpr(branches[0], filterKey, filterSuffix, filterValue, cmp)
+			return filterFieldExpr(branches[0], filterKey, filterSuffix, filterValue, fc)
 		}
 
-		return filterFieldExprBranches(branches, filterKey, filterSuffix, filterValue, cmp)
+		return filterFieldExprBranches(branches, filterKey, filterSuffix, filterValue, fc)
 	case types.NullType:
 		if missing {
 			// comparing non-existent field with null returns true
@@ -148,7 +505,7 @@ func filterDocumentPair(doc *types.Document, filterKey string, filterValue any, 
 		}
 
 		for _, val := range vals {
-			if result := collCompare(val, filterValue, cmp); result == types.Equal {
+			if result := collCompare(val, filterValue, fc.cmp); result == types.Equal {
 				return true, nil
 			}
 		}
@@ -167,7 +524,7 @@ func filterDocumentPair(doc *types.Document, filterKey string, filterValue any, 
 		}
 	default:
 		for _, val := range vals {
-			if equalsOrHasElement(val, filterValue, cmp) {
+			if equalsOrHasElement(val, filterValue, fc.cmp) {
 				return true, nil
 			}
 		}
@@ -202,7 +559,7 @@ func equalsOrHasElement(value, target any, cmp *collation.Comparator) bool {
 // with document operands when the path ends in an array index. MongoDB does not
 // expand the array such a path reaches, so it equals doc only if it is that
 // document. ok is false for other filters and paths.
-func positionalDocumentEquality(doc *types.Document, filterKey string, vals []any, filter *types.Document) (res, ok bool) {
+func positionalDocumentEquality(doc *types.Document, filterKey string, vals []any, filter *types.Document, cmp *collation.Comparator) (res, ok bool) {
 	// Runs per document, so rule out a path without an index suffix cheaply.
 	dot := strings.LastIndexByte(filterKey, '.')
 	if dot < 0 {
@@ -261,7 +618,7 @@ func positionalDocumentEquality(doc *types.Document, filterKey string, vals []an
 			continue
 		}
 		for _, e := range expected {
-			if types.Compare(d, e) == types.Equal {
+			if collCompare(d, e, cmp) == types.Equal {
 				return !negate, true
 			}
 		}
@@ -269,20 +626,71 @@ func positionalDocumentEquality(doc *types.Document, filterKey string, vals []an
 	return negate, true
 }
 
+// hasBitwiseOperator reports whether a field condition applies a bitwise
+// operator, directly or under $not.
+func hasBitwiseOperator(expr *types.Document) bool {
+	for _, op := range expr.Keys() {
+		switch op {
+		case "$bitsAllSet", "$bitsAnySet", "$bitsAllClear", "$bitsAnyClear":
+			return true
+		case "$not":
+			if inner, ok := must.NotFail(expr.Get(op)).(*types.Document); ok && hasBitwiseOperator(inner) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// indexedArrays returns the arrays a path ending in an array index reaches
+// by indexing an array, which MongoDB does not expand, or nil.
+func indexedArrays(doc *types.Document, filterKey string) []*types.Array {
+	dot := strings.LastIndexByte(filterKey, '.')
+	if dot < 0 {
+		return nil
+	}
+	index, err := strconv.Atoi(filterKey[dot+1:])
+	if err != nil || index < 0 {
+		return nil
+	}
+	path, err := types.NewPathFromString(filterKey)
+	if err != nil {
+		return nil
+	}
+	parents, err := commonpath.FindValues(doc, path.TrimSuffix(), &commonpath.FindValuesOpts{
+		FindArrayIndex:     true,
+		FindArrayDocuments: true,
+	})
+	if err != nil {
+		return nil
+	}
+	var indexed []*types.Array
+	for _, parent := range parents {
+		arr, ok := parent.(*types.Array)
+		if !ok || index >= arr.Len() {
+			continue
+		}
+		if elem, ok := must.NotFail(arr.Get(index)).(*types.Array); ok {
+			indexed = append(indexed, elem)
+		}
+	}
+	return indexed
+}
+
 // filterFieldExprBranches evaluates {field: {expr}} when a dotted path reaches
 // zero or several branches through arrays. Like MongoDB, each operator is
 // evaluated on its own: a positive operator needs one matching branch, a
 // negated one ($ne, $nin, $not, $exists: false) needs every branch to match.
-func filterFieldExprBranches(branches []*types.Document, filterKey, filterSuffix string, expr *types.Document, cmp *collation.Comparator) (bool, error) {
+func filterFieldExprBranches(branches []*types.Document, filterKey, filterSuffix string, expr *types.Document, fc *FilterContext) (bool, error) {
 	// Zero branches still evaluate once so invalid operator arguments surface.
 	errProbe := types.MakeDocument(0)
 
 	if expr.Len() == 0 || !strings.HasPrefix(expr.Keys()[0], "$") || isDBRefLiteral(expr) {
-		if _, err := filterFieldExpr(errProbe, filterKey, filterSuffix, expr, cmp); err != nil {
+		if _, err := filterFieldExpr(errProbe, filterKey, filterSuffix, expr, fc); err != nil {
 			return false, err
 		}
 		for _, branch := range branches {
-			if ok, err := filterFieldExpr(branch, filterKey, filterSuffix, expr, cmp); err != nil || ok {
+			if ok, err := filterFieldExpr(branch, filterKey, filterSuffix, expr, fc); err != nil || ok {
 				return ok, err
 			}
 		}
@@ -300,14 +708,14 @@ func filterFieldExprBranches(branches []*types.Document, filterKey, filterSuffix
 			opExpr.Set("$options", options)
 		}
 
-		if _, err := filterFieldExpr(errProbe, filterKey, filterSuffix, opExpr, cmp); err != nil {
+		if _, err := filterFieldExpr(errProbe, filterKey, filterSuffix, opExpr, fc); err != nil {
 			return false, err
 		}
 
 		negated := isNegatedFieldOperator(op, opValue)
 		matched := negated
 		for _, branch := range branches {
-			ok, err := filterFieldExpr(branch, filterKey, filterSuffix, opExpr, cmp)
+			ok, err := filterFieldExpr(branch, filterKey, filterSuffix, opExpr, fc)
 			if err != nil {
 				return false, err
 			}
@@ -337,7 +745,7 @@ func isNegatedFieldOperator(op string, value any) bool {
 }
 
 // filterOperator handles a top-level operator filter {$operator: filterValue}.
-func filterOperator(doc *types.Document, operator string, filterValue any, cmp *collation.Comparator) (bool, error) {
+func filterOperator(doc *types.Document, operator string, filterValue any, fc *FilterContext) (bool, error) {
 	switch operator {
 	case "$and":
 		// {$and: [{expr1}, {expr2}, ...]}
@@ -369,10 +777,18 @@ func filterOperator(doc *types.Document, operator string, filterValue any, cmp *
 			}
 		}
 
-		for i := 0; i < exprs.Len(); i++ {
+		var order []int
+		if exprs.Len() > 1 {
+			order = fc.clauseOrderFor(operator, exprs)
+		}
+		for k := range exprs.Len() {
+			i := k
+			if order != nil {
+				i = order[k]
+			}
 			expr := must.NotFail(exprs.Get(i)).(*types.Document)
 
-			matches, err := FilterDocumentColl(doc, expr, cmp)
+			matches, err := fc.Match(doc, expr)
 			if err != nil {
 				return false, err
 			}
@@ -413,10 +829,18 @@ func filterOperator(doc *types.Document, operator string, filterValue any, cmp *
 			}
 		}
 
-		for i := 0; i < exprs.Len(); i++ {
+		var order []int
+		if exprs.Len() > 1 {
+			order = fc.clauseOrderFor(operator, exprs)
+		}
+		for k := range exprs.Len() {
+			i := k
+			if order != nil {
+				i = order[k]
+			}
 			expr := must.NotFail(exprs.Get(i)).(*types.Document)
 
-			matches, err := FilterDocumentColl(doc, expr, cmp)
+			matches, err := fc.Match(doc, expr)
 			if err != nil {
 				return false, err
 			}
@@ -457,10 +881,18 @@ func filterOperator(doc *types.Document, operator string, filterValue any, cmp *
 			}
 		}
 
-		for i := 0; i < exprs.Len(); i++ {
+		var order []int
+		if exprs.Len() > 1 {
+			order = fc.clauseOrderFor(operator, exprs)
+		}
+		for k := range exprs.Len() {
+			i := k
+			if order != nil {
+				i = order[k]
+			}
 			expr := must.NotFail(exprs.Get(i)).(*types.Document)
 
-			matches, err := FilterDocumentColl(doc, expr, cmp)
+			matches, err := fc.Match(doc, expr)
 			if err != nil {
 				return false, err
 			}
@@ -487,11 +919,17 @@ func filterOperator(doc *types.Document, operator string, filterValue any, cmp *
 	case "$comment":
 		return true, nil
 
+	case "$alwaysTrue", "$alwaysFalse":
+		if err := checkAlwaysOperand(operator, filterValue); err != nil {
+			return false, err
+		}
+		return operator == "$alwaysTrue", nil
+
 	case "$sampleRate":
 		return filterSampleRate(filterValue)
 
 	case "$expr":
-		return filterExprOperator(doc, filterValue)
+		return fc.exprOperator(doc, filterValue)
 
 	case "$jsonSchema":
 		// {$jsonSchema: <JSON Schema object>}
@@ -541,14 +979,14 @@ func filterSampleRate(rate any) (bool, error) {
 	return rand.Float64() < x, nil
 }
 
-// filterExprOperator uses $expr operator to allow usage of aggregation expression.
+// exprOperator uses $expr operator to allow usage of aggregation expression.
 // It returns boolean indicating filter has matched.
 //
 // $expr is primary used by operators such as $gt and $cond which return boolean result.
 // However, if non-boolean result is returned from processing aggregation expression,
 // it returns false for null or zero value and true for all other values.
-func filterExprOperator(doc *types.Document, exprValue any) (bool, error) {
-	op, err := validatedExpr(exprValue)
+func (fc *FilterContext) exprOperator(doc *types.Document, exprValue any) (bool, error) {
+	op, err := fc.validatedExpr(exprValue)
 	if err != nil {
 		return false, err
 	}
@@ -572,29 +1010,31 @@ func filterExprOperator(doc *types.Document, exprValue any) (bool, error) {
 	}
 }
 
-// validatedExprs caches validated $expr operators by expression document, so a
-// filter applied to many documents is validated once.
-var validatedExprs identitycache.Cache[types.Document, operators.Operator]
-
 // validatedExpr returns the validated operator for the value of a $expr
-// filter. Only document expressions are cached; other values are cheap to
-// validate.
-func validatedExpr(exprValue any) (operators.Operator, error) {
+// filter, building one per expression document for the context's command.
+func (fc *FilterContext) validatedExpr(exprValue any) (operators.Operator, error) {
 	exprDoc, isDoc := exprValue.(*types.Document)
 	if !isDoc {
-		return operators.NewExpr(must.NotFail(types.NewDocument("$expr", exprValue)), "$expr")
+		return validatedExpr(exprValue)
 	}
-
-	if op, ok := validatedExprs.Get(exprDoc); ok {
+	if op, ok := fc.exprs[exprDoc]; ok {
 		return op, nil
 	}
-
-	op, err := operators.NewExpr(must.NotFail(types.NewDocument("$expr", exprDoc)), "$expr")
+	op, err := validatedExpr(exprDoc)
 	if err != nil {
 		return nil, err
 	}
-	validatedExprs.Put(exprDoc, op)
+	if fc.exprs == nil {
+		fc.exprs = map[*types.Document]operators.Operator{}
+	}
+	fc.exprs[exprDoc] = op
 	return op, nil
+}
+
+// validatedExpr returns the validated operator for the value of a $expr
+// filter.
+func validatedExpr(exprValue any) (operators.Operator, error) {
+	return operators.NewExpr(must.NotFail(types.NewDocument("$expr", exprValue)), "$expr")
 }
 
 // checkNoOperatorUnderIn rejects an operator expression as an $in or $nin
@@ -628,11 +1068,11 @@ func isDBRefLiteral(doc *types.Document) bool {
 
 // filterFieldExpr handles {field: {expr}} or {field: {document}} filter.
 // A DBRef is a literal value, as in mongod, not an operator expression.
-func filterFieldExpr(doc *types.Document, filterKey, filterSuffix string, expr *types.Document, cmp *collation.Comparator) (bool, error) {
+func filterFieldExpr(doc *types.Document, filterKey, filterSuffix string, expr *types.Document, fc *FilterContext) (bool, error) {
 	if isDBRefLiteral(expr) {
 		expr = must.NotFail(types.NewDocument("$eq", expr))
 	}
-	return filterFieldOperators(doc, filterKey, filterSuffix, expr, cmp)
+	return filterFieldOperators(doc, filterKey, filterSuffix, expr, fc)
 }
 
 // checkNotOperand returns the error mongod raises while parsing the operand
@@ -664,7 +1104,7 @@ func checkNotOperand(operand any) error {
 
 // filterFieldOperators is filterFieldExpr for a document that mongod always
 // parses as operators, such as the operand of $not, even when it is a DBRef.
-func filterFieldOperators(doc *types.Document, filterKey, filterSuffix string, expr *types.Document, cmp *collation.Comparator) (bool, error) {
+func filterFieldOperators(doc *types.Document, filterKey, filterSuffix string, expr *types.Document, fc *FilterContext) (bool, error) {
 	if expr.Len() == 0 {
 		fieldValue, err := doc.Get(filterSuffix)
 		if err != nil {
@@ -709,7 +1149,7 @@ func filterFieldOperators(doc *types.Document, filterKey, filterSuffix string, e
 
 		// A clustered collection's _id range stays within MinKey's or
 		// MaxKey's own type, as a clustered mongod scans it.
-		if filterKey != "_id" {
+		if filterKey != "_id" || fc.elementDepth > 0 {
 			if matched, ok := minMaxKeyRange(exprKey, fieldValue, exprValue); ok {
 				if !matched {
 					return false, nil
@@ -722,7 +1162,7 @@ func filterFieldOperators(doc *types.Document, filterKey, filterSuffix string, e
 			// An array matches if it, or one of its elements, equals expr.
 			switch fieldValue.(type) {
 			case *types.Document, *types.Array:
-				return types.Compare(fieldValue, expr) == types.Equal, nil
+				return collCompare(fieldValue, expr, fc.cmp) == types.Equal, nil
 			}
 			return false, nil
 		}
@@ -730,7 +1170,7 @@ func filterFieldOperators(doc *types.Document, filterKey, filterSuffix string, e
 		switch exprKey {
 		case "$eq":
 			// {field: {$eq: exprValue}}
-			if !equalsOrHasElement(fieldValue, exprValue, cmp) {
+			if !equalsOrHasElement(fieldValue, exprValue, fc.cmp) {
 				return false, nil
 			}
 
@@ -743,7 +1183,7 @@ func filterFieldOperators(doc *types.Document, filterKey, filterSuffix string, e
 					exprKey,
 				)
 			}
-			if equalsOrHasElement(fieldValue, exprValue, cmp) {
+			if equalsOrHasElement(fieldValue, exprValue, fc.cmp) {
 				return false, nil
 			}
 
@@ -767,8 +1207,7 @@ func filterFieldOperators(doc *types.Document, filterKey, filterSuffix string, e
 			// and results in Less. Other values "foo" and nil which are
 			// not number type are not considered for $gt comparison.
 
-			result := collCompareOrderOp(fieldValue, exprValue, types.Descending, cmp)
-			if result != types.Greater {
+			if !fc.rangeMatches(fieldValue, exprValue, types.Descending, types.Greater, types.Greater) {
 				return false, nil
 			}
 
@@ -791,8 +1230,7 @@ func filterFieldOperators(doc *types.Document, filterKey, filterSuffix string, e
 			// Above compares the maximum number of array 41.5 to the filter 42,
 			// and results in Less. Other values "foo" and nil which are
 			// not number type are not considered for $gte comparison.
-			result := collCompareOrderOp(fieldValue, exprValue, types.Descending, cmp)
-			if result != types.Equal && result != types.Greater {
+			if !fc.rangeMatches(fieldValue, exprValue, types.Descending, types.Greater, types.Equal) {
 				return false, nil
 			}
 
@@ -816,8 +1254,7 @@ func filterFieldOperators(doc *types.Document, filterKey, filterSuffix string, e
 			// and results in Less. Other values "foo" and nil which are
 			// not number type are not considered for $lt comparison.
 
-			result := collCompareOrderOp(fieldValue, exprValue, types.Ascending, cmp)
-			if result != types.Less {
+			if !fc.rangeMatches(fieldValue, exprValue, types.Ascending, types.Less, types.Less) {
 				return false, nil
 			}
 
@@ -841,8 +1278,7 @@ func filterFieldOperators(doc *types.Document, filterKey, filterSuffix string, e
 			// and results in Less. Other values "foo" and nil which are
 			// not number type are not considered for $lt comparison.
 
-			result := collCompareOrderOp(fieldValue, exprValue, types.Ascending, cmp)
-			if result != types.Equal && result != types.Less {
+			if !fc.rangeMatches(fieldValue, exprValue, types.Ascending, types.Less, types.Equal) {
 				return false, nil
 			}
 
@@ -869,7 +1305,7 @@ func filterFieldOperators(doc *types.Document, filterKey, filterSuffix string, e
 						return false, err
 					}
 
-					if equalsOrHasElement(fieldValue, arrValue, cmp) {
+					if equalsOrHasElement(fieldValue, arrValue, fc.cmp) {
 						found = true
 					}
 				case types.Regex:
@@ -881,7 +1317,7 @@ func filterFieldOperators(doc *types.Document, filterKey, filterSuffix string, e
 						found = true
 					}
 				default:
-					if equalsOrHasElement(fieldValue, arrValue, cmp) {
+					if equalsOrHasElement(fieldValue, arrValue, fc.cmp) {
 						found = true
 					}
 				}
@@ -914,7 +1350,7 @@ func filterFieldOperators(doc *types.Document, filterKey, filterSuffix string, e
 						return false, err
 					}
 
-					if equalsOrHasElement(fieldValue, arrValue, cmp) {
+					if equalsOrHasElement(fieldValue, arrValue, fc.cmp) {
 						found = true
 					}
 				case types.Regex:
@@ -926,7 +1362,7 @@ func filterFieldOperators(doc *types.Document, filterKey, filterSuffix string, e
 						found = true
 					}
 				default:
-					if equalsOrHasElement(fieldValue, arrValue, cmp) {
+					if equalsOrHasElement(fieldValue, arrValue, fc.cmp) {
 						found = true
 					}
 				}
@@ -943,7 +1379,7 @@ func filterFieldOperators(doc *types.Document, filterKey, filterSuffix string, e
 			}
 			switch exprValue := exprValue.(type) {
 			case *types.Document:
-				res, err := filterFieldOperators(doc, filterKey, filterSuffix, exprValue, cmp)
+				res, err := filterFieldOperators(doc, filterKey, filterSuffix, exprValue, fc)
 				if res || err != nil {
 					return false, err
 				}
@@ -965,7 +1401,7 @@ func filterFieldOperators(doc *types.Document, filterKey, filterSuffix string, e
 
 		case "$elemMatch":
 			// {field: {$elemMatch: value}}
-			res, err := filterFieldExprElemMatch(doc, filterKey, filterSuffix, exprValue, cmp)
+			res, err := filterFieldExprElemMatch(doc, filterKey, filterSuffix, exprValue, fc)
 			if !res || err != nil {
 				return false, err
 			}
@@ -979,35 +1415,35 @@ func filterFieldOperators(doc *types.Document, filterKey, filterSuffix string, e
 
 		case "$all":
 			// {field: {$all: [value, another_value, ...]}}
-			res, err := filterFieldExprAll(doc, filterKey, filterSuffix, fieldValue, exprValue, cmp)
+			res, err := filterFieldExprAll(doc, filterKey, filterSuffix, fieldValue, exprValue, fc)
 			if !res || err != nil {
 				return false, err
 			}
 
 		case "$bitsAllClear":
 			// {field: {$bitsAllClear: value}}
-			res, err := filterFieldExprBitsAllClear(fieldValue, exprValue)
+			res, err := fc.bitsOrElements(filterFieldExprBitsAllClear, fieldValue, exprValue)
 			if !res || err != nil {
 				return false, err
 			}
 
 		case "$bitsAllSet":
 			// {field: {$bitsAllSet: value}}
-			res, err := filterFieldExprBitsAllSet(fieldValue, exprValue)
+			res, err := fc.bitsOrElements(filterFieldExprBitsAllSet, fieldValue, exprValue)
 			if !res || err != nil {
 				return false, err
 			}
 
 		case "$bitsAnyClear":
 			// {field: {$bitsAnyClear: value}}
-			res, err := filterFieldExprBitsAnyClear(fieldValue, exprValue)
+			res, err := fc.bitsOrElements(filterFieldExprBitsAnyClear, fieldValue, exprValue)
 			if !res || err != nil {
 				return false, err
 			}
 
 		case "$bitsAnySet":
 			// {field: {$bitsAnySet: value}}
-			res, err := filterFieldExprBitsAnySet(fieldValue, exprValue)
+			res, err := fc.bitsOrElements(filterFieldExprBitsAnySet, fieldValue, exprValue)
 			if !res || err != nil {
 				return false, err
 			}
@@ -1337,7 +1773,7 @@ func filterFieldExprSize(fieldValue any, sizeValue any) (bool, error) {
 //
 // Special case: if any query element is {$elemMatch: expr}, it is treated as an $elemMatch
 // condition applied to the field array (MongoDB extension: $all + $elemMatch).
-func filterFieldExprAll(doc *types.Document, filterKey, filterSuffix string, fieldValue any, allValue any, cmp *collation.Comparator) (bool, error) {
+func filterFieldExprAll(doc *types.Document, filterKey, filterSuffix string, fieldValue any, allValue any, fc *FilterContext) (bool, error) {
 	query, ok := allValue.(*types.Array)
 	if !ok {
 		return false, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue, "$all needs an array", "$all")
@@ -1376,7 +1812,7 @@ func filterFieldExprAll(doc *types.Document, filterKey, filterSuffix string, fie
 			if err != nil {
 				return false, nil
 			}
-			matched, err := filterFieldExprElemMatch(doc, filterKey, filterSuffix, elemMatchValue, cmp)
+			matched, err := filterFieldExprElemMatch(doc, filterKey, filterSuffix, elemMatchValue, fc)
 			if err != nil {
 				return false, err
 			}
@@ -1387,13 +1823,14 @@ func filterFieldExprAll(doc *types.Document, filterKey, filterSuffix string, fie
 		return true, nil
 	}
 
-	if _, ok := fieldValue.(*types.Document); ok {
-		// For documents we return false as $all doesn't work on documents.
-		return false, nil
-	}
-
 	// Each query element must match on its own: a regex as a regex query
-	// does, any other value as an array element or an equal scalar.
+	// does, any other value as an array element or an equal scalar. Under a
+	// collation an array field is keyed once, so its strings are not
+	// collated again for every query element.
+	cmp, keyedField := fc.cmp, fieldValue
+	if _, isArray := fieldValue.(*types.Array); isArray && cmp != nil && query.Len() > 1 {
+		cmp, keyedField = nil, fc.cmp.KeyValue(fieldValue)
+	}
 	for i := 0; i < query.Len(); i++ {
 		q := must.NotFail(query.Get(i))
 		if re, ok := q.(types.Regex); ok {
@@ -1403,7 +1840,10 @@ func filterFieldExprAll(doc *types.Document, filterKey, filterSuffix string, fie
 			}
 			continue
 		}
-		if !equalsOrHasElement(fieldValue, q, cmp) {
+		if cmp == nil && fc.cmp != nil {
+			q = fc.cmp.KeyValue(q)
+		}
+		if !equalsOrHasElement(keyedField, q, cmp) {
 			return false, nil
 		}
 	}
@@ -1426,11 +1866,7 @@ func filterFieldExprBitsAllClear(fieldValue, maskValue any) (bool, error) {
 		return (^uint64(value) & bitmask) == bitmask, nil
 
 	case types.Binary:
-		return false, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrNotImplemented,
-			"BinData() not supported yet",
-			"$bitsAllClear",
-		)
+		return binaryBitTest("$bitsAllClear", value.B, maskValue, bitmask), nil
 
 	case int32:
 		return (^uint64(value) & bitmask) == bitmask, nil
@@ -1450,6 +1886,30 @@ func filterFieldExprBitsAllClear(fieldValue, maskValue any) (bool, error) {
 	}
 }
 
+// bitsOrElements applies a bitwise operator to a value, or to each element
+// of an array value without descending into nested arrays. An array reached
+// through a trailing array index is tested whole, so it never matches.
+func (fc *FilterContext) bitsOrElements(match func(fieldValue, maskValue any) (bool, error), fieldValue, maskValue any) (bool, error) {
+	arr, ok := fieldValue.(*types.Array)
+	if !ok || slices.Contains(fc.indexedArrays, arr) {
+		return match(fieldValue, maskValue)
+	}
+	if _, err := match(nil, maskValue); err != nil {
+		return false, err
+	}
+	for i := range arr.Len() {
+		elem := must.NotFail(arr.Get(i))
+		if _, nested := elem.(*types.Array); nested {
+			continue
+		}
+		res, err := match(elem, maskValue)
+		if res || err != nil {
+			return res, err
+		}
+	}
+	return false, nil
+}
+
 // filterFieldExprBitsAllSet handles {field: {$bitsAllSet: value}} filter.
 func filterFieldExprBitsAllSet(fieldValue, maskValue any) (bool, error) {
 	bitmask, err := getBinaryMaskParam("$bitsAllSet", maskValue)
@@ -1466,11 +1926,7 @@ func filterFieldExprBitsAllSet(fieldValue, maskValue any) (bool, error) {
 		return (uint64(value) & bitmask) == bitmask, nil
 
 	case types.Binary:
-		return false, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrNotImplemented,
-			"BinData() not supported yet",
-			"$bitsAllSet",
-		)
+		return binaryBitTest("$bitsAllSet", value.B, maskValue, bitmask), nil
 
 	case int32:
 		return (uint64(value) & bitmask) == bitmask, nil
@@ -1506,11 +1962,7 @@ func filterFieldExprBitsAnyClear(fieldValue, maskValue any) (bool, error) {
 		return (^uint64(value) & bitmask) != 0, nil
 
 	case types.Binary:
-		return false, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrNotImplemented,
-			"BinData() not supported yet",
-			"$bitsAnyClear",
-		)
+		return binaryBitTest("$bitsAnyClear", value.B, maskValue, bitmask), nil
 
 	case int32:
 		return (^uint64(value) & bitmask) != 0, nil
@@ -1546,11 +1998,7 @@ func filterFieldExprBitsAnySet(fieldValue, maskValue any) (bool, error) {
 		return (uint64(value) & bitmask) != 0, nil
 
 	case types.Binary:
-		return false, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrNotImplemented,
-			"BinData() not supported yet",
-			"$bitsAnySet",
-		)
+		return binaryBitTest("$bitsAnySet", value.B, maskValue, bitmask), nil
 
 	case int32:
 		return (uint64(value) & bitmask) != 0, nil
@@ -1583,39 +2031,77 @@ func isInvalidBitwiseValue(value float64) bool {
 		value < math.MinInt64
 }
 
-// decimal128ToInt64 attempts to convert a types.Decimal128 value to int64 for
-// use in bitwise operations. It truncates toward zero (like MongoDB does).
-// Returns (value, true) on success, or (0, false) if the value cannot be
-// represented as an int64 (NaN, Inf, out of range).
+// binaryBitTest applies a bitwise query operator to BinData, whose bit p is
+// bit p%8 of byte p/8; bits past its end are clear.
+func binaryBitTest(operator string, data []byte, maskValue any, bitmask uint64) bool {
+	var set, clear bool
+	for _, p := range bitPositions(maskValue, bitmask) {
+		if p/8 < uint64(len(data)) && data[p/8]&(1<<(p%8)) != 0 {
+			set = true
+		} else {
+			clear = true
+		}
+	}
+	switch operator {
+	case "$bitsAllSet":
+		return !clear
+	case "$bitsAnySet":
+		return set
+	case "$bitsAllClear":
+		return !set
+	default:
+		return clear
+	}
+}
+
+// bitPositions returns the bit positions a validated bitwise operator mask
+// tests; bitmask is the mask getBinaryMaskParam returned for it.
+func bitPositions(maskValue any, bitmask uint64) []uint64 {
+	var positions []uint64
+	switch mask := maskValue.(type) {
+	case *types.Array:
+		for i := range mask.Len() {
+			p, _ := handlerparams.GetWholeNumberParam(must.NotFail(mask.Get(i)))
+			positions = append(positions, uint64(p))
+		}
+	case types.Binary:
+		for i, b := range mask.B {
+			for bit := range 8 {
+				if b&(1<<bit) != 0 {
+					positions = append(positions, uint64(i*8+bit))
+				}
+			}
+		}
+	default:
+		for bit := range 64 {
+			if bitmask&(1<<bit) != 0 {
+				positions = append(positions, uint64(bit))
+			}
+		}
+	}
+	return positions
+}
+
+// decimal128ToInt64 converts d to int64 for the bitwise operators. ok is
+// false unless d is an integer that int64 holds: NaN, Inf, a fraction or a
+// value out of range does not convert.
 func decimal128ToInt64(d types.Decimal128) (int64, bool) {
-	// Use bson.Decimal128 which stores (H=high, L=low).
-	// types.Decimal128 stores H and L fields matching the wire format.
-	p := bson.NewDecimal128(d.H, d.L)
-
-	bi, exp, err := p.BigInt()
+	bi, exp, err := bson.NewDecimal128(d.H, d.L).BigInt()
 	if err != nil {
-		// NaN or Inf
 		return 0, false
 	}
-
-	// Apply the exponent: value = bi * 10^exp
 	if exp > 0 {
-		factor := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(exp)), nil)
-		bi = new(big.Int).Mul(bi, factor)
+		bi.Mul(bi, new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(exp)), nil))
 	} else if exp < 0 {
-		// Truncate toward zero: divide and discard remainder
-		divisor := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(-exp)), nil)
-		// Truncate toward zero: use Quo (truncated division)
-		bi = new(big.Int).Quo(bi, divisor)
+		var rem big.Int
+		bi.QuoRem(bi, new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(-exp)), nil), &rem)
+		if rem.Sign() != 0 {
+			return 0, false
+		}
 	}
-
-	// Check if it fits in int64
-	minInt64 := new(big.Int).SetInt64(math.MinInt64)
-	maxInt64 := new(big.Int).SetInt64(math.MaxInt64)
-	if bi.Cmp(minInt64) < 0 || bi.Cmp(maxInt64) > 0 {
+	if !bi.IsInt64() {
 		return 0, false
 	}
-
 	return bi.Int64(), true
 }
 
@@ -2076,7 +2562,7 @@ func filterFieldValueByTypeCode(fieldValue any, code handlerparams.TypeCode) (bo
 //     FilterDocument on each embedded document element.
 //   - Field conditions (at least one key without "$", e.g. {a: 1, b: 2} or {score: {$gt: 5}}):
 //     iterates array elements and calls FilterDocument on each embedded document element.
-func filterFieldExprElemMatch(doc *types.Document, filterKey, filterSuffix string, exprValue any, cmp *collation.Comparator) (bool, error) {
+func filterFieldExprElemMatch(doc *types.Document, filterKey, filterSuffix string, exprValue any, fc *FilterContext) (bool, error) {
 	expr, ok := exprValue.(*types.Document)
 	if !ok {
 		return false, handlererrors.NewCommandErrorMsgWithArgument(
@@ -2090,16 +2576,11 @@ func filterFieldExprElemMatch(doc *types.Document, filterKey, filterSuffix strin
 	isPureOperator := true // all keys start with "$"
 	hasLogical := false    // contains $and, $or, or $nor
 
+	if err := checkElemMatchTopLevelOnly(expr); err != nil {
+		return false, err
+	}
 	for _, key := range expr.Keys() {
-		if slices.Contains([]string{"$text", "$where"}, key) {
-			return false, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrBadValue,
-				fmt.Sprintf("%s can only be applied to the top-level document", key),
-				"$elemMatch",
-			)
-		}
-
-		if slices.Contains([]string{"$and", "$or", "$nor"}, key) {
+		if slices.Contains([]string{"$and", "$or", "$nor", "$alwaysTrue", "$alwaysFalse"}, key) {
 			hasLogical = true
 		}
 
@@ -2139,19 +2620,25 @@ func filterFieldExprElemMatch(doc *types.Document, filterKey, filterSuffix strin
 			// correctly requires ALL conditions to be satisfied by the SAME element,
 			// rather than allowing different elements to satisfy different conditions.
 			if elemArr, isArray := elem.(*types.Array); isArray {
-				matches, err = elemMatchArrayElement(elemArr, filterKey, filterSuffix, expr, cmp)
+				matches, err = elemMatchArrayElement(elemArr, filterKey, filterSuffix, expr, fc)
 			} else {
 				tempDoc := must.NotFail(types.NewDocument(filterSuffix, elem))
-				matches, err = filterFieldExpr(tempDoc, filterKey, filterSuffix, expr, cmp)
+				matches, err = filterFieldExpr(tempDoc, filterKey, filterSuffix, expr, fc)
 			}
 		} else {
 			// Logical operators ($and/$or/$nor) or field conditions: the element must be
-			// a document and satisfy the expression as a document filter.
-			elemDoc, ok := elem.(*types.Document)
-			if !ok {
+			// a document, or an array read as one keyed by index, and satisfy the
+			// expression as a document filter.
+			var elemDoc *types.Document
+			switch elem := elem.(type) {
+			case *types.Document:
+				elemDoc = elem
+			case *types.Array:
+				elemDoc = arrayAsDocument(elem)
+			default:
 				continue
 			}
-			matches, err = filterElementDocument(elemDoc, expr, cmp)
+			matches, err = filterElementDocument(elemDoc, expr, fc)
 		}
 
 		if err != nil {
@@ -2166,81 +2653,56 @@ func filterFieldExprElemMatch(doc *types.Document, filterKey, filterSuffix strin
 	return false, nil
 }
 
+// filterElementDocument filters an array element as a document. Its _id is
+// an ordinary field, so the clustered top-level _id rules in filterFieldExpr
+// do not apply.
+// checkElemMatchTopLevelOnly returns mongod's error for $text, $where or
+// $expr in an $elemMatch query, directly or in its logical operators.
+func checkElemMatchTopLevelOnly(expr *types.Document) error {
+	for _, key := range expr.Keys() {
+		switch key {
+		case "$text", "$where", "$expr":
+			return handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrBadValue,
+				fmt.Sprintf("%s can only be applied to the top-level document", key),
+				"$elemMatch",
+			)
+		case "$and", "$or", "$nor":
+			clauses, _ := must.NotFail(expr.Get(key)).(*types.Array)
+			for i := range clauses.Len() {
+				if clause, ok := must.NotFail(clauses.Get(i)).(*types.Document); ok {
+					if err := checkElemMatchTopLevelOnly(clause); err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// arrayAsDocument returns arr as a document whose fields are its indexes.
+func arrayAsDocument(arr *types.Array) *types.Document {
+	doc := types.MakeDocument(arr.Len())
+	for i := range arr.Len() {
+		doc.Set(strconv.Itoa(i), must.NotFail(arr.Get(i)))
+	}
+	return doc
+}
+
+func filterElementDocument(elem, filter *types.Document, fc *FilterContext) (bool, error) {
+	fc.elementDepth++
+	defer func() { fc.elementDepth-- }()
+	return fc.Match(elem, filter)
+}
+
 // elemMatchArrayElement applies the operators of an $elemMatch to an element
 // that is itself an array. As in MongoDB they test the element as a whole
 // value and do not look inside it, except $size and a nested $elemMatch,
 // which apply to arrays.
-// nestedIDKey stands for an embedded document's _id while filtering it. BSON
-// field names cannot hold a NUL byte, so it names no real field.
-const nestedIDKey = "\x00_id"
-
-// filterElementDocument filters an array element as a document. Its _id is an
-// ordinary field, so the element and filter are matched with _id renamed and
-// the clustered top-level _id rules in filterFieldExpr do not apply.
-func filterElementDocument(elem, filter *types.Document, cmp *collation.Comparator) (bool, error) {
-	if !mentionsID(filter) {
-		return FilterDocumentColl(elem, filter, cmp)
-	}
-	return FilterDocumentColl(renameID(elem), renameIDInFilter(filter), cmp)
-}
-
-func mentionsID(filter *types.Document) bool {
-	for _, k := range filter.Keys() {
-		switch k {
-		case "_id":
-			return true
-		case "$and", "$or", "$nor":
-			arr, _ := must.NotFail(filter.Get(k)).(*types.Array)
-			for i := 0; arr != nil && i < arr.Len(); i++ {
-				if sub, ok := must.NotFail(arr.Get(i)).(*types.Document); ok && mentionsID(sub) {
-					return true
-				}
-			}
-		}
-	}
-	return false
-}
-
-func renameID(doc *types.Document) *types.Document {
-	out := types.MakeDocument(doc.Len())
-	for _, k := range doc.Keys() {
-		v := must.NotFail(doc.Get(k))
-		if k == "_id" {
-			k = nestedIDKey
-		}
-		out.Set(k, v)
-	}
-	return out
-}
-
-func renameIDInFilter(filter *types.Document) *types.Document {
-	out := types.MakeDocument(filter.Len())
-	for _, k := range filter.Keys() {
-		v := must.NotFail(filter.Get(k))
-		switch k {
-		case "_id":
-			k = nestedIDKey
-		case "$and", "$or", "$nor":
-			if arr, ok := v.(*types.Array); ok {
-				renamed := types.MakeArray(arr.Len())
-				for i := 0; i < arr.Len(); i++ {
-					el := must.NotFail(arr.Get(i))
-					if sub, ok := el.(*types.Document); ok {
-						el = renameIDInFilter(sub)
-					}
-					renamed.Append(el)
-				}
-				v = renamed
-			}
-		}
-		out.Set(k, v)
-	}
-	return out
-}
-
-func elemMatchArrayElement(elem *types.Array, filterKey, filterSuffix string, expr *types.Document, cmp *collation.Comparator) (bool, error) {
+func elemMatchArrayElement(elem *types.Array, filterKey, filterSuffix string, expr *types.Document, fc *FilterContext) (bool, error) {
 	compareElem := func(v any) types.CompareResult {
-		return collCompareOrder(elem, v, cmp)
+		return collCompareOrder(elem, v, fc.cmp)
 	}
 	equalsElem := func(v any) bool {
 		if _, isRegex := v.(types.Regex); isRegex {
@@ -2275,7 +2737,7 @@ func elemMatchArrayElement(elem *types.Array, filterKey, filterSuffix string, ex
 		case "$in", "$nin", "$all":
 			values, isArray := v.(*types.Array)
 			if !isArray {
-				return filterFieldExpr(must.NotFail(types.NewDocument(filterSuffix, elem)), filterKey, filterSuffix, expr, cmp)
+				return filterFieldExpr(must.NotFail(types.NewDocument(filterSuffix, elem)), filterKey, filterSuffix, expr, fc)
 			}
 			someEqual, allEqual := false, values.Len() > 0
 			for i := 0; i < values.Len(); i++ {
@@ -2295,9 +2757,13 @@ func elemMatchArrayElement(elem *types.Array, filterKey, filterSuffix string, ex
 			}
 		case "$regex":
 			ok = false
+		case "$bitsAllSet", "$bitsAnySet", "$bitsAllClear", "$bitsAnyClear":
+			if _, err := getBinaryMaskParam(op, v); err != nil {
+				return false, err
+			}
 		case "$not":
 			if inner, isDoc := v.(*types.Document); isDoc {
-				matched, err := elemMatchArrayElement(elem, filterKey, filterSuffix, inner, cmp)
+				matched, err := elemMatchArrayElement(elem, filterKey, filterSuffix, inner, fc)
 				if err != nil {
 					return false, err
 				}
@@ -2322,7 +2788,7 @@ func elemMatchArrayElement(elem *types.Array, filterKey, filterSuffix string, ex
 			}
 		default:
 			single := must.NotFail(types.NewDocument(op, v))
-			matched, err := filterFieldExpr(must.NotFail(types.NewDocument(filterSuffix, elem)), filterKey, filterSuffix, single, cmp)
+			matched, err := filterFieldExpr(must.NotFail(types.NewDocument(filterSuffix, elem)), filterKey, filterSuffix, single, fc)
 			if err != nil {
 				return false, err
 			}

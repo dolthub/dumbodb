@@ -46,6 +46,10 @@ func TopKIteratorColl(iter types.DocumentsIterator, closer *iterator.MultiCloser
 
 	defer iter.Close()
 
+	// A bad sort specification fails at the first sort, after the input
+	// read so far, as the sort itself would.
+	sk, skErr := newSortKeyer(sortDoc, cmp)
+
 	trimAt := 2 * k
 
 	initCap := trimAt
@@ -53,7 +57,9 @@ func TopKIteratorColl(iter types.DocumentsIterator, closer *iterator.MultiCloser
 		initCap = 4096
 	}
 
-	buf := make([]*types.Document, 0, initCap)
+	// Rows keep their sort keys, so a retained document is keyed only once.
+	buf := make([]sortRow, 0, initCap)
+	var read int64
 
 	for {
 		_, doc, err := iter.Next()
@@ -65,26 +71,37 @@ func TopKIteratorColl(iter types.DocumentsIterator, closer *iterator.MultiCloser
 			return nil, lazyerrors.Error(err)
 		}
 
-		buf = append(buf, doc)
+		if skErr != nil {
+			if read++; read >= trimAt {
+				return nil, lazyerrors.Error(skErr)
+			}
+			continue
+		}
+
+		buf = append(buf, sortRow{doc: doc, keys: sk.keysOf(doc)})
 
 		if int64(len(buf)) >= trimAt {
-			if err := SortDocumentsWithCollation(buf, sortDoc, cmp); err != nil {
-				return nil, lazyerrors.Error(err)
-			}
-
+			sk.sortRows(buf)
 			buf = trimTopK(buf, k)
 		}
 	}
 
-	if err := SortDocumentsWithCollation(buf, sortDoc, cmp); err != nil {
-		return nil, lazyerrors.Error(err)
+	if skErr != nil {
+		return nil, lazyerrors.Error(skErr)
 	}
+
+	sk.sortRows(buf)
 
 	if int64(len(buf)) > k {
 		buf = trimTopK(buf, k)
 	}
 
-	res := iterator.Values(iterator.ForSlice(buf))
+	docs := make([]*types.Document, len(buf))
+	for i, r := range buf {
+		docs[i] = r.doc
+	}
+
+	res := iterator.Values(iterator.ForSlice(docs))
 	closer.Add(res)
 
 	return res, nil
@@ -92,9 +109,9 @@ func TopKIteratorColl(iter types.DocumentsIterator, closer *iterator.MultiCloser
 
 // trimTopK keeps the first k documents and releases references to the rest so
 // they can be collected, reusing the backing array.
-func trimTopK(buf []*types.Document, k int64) []*types.Document {
+func trimTopK(buf []sortRow, k int64) []sortRow {
 	for i := k; i < int64(len(buf)); i++ {
-		buf[i] = nil
+		buf[i] = sortRow{}
 	}
 
 	return buf[:k]

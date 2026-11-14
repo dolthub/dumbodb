@@ -64,7 +64,7 @@ func projectionExcludesID(projection *types.Document) bool {
 	}
 	switch v := v.(type) {
 	case bool, int32, int64, float64:
-		return !isTruthy(v)
+		return !common.IsTruthy(v)
 	}
 	return false
 }
@@ -82,7 +82,7 @@ func appendProjectionRootFields(projection *types.Document, roots *[]string, top
 		}
 		switch v := v.(type) {
 		case bool, int32, int64, float64:
-			if !isTruthy(v) {
+			if !common.IsTruthy(v) {
 				if top && key == "_id" {
 					continue
 				}
@@ -117,18 +117,4 @@ func appendProjectionRootFields(projection *types.Document, roots *[]string, top
 		included = true
 	}
 	return included, true
-}
-
-func isTruthy(v any) bool {
-	switch v := v.(type) {
-	case bool:
-		return v
-	case int32:
-		return v != 0
-	case int64:
-		return v != 0
-	case float64:
-		return v != 0
-	}
-	return false
 }

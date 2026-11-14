@@ -388,6 +388,7 @@ func BoundedByTrial(ctx context.Context, filter *types.Document, field string, r
 
 // trialPlan is one bound's scan in an emulated plan trial.
 type trialPlan struct {
+	fc       *FilterContext
 	cond     *types.Document
 	member   *types.Document
 	iter     types.DocumentsIterator
@@ -413,8 +414,11 @@ func (p *trialPlan) step(path types.Path, filter *types.Document, cmp *collation
 		return err
 	}
 	p.cost++
+	if p.fc == nil {
+		p.fc = NewFilterContext(cmp, PlanCollectionScan)
+	}
 	if p.member != nil {
-		if in, ferr := FilterDocumentColl(doc, p.member, cmp); ferr != nil || !in {
+		if in, ferr := p.fc.Match(doc, p.member); ferr != nil || !in {
 			return nil
 		}
 	}
@@ -441,7 +445,7 @@ func (p *trialPlan) step(path types.Path, filter *types.Document, cmp *collation
 		return -1
 	})
 	p.works = examined + p.fetched
-	if ok, ferr := FilterDocumentColl(doc, filter, cmp); ferr == nil && ok {
+	if ok, ferr := p.fc.Match(doc, filter); ferr == nil && ok {
 		p.advanced++
 		p.eof = p.advanced >= numToReturn
 	}
@@ -627,10 +631,11 @@ func branchRank(b *types.Document) int {
 // give, a document only at the first branch it matches.
 func sortByOrBranches(docs []*types.Document, pattern *types.Document, branches []*types.Document, cmp *collation.Comparator) error {
 	groups := make([][]*types.Document, len(branches)+1)
+	fc := NewFilterContext(cmp, PlanCollectionScan)
 	for _, doc := range docs {
 		g := len(branches)
 		for i, b := range branches {
-			if ok, err := FilterDocumentColl(doc, b, cmp); err == nil && ok {
+			if ok, err := fc.Match(doc, b); err == nil && ok {
 				g = i
 				break
 			}
@@ -709,6 +714,7 @@ func conditionAdmitter(v any, cmp *collation.Comparator) func(any) bool {
 	}
 	condDoc := must.NotFail(types.NewDocument("v", cond))
 	equal, isEquality := equalityOperand(v)
+	fc := NewFilterContext(cmp, PlanCollectionScan)
 	return func(elem any) bool {
 		if nested, ok := elem.(*types.Array); ok {
 			if spanAll {
@@ -716,7 +722,7 @@ func conditionAdmitter(v any, cmp *collation.Comparator) func(any) bool {
 			}
 			return isEquality && types.Compare(nested, equal) == types.Equal
 		}
-		ok, err := FilterDocumentColl(must.NotFail(types.NewDocument("v", elem)), condDoc, cmp)
+		ok, err := fc.Match(must.NotFail(types.NewDocument("v", elem)), condDoc)
 		return err == nil && ok
 	}
 }

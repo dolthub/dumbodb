@@ -24,6 +24,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
@@ -44,6 +45,7 @@ func (h *Handler) MsgDistinct(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 	if err != nil {
 		return nil, err
 	}
+	params.Filter = operators.BindNowInFilter(params.Filter, operators.CommandNow())
 
 	connCtx, cancel := withMaxTimeMS(connCtx, params.MaxTimeMS)
 	defer cancel()
@@ -77,13 +79,14 @@ func (h *Handler) MsgDistinct(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 			return nil, err
 		}
 		cmp := collation.Parse(params.Collation).Comparator()
+		operators.BindCollation(params.Filter, cmp)
 
 		closer := iterator.NewMultiCloser()
 		defer closer.Close()
 
 		// mongod runs the distinct as the view's stages, its $match, and a
 		// $replaceRoot, $unwind and $group.
-		iter, verr := viewSourceIterator(connCtx, db, viewInfo.Name, viewInfo.ViewOn, viewInfo.ViewPipeline, cmp, closer, h.DisablePushdown,
+		iter, verr := viewSourceIterator(withDBName(connCtx, params.DB), db, viewInfo.Name, viewInfo.ViewOn, viewInfo.ViewPipeline, cmp, closer, h.DisablePushdown,
 			viewPipelineLength(3+boolInt(params.Filter.Len() > 0)))
 		if verr != nil {
 			return nil, verr
@@ -119,7 +122,7 @@ func (h *Handler) MsgDistinct(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 		}
 		// mongod overlooks a bad $natural value on a missing collection.
 		if err == nil && !(backends.HintIsNatural(params.Hint) && collectionMissing(connCtx, c)) {
-			err = validateHintExists(connCtx, c, params.Hint, "distinct")
+			err = validateHintExists(connCtx, db, params.Collection, c, params.Hint, "distinct")
 		}
 		if err != nil {
 			return nil, err
@@ -129,6 +132,7 @@ func (h *Handler) MsgDistinct(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 	params.Collation = h.effectiveCollation(connCtx, db, params.Collection, params.Collation)
 
 	cmp := collation.Parse(params.Collation).Comparator()
+	operators.BindCollation(params.Filter, cmp)
 
 	distinct, err := h.execDistinct(connCtx, c, params, cmp)
 	if err != nil {
@@ -205,7 +209,7 @@ func (h *Handler) execDistinct(ctx context.Context, c backends.Collection, param
 
 	closer.Add(queryRes.Iter)
 
-	iter := common.FilterIteratorColl(iterator.WithContext(ctx, queryRes.Iter), closer, params.Filter, cmp)
+	iter := common.FilterIteratorPlan(iterator.WithContext(ctx, queryRes.Iter), closer, params.Filter, cmp, queryPlanMode(ctx, c, params.Filter, params.Hint, queryRes))
 
 	distinct, err := common.FilterDistinctValues(iter, params.Key, cmp)
 	if err != nil {

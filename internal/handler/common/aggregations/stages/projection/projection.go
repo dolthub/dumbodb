@@ -31,227 +31,15 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// ValidateProjection check projection document.
-// Document fields could be either included or excluded but not both.
-// Exception is for the _id field that could be included or excluded.
-//
-// Command error codes:
-//   - `ErrEmptyProject` when projection document is empty;
-//   - `ErrProjectionExIn` when there is exclusion in inclusion projection;
-//   - `ErrProjectionInEx` when there is inclusion in exclusion projection;
-//   - `ErrEmptyFieldPath` when projection path is empty;
-//   - `ErrPathContainsEmptyElement` when projection path contains empty key;
-//   - `ErrFieldPathInvalidName` when `$` is at the prefix of a key in the path;
-//   - `ErrWrongPositionalOperatorLocation` when there are multiple `$`;
-//   - `ErrAggregatePositionalProject` when `$` is used in the suffix key;
-//   - `ErrAggregatePositionalProject` when positional projection contains empty path;
-//   - `ErrNotImplemented` when there is unimplemented projection operators and expressions.
-func ValidateProjection(projection *types.Document) (*types.Document, bool, error) {
-	validated, inclusion, err := ValidateProjectionShape(projection)
-	if err == nil {
-		err = operators.CheckConstantSubexpressions(projection)
-	}
-	if err != nil {
-		return nil, false, err
-	}
-	return validated, inclusion, nil
-}
-
-// ValidateProjectionShape is ValidateProjection without folding constant
-// subexpressions, as an update pipeline parses $project.
-func ValidateProjectionShape(projection *types.Document) (*types.Document, bool, error) {
-	validated := types.MakeDocument(0)
-	if err := CheckPathCollisions(projection, "Invalid $project :: caused by :: ", "$project (stage)"); err != nil {
-		return nil, false, err
-	}
-	projection = FlattenProjection(projection)
-
-	if projection.Len() == 0 {
-		return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrEmptyProject,
-			"Invalid $project :: caused by :: projection specification must have at least one field",
-			"$project (stage)",
-		)
-	}
-
-	var projectionVal *bool
-
-	iter := projection.Iterator()
-	defer iter.Close()
-
-	for {
-		key, value, err := iter.Next()
-		if errors.Is(err, iterator.ErrIteratorDone) {
-			break
-		}
-
-		if key == "" {
-			return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrEmptyFieldPath,
-				"Invalid $project :: caused by :: FieldPath cannot be constructed with empty string",
-				"$project (stage)",
-			)
-		}
-
-		path, err := types.NewPathFromString(key)
-		if err != nil {
-			if strings.HasSuffix(key, "$") {
-				return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
-					handlererrors.ErrAggregatePositionalProject,
-					"Invalid $project :: caused by :: Cannot use positional projection in aggregation projection",
-					"$project (stage)",
-				)
-			}
-
-			return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrPathContainsEmptyElement,
-				"Invalid $project :: caused by :: FieldPath field names may not be empty strings.",
-				"projection",
-			)
-		}
-
-		if key == "$" {
-			return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrFieldPathInvalidName,
-				"Invalid $project :: caused by :: FieldPath field names may not start with '$'. "+
-					"Consider using $getField or $setField.",
-				"$project (stage)",
-			)
-		}
-
-		if strings.HasSuffix(key, "$") {
-			return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrAggregatePositionalProject,
-				"Invalid $project :: caused by :: Cannot use positional projection in aggregation projection",
-				"$project (stage)",
-			)
-		}
-
-		// if `$` is at prefix, it returns ErrFieldPathInvalidName error code instead.
-		prefixTrimmed := strings.TrimPrefix(key, "$")
-		if slices.Contains(strings.Split(prefixTrimmed, "."), "$") {
-			return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrWrongPositionalOperatorLocation,
-				"Invalid $project :: caused by :: "+
-					"As of 4.4, it's illegal to specify positional operator in the middle of a path."+
-					"Positional projection may only be used at the end, "+
-					"for example: a.b.$. If the query previously used a form "+
-					"like a.b.$.d, remove the parts following the '$' and "+
-					"the results will be equivalent.",
-				"$project (stage)",
-			)
-		}
-
-		for _, k := range path.Slice() {
-			if strings.HasPrefix(k, "$") {
-				// arbitrary `$` cannot exist in the path
-				// `v.$foo` is invalid, `v.$` and `v.foo$` are fine.
-				return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
-					handlererrors.ErrFieldPathInvalidName,
-					"Invalid $project :: caused by :: FieldPath field names may not start with '$'. "+
-						"Consider using $getField or $setField.",
-					"$project (stage)",
-				)
-			}
-		}
-
-		var result bool
-
-		switch value := value.(type) {
-		case *types.Document:
-			if !operators.IsOperator(value) {
-				if value.Len() == 0 {
-					return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
-						handlererrors.ErrEmptySubProject,
-						"Invalid $project :: caused by :: An empty sub-projection is not a valid value."+
-							" Found empty object at path",
-						"$project (stage)",
-					)
-				}
-
-				validated.Set(key, value)
-				result = true
-
-				break
-			}
-
-			if err := ValidateExpression(value); err != nil {
-				return nil, false, err
-			}
-
-			// validate operators later
-			validated.Set(key, value)
-
-			result = true
-
-		case *types.Array, string, types.Binary, types.ObjectID,
-			time.Time, types.NullType, types.Regex, types.Timestamp: // all this types are treated as new fields value
-			result = true
-
-			validated.Set(key, value)
-		case float64, int32, int64:
-			// projection treats 0 as false and any other value as true
-			comparison := types.Compare(value, int32(0))
-
-			if comparison != types.Equal {
-				result = true
-			}
-
-			// set the value with boolean result to omit type assertion when we will apply projection
-			validated.Set(key, result)
-		case bool:
-			result = value
-
-			// set the value with boolean result to omit type assertion when we will apply projection
-			validated.Set(key, result)
-		default:
-			return nil, false, lazyerrors.Errorf("unsupported operation %s %value (%T)", key, value, value)
-		}
-
-		if projection.Len() == 1 && key == "_id" {
-			return validated, result, nil
-		}
-
-		// if projectionVal is nil we are processing the first field
-		if projectionVal == nil {
-			if key == "_id" {
-				continue
-			}
-
-			projectionVal = &result
-
-			continue
-		}
-
-		if *projectionVal != result {
-			if key == "_id" {
-				continue
-			}
-
-			if *projectionVal {
-				return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
-					handlererrors.ErrProjectionExIn,
-					fmt.Sprintf("Invalid $project :: caused by :: Cannot do exclusion on field %s in inclusion projection", key),
-					"projection",
-				)
-			}
-
-			return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrProjectionInEx,
-				fmt.Sprintf("Invalid $project :: caused by :: Cannot do inclusion on field %s in exclusion projection", key),
-				"projection",
-			)
-		}
-	}
-
-	return validated, *projectionVal, nil
-}
-
 // ProjectDocument applies projection to the copy of the document.
 func ProjectDocument(doc, projection *types.Document, inclusion bool) (*types.Document, error) {
 	defer doc.ShowRecordKey()()
 	if inclusion && operators.SpecHasComputedPath(projection, true) {
-		return operators.ProjectInclusionTree(doc, projection)
+		projected, err := operators.ProjectInclusionTree(doc, projection)
+		if err != nil {
+			return nil, err
+		}
+		return projected, ProjectIDSubpaths(doc, projected, projection, inclusion)
 	}
 
 	projected, err := projectID(doc, projection)
@@ -268,7 +56,56 @@ func ProjectDocument(doc, projection *types.Document, inclusion bool) (*types.Do
 		projected.Set(key, must.NotFail(projectedWithoutID.Get(key)))
 	}
 
+	if err = ProjectIDSubpaths(doc, projected, projection, inclusion); err != nil {
+		return nil, err
+	}
+
 	return projected, nil
+}
+
+// ProjectIDSubpaths applies the flags on paths within _id, such as "_id.x",
+// to the projected _id. An inclusion drops an _id that is not a document.
+func ProjectIDSubpaths(doc, projected, projection *types.Document, inclusion bool) error {
+	var paths []types.Path
+	for _, key := range projection.Keys() {
+		if _, isFlag := must.NotFail(projection.Get(key)).(bool); isFlag && strings.HasPrefix(key, "_id.") {
+			path, err := types.NewPathFromString(strings.TrimPrefix(key, "_id."))
+			if err != nil {
+				return lazyerrors.Error(err)
+			}
+			paths = append(paths, path)
+		}
+	}
+	if len(paths) == 0 {
+		return nil
+	}
+	idValue, _ := doc.Get("_id")
+	id, ok := idValue.(*types.Document)
+	if !projected.Has("_id") {
+		return nil
+	}
+	if !ok {
+		if inclusion {
+			projected.Remove("_id")
+		}
+		return nil
+	}
+	if !inclusion {
+		trimmed := id.DeepCopy()
+		for _, path := range paths {
+			trimmed.RemoveByPath(path)
+		}
+		projected.Set("_id", trimmed)
+		return nil
+	}
+	kept := types.MakeDocument(0)
+	for _, path := range paths {
+		if _, err := includeProjection(path, id, kept); err != nil {
+			return err
+		}
+	}
+	projected.Set("_id", kept)
+	return nil
 }
 
 // topLevelInclusionFields returns the fields of a validated inclusion projection
@@ -352,7 +189,7 @@ func projectID(doc, projection *types.Document) (*types.Document, error) {
 					break
 				}
 
-				return nil, err
+				return nil, operators.WithOperatorContext(err, idValue.Command())
 			}
 
 			set = true
@@ -367,7 +204,29 @@ func projectID(doc, projection *types.Document) (*types.Document, error) {
 
 			set = true
 
-		case string, types.Binary, types.ObjectID,
+		case string:
+			if !strings.HasPrefix(idValue, "$") {
+				projected.Set("_id", idValue)
+				set = true
+
+				break
+			}
+
+			var expr *aggregations.Expression
+			if expr, err = aggregations.NewExpression(idValue, nil); err != nil {
+				return nil, processOperatorError(err)
+			}
+
+			var value any
+			if value, err = expr.Evaluate(doc); err != nil {
+				break
+			}
+
+			projected.Set("_id", value)
+
+			set = true
+
+		case types.Binary, types.ObjectID,
 			time.Time, types.NullType, types.Regex, types.Timestamp: // all this types are treated as new fields value
 			projected.Set("_id", idValue)
 
@@ -450,7 +309,7 @@ func projectDocumentWithoutID(doc *types.Document, projection *types.Document, i
 					continue
 				}
 
-				return nil, err
+				return nil, operators.WithOperatorContext(err, value.Command())
 			}
 
 			projected.Set(key, v)

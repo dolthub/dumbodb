@@ -138,6 +138,11 @@ type QueryResult struct {
 	// Sorted reports that Iter yields documents in QueryParams.Sort order, so
 	// the caller need not sort them.
 	Sorted bool
+
+	// IndexScan reports that an index, the _id one included, serves the
+	// query rather than a collection scan; mongod orders the remaining
+	// predicates differently then.
+	IndexScan bool
 }
 
 // Query executes a query against the collection.
@@ -250,8 +255,11 @@ type ExplainParams struct {
 	Filter     *types.Document
 	Sort       *types.Document
 	Projection *types.Document
-	Limit      int64
-	Skip       int64
+	// WindowedProjection shows Projection only under a blocking sort, a
+	// skip or a limit, as mongod projects the fields its SBE stages read.
+	WindowedProjection bool
+	Limit              int64
+	Skip               int64
 	// ZeroLimit marks a limit of 0, which Limit's 0 cannot tell from none: a
 	// skip after a limit used it up, and the plan returns nothing.
 	ZeroLimit bool

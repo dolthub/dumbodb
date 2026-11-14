@@ -16,6 +16,7 @@ package accumulators
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -46,4 +47,18 @@ func newOperand(expr any) (operand, error) {
 // missing value, which each accumulator treats in its own way.
 func (o operand) evaluate(doc *types.Document) (value any, missing bool, err error) {
 	return operators.EvalOperand(o.expr, doc)
+}
+
+// readsStoredValue reports whether the operand is a field path, whose value
+// mongod's SBE engine reads in place from the stored document.
+func (o operand) readsStoredValue() bool {
+	s, ok := o.expr.(string)
+	if !ok || !strings.HasPrefix(s, "$") {
+		return false
+	}
+	if !strings.HasPrefix(s, "$$") {
+		return true
+	}
+	root, _, _ := strings.Cut(s[2:], ".")
+	return root == "ROOT" || root == "CURRENT"
 }

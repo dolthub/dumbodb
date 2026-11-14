@@ -16,14 +16,14 @@ package common
 
 import (
 	"errors"
-	"fmt"
 	"slices"
 	"strings"
 	"time"
 
+	projectionpkg "github.com/dolthub/dumbodb/internal/handler/common/aggregations/stages/projection"
+
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
-	stageProjection "github.com/dolthub/dumbodb/internal/handler/common/aggregations/stages/projection"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
@@ -44,14 +44,6 @@ func translateExpressionError(err error) error {
 		)
 	}
 	return err
-}
-
-func expressionInExclusionError() error {
-	return handlererrors.NewCommandErrorMsgWithArgument(
-		handlererrors.ErrProjectionExpressionInExclusion,
-		"Cannot use expression other than $meta in exclusion projection",
-		"projection",
-	)
 }
 
 // Distinguishes null-valued fields (project null) from missing fields
@@ -94,309 +86,6 @@ func findProjectionPathExists(expr string, doc *types.Document) bool {
 	return err == nil
 }
 
-// ValidateProjection check projection document.
-// Document fields could be either included or excluded but not both.
-// Exception is for the _id field that could be included or excluded.
-// ValidateProjection returns errProjectionEmpty for empty projection and
-// CommandError for invalid projection fields.
-//
-// Command error codes:
-//   - `ErrProjectionExIn` when there is exclusion in inclusion projection;
-//   - `ErrProjectionInEx` when there is inclusion in exclusion projection;
-//   - `ErrEmptyFieldPath` when projection path is empty;
-//   - `ErrInvalidFieldPath` when positional projection path contains empty key;
-//   - `ErrPathContainsEmptyElement` when projection path contains empty key;
-//   - `ErrFieldPathInvalidName` when `$` is at the prefix of a key in the path;
-//   - `ErrWrongPositionalOperatorLocation` when there are multiple `$`;
-//   - `ErrExclusionPositionalProjection` when positional projection is used for exclusion;
-//   - `ErrBadPositionalProjection` when array or filter at positional projection path is empty;
-//   - `ErrBadPositionalProjection` when there is no filter field key for positional projection path;
-//   - `ErrElementMismatchPositionalProjection` when unexpected array was found on positional projection path;
-//   - `ErrNotImplemented` when there is unimplemented projection operators and expressions.
-func ValidateProjection(projection *types.Document) (*types.Document, bool, error) {
-	validated, inclusion, err := validateProjectionShape(projection)
-	if err == nil {
-		err = checkProjectionConstants(projection)
-	}
-	if err != nil {
-		return nil, false, err
-	}
-	return validated, inclusion, nil
-}
-
-// checkProjectionConstants folds constant expressions in a find projection,
-// skipping the $slice and $elemMatch projection operators, which are not
-// expressions.
-func checkProjectionConstants(value any) error {
-	doc, ok := value.(*types.Document)
-	if !ok {
-		return operators.CheckConstantSubexpressions(value)
-	}
-	if operators.IsOperator(doc) {
-		switch doc.Command() {
-		case "$slice", "$elemMatch":
-			return nil
-		}
-		return operators.CheckConstantSubexpressions(doc)
-	}
-	for _, v := range doc.Values() {
-		if err := checkProjectionConstants(v); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// validateProjectionShape is find's form of projection.ValidateProjectionShape:
-// it also accepts positional, $elemMatch and $slice projections, and its
-// errors have no "Invalid $project" prefix.
-func validateProjectionShape(projection *types.Document) (*types.Document, bool, error) {
-	validated := types.MakeDocument(0)
-
-	if projection.Len() == 0 {
-		// empty projection is exclusion project.
-		return types.MakeDocument(0), false, nil
-	}
-
-	if err := stageProjection.CheckPathCollisions(projection, "", "projection"); err != nil {
-		return nil, false, err
-	}
-	projection = stageProjection.FlattenProjection(projection)
-
-	var inclusion *bool
-
-	iter := projection.Iterator()
-	defer iter.Close()
-
-	for {
-		key, value, err := iter.Next()
-		if errors.Is(err, iterator.ErrIteratorDone) {
-			break
-		}
-
-		if err != nil {
-			return nil, false, lazyerrors.Error(err)
-		}
-
-		if key == "" {
-			return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrEmptyFieldPath,
-				"FieldPath cannot be constructed with empty string",
-				"projection",
-			)
-		}
-
-		positionalProjection := strings.HasSuffix(key, "$")
-
-		path, err := types.NewPathFromString(key)
-		if err != nil {
-			if positionalProjection {
-				return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
-					handlererrors.ErrInvalidFieldPath,
-					"FieldPath must not end with a '.'.",
-					"projection",
-				)
-			}
-
-			return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrPathContainsEmptyElement,
-				"FieldPath field names may not be empty strings.",
-				"projection",
-			)
-		}
-
-		if path.Len() > 1 && strings.Count(path.TrimSuffix().String(), "$") > 1 {
-			// there cannot be more than one positional operator.
-			return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrWrongPositionalOperatorLocation,
-				"As of 4.4, it's illegal to specify positional operator in the middle of a path."+
-					"Positional projection may only be used at the end, "+
-					"for example: a.b.$. If the query previously used a form "+
-					"like a.b.$.d, remove the parts following the '$' and "+
-					"the results will be equivalent.",
-				"projection",
-			)
-		}
-
-		if key == "$" || strings.HasPrefix(key, "$") {
-			// positional operator cannot be at the prefix.
-			return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrFieldPathInvalidName,
-				"FieldPath field names may not start with '$'. Consider using $getField or $setField.",
-				"projection",
-			)
-		}
-
-		if path.Len() > 1 && slices.Contains(path.TrimSuffix().Slice(), "$") {
-			// there cannot be a positional operator along the path, can only be at the end.
-			return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrWrongPositionalOperatorLocation,
-				"As of 4.4, it's illegal to specify positional operator in the middle of a path."+
-					"Positional projection may only be used at the end, "+
-					"for example: a.b.$. If the query previously used a form "+
-					"like a.b.$.d, remove the parts following the '$' and "+
-					"the results will be equivalent.",
-				"projection",
-			)
-		}
-
-		for _, k := range path.Slice() {
-			if strings.HasPrefix(k, "$") && k != "$" {
-				// arbitrary `$` cannot exist in the path,
-				// `v.$foo` is invalid, `v.$` and `v.foo$` are fine.
-				return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
-					handlererrors.ErrFieldPathInvalidName,
-					"FieldPath field names may not start with '$'. Consider using $getField or $setField.",
-					"projection",
-				)
-			}
-		}
-
-		var inclusionField bool
-
-		switch value := value.(type) {
-		case *types.Document:
-			var opKey string
-			var opVal any
-			if value.Len() == 1 {
-				opKey = value.Keys()[0]
-				opVal = must.NotFail(value.Get(opKey))
-			}
-
-			switch opKey {
-			case "$elemMatch":
-				if _, ok := opVal.(*types.Document); !ok {
-					return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
-						handlererrors.ErrBadValue,
-						"$elemMatch projection requires an object specification",
-						"$elemMatch",
-					)
-				}
-
-				inclusionField = true
-				validated.Set(key, value)
-
-			case "$slice":
-				if err := validateSliceProjectionArg(opVal); err != nil {
-					return nil, false, err
-				}
-
-				validated.Set(key, value)
-				// $slice is neutral - does not affect inclusion/exclusion mode tracking.
-				continue
-
-			case "$meta":
-				if _, err := operators.ParseMetaName(opVal); err != nil {
-					return nil, false, err
-				}
-
-				validated.Set(key, value)
-				// $meta is neutral: it adds a field in either mode.
-				continue
-
-			default:
-				if value.Len() == 0 {
-					return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
-						handlererrors.ErrEmptySubProject,
-						"An empty sub-projection is not a valid value. Found empty object at path",
-						"projection",
-					)
-				}
-				if err := stageProjection.ValidateExpression(value); err != nil {
-					return nil, false, withoutProjectPrefix(err)
-				}
-				if inclusion != nil && !*inclusion {
-					return nil, false, expressionInExclusionError()
-				}
-				inclusionField = true
-				validated.Set(key, value)
-			}
-
-		case *types.Array, string, types.Binary, types.ObjectID,
-			time.Time, types.NullType, types.Regex, types.Timestamp: // all these types are treated as new fields value
-			inclusionField = true
-
-			validated.Set(key, value)
-		case float64, int32, int64:
-			// projection treats 0 as false and any other value as true
-			comparison := types.Compare(value, int32(0))
-
-			if comparison != types.Equal {
-				inclusionField = true
-			}
-
-			// set the value with boolean inclusionField to omit type assertion when we will apply projection
-			validated.Set(key, inclusionField)
-		case bool:
-			inclusionField = value
-
-			// set the value with boolean inclusionField to omit type assertion when we will apply projection
-			validated.Set(key, inclusionField)
-		default:
-			return nil, false, lazyerrors.Errorf("unsupported operation %s %value (%T)", key, value, value)
-		}
-
-		if projection.Len() == 1 && key == "_id" {
-			return validated, inclusionField, nil
-		}
-
-		if !inclusionField && positionalProjection {
-			return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrExclusionPositionalProjection,
-				"positional projection cannot be used with exclusion",
-				"projection",
-			)
-		}
-
-		// if inclusion is nil we are processing the first field
-		if inclusion == nil {
-			if key == "_id" {
-				continue
-			}
-
-			inclusion = &inclusionField
-
-			continue
-		}
-
-		if *inclusion != inclusionField {
-			if key == "_id" {
-				continue
-			}
-			if *inclusion {
-				return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
-					handlererrors.ErrProjectionExIn,
-					fmt.Sprintf("Cannot do exclusion on field %s in inclusion projection", key),
-					"projection",
-				)
-			}
-
-			return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrProjectionInEx,
-				fmt.Sprintf("Cannot do inclusion on field %s in exclusion projection", key),
-				"projection",
-			)
-		}
-	}
-
-	if inclusion == nil {
-		// Only $slice operators were specified (possibly alongside _id).
-		// If _id was explicitly included (value true), use inclusion mode so
-		// only _id and the sliced arrays appear  -- matching MongoDB behaviour for
-		// projections like {_id: 1, scores: {$slice: 2}}.
-		if idVal, idErr := validated.Get("_id"); idErr == nil {
-			if b, ok := idVal.(bool); ok && b {
-				return validated, true, nil
-			}
-		}
-		// Otherwise default to exclusion mode (show everything with array
-		// modifications applied).
-		return validated, false, nil
-	}
-
-	return validated, *inclusion, nil
-}
-
 // ProjectDocument applies projection to the copy of the document.
 // It returns proper CommandError that can be returned by $project aggregation stage.
 //
@@ -409,7 +98,11 @@ func validateProjectionShape(projection *types.Document) (*types.Document, bool,
 func ProjectDocument(doc, projection, filter *types.Document, inclusion bool) (*types.Document, error) {
 	defer doc.ShowRecordKey()()
 	if inclusion && !hasFindProjectionOperator(projection) && operators.SpecHasComputedPath(projection, true) {
-		return operators.ProjectInclusionTree(doc, projection)
+		projected, err := operators.ProjectInclusionTree(doc, projection)
+		if err != nil {
+			return nil, err
+		}
+		return projected, projectionpkg.ProjectIDSubpaths(doc, projected, projection, inclusion)
 	}
 
 	projected, err := projectID(doc, projection)
@@ -424,6 +117,10 @@ func ProjectDocument(doc, projection, filter *types.Document, inclusion bool) (*
 
 	for _, key := range projectedWithoutID.Keys() {
 		projected.Set(key, must.NotFail(projectedWithoutID.Get(key)))
+	}
+
+	if err = projectionpkg.ProjectIDSubpaths(doc, projected, projection, inclusion); err != nil {
+		return nil, err
 	}
 
 	return projected, nil
@@ -644,44 +341,6 @@ func setComputed(projected *types.Document, path types.Path, expr any, doc *type
 	return projected.SetByPath(path, res)
 }
 
-// validateSliceProjectionArg validates the $slice projection argument.
-// Valid forms: integer (int32/int64/float64) or [skip, limit] array.
-func validateSliceProjectionArg(arg any) error {
-	switch v := arg.(type) {
-	case int32, int64, float64:
-		return nil
-	case *types.Array:
-		if v.Len() != 2 {
-			return handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrBadValue,
-				"$slice array argument should be of form [skip, limit]",
-				"$slice",
-			)
-		}
-
-		for i := range 2 {
-			elem, _ := v.Get(i)
-			switch elem.(type) {
-			case int32, int64, float64:
-			default:
-				return handlererrors.NewCommandErrorMsgWithArgument(
-					handlererrors.ErrBadValue,
-					"$slice array argument should be of form [skip, limit]",
-					"$slice",
-				)
-			}
-		}
-
-		return nil
-	default:
-		return handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrBadValue,
-			fmt.Sprintf("First argument to $slice must be an array, but is of type %T", arg),
-			"$slice",
-		)
-	}
-}
-
 // sliceArray returns the first n elements (n > 0) or last |n| elements (n < 0) of arr.
 // If |n| >= arr.Len(), the full array is returned.
 func sliceArray(arr *types.Array, n int) *types.Array {
@@ -895,6 +554,8 @@ func findFirstElemMatchElement(arr *types.Array, condition *types.Document) (any
 		}
 	}
 
+	fc := NewFilterContext(nil, PlanCollectionScan)
+	matchFilter := must.NotFail(types.NewDocument("__v__", condition))
 	for {
 		_, elem, err := iter.Next()
 		if errors.Is(err, iterator.ErrIteratorDone) {
@@ -910,12 +571,11 @@ func findFirstElemMatchElement(arr *types.Array, condition *types.Document) (any
 		if isOperatorCondition {
 			// Wrap scalar/array element in a document with a dummy key to apply operator filter.
 			wrapDoc := must.NotFail(types.NewDocument("__v__", elem))
-			matchFilter := must.NotFail(types.NewDocument("__v__", condition))
-			matches, err = FilterDocument(wrapDoc, matchFilter)
+			matches, err = fc.Match(wrapDoc, matchFilter)
 		} else {
 			// Element must be a document to match field conditions.
 			if elemDoc, ok := elem.(*types.Document); ok {
-				matches, err = FilterDocument(elemDoc, condition)
+				matches, err = fc.Match(elemDoc, condition)
 			}
 		}
 
@@ -1233,18 +893,4 @@ func hasFindProjectionOperator(projection *types.Document) bool {
 		}
 	}
 	return false
-}
-
-// withoutProjectPrefix drops the "Invalid $project" context from an
-// expression error, which MongoDB reports without it in find projections.
-func withoutProjectPrefix(err error) error {
-	var ce *handlererrors.CommandError
-	if !errors.As(err, &ce) {
-		return err
-	}
-	msg, found := strings.CutPrefix(ce.Err().Error(), "Invalid $project :: caused by :: ")
-	if !found {
-		return err
-	}
-	return handlererrors.NewCommandErrorMsgWithArgument(ce.Code(), msg, "projection")
 }

@@ -16,6 +16,8 @@ package stages
 
 import (
 	"context"
+	"slices"
+	"strings"
 
 	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
@@ -31,6 +33,9 @@ import (
 type match struct {
 	filter *types.Document
 	cmp    *collation.Comparator
+	// plan is the order mongod checks the filter's conditions in: that of
+	// the query it is pushed into, or, by default, $expr first.
+	plan common.PlanMode
 }
 
 func newMatch(stage *types.Document) (aggregations.Stage, error) {
@@ -42,6 +47,9 @@ func newMatch(stage *types.Document) (aggregations.Stage, error) {
 // (see SeesStoredDocuments); only then are the document values it compares
 // against put in stored key order.
 func NewMatchStage(stage *types.Document, cmp *collation.Comparator, storedInput bool) (aggregations.Stage, error) {
+	if cmp == nil {
+		cmp = operators.CollationOf(stage)
+	}
 	filter, err := common.GetRequiredParam[*types.Document](stage, "$match")
 	if err != nil {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
@@ -51,14 +59,22 @@ func NewMatchStage(stage *types.Document, cmp *collation.Comparator, storedInput
 		)
 	}
 
-	if err := validateMatch(filter); err != nil {
-		return nil, err
-	}
-
+	// Canonicalize first: validation builds the filter's operators, which
+	// must see the values they will compare.
 	if storedInput {
 		common.CanonicalizeFilter(filter)
 	}
-	return &match{filter: filter, cmp: cmp}, nil
+
+	if err := validateMatch(filter); err != nil {
+		return nil, err
+	}
+	// mongod parses the whole pipeline before running it, so a malformed
+	// filter fails before any later stage's errors.
+	if err := common.ValidateFilter(filter, cmp); err != nil {
+		return nil, err
+	}
+
+	return &match{filter: filter, cmp: cmp, plan: common.PlanUnpushed}, nil
 }
 
 // newValidatedMatchStage is NewMatchStage for a $match stage whose filter
@@ -68,11 +84,25 @@ func newValidatedMatchStage(stage *types.Document, storedInput bool) aggregation
 	if storedInput {
 		common.CanonicalizeFilter(filter)
 	}
-	return &match{filter: filter}
+	return &match{filter: filter, cmp: operators.CollationOf(stage), plan: common.PlanUnpushed}
 }
 
 func (m *match) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
-	return common.FilterIteratorColl(iter, closer, m.filter, m.cmp), nil
+	return common.FilterIteratorPlan(iter, closer, m.filter, m.cmp, m.plan), nil
+}
+
+// SetPushedMatchPlan gives a $match that mongod pushes into the query layer
+// the plan mode of the query answering it, and reports whether stage is a
+// $match.
+func SetPushedMatchPlan(stage aggregations.Stage, mode common.PlanMode) bool {
+	if s, ok := stage.(*sbeStage); ok {
+		stage = s.inner
+	}
+	m, ok := stage.(*match)
+	if ok {
+		m.plan = mode
+	}
+	return ok
 }
 
 // validateMatch validates $expr field if any.
@@ -125,4 +155,56 @@ func SeesStoredDocuments(pipeline []any, i int) bool {
 func KeepsRecordID(s aggregations.Stage) bool {
 	_, ok := s.(*match)
 	return ok
+}
+
+// PushedMatches returns the $match stages of pipeline mongod pushes into the
+// query that reads its input: the leading ones, also those after a leading
+// $sort, which mongod moves ahead of it. filter is their conjunction, nil
+// when there are none.
+func PushedMatches(pipeline []aggregations.Stage) (matches []aggregations.Stage, filter *types.Document) {
+	clauses := types.MakeArray(0)
+stages:
+	for _, stage := range pipeline {
+		inner := stage
+		if s, ok := inner.(*sbeStage); ok {
+			inner = s.inner
+		}
+		switch inner := inner.(type) {
+		case *sort:
+		case *match:
+			matches = append(matches, stage)
+			clauses.Append(inner.filter)
+		default:
+			break stages
+		}
+	}
+	switch clauses.Len() {
+	case 0:
+		return nil, nil
+	case 1:
+		return matches, must.NotFail(clauses.Get(0)).(*types.Document)
+	}
+	return matches, must.NotFail(types.NewDocument("$and", clauses))
+}
+
+// filterFields returns the fields filter has conditions on, at the top level
+// or in logical operators' clauses.
+func filterFields(filter *types.Document, fields []string) []string {
+	keys, values := filter.Keys(), filter.Values()
+	for i, key := range keys {
+		switch key {
+		case "$and", "$or", "$nor":
+			clauses, _ := values[i].(*types.Array)
+			for j := 0; clauses != nil && j < clauses.Len(); j++ {
+				if clause, ok := must.NotFail(clauses.Get(j)).(*types.Document); ok {
+					fields = filterFields(clause, fields)
+				}
+			}
+		default:
+			if !strings.HasPrefix(key, "$") && !slices.Contains(fields, key) {
+				fields = append(fields, key)
+			}
+		}
+	}
+	return fields
 }

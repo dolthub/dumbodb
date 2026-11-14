@@ -34,6 +34,7 @@ type collStats struct {
 	storageStats   *storageStats
 	count          bool
 	latencyStats   bool
+	histograms     bool
 	queryExecStats bool
 }
 
@@ -42,28 +43,82 @@ type storageStats struct {
 	scale int32
 }
 
-func newCollStats(stage *types.Document) (aggregations.Stage, error) {
+// CheckCollStatsSpec returns the error mongod's lite parser gives for a
+// $collStats specification, checking each field as it reads it.
+func CheckCollStatsSpec(stage *types.Document) error {
 	fields, err := common.GetRequiredParam[*types.Document](stage, "$collStats")
 	if err != nil {
 		// Format as "key: value" without surrounding braces, matching MongoDB's error format.
 		stageValue, _ := stage.Get("$collStats")
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+		return handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrStageCollStatsInvalidArg,
 			fmt.Sprintf("$collStats must take a nested object but found: $collStats: %s", types.FormatAnyValue(stageValue)),
 			"$collStats (stage)",
 		)
 	}
+	for _, key := range fields.Keys() {
+		switch key {
+		case "count", "queryExecStats":
+			_, err = collStatsOption(fields, key, true)
+		case "latencyStats", "storageStats":
+			_, err = collStatsOption(fields, key, false)
+		default:
+			err = handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIDLUnknownField,
+				fmt.Sprintf("BSON field '$collStats.%s' is an unknown field.", key), "$collStats (stage)")
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func newCollStats(stage *types.Document) (aggregations.Stage, error) {
+	if err := CheckCollStatsSpec(stage); err != nil {
+		return nil, err
+	}
+	fields := must.NotFail(stage.Get("$collStats")).(*types.Document)
 
 	var cs collStats
 
-	// Return error on invalid type of count.
-	cs.count = fields.Has("count")
+	var present bool
+	var err error
+	if present, err = collStatsOption(fields, "count", true); err != nil {
+		return nil, err
+	}
+	cs.count = present
 
-	cs.latencyStats = fields.Has("latencyStats")
+	if v, getErr := fields.Get("latencyStats"); getErr == nil && v != types.Null {
+		spec, ok := v.(*types.Document)
+		if !ok {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrTypeMismatch,
+				fmt.Sprintf("BSON field '$collStats.latencyStats' is the wrong type '%s', expected type 'object'",
+					handlerparams.AliasFromType(v)), "$collStats (stage)")
+		}
+		for _, k := range spec.Keys() {
+			if k != "histograms" {
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIDLUnknownField,
+					fmt.Sprintf("BSON field '$collStats.latencyStats.%s' is an unknown field.", k), "$collStats (stage)")
+			}
+			h, isBool := must.NotFail(spec.Get(k)).(bool)
+			if !isBool {
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrTypeMismatch,
+					"Field 'histograms' should be a boolean value, but found: "+handlerparams.AliasFromType(must.NotFail(spec.Get(k))),
+					"$collStats (stage)")
+			}
+			cs.histograms = h
+		}
+		cs.latencyStats = true
+	}
 
-	cs.queryExecStats = fields.Has("queryExecStats")
+	if cs.queryExecStats, err = collStatsOption(fields, "queryExecStats", true); err != nil {
+		return nil, err
+	}
 
-	if fields.Has("storageStats") {
+	if present, err = collStatsOption(fields, "storageStats", false); err != nil {
+		return nil, err
+	}
+	if present {
 		cs.storageStats = new(storageStats)
 
 		storageStatsFields := must.NotFail(fields.Get("storageStats")).(*types.Document)
@@ -84,6 +139,27 @@ func newCollStats(stage *types.Document) (aggregations.Stage, error) {
 	}
 
 	return &cs, nil
+}
+
+// collStatsOption reports whether $collStats asks for the option name: an
+// object does, null and absence do not, and anything else is TypeMismatch.
+// An option that takes no settings must be an empty object.
+func collStatsOption(fields *types.Document, name string, mustBeEmpty bool) (bool, error) {
+	v, err := fields.Get(name)
+	if err != nil || v == types.Null {
+		return false, nil
+	}
+	spec, ok := v.(*types.Document)
+	if !ok {
+		return false, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrTypeMismatch,
+			fmt.Sprintf("BSON field '$collStats.%s' is the wrong type '%s', expected type 'object'",
+				name, handlerparams.AliasFromType(v)), "$collStats (stage)")
+	}
+	if mustBeEmpty && spec.Len() > 0 {
+		return false, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCollStatsExpectedEmptyObject,
+			"expected an empty object, but got "+types.FormatAnyValue(spec), "$collStats (stage)")
+	}
+	return true, nil
 }
 
 // Process implements Stage interface.
@@ -124,6 +200,22 @@ func (c *collStats) Process(ctx context.Context, iter types.DocumentsIterator, c
 		}
 
 		must.NoError(res.SetByPath(types.NewStaticPath("storageStats", "scaleFactor"), scale))
+	}
+
+	if c.latencyStats {
+		// DumboDB does not time operations, so every counter is zero.
+		stats := types.MakeDocument(4)
+		for _, kind := range []string{"commands", "reads", "writes", "transactions"} {
+			counters := types.MakeDocument(4)
+			if c.histograms {
+				counters.Set("histogram", types.MakeArray(0))
+			}
+			counters.Set("latency", int64(0))
+			counters.Set("ops", int64(0))
+			counters.Set("queryableEncryptionLatencyMicros", int64(0))
+			stats.Set(kind, counters)
+		}
+		res.Set("latencyStats", stats)
 	}
 
 	if _, _, err := iter.Next(); err == nil || !errors.Is(err, iterator.ErrIteratorDone) {

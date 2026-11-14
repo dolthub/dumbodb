@@ -18,8 +18,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/commonpath"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -35,6 +37,8 @@ type unwind struct {
 	field                      *aggregations.Expression
 	includeArrayIndex          string // empty means not set
 	preserveNullAndEmptyArrays bool
+	// absorbed is set when a preceding $lookup unwinds its own matches.
+	absorbed bool
 }
 
 func newUnwind(stage *types.Document) (aggregations.Stage, error) {
@@ -120,6 +124,20 @@ func newUnwindFromDocument(doc *types.Document) (aggregations.Stage, error) {
 	if v, getErr := doc.Get("includeArrayIndex"); getErr == nil {
 		switch s := v.(type) {
 		case string:
+			switch {
+			case s == "":
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrUnwindIndexEmpty,
+					"expected a non-empty string for the includeArrayIndex  option to $unwind stage, got string", "$unwind (stage)")
+			case strings.HasPrefix(s, "$"):
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrUnwindIndexDollar,
+					"includeArrayIndex option to $unwind stage should not be prefixed with a '$': "+s, "$unwind (stage)")
+			case strings.IndexByte(s, 0) >= 0:
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFieldPathNulByte,
+					"FieldPath field names may not contain '\\0'.", "$unwind (stage)")
+			}
+			if err := operators.CheckFieldPaths("$" + s); err != nil {
+				return nil, err
+			}
 			u.includeArrayIndex = s
 		case types.NullType:
 			// null is treated as not set
@@ -167,6 +185,23 @@ func newUnwindFromDocument(doc *types.Document) (aggregations.Stage, error) {
 
 // parseUnwindPath parses and validates a field path string for $unwind.
 func parseUnwindPath(field string) (*aggregations.Expression, error) {
+	// The path is a field path, never a variable.
+	switch {
+	case strings.HasPrefix(field, "$") && strings.ContainsRune(field, 0):
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrUnwindPathNulByte,
+			"field path must not contain embedded null characters", "$unwind (stage)")
+	case field == "$":
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrEmptyFieldPath,
+			"FieldPath cannot be constructed with empty string", "$unwind (stage)")
+	case strings.HasPrefix(field, "$$"):
+		name, _, _ := strings.Cut(field[1:], ".")
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFieldPathInvalidName,
+			"Consider using $getField or $setField for a field path with '.' or '$'. :: caused by :: "+
+				"FieldPath field names may not start with '$', given '"+name+"'.", "$unwind (stage)")
+	}
+	if err := operators.CheckFieldPaths(field); err != nil {
+		return nil, err
+	}
 	// For $unwind to deconstruct an array from dot notation, array must be at the suffix.
 	// It returns empty result if array is found at other parts of dot notation,
 	// so it does not return value by index of array nor values for given key in array's document.
@@ -208,6 +243,9 @@ func parseUnwindPath(field string) (*aggregations.Expression, error) {
 }
 
 func (u *unwind) Process(_ context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
+	if u.absorbed {
+		return iter, nil
+	}
 	if u.field == nil {
 		iter.Close()
 		result := iterator.Values(iterator.ForSlice([]*types.Document(nil)))
@@ -229,7 +267,8 @@ type unwindIterator struct {
 	iter      types.DocumentsIterator
 	fieldPath types.Path
 
-	// doc and elements are the input document being unwound and its array.
+	// doc is the input document being unwound, without its array, and
+	// elements is that array.
 	doc      *types.Document
 	elements iterator.Interface[int, any]
 }
@@ -245,9 +284,7 @@ func (it *unwindIterator) Next() (struct{}, *types.Document, error) {
 				if setErr := newDoc.SetByPath(it.fieldPath, v); setErr != nil {
 					return unused, nil, lazyerrors.Error(setErr)
 				}
-				if it.u.includeArrayIndex != "" {
-					newDoc.Set(it.u.includeArrayIndex, int64(idx))
-				}
+				it.u.setIndex(newDoc, int64(idx))
 
 				return unused, newDoc, nil
 			}
@@ -277,42 +314,52 @@ func (it *unwindIterator) Next() (struct{}, *types.Document, error) {
 func (it *unwindIterator) start(doc *types.Document) *types.Document {
 	d, evalErr := it.u.field.Evaluate(doc)
 	if evalErr != nil {
-		// Field does not exist in the document.
-		if it.u.preserveNullAndEmptyArrays {
-			return doc.DeepCopy()
-		}
-
-		return nil
+		return it.u.preserved(doc, false)
 	}
 
 	switch d := d.(type) {
 	case types.NullType:
-		if it.u.preserveNullAndEmptyArrays {
-			return doc.DeepCopy()
-		}
-
-		return nil
+		return it.u.preserved(doc, false)
 
 	case *types.Array:
 		if d.Len() == 0 {
-			if it.u.preserveNullAndEmptyArrays {
-				// Emit the document with the field removed.
-				newDoc := doc.DeepCopy()
-				newDoc.RemoveByPath(it.fieldPath)
-
-				return newDoc
-			}
-
-			return nil
+			return it.u.preserved(doc, true)
 		}
 
-		it.doc, it.elements = doc, d.Iterator()
+		// Copying the array into every output would cost its size per element.
+		template := doc.DeepCopy()
+		if err := template.SetByPath(it.fieldPath, types.Null); err != nil {
+			template = doc
+		}
+		it.doc, it.elements = template, d.Iterator()
 
 		return nil
 
 	default:
-		// Scalar value: pass through unchanged.
-		return doc.DeepCopy()
+		out := doc.DeepCopy()
+		it.u.setIndex(out, types.Null)
+
+		return out
+	}
+}
+
+// preserved returns doc as emitted for a missing, null or empty array value,
+// or nil when such documents are dropped.
+func (u *unwind) preserved(doc *types.Document, removeField bool) *types.Document {
+	if !u.preserveNullAndEmptyArrays {
+		return nil
+	}
+	out := doc.DeepCopy()
+	if removeField {
+		out.RemoveByPath(u.field.GetExpressionPath())
+	}
+	u.setIndex(out, types.Null)
+	return out
+}
+
+func (u *unwind) setIndex(doc *types.Document, idx any) {
+	if u.includeArrayIndex != "" {
+		setNestedField(doc, u.includeArrayIndex, idx)
 	}
 }
 

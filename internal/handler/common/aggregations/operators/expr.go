@@ -57,6 +57,9 @@ func ParseExpr(exprValue *types.Document, errArgument string) (Operator, error) 
 		errArgument: errArgument,
 	}
 
+	if err := CheckFieldPaths(v); err != nil {
+		return nil, err
+	}
 	if err := e.validateExpr(v); err != nil {
 		return nil, err
 	}
@@ -242,6 +245,9 @@ func processExprOperatorErrors(err error, argument string) error {
 
 	switch {
 	case errors.As(err, &opErr):
+		if code, ok := FieldOpErrorCode(opErr); ok {
+			return handlererrors.NewCommandErrorMsgWithArgument(code, opErr.Error(), argument)
+		}
 		switch opErr.Code() {
 		case ErrTooManyFields:
 			return handlererrors.NewCommandErrorMsgWithArgument(

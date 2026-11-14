@@ -16,10 +16,11 @@ package stages
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
-	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -88,6 +89,15 @@ func NewUnionWithStage(stage *types.Document, fetcher CollectionFetcher) (aggreg
 			"$unionWith (stage)")
 	}
 
+	if err := CheckParseFailingStages(sub.pipeline); err != nil {
+		return nil, err
+	}
+	if err := checkFirstOnlyStages(sub.pipeline); err != nil {
+		return nil, err
+	}
+	if err := checkSubPipelineParses(sub.pipeline, fetcher); err != nil {
+		return nil, err
+	}
 	for i := range sub.pipeline.Len() {
 		d, ok := must.NotFail(sub.pipeline.Get(i)).(*types.Document)
 		if !ok || d.Len() == 0 {
@@ -98,6 +108,9 @@ func NewUnionWithStage(stage *types.Document, fetcher CollectionFetcher) (aggreg
 				name+" is not allowed within a $unionWith's sub-pipeline", "$unionWith (stage)")
 		}
 	}
+
+	sub.sbeSubPipeline = true
+	sub.cmp = operators.CollationOf(stage)
 
 	return &unionWith{sub: sub, fetcher: fetcher}, nil
 }
@@ -110,31 +123,100 @@ func unionWithWrongType(field string, v any, want string) error {
 
 // Process implements aggregations.Stage.
 func (u *unionWith) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
-	out, err := common.ConsumeDocuments(iter, "$unionWith")
-	if err != nil {
-		return nil, lazyerrors.Error(err)
-	}
-
 	fetcher := withFetchCache(u.fetcher)
-	ctx = WithJoinStages(ctx, JoinStages{})
-	var fromDocs []*types.Document
-	if u.sub.from != "" {
-		if fromDocs, err = fetcher.Fetch(ctx, u.sub.from, nil); err != nil {
-			return nil, lazyerrors.Error(err)
-		}
-	}
-	unioned, err := u.sub.runPipeline(ctx, fetcher, fromDocs, types.MakeDocument(0), nil)
-	if err != nil {
+	if err := checkViewCollation(ctx, fetcher, u.sub.from, u.sub.cmp); err != nil {
+		iter.Close()
 		return nil, err
 	}
-	// Fetched documents may be shared; later stages may modify these.
-	for _, d := range unioned {
-		out = append(out, d.DeepCopy())
+	ctx = WithJoinStages(ctx, JoinStages{})
+
+	isView := func(name string) bool {
+		_, ok := fetcher.ViewPipeline(ctx, name)
+		return ok
 	}
 
-	result := iterator.Values(iterator.ForSlice(out))
-	closer.Add(result)
-	return result, nil
+	// mongod runs a $unionWith sub-pipeline in SBE, after the stages of the
+	// view it reads from, unless it is nested in a $lookup sub-pipeline.
+	u.sub.optimizePipeline(ctx, fetcher)
+	subSpecs := sbeSpecs(u.sub.optimized)
+	var viewSpecs []*types.Document
+	if view, ok := fetcher.ViewPipeline(ctx, u.sub.from); ok && u.sub.from != "" {
+		viewSpecs = sbeSpecs(view)
+	}
+	viewInSBE := false
+	// A missing collection gives mongod an empty plan and a leading _id
+	// equality its express plan; neither runs in SBE.
+	combinedSpecs := append(append([]*types.Document{}, viewSpecs...), subSpecs...)
+	noSBE := IsExpressMatch(combinedSpecs) || (u.sub.from != "" && !fetcher.SourceExists(ctx, u.sub.from))
+	if u.sub.inClassic || noSBE {
+		u.sub.sbePrefix, u.sub.sbeSubPipeline = 0, false
+	} else {
+		combined := SBEPrefixLen(append(append([]*types.Document{}, viewSpecs...), subSpecs...), isView)
+		u.sub.sbePrefix = max(0, combined-len(viewSpecs))
+		viewInSBE = len(viewSpecs) > 0 && combined > 0
+		u.sub.viewIsView = isView
+	}
+
+	// The sub-pipeline starts once the input is exhausted, as in mongod, so
+	// an error reading the input comes before any from the sub-pipeline.
+	start := func() (types.DocumentsIterator, *iterator.MultiCloser, error) {
+		var fromDocs []*types.Document
+		if u.sub.from != "" {
+			var err error
+			if fromDocs, err = fetcher.Fetch(ctx, u.sub.from, nil); err != nil {
+				if viewInSBE {
+					return nil, nil, sbeError(err)
+				}
+				return nil, nil, lazyerrors.Error(err)
+			}
+		}
+		return u.sub.pipelineIter(ctx, fetcher, fromDocs, types.MakeDocument(0), nil)
+	}
+	res := &unionIterator{input: iter, start: start}
+	closer.Add(res)
+	return res, nil
+}
+
+// unionIterator returns its input's documents, then those of a sub-pipeline
+// it starts when the input is exhausted.
+type unionIterator struct {
+	input    types.DocumentsIterator
+	start    func() (types.DocumentsIterator, *iterator.MultiCloser, error)
+	unioned  types.DocumentsIterator
+	closer   *iterator.MultiCloser
+	finished bool
+}
+
+func (it *unionIterator) Next() (struct{}, *types.Document, error) {
+	var unused struct{}
+	if it.finished {
+		return unused, nil, iterator.ErrIteratorDone
+	}
+	if it.unioned == nil {
+		_, doc, err := it.input.Next()
+		if !errors.Is(err, iterator.ErrIteratorDone) {
+			return unused, doc, err
+		}
+		if it.unioned, it.closer, err = it.start(); err != nil {
+			it.finished = true
+			return unused, nil, err
+		}
+	}
+	_, doc, err := it.unioned.Next()
+	if errors.Is(err, iterator.ErrIteratorDone) {
+		it.finished = true
+	}
+	return unused, doc, err
+}
+
+func (it *unionIterator) Close() {
+	it.input.Close()
+	if it.unioned != nil {
+		it.unioned.Close()
+	}
+	if it.closer != nil {
+		it.closer.Close()
+	}
 }
 
 var _ aggregations.Stage = (*unionWith)(nil)

@@ -45,7 +45,7 @@ func EvalOperand(expr any, doc *types.Document) (value any, missing bool, err er
 			if errors.Is(err, aggregations.ErrMissingValue) {
 				return nil, true, nil
 			}
-			return value, false, err
+			return value, false, withOperatorContext(err, v.Command())
 		}
 		value, err = evalDocumentExpressions(v, doc)
 		return value, false, err
@@ -113,12 +113,17 @@ func isMissingVariable(doc *types.Document, name string) bool {
 	return doc != nil && doc.Has(missingVariablePrefix+name)
 }
 
-// isConstantExpression reports whether expr reads no field and no variable,
+// IsConstantExpression reports whether expr reads no field and no variable,
 // so that mongod folds it to a constant while parsing.
+func IsConstantExpression(expr any) bool {
+	return isConstantExpression(expr)
+}
+
 func isConstantExpression(expr any) bool {
 	switch v := expr.(type) {
 	case string:
-		return !strings.HasPrefix(v, "$")
+		// mongod folds $$REMOVE to the missing value.
+		return !strings.HasPrefix(v, "$") || v == "$$REMOVE"
 	case *types.Array:
 		for i := range v.Len() {
 			if !isConstantExpression(must.NotFail(v.Get(i))) {
@@ -128,10 +133,16 @@ func isConstantExpression(expr any) bool {
 		return true
 	case *types.Document:
 		if IsOperator(v) {
+			if bindsVariables(v) {
+				return false
+			}
 			switch v.Command() {
-			case "$literal":
-				return true
+			case "$literal", "$const":
+				return !isBoundNow(v)
 			case "$rand", "$sampleRate", "$meta":
+				return false
+			case "$getField", "$setField", "$unsetField":
+				// mongod never folds them, even over constant arguments.
 				return false
 			}
 		}
@@ -144,6 +155,24 @@ func isConstantExpression(expr any) bool {
 	default:
 		return true
 	}
+}
+
+// bindsVariables reports whether an operator binds a variable, which keeps
+// mongod from folding it: $filter, $map, $reduce, and $let with variables.
+func bindsVariables(op *types.Document) bool {
+	switch op.Command() {
+	case "$filter", "$map", "$reduce":
+		return true
+	case "$let":
+		spec, _ := must.NotFail(op.Get("$let")).(*types.Document)
+		if spec == nil {
+			return false
+		}
+		v, _ := spec.Get("vars")
+		vars, _ := v.(*types.Document)
+		return vars != nil && vars.Len() > 0
+	}
+	return false
 }
 
 // checkConstantOperand returns the error mongod raises when it folds a
@@ -179,7 +208,7 @@ func CheckConstantSubexpressions(expr any) error {
 func foldConstants(expr any) (any, bool, error) {
 	switch v := expr.(type) {
 	case string:
-		return v, !strings.HasPrefix(v, "$"), nil
+		return v, isConstantExpression(v), nil
 	case *types.Array:
 		folded := types.MakeArray(v.Len())
 		constant := true
@@ -206,9 +235,13 @@ func foldDocumentConstants(doc *types.Document) (any, bool, error) {
 		name = doc.Command()
 		// Unknown names are not expressions here, such as $sortArray's
 		// sortBy {"$a": 1}; inside a real expression parsing rejects them.
-		if _, known := Operators[name]; !known || name == "$literal" {
+		if _, known := Operators[name]; !known || name == "$literal" || name == "$const" {
 			return doc, isConstantExpression(doc), nil
 		}
+	}
+
+	if name == "$switch" {
+		return foldSwitchConstants(doc)
 	}
 
 	folded := types.MakeDocument(doc.Len())
@@ -226,7 +259,9 @@ func foldDocumentConstants(doc *types.Document) (any, bool, error) {
 	switch {
 	case !operator:
 		return folded, constant, nil
-	case name == "$rand" || name == "$sampleRate" || name == "$meta":
+	case name == "$rand" || name == "$sampleRate" || name == "$meta" || bindsVariables(doc):
+		return folded, false, nil
+	case name == "$getField" || name == "$setField" || name == "$unsetField":
 		return folded, false, nil
 	case !constant || convertOperators[name]:
 		return folded, constant, nil
@@ -240,6 +275,70 @@ func foldDocumentConstants(doc *types.Document) (any, bool, error) {
 		return folded, false, nil
 	}
 	return must.NotFail(types.NewDocument("$literal", value)), true, nil
+}
+
+// foldSwitchConstants folds a $switch as mongod's optimizer does: the default
+// first, then each case in turn. A constant falsy case drops its branch
+// unfolded, and a constant truthy one makes its then the default and drops
+// every later branch. With no branch left and no default it fails.
+func foldSwitchConstants(doc *types.Document) (any, bool, error) {
+	arg := must.NotFail(doc.Get("$switch"))
+	if _, err := newSwitch(arg); err != nil {
+		return nil, false, err
+	}
+	spec := arg.(*types.Document)
+
+	var def any
+	var defConstant, hasDefault bool
+	if v, err := spec.Get("default"); err == nil {
+		if def, defConstant, err = foldConstants(v); err != nil {
+			return nil, false, err
+		}
+		hasDefault = true
+	}
+
+	branches := must.NotFail(spec.Get("branches")).(*types.Array)
+	kept := types.MakeArray(branches.Len())
+	for i := range branches.Len() {
+		branch := must.NotFail(branches.Get(i)).(*types.Document)
+		caseExpr, caseConstant, err := foldConstants(must.NotFail(branch.Get("case")))
+		if err != nil {
+			return nil, false, err
+		}
+		if caseConstant {
+			v, _, err := foldConstant(caseExpr, nil)
+			if err != nil {
+				return nil, false, err
+			}
+			if isFalsy(v) {
+				continue
+			}
+			if def, defConstant, err = foldConstants(must.NotFail(branch.Get("then"))); err != nil {
+				return nil, false, err
+			}
+			hasDefault = true
+			break
+		}
+		thenExpr, _, err := foldConstants(must.NotFail(branch.Get("then")))
+		if err != nil {
+			return nil, false, err
+		}
+		kept.Append(must.NotFail(types.NewDocument("case", caseExpr, "then", thenExpr)))
+	}
+
+	if kept.Len() == 0 {
+		if !hasDefault {
+			return nil, false, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSwitchNoMatch,
+				"Cannot execute a switch statement where all the cases evaluate to false without a default", "$switch")
+		}
+		return def, defConstant, nil
+	}
+
+	folded := must.NotFail(types.NewDocument("branches", kept))
+	if hasDefault {
+		folded.Set("default", def)
+	}
+	return must.NotFail(types.NewDocument("$switch", folded)), false, nil
 }
 
 // foldConstant is EvalOperand. Operator constructors call it, and EvalOperand
@@ -321,15 +420,20 @@ func evalArgValue(arg any, doc *types.Document) (any, error) {
 			case "NOW":
 				base = time.Now().UTC()
 			case "REMOVE":
-				// Missing rather than null, so a $cond selecting $$REMOVE drops
-				// the field instead of writing an explicit null.
-				return nil, aggregations.ErrMissingValue
+				// An operator reads the missing value as null; $cond and the
+				// stages read it with EvalOperand, which keeps it missing.
+				return types.Null, nil
+			case "IS_MR", "CLUSTER_TIME":
+				return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrBuiltinVariableUnavailable,
+					"Builtin variable '$$"+varName+"' is not available")
+			case "USER_ROLES":
+				base = types.MakeArray(0)
 			case "PRUNE", "KEEP", "DESCEND":
 				// $redact reads these as literal strings to decide its action.
 				base = v
 			default:
 				if isMissingVariable(doc, varName) {
-					return nil, aggregations.ErrMissingValue
+					return types.Null, nil
 				}
 				val, err := doc.Get("$$" + varName)
 				if err != nil {
@@ -345,22 +449,7 @@ func evalArgValue(arg any, doc *types.Document) (any, error) {
 				return base, nil
 			}
 
-			baseDoc, ok := base.(*types.Document)
-			if !ok {
-				return types.Null, nil
-			}
-
-			path, err := types.NewPathFromString(fieldPath)
-			if err != nil {
-				return types.Null, nil
-			}
-
-			result, err := baseDoc.GetByPath(path)
-			if err != nil {
-				return types.Null, nil
-			}
-
-			return result, nil
+			return evalVariablePath(base, fieldPath), nil
 		}
 
 		if strings.HasPrefix(v, "$") {
@@ -387,6 +476,25 @@ func evalArgValue(arg any, doc *types.Document) (any, error) {
 	default:
 		return v, nil
 	}
+}
+
+// evalVariablePath reads fieldPath from a variable's value as a field path
+// reads the document, through arrays too.
+func evalVariablePath(base any, fieldPath string) any {
+	switch base.(type) {
+	case *types.Document, *types.Array:
+	default:
+		return types.Null
+	}
+	expr, err := fieldExpression("$v." + fieldPath)
+	if err != nil {
+		return types.Null
+	}
+	result, err := expr.Evaluate(must.NotFail(types.NewDocument("v", base)))
+	if err != nil {
+		return types.Null
+	}
+	return result
 }
 
 // evalDocumentExpressions evaluates a document literal as MongoDB's
@@ -427,4 +535,29 @@ func coerceToBool(v any) bool {
 	default:
 		return convertToBool(v)
 	}
+}
+
+// OperatorContextError records the innermost operator an evaluation error
+// came from, for errors whose code alone does not say.
+type OperatorContextError struct {
+	Op  string
+	Err error
+}
+
+func (e *OperatorContextError) Error() string { return e.Err.Error() }
+
+func (e *OperatorContextError) Unwrap() error { return e.Err }
+
+// WithOperatorContext returns err marked as raised by the operator op, unless
+// it already names an operator.
+func WithOperatorContext(err error, op string) error {
+	return withOperatorContext(err, op)
+}
+
+func withOperatorContext(err error, op string) error {
+	var ctxErr *OperatorContextError
+	if err == nil || errors.As(err, &ctxErr) {
+		return err
+	}
+	return &OperatorContextError{Op: op, Err: err}
 }

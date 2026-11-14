@@ -22,13 +22,16 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"math/big"
 	"net"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/FerretDB/wire"
+	"github.com/cockroachdb/apd/v3"
 	"github.com/google/uuid"
 
 	"github.com/dolthub/dumbodb/internal/backends"
@@ -37,6 +40,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/stages"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
@@ -68,9 +72,12 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		return nil, err
 	}
 
+	// collDoc is the aggregate's collation and collCmp its comparator.
+	var collDoc *types.Document
 	var collCmp *collation.Comparator
 	if cv, _ := document.Get("collation"); cv != nil {
 		if cd, ok := cv.(*types.Document); ok {
+			collDoc = cd
 			collCmp = collation.Parse(cd).Comparator()
 		}
 	}
@@ -85,6 +92,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 	if dbName, err = common.GetRequiredParam[string](document, "$db"); err != nil {
 		return nil, err
 	}
+	connCtx = withDBName(connCtx, dbName)
 
 	collectionParam, err := document.Get(document.Command())
 	if err != nil {
@@ -144,14 +152,20 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		return nil, lazyerrors.Error(err)
 	}
 
+	targetIsView := false
 	if target, lookupErr := lookupCollectionInfo(connCtx, db, cName); lookupErr == nil && target != nil && target.IsView {
+		targetIsView = true
 		opCollation, _ := document.Get("collation")
 		opCollationDoc, _ := opCollation.(*types.Document)
 		viewCollation, vErr := viewReadCollation(opCollationDoc, target.Collation)
 		if vErr != nil {
 			return nil, vErr
 		}
+		collDoc = viewCollation
 		collCmp = collation.Parse(viewCollation).Comparator()
+	} else if lookupErr == nil && target != nil && !document.Has("collation") && target.Collation != nil {
+		collDoc = target.Collation
+		collCmp = collation.Parse(target.Collation).Comparator()
 	}
 
 	owner := conninfo.Get(connCtx).SessionPrincipal()
@@ -177,13 +191,26 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 	if err = aggregations.CheckPipelineLength(pipeline.Len()); err != nil {
 		return nil, err
 	}
+	if err = stages.LiteParsePipeline(pipeline); err != nil {
+		return nil, err
+	}
+	userPipeline := pipeline
+	pipeline = operators.BindNowInPipeline(pipeline, operators.CommandNow())
 
-	aggregationStages := aggregations.MoveMatchesAhead(must.NotFail(iterator.ConsumeValues(pipeline.Iterator())))
-	if err = aggregations.CheckExpandedPipelineLength(aggregations.ExpandedLength(aggregationStages)); err != nil {
+	aggregationStages := must.NotFail(iterator.ConsumeValues(pipeline.Iterator()))
+	expandedLength := aggregations.ExpandedLength(aggregationStages)
+	// A view's stages come first, so its pipeline is optimized with them.
+	aggregationStages = stages.OptimizeSkipsAndLimits(aggregations.MoveMatchesAhead(
+		stages.OptimizeSkipsAndLimits(aggregationStages, !targetIsView)), !targetIsView)
+	for _, v := range aggregationStages {
+		operators.BindCollation(v, collCmp)
+	}
+	if err = aggregations.CheckExpandedPipelineLength(expandedLength); err != nil {
 		return nil, err
 	}
 	stagesDocuments := make([]aggregations.Stage, 0, len(aggregationStages))
 	collStatsDocuments := make([]aggregations.Stage, 0, len(aggregationStages))
+	stagesSpecs := make([]*types.Document, 0, len(aggregationStages))
 
 	for i, v := range aggregationStages {
 		var d *types.Document
@@ -199,6 +226,10 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		if err = documentsNotFirst(d, i); err != nil {
 			return nil, err
 		}
+		if name := d.Command(); i > 0 && (name == "$listCatalog" || name == "$querySettings") {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCollStatsIsNotFirstStage,
+				name+" is only valid as the first stage in a pipeline", document.Command())
+		}
 
 		var s aggregations.Stage
 
@@ -211,17 +242,22 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 
 		case "$out":
 			// $out requires database write access to replace a collection.
-			outWriter := makeOutWriter(h.b, dbName)
+			bypass, _ := document.Get("bypassDocumentValidation")
+			outWriter := makeOutWriter(h.b, dbName, bypass == true)
 			s, err = stages.NewOutStage(d, dbName, outWriter)
 
 		case "$merge":
 			// $merge requires database read/write access to merge into a collection.
 			mergeWriter := makeMergeWriter(h.b, dbName)
-			s, err = stages.NewMergeStage(d, dbName, mergeWriter)
+			if s, err = stages.NewMergeStage(d, dbName, mergeWriter); err == nil {
+				err = checkMergeTarget(connCtx, h.b, s, collDoc)
+			}
 
 		case "$indexStats":
 			// $indexStats requires collection access to retrieve index metadata.
-			s, err = stages.NewIndexStatsStage(d, connCtx, c, h.TCPHost)
+			s, err = stages.NewIndexStatsStage(d, connCtx, c, h.TCPHost, func(indexes []backends.IndexInfo) []backends.IndexInfo {
+				return clientVisibleIndexes(connCtx, db, cName, indexes)
+			})
 
 		case "$planCacheStats":
 			s, err = stages.NewPlanCacheStatsStage(connCtx, c, dbName+"."+cName, h.TCPHost)
@@ -264,9 +300,16 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			collStatsDocuments = append(collStatsDocuments, s)
 		default:
 			stagesDocuments = append(stagesDocuments, s)
+			stagesSpecs = append(stagesSpecs, d)
 			collStatsDocuments = append(collStatsDocuments, s) // It's possible to apply any stage after $collStats stage
 		}
 	}
+
+	if err = checkOutMergeFinal(userPipeline); err != nil {
+		return nil, err
+	}
+
+	stages.MarkLookupsUnwound(stagesDocuments, stagesSpecs)
 
 	if err = common.ValidatePipelineMetadata(aggregationStages); err != nil {
 		return nil, err
@@ -389,7 +432,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 				err = checkCompoundNaturalHint(hint, "aggregate")
 			}
 			if err == nil && !cInfo.IsView && !(ledByMatch && backends.HintIsNatural(hint)) {
-				err = validateHintExists(ctx, c, hint, "aggregate")
+				err = validateHintExists(ctx, db, cName, c, hint, "aggregate")
 			}
 			if err == nil && cInfo.IsView {
 				err = validateViewHint(ctx, db, &cInfo, hint, "aggregate", ledByMatch)
@@ -480,7 +523,10 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		// The stages the pushed filter and limit are drawn from: the user's,
 		// or for a view, the view's then the user's, as they run on the base.
 		pushdownStages := aggregationStages
+		collectionExists := len(cList.Collections) > 0
 		isView := cInfo.IsView
+		scanned := cName
+		var viewInClassic bool
 		if isView {
 			view := cList.Collections[0]
 			baseCollection, viewStages, rawViewStages, vErr := resolveViewChain(ctx, db, view.Name, view.ViewOn, view.ViewPipeline, collCmp)
@@ -488,7 +534,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 				closer.Close()
 				return nil, handleMaxTimeMSError(vErr, maxTimeMS, "aggregate")
 			}
-			if err = viewPipelineLength(aggregations.ExpandedLength(aggregationStages) +
+			if err = viewPipelineLength(expandedLength +
 				aggregations.ExpandedLength(rawViewStages) - len(rawViewStages))(len(rawViewStages)); err != nil {
 				closer.Close()
 				return nil, err
@@ -499,9 +545,12 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 				return nil, handleMaxTimeMSError(srcErr, maxTimeMS, "aggregate")
 			}
 			cInfo = backends.CollectionInfo{}
+			collectionExists = srcInfo != nil
 			if srcInfo != nil {
 				cInfo = *srcInfo
 			}
+			scanned = baseCollection
+			viewInClassic = stages.ViewStagesInClassic(rawViewStages, aggregationStages)
 			c, err = db.Collection(baseCollection)
 			if err != nil {
 				closer.Close()
@@ -513,6 +562,27 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 				qp.Filter, _ = aggregations.GetPushdownQuery(pushdownStages)
 				common.CanonicalizeFilter(qp.Filter)
 			}
+			specs := make([]*types.Document, 0, len(rawViewStages)+len(stagesSpecs))
+			for _, v := range rawViewStages {
+				d, _ := v.(*types.Document)
+				specs = append(specs, d)
+			}
+			stagesSpecs = append(specs, stagesSpecs...)
+			if len(stagesDocuments) == len(stagesSpecs) {
+				stagesDocuments, stagesSpecs = stages.OptimizeSkipsAndLimitsInStages(stagesDocuments, stagesSpecs, true)
+			}
+			stages.MarkLookupsUnwound(stagesDocuments, stagesSpecs)
+		}
+
+		collectionIsView := viewChecker(ctx, db)
+		// mongod answers a missing collection with an empty plan, which does
+		// not run in SBE.
+		var sbe sbePlan
+		if collectionExists {
+			sbe = classifySBE(ctx, db, scanned, stagesSpecs, collDoc, viewInClassic, collectionIsView)
+			stages.MarkSBELookupsBefore(stagesDocuments, sbe.pushable)
+			stages.WrapSBEStages(stagesDocuments, stagesSpecs, sbe.groups)
+			c = sbe.countAsDistinctScan(c, stagesDocuments)
 		}
 
 		switch {
@@ -560,7 +630,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			}
 		}
 
-		if runsInSBE(aggregationStages) {
+		if sbe.runsInSBE() {
 			ctx = backends.WithSBEScan(ctx)
 		}
 		iter, err = processStagesDocuments(ctx, closer, &stagesDocumentsParams{
@@ -570,7 +640,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		statistics := stages.GetStatistics(collStatsDocuments)
 
 		iter, err = processStagesStats(ctx, closer, &stagesStatsParams{
-			c, db, dbName, cName, statistics, collStatsDocuments, h.TCPHost,
+			c, db, dbName, cName, statistics, collStatsDocuments, h.TCPHost, false,
 		})
 	}
 
@@ -630,11 +700,124 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 }
 
 var dbLevelSourceStages = map[string]struct{}{
-	"$currentOp":         {},
-	"$documents":         {},
-	"$listLocalSessions": {},
-	"$listSessions":      {},
-	"$changeStream":      {},
+	"$currentOp":          {},
+	"$documents":          {},
+	"$listLocalSessions":  {},
+	"$listSessions":       {},
+	"$changeStream":       {},
+	"$queryStats":         {},
+	"$listCatalog":        {},
+	"$querySettings":      {},
+	"$listClusterCatalog": {},
+}
+
+// checkDatabaseStagePositions returns mongod's error for a stage that must
+// come first, which it checks after each stage parses and the first stage is
+// found to run without a collection.
+func checkDatabaseStagePositions(pipeline *types.Array) error {
+	for i := 1; i < pipeline.Len(); i++ {
+		stage, ok := must.NotFail(pipeline.Get(i)).(*types.Document)
+		if !ok || stage.Len() != 1 {
+			return nil
+		}
+		switch name := stage.Command(); name {
+		case "$queryStats", "$listCatalog", "$querySettings", "$currentOp", "$listLocalSessions",
+			"$documents", "$collStats", "$indexStats":
+			return firstStageOnlyError(name)
+		case "$listClusterCatalog":
+			// mongod expands $listClusterCatalog into stages led by
+			// $_internalListCollections and reports that stage's name.
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCollStatsIsNotFirstStage,
+				"$_internalListCollections is only valid as the first stage in a pipeline", name+" (stage)")
+		}
+	}
+	return nil
+}
+
+// checkDatabasePipelineStages returns the error mongod reports while it parses
+// the stages of an {aggregate: 1} pipeline, before it checks that each stage
+// may run without a collection.
+func checkDatabasePipelineStages(pipeline *types.Array, dbName string) error {
+	for i := range pipeline.Len() {
+		stage, ok := must.NotFail(pipeline.Get(i)).(*types.Document)
+		if !ok || stage.Len() != 1 {
+			return nil
+		}
+		switch name := stage.Command(); name {
+		case "$queryStats", "$listCatalog":
+			check := stages.CheckQueryStatsSpec
+			if name == "$listCatalog" {
+				check = stages.CheckListCatalogSpec
+			}
+			if err := check(stage); err != nil {
+				return err
+			}
+			if dbName != "admin" {
+				if name == "$listCatalog" {
+					return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace,
+						"Collectionless $listCatalog must be run against the 'admin' database with {aggregate: 1}", "$listCatalog (stage)")
+				}
+				_, err := stages.NewStage(stage.DeepCopy())
+				return err
+			}
+		case "$facet":
+			if dbName == "admin" {
+				if err := stages.CheckFacetQueryStats(stage); err != nil {
+					return err
+				}
+			}
+			if err := stages.CheckFacetListClusterCatalog(stage); err != nil {
+				return err
+			}
+			if _, err := stages.NewStage(stage.DeepCopy()); err != nil {
+				return err
+			}
+		case "$changeStreamSplitLargeEvent":
+			if err := stages.CheckChangeStreamSplitLargeEventSpec(stage); err != nil {
+				return err
+			}
+		case "$querySettings":
+			if err := stages.CheckQuerySettingsSpec(stage); err != nil {
+				return err
+			}
+		case "$listClusterCatalog":
+			if _, err := stages.ParseListClusterCatalogSpec(stage); err != nil {
+				return err
+			}
+		case "$out":
+			if _, err := stages.NewOutStage(stage.DeepCopy(), dbName, nil); err != nil {
+				return err
+			}
+		case "$merge":
+			// A target with 'on' fields is checked once its index is known.
+			merge, err := stages.NewMergeStage(stage.DeepCopy(), dbName, nil)
+			if err != nil {
+				return err
+			}
+			if _, _, on, _ := stages.MergeTarget(merge); len(on) == 1 && on[0] == "_id" {
+				if err = stages.CheckWriteTarget(merge); err != nil {
+					return err
+				}
+			}
+		case "$currentOp":
+			if err := stages.CheckCurrentOpSpec(stage); err != nil {
+				return err
+			}
+			if dbName != "admin" {
+				return currentOpNamespaceError()
+			}
+			if err := stages.CheckCurrentOpOptions(stage); err != nil {
+				return err
+			}
+		case "$documents", "$listLocalSessions":
+		default:
+			if stages.FailsParsing(stage) {
+				_, err := stages.NewStage(stage.DeepCopy())
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (h *Handler) aggregateDatabase(connCtx context.Context, document *types.Document, dbName string) (*wire.OpMsg, error) {
@@ -665,6 +848,13 @@ func (h *Handler) aggregateDatabase(connCtx context.Context, document *types.Doc
 	if err = aggregations.CheckPipelineLength(pipeline.Len()); err != nil {
 		return nil, err
 	}
+	if err = stages.LiteParsePipeline(pipeline); err != nil {
+		return nil, err
+	}
+	pipeline = stages.OptimizeSkipsAndLimitsArray(operators.BindNowInPipeline(pipeline, operators.CommandNow()), false)
+	if cd, ok := getOrNilDocument(document, "collation"); ok {
+		operators.BindCollation(pipeline, collation.Parse(cd).Comparator())
+	}
 
 	if pipeline.Len() == 0 {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
@@ -684,6 +874,16 @@ func (h *Handler) aggregateDatabase(connCtx context.Context, document *types.Doc
 	}
 
 	stageName := firstStage.Command()
+	if err = checkDatabasePipelineStages(pipeline, dbName); err != nil {
+		return nil, err
+	}
+	if !stages.IsKnownStage(stageName) {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrStageUnrecognized,
+			fmt.Sprintf("Unrecognized pipeline stage name: '%s'", stageName),
+			document.Command(),
+		)
+	}
 	if _, dbOK := dbLevelSourceStages[stageName]; !dbOK {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrInvalidNamespace,
@@ -691,21 +891,30 @@ func (h *Handler) aggregateDatabase(connCtx context.Context, document *types.Doc
 			document.Command(),
 		)
 	}
-
-	if stageName == "$currentOp" && dbName != "admin" {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrInvalidNamespace,
-			"$currentOp must be run against the 'admin' database with {aggregate: 1}",
-			document.Command(),
-		)
+	if err = checkDatabaseStagePositions(pipeline); err != nil {
+		return nil, err
 	}
 
-	if stageName == "$documents" {
+	switch stageName {
+	case "$currentOp":
+		// DumboDB reports no operations.
+		return h.aggregateSourceDocuments(connCtx, document, nil, pipeline, dbName)
+	case "$listLocalSessions":
+		sessions, err := h.listLocalSessions(connCtx, firstStage)
+		if err != nil {
+			return nil, err
+		}
+		return h.aggregateSourceDocuments(connCtx, document, sessions, pipeline, dbName)
+	case "$documents":
 		return h.aggregateDocuments(connCtx, document, firstStage, pipeline, dbName)
-	}
-
-	if stageName == "$listLocalSessions" {
-		return h.aggregateListLocalSessions(connCtx, dbName, firstStage)
+	case "$queryStats", "$querySettings":
+		// DumboDB records no query statistics and has no query settings.
+		return h.aggregateDocuments(connCtx, document, must.NotFail(types.NewDocument("$documents", types.MakeArray(0))), pipeline, dbName)
+	case "$listClusterCatalog":
+		return h.aggregateListClusterCatalog(connCtx, document, firstStage, pipeline, dbName)
+	case "$listCatalog":
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrNotImplemented,
+			stageName+" is not implemented", stageName+" (stage)")
 	}
 
 	return documentOpMsg(
@@ -720,18 +929,18 @@ func (h *Handler) aggregateDatabase(connCtx context.Context, document *types.Doc
 	)
 }
 
-// aggregateListLocalSessions implements the $listLocalSessions source
-// stage: one document per logical session cached on this node and owned by a
+// listLocalSessions returns the documents of the $listLocalSessions source
+// stage: one per logical session cached on this node and owned by a
 // principal the spec selects. Each session's _id.id is the lsid UUID and
 // _id.uid is SHA256("user@db") (SHA256("") when unauthenticated), matching
 // MongoDB's session identity encoding.
-func (h *Handler) aggregateListLocalSessions(connCtx context.Context, dbName string, stage *types.Document) (*wire.OpMsg, error) {
+func (h *Handler) listLocalSessions(connCtx context.Context, stage *types.Document) ([]*types.Document, error) {
 	spec, err := parseListSessionsSpec(stage, conninfo.Get(connCtx).SessionPrincipal())
 	if err != nil {
 		return nil, err
 	}
 
-	firstBatch := types.MakeArray(0)
+	var sessions []*types.Document
 	if reg := h.SessionRegistry(); reg != nil {
 		for _, s := range reg.Snapshot() {
 			principal, id, ok := conninfo.SplitSessionKey(s.Lsid)
@@ -746,7 +955,7 @@ func (h *Handler) aggregateListLocalSessions(connCtx context.Context, dbName str
 				continue
 			}
 			uidSum := sha256.Sum256([]byte(sessionUserDigestName(principal)))
-			firstBatch.Append(must.NotFail(types.NewDocument(
+			sessions = append(sessions, must.NotFail(types.NewDocument(
 				"_id", must.NotFail(types.NewDocument(
 					"id", types.Binary{Subtype: types.BinaryUUID, B: idBytes},
 					"uid", types.Binary{Subtype: types.BinaryGeneric, B: uidSum[:]},
@@ -755,17 +964,7 @@ func (h *Handler) aggregateListLocalSessions(connCtx context.Context, dbName str
 			)))
 		}
 	}
-
-	return documentOpMsg(
-		must.NotFail(types.NewDocument(
-			"cursor", must.NotFail(types.NewDocument(
-				"firstBatch", firstBatch,
-				"id", int64(0),
-				"ns", dbName+".$cmd.aggregate",
-			)),
-			"ok", float64(1),
-		)),
-	)
+	return sessions, nil
 }
 
 // sessionUserDigestName is the "user@db" name MongoDB hashes into a session
@@ -862,28 +1061,17 @@ func parseListSessionsSpec(stage *types.Document, callerPrincipal string) (listS
 // array elements are fed through any remaining pipeline stages and returned
 // through the normal cursor/batch machinery.
 func (h *Handler) aggregateDocuments(connCtx context.Context, document, firstStage *types.Document, pipeline *types.Array, dbName string) (*wire.OpMsg, error) {
-	arr, ok := must.NotFail(firstStage.Get("$documents")).(*types.Array)
-	if !ok {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrTypeMismatch,
-			"$documents value must be an array of objects",
-			document.Command(),
-		)
+	// $documents evaluates its argument as an expression.
+	srcDocs, err := stages.EvalDocuments(firstStage)
+	if err != nil {
+		return nil, err
 	}
+	return h.aggregateSourceDocuments(connCtx, document, srcDocs, pipeline, dbName)
+}
 
-	srcDocs := make([]*types.Document, 0, arr.Len())
-	for i := 0; i < arr.Len(); i++ {
-		d, ok := must.NotFail(arr.Get(i)).(*types.Document)
-		if !ok {
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrTypeMismatch,
-				"$documents array element must be an object",
-				document.Command(),
-			)
-		}
-		srcDocs = append(srcDocs, d)
-	}
-
+// aggregateSourceDocuments runs the stages of an {aggregate: 1} pipeline after
+// its first, source stage on srcDocs, the documents that stage produced.
+func (h *Handler) aggregateSourceDocuments(connCtx context.Context, document *types.Document, srcDocs []*types.Document, pipeline *types.Array, dbName string) (*wire.OpMsg, error) {
 	pipelineStages := make([]aggregations.Stage, 0, pipeline.Len()-1)
 	for i := 1; i < pipeline.Len(); i++ {
 		sd, ok := must.NotFail(pipeline.Get(i)).(*types.Document)
@@ -897,6 +1085,9 @@ func (h *Handler) aggregateDocuments(connCtx context.Context, document, firstSta
 		if err := documentsNotFirst(sd, i); err != nil {
 			return nil, err
 		}
+		if sd.Command() == "$listLocalSessions" {
+			return nil, firstStageOnlyError("$listLocalSessions")
+		}
 		var s aggregations.Stage
 		var err error
 		switch sd.Command() {
@@ -906,13 +1097,27 @@ func (h *Handler) aggregateDocuments(connCtx context.Context, document, firstSta
 				return nil, lazyerrors.Error(dbErr)
 			}
 			s, err = newForeignCollectionStage(sd, db)
+		case "$out":
+			bypass, _ := document.Get("bypassDocumentValidation")
+			s, err = stages.NewOutStage(sd, dbName, makeOutWriter(h.b, dbName, bypass == true))
+		case "$merge":
+			if s, err = stages.NewMergeStage(sd, dbName, makeMergeWriter(h.b, dbName)); err == nil {
+				collDoc, _ := getOrNilDocument(document, "collation")
+				err = checkMergeTarget(connCtx, h.b, s, collDoc)
+			}
 		default:
 			s, err = stages.NewStage(sd)
 		}
 		if err != nil {
 			return nil, err
 		}
+		if sd.Command() == "$collStats" {
+			return nil, firstStageOnlyError("$collStats")
+		}
 		pipelineStages = append(pipelineStages, s)
+	}
+	if err := checkOutMergeFinal(pipeline); err != nil {
+		return nil, err
 	}
 
 	cursorDoc := must.NotFail(document.Get("cursor")).(*types.Document)
@@ -1028,17 +1233,6 @@ func sortLimitBound(aggregationStages []any, i int) int64 {
 	return 0
 }
 
-// runsInSBE reports whether mongod runs a pipeline in SBE: one with a stage
-// SBE executes, such as $group or $lookup.
-func runsInSBE(stages []any) bool {
-	for _, s := range stages {
-		if d, _ := s.(*types.Document); d != nil && sbeStages[d.Command()] {
-			return true
-		}
-	}
-	return false
-}
-
 // pushdownLimit returns the $limit that directly follows the stages
 // aggregations.GetPushdownQuery pushes down (at most one $match and one $sort
 // leading the pipeline), else 0. The query layer applies it like a find limit.
@@ -1102,6 +1296,13 @@ func processStagesDocuments(ctx context.Context, closer *iterator.MultiCloser, p
 
 	closer.Add(queryRes.Iter)
 
+	if pushed, filter := stages.PushedMatches(p.stages); len(pushed) > 0 {
+		planMode := queryPlanMode(ctx, p.c, filter, p.qp.Hint, queryRes)
+		for _, s := range pushed {
+			stages.SetPushedMatchPlan(s, planMode)
+		}
+	}
+
 	// Stages evaluate expressions per document; stop between documents once
 	// maxTimeMS expires or the client goes away.
 	var iter types.DocumentsIterator = iterator.WithContext(ctx, queryRes.Iter)
@@ -1155,10 +1356,50 @@ type stagesStatsParams struct {
 	statistics map[stages.Statistic]struct{}
 	stages     []aggregations.Stage
 	tcpHost    string
+	// subPipeline is set for $collStats at the start of a sub-pipeline,
+	// which reads through a view to its base collection.
+	subPipeline bool
+}
+
+// resolveStatsView points p at the base collection of a view, as mongod
+// does for a sub-pipeline over a view without stages of its own. A view's
+// stages come before $collStats, which then fails as not first (40602); at
+// the top level mongod refuses a view (CommandNotSupportedOnView).
+func resolveStatsView(ctx context.Context, p *stagesStatsParams) error {
+	info, err := lookupCollectionInfo(ctx, p.db, p.cName)
+	if err != nil || info == nil || !info.IsView {
+		return nil
+	}
+	if !p.subPipeline {
+		// A view has latency statistics of its own, but no storage.
+		for stat := range p.statistics {
+			if stat != stages.StatisticLatency {
+				return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCommandNotSupportedOnView,
+					fmt.Sprintf("Namespace %s.%s is a view, not a collection", p.dbName, p.cName), "aggregate")
+			}
+		}
+		return nil
+	}
+	base, viewStages, _, err := resolveViewChain(ctx, p.db, info.Name, info.ViewOn, info.ViewPipeline, nil)
+	if err != nil {
+		return err
+	}
+	if len(viewStages) > 0 {
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCollStatsIsNotFirstStage,
+			"$collStats is only valid as the first stage in a pipeline", "$collStats")
+	}
+	if p.c, err = p.db.Collection(base); err != nil {
+		return lazyerrors.Error(err)
+	}
+	p.cName = base
+	return nil
 }
 
 // processStagesStats retrieves the statistics from the database and then processes them through the stages.
 func processStagesStats(ctx context.Context, closer *iterator.MultiCloser, p *stagesStatsParams) (types.DocumentsIterator, error) { //nolint:lll // for readability
+	if err := resolveStatsView(ctx, p); err != nil {
+		return nil, err
+	}
 	_, hasCount := p.statistics[stages.StatisticCount]
 	_, hasStorage := p.statistics[stages.StatisticStorage]
 
@@ -1184,22 +1425,27 @@ func processStagesStats(ctx context.Context, closer *iterator.MultiCloser, p *st
 	))
 
 	var (
-		collStats *backends.CollectionStatsResult
-		cInfo     backends.CollectionInfo
-		nIndexes  int64
+		collStats      *backends.CollectionStatsResult
+		cInfo          backends.CollectionInfo
+		nIndexes       int64
+		visibleIndexes []backends.IndexInfo
 	)
 
 	if hasCount || hasStorage {
 		collStats, err = p.c.Stats(ctx, new(backends.CollectionStatsParams))
 		if backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist) ||
 			backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseDoesNotExist) {
+			stat := "count"
+			if hasStorage {
+				stat = "storageStats"
+			}
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrNamespaceNotFound,
 				fmt.Sprintf(
 					"PlanExecutor error during aggregation :: caused by :: "+
-						"Unable to retrieve storageStats in $collStats stage :: "+
+						"Unable to retrieve %s in $collStats stage :: "+
 						"caused by :: Collection [%s.%s] not found.",
-					p.dbName, p.cName,
+					stat, p.dbName, p.cName,
 				),
 				"aggregate",
 			)
@@ -1232,7 +1478,9 @@ func processStagesStats(ctx context.Context, closer *iterator.MultiCloser, p *st
 			return nil, lazyerrors.Error(err)
 		}
 
+		iList.Indexes = clientVisibleIndexes(ctx, p.db, p.cName, iList.Indexes)
 		nIndexes = int64(len(iList.Indexes))
+		visibleIndexes = iList.Indexes
 	}
 
 	if hasStorage {
@@ -1244,6 +1492,9 @@ func processStagesStats(ctx context.Context, closer *iterator.MultiCloser, p *st
 		indexSizes := types.MakeDocument(len(collStats.IndexSizes))
 		indexDetails := types.MakeDocument(len(collStats.IndexSizes))
 		for _, indexSize := range collStats.IndexSizes {
+			if visibleIndexes != nil && !hasIndexNamed(visibleIndexes, indexSize.Name) {
+				continue
+			}
 			indexSizes.Set(indexSize.Name, int32(indexSize.Size))
 			indexDetails.Set(indexSize.Name, must.NotFail(types.NewDocument()))
 		}
@@ -1299,15 +1550,29 @@ const (
 // collection with the provided documents. As in MongoDB, they are written in
 // batches to a temporary collection that is then renamed over the target, so
 // the target is unchanged if the pipeline or a write fails.
-func makeOutWriter(b backends.Backend, currentDB string) stages.OutWriter { //nolint:unparam // currentDB used by caller
+func makeOutWriter(b backends.Backend, currentDB string, bypassValidation bool) stages.OutWriter { //nolint:unparam // currentDB used by caller
 	return func(ctx context.Context, dbName, collName string, docs types.DocumentsIterator) error {
 		db, err := b.Database(dbName)
 		if err != nil {
 			return lazyerrors.Error(err)
 		}
 
+		// The new collection replaces an existing target with its options
+		// and indexes, as mongod's does.
 		tmpName := "tmp.agg_out." + uuid.NewString()
-		if err = db.CreateCollection(ctx, &backends.CreateCollectionParams{Name: tmpName}); err != nil {
+		tmpParams := &backends.CreateCollectionParams{Name: tmpName}
+		var validator *types.Document
+		if target, _ := lookupCollectionInfo(ctx, db, collName); target != nil {
+			if target.IsView {
+				return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCommandNotSupportedOnView,
+					fmt.Sprintf("Namespace %s.%s is a view, not a collection", dbName, collName), "$out")
+			}
+			tmpParams = outTargetOptions(tmpName, target)
+			if target.ValidationAction != "warn" && !bypassValidation {
+				validator = target.Validator
+			}
+		}
+		if err = db.CreateCollection(ctx, tmpParams); err != nil {
 			return lazyerrors.Error(err)
 		}
 		renamed := false
@@ -1322,6 +1587,10 @@ func makeOutWriter(b backends.Backend, currentDB string) stages.OutWriter { //no
 			return lazyerrors.Error(err)
 		}
 
+		if err = copyOutTargetIndexes(ctx, db, collName, tmp); err != nil {
+			return err
+		}
+
 		var batch []*types.Document
 		var batchBytes int
 		flush := func() error {
@@ -1330,7 +1599,7 @@ func makeOutWriter(b backends.Backend, currentDB string) stages.OutWriter { //no
 			}
 			_, insertErr := tmp.InsertAll(ctx, &backends.InsertAllParams{Docs: batch})
 			batch, batchBytes = nil, 0
-			return insertErr
+			return outWriteError(dbName, collName, insertErr)
 		}
 
 		for {
@@ -1343,6 +1612,16 @@ func makeOutWriter(b backends.Backend, currentDB string) stages.OutWriter { //no
 			}
 			if !doc.Has("_id") {
 				doc.Set("_id", types.NewObjectID())
+			}
+			if validator != nil {
+				valid, err := common.FilterDocument(doc, validator)
+				if err != nil {
+					return err
+				}
+				if !valid {
+					return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDocumentValidationFailure,
+						"Document failed validation", "$out")
+				}
 			}
 			batch = append(batch, doc)
 			batchBytes += doc.BSONSize()
@@ -1365,6 +1644,182 @@ func makeOutWriter(b backends.Backend, currentDB string) stages.OutWriter { //no
 	}
 }
 
+// outTargetOptions returns the parameters of a collection named name with
+// target's options.
+func outTargetOptions(name string, target *backends.CollectionInfo) *backends.CreateCollectionParams {
+	return &backends.CreateCollectionParams{
+		Name:               name,
+		Validator:          target.Validator,
+		Collation:          target.Collation,
+		ValidationLevel:    target.ValidationLevel,
+		ValidationAction:   target.ValidationAction,
+		MergeMode:          target.MergeMode,
+		ClusteredIndexName: target.ClusteredIndexName,
+		IsTimeSeries:       target.IsTimeSeries,
+		TimeField:          target.TimeField,
+		MetaField:          target.MetaField,
+		Granularity:        target.Granularity,
+		BucketSpanSeconds:  target.BucketSpanSeconds,
+	}
+}
+
+// copyOutTargetIndexes creates the indexes of an existing $out target on the
+// temporary collection that replaces it, as mongod keeps them.
+func copyOutTargetIndexes(ctx context.Context, db backends.Database, collName string, tmp backends.Collection) error {
+	target, err := db.Collection(collName)
+	if err != nil {
+		return lazyerrors.Error(err)
+	}
+	res, err := target.ListIndexes(ctx, new(backends.ListIndexesParams))
+	if err != nil {
+		if backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist) ||
+			backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseDoesNotExist) {
+			return nil
+		}
+		return lazyerrors.Error(err)
+	}
+	var indexes []backends.IndexInfo
+	for _, idx := range res.Indexes {
+		if idx.Name != backends.DefaultIndexName {
+			indexes = append(indexes, idx)
+		}
+	}
+	if len(indexes) == 0 {
+		return nil
+	}
+	if _, err = tmp.CreateIndexes(ctx, &backends.CreateIndexesParams{Indexes: indexes}); err != nil {
+		return lazyerrors.Error(err)
+	}
+	return nil
+}
+
+// outWriteError returns mongod's error for a $out write that breaks a unique
+// index of the target, or err itself.
+func outWriteError(dbName, collName string, err error) error {
+	if err == nil {
+		return nil
+	}
+	var be *backends.Error
+	if !errors.As(err, &be) || be.Code() != backends.ErrorCodeInsertDuplicateID {
+		return err
+	}
+	msg := fmt.Sprintf("E11000 duplicate key error collection: %s.%s", dbName, collName)
+	if be.DupIndex() != "" {
+		msg += " index: " + be.DupIndex()
+	}
+	if k := be.DupKey(); k != nil {
+		msg += " dup key: " + types.FormatAnyValue(k)
+	}
+	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDuplicateKeyInsert, msg, "$out")
+}
+
+// mergeWriteError returns mongod's error for a $merge write that breaks a
+// unique index, or err itself.
+func mergeWriteError(params *stages.MergeParams, err error) error {
+	if err == nil {
+		return nil
+	}
+	var be *backends.Error
+	if !errors.As(err, &be) || be.Code() != backends.ErrorCodeInsertDuplicateID {
+		return lazyerrors.Error(err)
+	}
+	msg := fmt.Sprintf("$merge failed due to a DuplicateKey error :: caused by :: E11000 duplicate key error collection: %s.%s",
+		params.DBName, params.CollName)
+	if be.DupIndex() != "" {
+		msg += " index: " + be.DupIndex()
+	}
+	if k := be.DupKey(); k != nil {
+		msg += " dup key: " + types.FormatAnyValue(k)
+	}
+	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrDuplicateKeyInsert, msg, "$merge")
+}
+
+// mergeChangesID reports whether merging incoming into the matched existing
+// document would change its _id. A replacement compares by value, so 1.0 or
+// NumberLong(1) replaces a document whose _id is 1; a merge, as an update
+// does, treats any other encoding as a change.
+func mergeChangesID(existing, incoming *types.Document, byValue bool) bool {
+	id, err := incoming.Get("_id")
+	if err != nil {
+		return false
+	}
+	old := must.NotFail(existing.Get("_id"))
+	if byValue {
+		return types.CompareForAggregation(id, old) != types.Equal
+	}
+	return !types.Identical(id, old)
+}
+
+func mergeImmutableIDError(cause string) error {
+	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrImmutableField,
+		"$merge failed to update the matching document, did you attempt to modify the _id or the shard key? :: caused by :: "+cause,
+		"$merge (stage)")
+}
+
+// checkMergeTarget returns mongod's error for a $merge target: 'on' fields
+// without a unique index, then a system collection or internal database.
+func checkMergeTarget(ctx context.Context, b backends.Backend, stage aggregations.Stage, aggCollation *types.Document) error {
+	if err := checkMergeOnIndex(ctx, b, stage, aggCollation); err != nil {
+		return err
+	}
+	return stages.CheckWriteTarget(stage)
+}
+
+// checkMergeOnIndex returns mongod's error when $merge's 'on' fields other than
+// _id alone are not exactly the fields of a unique, non-partial index whose
+// collation is the aggregate's on the target collection.
+func checkMergeOnIndex(ctx context.Context, b backends.Backend, stage aggregations.Stage, aggCollation *types.Document) error {
+	dbName, collName, on, ok := stages.MergeTarget(stage)
+	if !ok || len(on) == 0 || (len(on) == 1 && on[0] == "_id") {
+		return nil
+	}
+
+	noIndex := handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrMergeOnNoUniqueIndex,
+		"Cannot find index to verify that join fields will be unique", "$merge")
+
+	db, err := b.Database(dbName)
+	if err != nil {
+		return lazyerrors.Error(err)
+	}
+	if target, _ := lookupCollectionInfo(ctx, db, collName); target != nil && target.IsView {
+		return noIndex
+	}
+	coll, err := db.Collection(collName)
+	if err != nil {
+		return lazyerrors.Error(err)
+	}
+	res, err := coll.ListIndexes(ctx, new(backends.ListIndexesParams))
+	if err != nil {
+		if backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist) ||
+			backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseDoesNotExist) {
+			return noIndex
+		}
+		return lazyerrors.Error(err)
+	}
+
+	onFields := make(map[string]bool, len(on))
+	for _, f := range on {
+		onFields[f] = true
+	}
+	for _, idx := range res.Indexes {
+		if !idx.Unique || idx.PartialFilterExpression != nil || len(idx.Key) != len(onFields) ||
+			collation.Parse(idx.Collation).Identity() != collation.Parse(aggCollation).Identity() {
+			continue
+		}
+		matches := true
+		for _, k := range idx.Key {
+			if !onFields[k.Field] {
+				matches = false
+				break
+			}
+		}
+		if matches {
+			return nil
+		}
+	}
+	return noIndex
+}
+
 // makeMergeWriter returns a MergeFunc callback that merges documents into the
 // target collection according to the $merge semantics.
 func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //nolint:unparam // currentDB used by caller
@@ -1383,30 +1838,23 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 			return nil
 		}
 
+		if target, _ := lookupCollectionInfo(ctx, db, params.CollName); target != nil && target.IsView {
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCommandNotSupportedOnView,
+				fmt.Sprintf("Namespace %s.%s is a view, not a collection", params.DBName, params.CollName), "$merge")
+		}
+
+		// A target that does not exist yet matches no document.
 		qRes, err := coll.Query(ctx, new(backends.QueryParams))
-		if err != nil {
-			if backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist) ||
-				backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseDoesNotExist) {
-				// Collection doesn't exist yet; all docs are "not matched".
-				if params.WhenNotMatched == "insert" {
-					for _, doc := range params.Docs {
-						if !doc.Has("_id") {
-							doc.Set("_id", types.NewObjectID())
-						}
-					}
-					_, insertErr := coll.InsertAll(ctx, &backends.InsertAllParams{Docs: params.Docs})
-					return insertErr
-				}
-
-				return nil
-			}
-
+		if err != nil && !backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist, backends.ErrorCodeDatabaseDoesNotExist) {
 			return lazyerrors.Error(err)
 		}
 
+		// An entry is a target document or, with insertAt >= 0, a document
+		// this batch inserts, which a later document with the same key
+		// matches as mongod's sequential upserts do.
 		type existingEntry struct {
-			doc   *types.Document
-			index int
+			doc      *types.Document
+			insertAt int
 		}
 
 		// Only the target documents this batch can match are kept, so memory
@@ -1418,7 +1866,19 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 
 		existingMap := make(map[string]*existingEntry, len(params.Docs))
 
-		for i := 0; ; i++ {
+		// A dotted 'on' field is matched as mongod's update query matches
+		// it, so a path may also reach into the target's arrays.
+		var onFilters []*types.Document
+		var dottedMatches []*existingEntry
+		if mergeOnDotted(params.On) {
+			onFilters = make([]*types.Document, len(params.Docs))
+			for i, incoming := range params.Docs {
+				onFilters[i] = mergeOnFilter(incoming, params.On)
+			}
+			dottedMatches = make([]*existingEntry, len(params.Docs))
+		}
+
+		for qRes != nil {
 			_, existing, nextErr := qRes.Iter.Next()
 			if errors.Is(nextErr, iterator.ErrIteratorDone) {
 				break
@@ -1427,22 +1887,87 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 				qRes.Iter.Close()
 				return lazyerrors.Error(nextErr)
 			}
+			if onFilters != nil {
+				var entry *existingEntry
+				for j, filter := range onFilters {
+					if dottedMatches[j] != nil {
+						continue
+					}
+					ok, err := common.FilterDocument(existing, filter)
+					if err != nil {
+						qRes.Iter.Close()
+						return lazyerrors.Error(err)
+					}
+					if ok {
+						if entry == nil {
+							entry = &existingEntry{doc: existing, insertAt: -1}
+						}
+						dottedMatches[j] = entry
+					}
+				}
+				continue
+			}
 			if key := buildMergeKey(existing, params.On); wanted[key] {
-				existingMap[key] = &existingEntry{doc: existing, index: i}
+				existingMap[key] = &existingEntry{doc: existing, insertAt: -1}
 			}
 		}
-		qRes.Iter.Close()
+		if qRes != nil {
+			qRes.Iter.Close()
+		}
 
 		var toInsert []*types.Document
 		var toUpdate []*types.Document
+		write := func(entry *existingEntry, doc *types.Document) {
+			entry.doc = doc
+			if entry.insertAt >= 0 {
+				toInsert[entry.insertAt] = doc
+				return
+			}
+			toUpdate = append(toUpdate, doc)
+		}
+		// mongod writes a batch unordered: each document whose write fails
+		// is skipped, the others are written, and the first failure is
+		// reported.
+		var batchErr error
+		fail := func(err error) {
+			if batchErr == nil {
+				batchErr = err
+			}
+		}
 
-		for _, incoming := range params.Docs {
+		for i, incoming := range params.Docs {
 			key := buildMergeKey(incoming, params.On)
 			entry, matched := existingMap[key]
+			if dottedMatches != nil {
+				entry = dottedMatches[i]
+				matched = entry != nil
+			}
+
+			if params.ApplyWhenMatched != nil {
+				var existing *types.Document
+				if matched {
+					existing = entry.doc
+				}
+				updated, err := params.ApplyWhenMatched(ctx, existing, i)
+				if err != nil {
+					fail(err)
+					continue
+				}
+				if matched {
+					write(entry, updated)
+					continue
+				}
+			}
 
 			if matched {
 				switch params.WhenMatched {
+
 				case "merge":
+					if mergeChangesID(entry.doc, incoming, false) {
+						fail(mergeImmutableIDError("Performing an update on the path '_id' would modify the immutable field '_id'"))
+						continue
+					}
+
 					// Merge fields from incoming into existing.
 					merged := entry.doc
 					for _, k := range incoming.Keys() {
@@ -1450,62 +1975,109 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 						merged.Set(k, v)
 					}
 
-					toUpdate = append(toUpdate, merged)
+					write(entry, merged)
 
 				case "replace":
+					if mergeChangesID(entry.doc, incoming, true) {
+						fail(mergeImmutableIDError(fmt.Sprintf(
+							"After applying the update, the (immutable) field '_id' was found to have been altered to _id: %s",
+							types.FormatAnyValue(must.NotFail(incoming.Get("_id"))))))
+						continue
+					}
+
 					// Replace existing doc (preserving its _id if incoming lacks one).
 					if _, idErr := incoming.Get("_id"); idErr != nil {
 						id := must.NotFail(entry.doc.Get("_id"))
 						incoming.Set("_id", id)
 					}
 
-					toUpdate = append(toUpdate, incoming)
+					write(entry, incoming)
 
 				case "keepExisting":
 					// Do nothing; existing document wins.
 
 				case "fail":
-					return handlererrors.NewCommandErrorMsgWithArgument(
-						handlererrors.ErrBadValue,
-						"$merge with whenMatched: 'fail' found a matching document",
+					fail(handlererrors.NewCommandErrorMsgWithArgument(
+						handlererrors.ErrDuplicateKeyInsert,
+						"$merge with whenMatched: fail found an existing document with the same values for the 'on' fields",
 						"$merge (stage)",
-					)
+					))
 				}
 			} else {
 				switch params.WhenNotMatched {
 				case "insert":
+					// A generated _id matches no later document.
+					keyed := dottedMatches == nil && (incoming.Has("_id") || !slices.Contains(params.On, "_id"))
 					if !incoming.Has("_id") {
 						incoming.Set("_id", types.NewObjectID())
 					}
 					toInsert = append(toInsert, incoming)
+					if keyed {
+						existingMap[key] = &existingEntry{doc: incoming, insertAt: len(toInsert) - 1}
+					}
 
 				case "discard":
 					// Skip this document.
 
 				case "fail":
-					return handlererrors.NewCommandErrorMsgWithArgument(
-						handlererrors.ErrBadValue,
-						"$merge with whenNotMatched: 'fail' found an unmatched document",
+					fail(handlererrors.NewCommandErrorMsgWithArgument(
+						handlererrors.ErrMergeStageNoMatchingDocument,
+						"$merge could not find a matching document in the target collection for at least one document in the source collection",
 						"$merge (stage)",
-					)
+					))
 				}
 			}
 		}
 
-		if len(toInsert) > 0 {
-			if _, err = coll.InsertAll(ctx, &backends.InsertAllParams{Docs: toInsert}); err != nil {
-				return lazyerrors.Error(err)
-			}
+		if err = writeMergeDocuments(ctx, coll, params, toInsert, toUpdate); err != nil {
+			return err
 		}
-
-		if len(toUpdate) > 0 {
-			if _, err = coll.UpdateAll(ctx, &backends.UpdateAllParams{Docs: toUpdate}); err != nil {
-				return lazyerrors.Error(err)
-			}
-		}
-
-		return nil
+		return batchErr
 	}
+}
+
+// writeMergeDocuments inserts and updates the documents a $merge batch wrote.
+// As mongod writes the batch unordered, a document that would duplicate a
+// unique key is skipped, the others are written, and the first such failure
+// is returned.
+func writeMergeDocuments(ctx context.Context, coll backends.Collection, params *stages.MergeParams, toInsert, toUpdate []*types.Document) error {
+	insert := func(docs []*types.Document) error {
+		_, err := coll.InsertAll(ctx, &backends.InsertAllParams{Docs: docs})
+		return err
+	}
+	update := func(docs []*types.Document) error {
+		_, err := coll.UpdateAll(ctx, &backends.UpdateAllParams{Docs: docs})
+		return err
+	}
+	var dupErr error
+	for _, w := range []struct {
+		docs  []*types.Document
+		write func([]*types.Document) error
+	}{{toInsert, insert}, {toUpdate, update}} {
+		if len(w.docs) == 0 {
+			continue
+		}
+		err := w.write(w.docs)
+		if err == nil {
+			continue
+		}
+		if !backends.ErrorCodeIs(err, backends.ErrorCodeInsertDuplicateID) {
+			return mergeWriteError(params, err)
+		}
+		for _, doc := range w.docs {
+			err = w.write([]*types.Document{doc})
+			switch {
+			case err == nil:
+			case backends.ErrorCodeIs(err, backends.ErrorCodeInsertDuplicateID):
+				if dupErr == nil {
+					dupErr = mergeWriteError(params, err)
+				}
+			default:
+				return mergeWriteError(params, err)
+			}
+		}
+	}
+	return dupErr
 }
 
 func wrapAggregateExecutorError(err error) error {
@@ -1529,6 +2101,32 @@ func wrapAggregateExecutorError(err error) error {
 	)
 }
 
+// mergeOnDotted reports whether any $merge 'on' field is a dotted path.
+func mergeOnDotted(on []string) bool {
+	for _, field := range on {
+		if strings.Contains(field, ".") {
+			return true
+		}
+	}
+	return false
+}
+
+// mergeOnFilter returns the equality query on the 'on' fields of incoming
+// with which mongod finds the target document to update.
+func mergeOnFilter(incoming *types.Document, on []string) *types.Document {
+	filter := types.MakeDocument(len(on))
+	for _, field := range on {
+		var v any = types.Null
+		if path, err := types.NewPathFromString(field); err == nil {
+			if got, err := incoming.GetByPath(path); err == nil {
+				v = got
+			}
+		}
+		filter.Set(field, must.NotFail(types.NewDocument("$eq", v)))
+	}
+	return filter
+}
+
 // This key is used to match incoming documents against existing documents in $merge.
 func buildMergeKey(doc *types.Document, fields []string) string {
 	if len(fields) == 1 {
@@ -1537,7 +2135,7 @@ func buildMergeKey(doc *types.Document, fields []string) string {
 			return ""
 		}
 
-		return fmt.Sprintf("%v", v)
+		return mergeKeyValue(v)
 	}
 
 	key := ""
@@ -1549,10 +2147,81 @@ func buildMergeKey(doc *types.Document, fields []string) string {
 			continue
 		}
 
-		key += fmt.Sprintf("|%v", v)
+		key += "|" + mergeKeyValue(v)
 	}
 
 	return key
+}
+
+// mergeKeyValue returns a key for v under which values that compare equal,
+// such as 1, NumberLong(1) and NumberDecimal("1.0"), are the same.
+func mergeKeyValue(v any) string {
+	var r *big.Rat
+	switch n := v.(type) {
+	case int32:
+		r = new(big.Rat).SetInt64(int64(n))
+	case int64:
+		r = new(big.Rat).SetInt64(n)
+	case float64:
+		switch {
+		case math.IsNaN(n):
+			return "n:NaN"
+		case math.IsInf(n, 1):
+			return "n:Infinity"
+		case math.IsInf(n, -1):
+			return "n:-Infinity"
+		}
+		r = new(big.Rat).SetFloat64(n)
+	case types.Decimal128:
+		d := aggregations.DecimalToAPD(n)
+		if d.Form != apd.Finite {
+			return "n:" + d.String()
+		}
+		var ok bool
+		if r, ok = new(big.Rat).SetString(d.Text('f')); !ok {
+			return fmt.Sprintf("%v", v)
+		}
+	case *types.Document:
+		key := "{"
+		values := n.Values()
+		for i, k := range n.Keys() {
+			key += strconv.Quote(k) + ":" + mergeKeyValue(values[i]) + ","
+		}
+		return key + "}"
+	case *types.Array:
+		key := "["
+		for i := range n.Len() {
+			key += mergeKeyValue(must.NotFail(n.Get(i))) + ","
+		}
+		return key + "]"
+	default:
+		return fmt.Sprintf("%T:%v", v, v)
+	}
+	return "n:" + r.RatString()
+}
+
+// checkOutMergeFinal returns mongod's error for $out or $merge before the last
+// stage of pipeline.
+func checkOutMergeFinal(pipeline *types.Array) error {
+	for i := 0; i < pipeline.Len()-1; i++ {
+		if name := must.NotFail(pipeline.Get(i)).(*types.Document).Command(); name == "$out" || name == "$merge" {
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrStageNotFinal,
+				name+" can only be the final stage in the pipeline", name+" (stage)")
+		}
+	}
+	return nil
+}
+
+func currentOpNamespaceError() error {
+	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace,
+		"$currentOp must be run against the 'admin' database with {aggregate: 1}", "$currentOp (stage)")
+}
+
+// firstStageOnlyError is mongod's error for the stage name, which must be
+// first, in a later position.
+func firstStageOnlyError(name string) error {
+	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCollStatsIsNotFirstStage,
+		name+" is only valid as the first stage in a pipeline", name+" (stage)")
 }
 
 // documentsNotFirst is mongod's error for $documents after the first stage.
@@ -1582,4 +2251,11 @@ func (d *recordKeyDropper) Next() (struct{}, *types.Document, error) {
 		doc.SetRecordKey(nil)
 	}
 	return zero, doc, err
+}
+
+// getOrNilDocument returns the document field key of doc, if it is one.
+func getOrNilDocument(doc *types.Document, key string) (*types.Document, bool) {
+	v, _ := doc.Get(key)
+	d, ok := v.(*types.Document)
+	return d, ok
 }

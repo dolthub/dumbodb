@@ -25,6 +25,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
@@ -54,6 +55,7 @@ func (h *Handler) MsgCount(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMs
 	}
 
 	common.CanonicalizeFilter(params.Filter)
+	params.Filter = operators.BindNowInFilter(params.Filter, operators.CommandNow())
 	if err := common.ValidateFilter(params.Filter, nil); err != nil {
 		return nil, err
 	}
@@ -94,7 +96,7 @@ func (h *Handler) MsgCount(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMs
 			params.Hint = clusteredHint(params.Hint, cList.Collections[0].ClusteredIndexName)
 		}
 		if err = checkHintType(params.Hint); err == nil && !isView {
-			err = validateHintExists(connCtx, c, params.Hint, "count")
+			err = validateHintExists(connCtx, db, params.Collection, c, params.Hint, "count")
 		}
 		if err == nil && isView {
 			err = validateViewHint(connCtx, db, &cList.Collections[0], params.Hint, "count", params.Filter.Len() > 0)
@@ -112,6 +114,7 @@ func (h *Handler) MsgCount(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMs
 	}
 
 	cmp := collation.Parse(params.Collation).Comparator()
+	operators.BindCollation(params.Filter, cmp)
 
 	if isView {
 		view := cList.Collections[0]
@@ -121,7 +124,7 @@ func (h *Handler) MsgCount(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMs
 
 		// mongod runs the count as the view's stages, its $match, $skip and
 		// $limit, and a $group and $project that count.
-		iter, verr := viewSourceIterator(connCtx, db, view.Name, view.ViewOn, view.ViewPipeline, cmp, closer, h.DisablePushdown,
+		iter, verr := viewSourceIterator(withDBName(connCtx, params.DB), db, view.Name, view.ViewOn, view.ViewPipeline, cmp, closer, h.DisablePushdown,
 			viewPipelineLength(2+boolInt(params.Filter.Len() > 0)+boolInt(params.Skip > 0)+boolInt(params.Limit != 0)))
 		if verr != nil {
 			return nil, verr
@@ -253,7 +256,7 @@ func (h *Handler) execCountReading(ctx context.Context, c backends.Collection, p
 	closer := iterator.NewMultiCloser(queryRes.Iter)
 	defer closer.Close()
 
-	iter = common.FilterIteratorColl(iter, closer, params.Filter, cmp)
+	iter = common.FilterIteratorPlan(iter, closer, params.Filter, cmp, queryPlanMode(ctx, c, params.Filter, params.Hint, queryRes))
 
 	matched := &countingIterator{DocumentsIterator: iter}
 	iter = common.SkipIterator(matched, closer, params.Skip)

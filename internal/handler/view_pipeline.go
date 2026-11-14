@@ -16,14 +16,18 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/stages"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
@@ -44,8 +48,16 @@ func buildViewPipelineStages(db backends.Database, viewPipeline *types.Array, cm
 		return nil, nil, nil
 	}
 
+	if cmp != nil {
+		// The stored pipeline may serve other commands concurrently; the
+		// collation is attached to this command's copy.
+		viewPipeline = viewPipeline.DeepCopy()
+	}
 	stageDocs := must.NotFail(iterator.ConsumeValues(viewPipeline.Iterator()))
 	result := make([]aggregations.Stage, 0, len(stageDocs))
+	for _, v := range stageDocs {
+		operators.BindCollation(v, cmp)
+	}
 
 	for i, v := range stageDocs {
 		vd, ok := v.(*types.Document)
@@ -57,14 +69,8 @@ func buildViewPipelineStages(db backends.Database, viewPipeline *types.Array, cm
 		var err error
 
 		switch vd.Command() {
-		case "$lookup", "$graphLookup":
-			fetcher := foreignCollectionFetcher(db)
-
-			if vd.Command() == "$graphLookup" {
-				vs, err = stages.NewGraphLookupStage(vd, fetcher)
-			} else {
-				vs, err = stages.NewLookupStage(vd, fetcher)
-			}
+		case "$lookup", "$graphLookup", "$unionWith", "$facet":
+			vs, err = newForeignCollectionStage(vd, db)
 		case "$match":
 			vs, err = stages.NewMatchStage(vd, cmp, stages.SeesStoredDocuments(stageDocs, i))
 		case "$sort":
@@ -81,11 +87,379 @@ func buildViewPipelineStages(db backends.Database, viewPipeline *types.Array, cm
 
 		result = append(result, vs)
 	}
+	specs := make([]*types.Document, len(stageDocs))
+	for i, v := range stageDocs {
+		specs[i] = v.(*types.Document)
+	}
+	stages.MarkLookupsUnwound(result, specs)
 
 	return result, stageDocs, nil
 }
 
+// validateViewPipeline returns mongod's error for a view definition whose
+// pipeline cannot be parsed or writes to disk.
+func validateViewPipeline(dbName, viewName string, pipeline *types.Array) error {
+	if pipeline == nil {
+		return nil
+	}
+	prefix := fmt.Sprintf("Invalid pipeline for view %s.%s :: caused by :: ", dbName, viewName)
+	// mongod reports the lite parse's errors without the view prefix.
+	if err := stages.LiteParsePipeline(pipeline); err != nil {
+		return err
+	}
+	if err := stages.CheckViewPipelineStages(pipeline); err != nil {
+		var cerr *handlererrors.CommandError
+		if errors.As(err, &cerr) {
+			return cerr.WithMessage(prefix + cerr.Err().Error())
+		}
+		return err
+	}
+	// Every stage parses, sub-pipelines included, before any is refused
+	// for the view. A view may hold Atlas Search stages, which parse without
+	// mongot, so they are left out of the stages built here.
+	withPrefix := func(err error) error {
+		var cerr *handlererrors.CommandError
+		if errors.As(err, &cerr) && !strings.HasPrefix(cerr.Err().Error(), prefix) {
+			return cerr.WithMessage(prefix + cerr.Err().Error())
+		}
+		return err
+	}
+	noFetch := stages.FetcherFunc(func(context.Context, string, *types.Document) ([]*types.Document, error) { return nil, nil })
+	for i := range pipeline.Len() {
+		stage, ok := must.NotFail(pipeline.Get(i)).(*types.Document)
+		if !ok || stage.Len() != 1 {
+			continue
+		}
+		var err error
+		switch name := stage.Command(); {
+		case isViewSearchStage(name):
+			err = checkSearchSpec(stage)
+		case name == "$documents", name == "$listLocalSessions",
+			name == "$listClusterCatalog", name == "$querySettings":
+		case name == "$currentOp":
+			err = stages.CheckCurrentOpSpec(stage)
+		case name == "$lookup":
+			var lookup *types.Document
+			if lookup, err = stageWithoutSearch(stage); err == nil {
+				_, err = stages.NewLookupStage(lookup, noFetch)
+			}
+		case name == "$unionWith":
+			var unionWith *types.Document
+			if unionWith, err = stageWithoutSearch(stage); err == nil {
+				_, err = stages.NewUnionWithStage(unionWith, noFetch)
+			}
+		case name == "$graphLookup":
+			_, err = stages.NewGraphLookupStage(stage.DeepCopy(), noFetch)
+		case name == "$facet":
+			var facet *types.Document
+			if facet, err = stageWithoutSearch(stage); err == nil {
+				_, err = stages.NewFacetStage(facet, noFetch)
+			}
+		default:
+			if stages.FailsParsing(stage) {
+				_, err = stages.NewStage(stage.DeepCopy())
+			}
+		}
+		if err != nil {
+			return withPrefix(err)
+		}
+	}
+	for i := range pipeline.Len() {
+		stage, ok := must.NotFail(pipeline.Get(i)).(*types.Document)
+		if !ok || stage.Len() != 1 {
+			continue
+		}
+		if name := stage.Command(); name == "$out" || name == "$merge" {
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrOptionNotSupportedOnView,
+				fmt.Sprintf("%sThe aggregation stage %s in location %d of the pipeline cannot be used in the view "+
+					"definition of %s.%s because it writes to disk", prefix, name, i, dbName, viewName),
+				"create")
+		}
+	}
+	if err := checkSearchPlacement(pipeline, false, false, false); err != nil {
+		return withPrefix(err)
+	}
+	// Every stage's namespace is checked before any stage's position.
+	for i := range pipeline.Len() {
+		stage, ok := must.NotFail(pipeline.Get(i)).(*types.Document)
+		if !ok || stage.Len() != 1 {
+			continue
+		}
+		var cerr *handlererrors.CommandError
+		if errors.As(stages.ViewNamespaceError(stage, i), &cerr) {
+			return cerr.WithMessage(prefix + cerr.Err().Error())
+		}
+	}
+	for i := 1; i < pipeline.Len(); i++ {
+		stage, ok := must.NotFail(pipeline.Get(i)).(*types.Document)
+		if !ok || stage.Len() != 1 {
+			continue
+		}
+		if name := stage.Command(); isViewSearchStage(name) || name == "$collStats" || name == "$indexStats" {
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCollStatsIsNotFirstStage,
+				prefix+name+" is only valid as the first stage in a pipeline", name)
+		}
+	}
+	return nil
+}
+
+// isViewSearchStage reports whether name is an Atlas Search stage, which a
+// view definition holds without mongot.
+func isViewSearchStage(name string) bool {
+	return stages.IsSearchStage(name) || name == "$listSearchIndexes"
+}
+
+// checkSearchSpec returns mongod's error for an Atlas Search stage whose
+// specification does not parse.
+func checkSearchSpec(stage *types.Document) error {
+	name := stage.Command()
+	spec := must.NotFail(stage.Get(name))
+	if name == "$listSearchIndexes" {
+		return checkListSearchIndexesSpec(spec)
+	}
+	if _, ok := spec.(*types.Document); ok {
+		return nil
+	}
+	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFailedToParse,
+		fmt.Sprintf("%s value must be an object. Found: %s", name, handlerparams.AliasFromType(spec)), name)
+}
+
+// checkListSearchIndexesSpec returns mongod's error for a $listSearchIndexes
+// specification that does not parse.
+func checkListSearchIndexesSpec(spec any) error {
+	fail := func(code handlererrors.ErrorCode, msg string) error {
+		return handlererrors.NewCommandErrorMsgWithArgument(code, msg, "$listSearchIndexes (stage)")
+	}
+	doc, ok := spec.(*types.Document)
+	if !ok {
+		return fail(handlererrors.ErrFailedToParse,
+			"The $listSearchIndexes stage specification must be an object. Found: "+handlerparams.AliasFromType(spec))
+	}
+	var set int
+	for _, key := range doc.Keys() {
+		v := must.NotFail(doc.Get(key))
+		if key != "id" && key != "name" {
+			return fail(handlererrors.ErrIDLUnknownField, "BSON field '$listSearchIndexes."+key+"' is an unknown field.")
+		}
+		switch v.(type) {
+		case types.NullType:
+		case string:
+			set++
+		default:
+			return fail(handlererrors.ErrTypeMismatch, fmt.Sprintf(
+				"BSON field '$listSearchIndexes.%s' is the wrong type '%s', expected type 'string'", key, handlerparams.AliasFromType(v)))
+		}
+	}
+	if set == 2 {
+		return fail(handlererrors.ErrInvalidOptions, "Cannot set both 'name' and 'id' for $listSearchIndexes.")
+	}
+	return nil
+}
+
+// subPipeline is a sub-pipeline of a stage, under its key in the stage's
+// specification.
+type subPipeline struct {
+	key      string
+	pipeline *types.Array
+}
+
+// subPipelines returns the sub-pipelines of a $lookup, $unionWith or $facet
+// stage, in order.
+func subPipelines(stage *types.Document) []subPipeline {
+	spec, _ := must.NotFail(stage.Get(stage.Command())).(*types.Document)
+	if spec == nil {
+		return nil
+	}
+	var keys []string
+	switch stage.Command() {
+	case "$lookup", "$unionWith":
+		keys = []string{"pipeline"}
+	case "$facet":
+		keys = spec.Keys()
+	}
+	var out []subPipeline
+	for _, k := range keys {
+		v, _ := spec.Get(k)
+		if p, ok := v.(*types.Array); ok {
+			out = append(out, subPipeline{key: k, pipeline: p})
+		}
+	}
+	return out
+}
+
+// stageWithoutSearch returns a copy of a $lookup, $unionWith or $facet stage
+// whose sub-pipelines, at any depth, leave out their Atlas Search stages, or
+// mongod's error for a search stage that does not parse.
+func stageWithoutSearch(stage *types.Document) (*types.Document, error) {
+	stage = stage.DeepCopy()
+	subs := subPipelines(stage)
+	if len(subs) == 0 {
+		return stage, nil
+	}
+	spec := must.NotFail(stage.Get(stage.Command())).(*types.Document)
+	for _, sp := range subs {
+		p := sp.pipeline
+		kept := types.MakeArray(p.Len())
+		for i := range p.Len() {
+			sub := must.NotFail(p.Get(i))
+			d, ok := sub.(*types.Document)
+			if ok && d.Len() == 1 {
+				if isViewSearchStage(d.Command()) {
+					if err := checkSearchSpec(d); err != nil {
+						return nil, err
+					}
+					continue
+				}
+				var err error
+				if sub, err = stageWithoutSearch(d); err != nil {
+					return nil, err
+				}
+			}
+			kept.Append(sub)
+		}
+		spec.Set(sp.key, kept)
+	}
+	return stage, nil
+}
+
+// checkSearchPlacement returns mongod's error for an Atlas Search stage a
+// parsed view pipeline holds where it may not run: after the first stage,
+// in a $facet, or a $vectorSearch in a $lookup. In a $facet, a stage whose
+// sub-pipeline holds a search stage is refused too. A search stage after the
+// first stage of the view's own pipeline is refused by the caller.
+func checkSearchPlacement(pipeline *types.Array, nested, inFacet, inLookup bool) error {
+	for i := range pipeline.Len() {
+		stage, ok := must.NotFail(pipeline.Get(i)).(*types.Document)
+		if !ok || stage.Len() != 1 {
+			continue
+		}
+		name := stage.Command()
+		if isViewSearchStage(name) {
+			switch {
+			case inFacet:
+				return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrStageNotAllowedInFacet,
+					name+" is not allowed to be used within a $facet stage", "$facet (stage)")
+			case name == "$vectorSearch" && inLookup:
+				return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrLookupSubPipelineWrites,
+					"$vectorSearch is not allowed within a $lookup's sub-pipeline", "$lookup (stage)")
+			case i > 0 && nested:
+				return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCollStatsIsNotFirstStage,
+					name+" is only valid as the first stage in a pipeline", name)
+			}
+			continue
+		}
+		// A stage's own sub-pipelines are checked before the stage is
+		// checked against the pipeline holding it.
+		subs := subPipelines(stage)
+		for _, sp := range subs {
+			if err := checkSearchPlacement(sp.pipeline, true, inFacet || name == "$facet", name == "$lookup"); err != nil {
+				return err
+			}
+		}
+		for _, sp := range subs {
+			if inFacet && holdsSearch(sp.pipeline, isViewSearchStage) {
+				return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrStageNotAllowedInFacet,
+					name+" is not allowed to be used within a $facet stage", "$facet (stage)")
+			}
+			if inLookup && holdsSearch(sp.pipeline, isVectorSearch) {
+				return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrLookupSubPipelineWrites,
+					name+" is not allowed within a $lookup's sub-pipeline", "$lookup (stage)")
+			}
+		}
+	}
+	return nil
+}
+
+func isVectorSearch(name string) bool { return name == "$vectorSearch" }
+
+// holdsSearch reports whether pipeline holds, at any depth, a stage whose
+// name is matched by isSearch.
+func holdsSearch(pipeline *types.Array, isSearch func(string) bool) bool {
+	for i := range pipeline.Len() {
+		stage, ok := must.NotFail(pipeline.Get(i)).(*types.Document)
+		if !ok || stage.Len() != 1 {
+			continue
+		}
+		if isSearch(stage.Command()) {
+			return true
+		}
+		for _, sp := range subPipelines(stage) {
+			if holdsSearch(sp.pipeline, isSearch) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 type foreignViewDepthKey struct{}
+
+// dbNameKey holds the database a command runs on, which a sub-pipeline's
+// $collStats reports.
+type dbNameKey struct{}
+
+func withDBName(ctx context.Context, dbName string) context.Context {
+	return context.WithValue(ctx, dbNameKey{}, dbName)
+}
+
+// SourceExists implements stages.ExistenceChecker.
+func (f *foreignFetcher) SourceExists(ctx context.Context, name string) bool {
+	info, err := lookupCollectionInfo(ctx, f.db, name)
+	if err != nil || info == nil {
+		return false
+	}
+	if !info.IsView {
+		return true
+	}
+	base, _, _, err := resolveViewChain(ctx, f.db, info.Name, info.ViewOn, info.ViewPipeline, nil)
+	if err != nil {
+		return false
+	}
+	baseInfo, err := lookupCollectionInfo(ctx, f.db, base)
+	return err == nil && baseInfo != nil
+}
+
+// CheckViewCollation implements stages.ViewCollationChecker.
+func (f *foreignFetcher) CheckViewCollation(ctx context.Context, name string, cmp *collation.Comparator) error {
+	info, err := lookupCollectionInfo(ctx, f.db, name)
+	if err != nil || info == nil || !info.IsView || collation.Parse(info.Collation).Comparator() == cmp {
+		return nil
+	}
+	dbName, _ := ctx.Value(dbNameKey{}).(string)
+	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrOptionNotSupportedOnView,
+		"Cannot override a view's default collation"+dbName+"."+name, "aggregate")
+}
+
+// ViewPipeline implements stages.ViewResolver: the stages of a view and of
+// the views it reads from.
+func (f *foreignFetcher) ViewPipeline(ctx context.Context, name string) (*types.Array, bool) {
+	info, err := lookupCollectionInfo(ctx, f.db, name)
+	if err != nil || info == nil || !info.IsView {
+		return nil, false
+	}
+	_, _, raw, err := resolveViewChain(ctx, f.db, info.Name, info.ViewOn, info.ViewPipeline, nil)
+	if err != nil {
+		return types.MakeArray(0), true
+	}
+	arr := types.MakeArray(len(raw))
+	for _, st := range raw {
+		arr.Append(st)
+	}
+	return arr, true
+}
+
+// CollStats implements stages.StatsFetcher.
+func (f *foreignFetcher) CollStats(ctx context.Context, collName string, pipeline []aggregations.Stage, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
+	c, err := f.db.Collection(collName)
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+	dbName, _ := ctx.Value(dbNameKey{}).(string)
+	return processStagesStats(ctx, closer, &stagesStatsParams{
+		c: c, db: f.db, dbName: dbName, cName: collName, statistics: stages.GetStatistics(pipeline), stages: pipeline,
+		subPipeline: true,
+	})
+}
 
 // newForeignCollectionStage builds a $lookup, $graphLookup, $unionWith or
 // $facet stage that reads other collections of db.

@@ -15,10 +15,13 @@
 package common
 
 import (
+	"fmt"
+	"math"
 	"strings"
 
 	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
@@ -40,7 +43,9 @@ func validateFilter(filter *types.Document, cmp *collation.Comparator, foldExpr 
 		value := must.NotFail(filter.Get(key))
 		switch key {
 		case "$and", "$or", "$nor":
-			if _, err := FilterDocumentColl(empty, must.NotFail(types.NewDocument(key, value)), cmp); err != nil {
+			// $expr is checked below, not evaluated: its errors depend on
+			// the documents, as in mongod.
+			if _, err := FilterDocumentColl(empty, must.NotFail(types.NewDocument(key, withoutExpr(value))), cmp); err != nil {
 				return err
 			}
 			branches, _ := value.(*types.Array)
@@ -52,6 +57,9 @@ func validateFilter(filter *types.Document, cmp *collation.Comparator, foldExpr 
 				}
 			}
 		case "$expr":
+			if err := operators.CheckFieldPaths(value); err != nil {
+				return err
+			}
 			if !foldExpr {
 				continue
 			}
@@ -59,6 +67,10 @@ func validateFilter(filter *types.Document, cmp *collation.Comparator, foldExpr 
 				return err
 			}
 		case "$where", "$text", "$comment":
+		case "$alwaysTrue", "$alwaysFalse":
+			if err := checkAlwaysOperand(key, value); err != nil {
+				return err
+			}
 		default:
 			if err := validateFieldPredicate(empty, key, value, cmp); err != nil {
 				return err
@@ -66,6 +78,34 @@ func validateFilter(filter *types.Document, cmp *collation.Comparator, foldExpr 
 		}
 	}
 	return nil
+}
+
+// withoutExpr returns the clauses of a logical operator with their $expr
+// conditions removed.
+func withoutExpr(v any) any {
+	clauses, ok := v.(*types.Array)
+	if !ok {
+		return v
+	}
+	out := types.MakeArray(clauses.Len())
+	for i := range clauses.Len() {
+		clause := must.NotFail(clauses.Get(i))
+		if d, ok := clause.(*types.Document); ok {
+			stripped := types.MakeDocument(d.Len())
+			for _, k := range d.Keys() {
+				switch k {
+				case "$expr":
+				case "$and", "$or", "$nor":
+					stripped.Set(k, withoutExpr(must.NotFail(d.Get(k))))
+				default:
+					stripped.Set(k, must.NotFail(d.Get(k)))
+				}
+			}
+			clause = stripped
+		}
+		out.Append(clause)
+	}
+	return out
 }
 
 func validateFieldPredicate(empty *types.Document, key string, value any, cmp *collation.Comparator) error {
@@ -114,7 +154,7 @@ func isFieldOperatorExpression(doc *types.Document) bool {
 		return false
 	}
 	switch first := doc.Keys()[0]; first {
-	case "$and", "$or", "$nor", "$expr", "$where", "$text", "$comment":
+	case "$and", "$or", "$nor", "$expr", "$where", "$text", "$comment", "$alwaysTrue", "$alwaysFalse":
 		return false
 	default:
 		return strings.HasPrefix(first, "$")
@@ -146,4 +186,46 @@ func ValidateFilterExprs(filter *types.Document) error {
 		}
 	}
 	return nil
+}
+
+// checkAlwaysOperand returns mongod's error for an $alwaysTrue or
+// $alwaysFalse operand, which must be the number 1.
+func checkAlwaysOperand(op string, v any) error {
+	var n int64
+	switch v := v.(type) {
+	case int32:
+		n = int64(v)
+	case int64:
+		n = v
+	case float64:
+		switch {
+		case math.IsNaN(v):
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFailedToParse,
+				fmt.Sprintf("Expected an integer, but found NaN in: %s: %s", op, types.FormatAnyValue(v)), op)
+		case v != math.Trunc(v):
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFailedToParse,
+				fmt.Sprintf("Expected an integer: %s: %s", op, types.FormatAnyValue(v)), op)
+		case v < math.MinInt64 || v >= math.MaxInt64:
+			return errNotInt64(op, v)
+		}
+		n = int64(v)
+	case types.Decimal128:
+		var ok bool
+		if n, ok = decimal128ToInt64(v); !ok {
+			return errNotInt64(op, v)
+		}
+	default:
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFailedToParse,
+			fmt.Sprintf("Expected a number in: %s: %s", op, types.FormatAnyValue(v)), op)
+	}
+	if n != 1 {
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFailedToParse,
+			op+" must be an integer value of 1", op)
+	}
+	return nil
+}
+
+func errNotInt64(op string, v any) error {
+	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFailedToParse,
+		fmt.Sprintf("Cannot represent as a 64-bit integer: %s: %s", op, types.FormatAnyValue(v)), op)
 }

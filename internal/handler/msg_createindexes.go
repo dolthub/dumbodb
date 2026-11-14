@@ -189,10 +189,22 @@ func (h *Handler) MsgCreateIndexes(connCtx context.Context, msg *wire.OpMsg) (*w
 		}
 	}
 
-	numIndexesBefore := len(beforeCreate.Indexes)
+	visibleBefore := clientVisibleIndexes(connCtx, db, collection, beforeCreate.Indexes)
+	numIndexesBefore := len(visibleBefore)
+	if cInfo != nil && cInfo.IsTimeSeries {
+		// A time-series collection: mongod builds its indexes on the buckets,
+		// where _id is control.min._id and control.max._id.
+		for _, idx := range toCreate {
+			if idx.Name == backends.DefaultIndexName {
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
+					"The index name '_id_' is reserved for the _id index, which must have key pattern {_id: 1}, "+
+						"found key: { control.min._id: 1, control.max._id: 1 }", command)
+			}
+		}
+	}
 
-	// for compatibility
-	if numIndexesBefore == 0 {
+	// A collection created here counts its _id index as already present.
+	if createCollection {
 		numIndexesBefore = 1
 	}
 
@@ -227,7 +239,8 @@ func (h *Handler) MsgCreateIndexes(connCtx context.Context, msg *wire.OpMsg) (*w
 			return nil, err
 		}
 	}
-	if toCreate, err = validateIndexesForCreation(command, beforeCreate.Indexes, toCreate); err != nil {
+	timeSeries := isTimeSeriesCollection(connCtx, db, collection)
+	if toCreate, err = validateIndexesForCreation(command, visibleBefore, toCreate, timeSeries); err != nil {
 		return nil, err
 	}
 	if err = checkIndexCount(command, dbName, collection, numIndexesBefore, toCreate, buildingIn); err != nil {
@@ -802,7 +815,9 @@ func checkClusteredIndexName(command, clusteredName string, toCreate []backends.
 
 // validateIndexesForCreation filters duplicates out of toCreate and returns an
 // error if any index conflicts with an existing one or has an invalid spec.
-func validateIndexesForCreation(command string, existing, toCreate []backends.IndexInfo) ([]backends.IndexInfo, error) {
+// A time-series collection has no _id index of its own, so an {_id: 1} index
+// is created like any other.
+func validateIndexesForCreation(command string, existing, toCreate []backends.IndexInfo, timeSeries bool) ([]backends.IndexInfo, error) {
 	filteredToCreate := make([]backends.IndexInfo, 0, len(toCreate))
 
 	for i, newIdx := range toCreate {
@@ -861,7 +876,7 @@ func validateIndexesForCreation(command string, existing, toCreate []backends.In
 			}
 		}
 
-		identical := newKey == "_id: 1"
+		identical := newKey == "_id: 1" && !timeSeries
 		for _, existingIdx := range existing {
 			if identical {
 				break

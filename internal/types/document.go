@@ -52,6 +52,8 @@ type documentExtra struct {
 	// recordKey is the KeyString of _id that MongoDB returns as a clustered
 	// collection's RecordId; nil when not read from storage.
 	recordKey []byte
+	// annotation is state its owner attaches with Annotate.
+	annotation *any
 }
 
 // DocumentArena hands out documents' rarely set state in batches, so a scan
@@ -245,6 +247,27 @@ func (d *Document) CopyRecordIdentity(from *Document) {
 	d.SetRecordKey(from.RecordKey())
 }
 
+// Annotation returns the value attached to d with Annotate, or nil.
+func (d *Document) Annotation() any {
+	if d == nil || d.extra == nil || d.extra.annotation == nil {
+		return nil
+	}
+	return *d.extra.annotation
+}
+
+// Annotate attaches v to d as state of the command that owns d, such as the
+// collation its expression compares under. v is not a field: it is not
+// encoded or compared, and DeepCopy carries it.
+func (d *Document) Annotate(v any) {
+	if d.extra == nil {
+		if v == nil {
+			return
+		}
+		d.extra = new(documentExtra)
+	}
+	d.extra.annotation = &v
+}
+
 // Freeze prevents document from further field modifications.
 // Any methods that would modify document fields will panic.
 //
@@ -287,6 +310,13 @@ func (d *Document) Len() int {
 		d.decodeLazy()
 	}
 	return len(d.fields)
+}
+
+// FieldAt returns the key and value of the field at index i, which must be
+// less than Len.
+func (d *Document) FieldAt(i int) (string, any) {
+	d.load()
+	return d.fields[i].key, d.fields[i].value
 }
 
 // Iterator returns an iterator over the document fields.

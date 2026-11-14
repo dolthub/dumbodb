@@ -16,7 +16,6 @@ package common
 
 import (
 	"github.com/dolthub/dumbodb/internal/collation"
-	"github.com/dolthub/dumbodb/internal/handler/commonpath"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
@@ -34,9 +33,9 @@ func signToResult(n int) types.CompareResult {
 }
 
 // collCompare compares two values like types.Compare, but compares strings,
-// alone or inside arrays, under cmp when cmp is non-nil. Strings inside
-// embedded documents compare bytewise, as collated indexes key them. It walks
-// arrays element by element, as types.Compare does, without copying them.
+// alone or inside arrays and documents, under cmp when cmp is non-nil. Field
+// names compare bytewise. It walks arrays and documents element by element,
+// as types.Compare does, without copying them.
 func collCompare(a, b any, cmp *collation.Comparator) types.CompareResult {
 	if cmp == nil {
 		return types.Compare(a, b)
@@ -49,7 +48,37 @@ func collCompare(a, b any, cmp *collation.Comparator) types.CompareResult {
 	if arr, ok := a.(*types.Array); ok {
 		return collCompareArray(arr, b, cmp)
 	}
+	if ad, ok := a.(*types.Document); ok {
+		if bd, ok := b.(*types.Document); ok {
+			return collCompareDocuments(ad, bd, cmp)
+		}
+	}
 	return types.Compare(a, b)
+}
+
+// collCompareDocuments is types.Compare for two documents under cmp: field by
+// field, each by value type order, then name, then value.
+func collCompareDocuments(a, b *types.Document, cmp *collation.Comparator) types.CompareResult {
+	aKeys, bKeys := a.Keys(), b.Keys()
+	aValues, bValues := a.Values(), b.Values()
+	for i := range aKeys {
+		if i == len(bKeys) {
+			return types.Greater
+		}
+		if result := types.CompareTypeOrder(aValues[i], bValues[i]); result != types.Equal {
+			return result
+		}
+		if result := types.Compare(aKeys[i], bKeys[i]); result != types.Equal {
+			return result
+		}
+		if result := collCompare(aValues[i], bValues[i], cmp); result != types.Equal {
+			return result
+		}
+	}
+	if len(aKeys) < len(bKeys) {
+		return types.Less
+	}
+	return types.Equal
 }
 
 // collCompareArray is types.Compare for an array against b under cmp.
@@ -122,7 +151,7 @@ func collCompareOrderOp(a, b any, order types.SortType, cmp *collation.Comparato
 	}
 	arrA, isAArray := a.(*types.Array)
 	arrB, isBArray := b.(*types.Array)
-	if cmp == nil || !isAArray && !isBArray {
+	if cmp == nil {
 		return types.CompareOrderForOperator(a, b, order)
 	}
 	if isAArray && !isBArray {
@@ -183,27 +212,23 @@ func arrayStringKeys(v any, cmp *collation.Comparator) any {
 	return v
 }
 
-// lessFuncCollated returns a sort comparator that orders string fields under
-// cmp and falls back to standard ordering for non-string values.
-func lessFuncCollated(sortPath types.Path, sortType types.SortType, cmp *collation.Comparator) func(a, b *types.Document) bool {
-	return func(a, b *types.Document) bool {
-		aField := commonpath.SortKeyValue(a, sortPath)
-		bField := commonpath.SortKeyValue(b, sortPath)
-
-		aStr, aIsStr := aField.(string)
-		bStr, bIsStr := bField.(string)
-
-		if aIsStr && bIsStr {
-			sign := cmp.CompareStrings(aStr, bStr)
-			if sign == 0 {
-				return false
-			}
-			if sortType == types.Ascending {
-				return sign < 0
-			}
-			return sign > 0
-		}
-
-		return types.CompareOrderForSort(aField, bField, sortType) == types.Less
+// rangeMatches reports whether a range operator's comparison of fieldValue
+// with operand under order gives want or also. An array operand also
+// matches an array field holding an array element that compares so.
+func (fc *FilterContext) rangeMatches(fieldValue, operand any, order types.SortType, want, also types.CompareResult) bool {
+	if r := collCompareOrderOp(fieldValue, operand, order, fc.cmp); r == want || r == also {
+		return true
 	}
+	fieldArr, isArray := fieldValue.(*types.Array)
+	if _, operandIsArray := operand.(*types.Array); !isArray || !operandIsArray {
+		return false
+	}
+	for i := range fieldArr.Len() {
+		if elem, ok := must.NotFail(fieldArr.Get(i)).(*types.Array); ok {
+			if r := collCompare(elem, operand, fc.cmp); r == want || r == also {
+				return true
+			}
+		}
+	}
+	return false
 }

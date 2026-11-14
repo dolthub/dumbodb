@@ -18,11 +18,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/dolthub/dumbodb/internal/collation"
 	"math"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/dolthub/dumbodb/internal/collation"
 
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
@@ -61,12 +62,18 @@ type group struct {
 type groupBy struct {
 	accumulator accumulators.Accumulator
 	outputField string
-	retains     bool // the accumulator keeps input values ($push, $addToSet, $mergeObjects)
+	retains     bool // the accumulator keeps input values ($push, $addToSet)
 }
 
 // retainingAccumulators keep (part of) every input value, so their memory
-// grows with the input rather than with the number of groups.
-var retainingAccumulators = map[string]bool{"$addToSet": true, "$mergeObjects": true, "$push": true}
+// grows with the input rather than with the number of groups. $mergeObjects
+// charges what it keeps itself.
+var retainingAccumulators = map[string]bool{
+	"$addToSet": true, "$push": true,
+	"$firstN": true, "$lastN": true, "$minN": true, "$maxN": true,
+	"$top": true, "$bottom": true, "$topN": true, "$bottomN": true,
+	"$median": true, "$percentile": true,
+}
 
 func newGroup(stage *types.Document) (aggregations.Stage, error) {
 	return NewGroupStage(stage, nil)
@@ -75,6 +82,9 @@ func newGroup(stage *types.Document) (aggregations.Stage, error) {
 // NewGroupStage creates a $group stage whose keys and set accumulators
 // compare strings under cmp, the aggregate's collation, when it is set.
 func NewGroupStage(stage *types.Document, cmp *collation.Comparator) (aggregations.Stage, error) {
+	if cmp == nil {
+		cmp = operators.CollationOf(stage)
+	}
 	fields, err := common.GetRequiredParam[*types.Document](stage, "$group")
 	if err != nil {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
@@ -102,6 +112,9 @@ func NewGroupStage(stage *types.Document, cmp *collation.Comparator) (aggregatio
 		}
 
 		if field == "_id" {
+			if err = operators.CheckFieldPaths(v); err != nil {
+				return nil, err
+			}
 			if err = validateGroupKey(v); err != nil {
 				return nil, err
 			}
@@ -113,6 +126,9 @@ func NewGroupStage(stage *types.Document, cmp *collation.Comparator) (aggregatio
 			continue
 		}
 
+		if err = operators.CheckFieldPaths(v); err != nil {
+			return nil, err
+		}
 		accumulator, err := accumulators.NewAccumulator("$group", field, v)
 		if err != nil {
 			return nil, processGroupStageError(err)
@@ -199,40 +215,61 @@ func (g *group) Process(ctx context.Context, iter types.DocumentsIterator, close
 		}
 	}
 
-	var res []*types.Document
+	res := &groupResultsIterator{g: g, gm: gm}
+	closer.Add(res)
 
-	for i := range gm.docs {
-		grp := &gm.docs[i]
+	return res, nil
+}
 
-		doc := must.NotFail(types.NewDocument("_id", grp.groupID))
+// groupResultsIterator computes each group's accumulator results as the group
+// is emitted, so results are not all held at once.
+type groupResultsIterator struct {
+	g    *group
+	gm   *groupMap
+	next int
+}
 
-		for j, acc := range grp.accs {
-			out, err := acc.Result()
-			if err != nil {
-				return nil, processGroupStageError(err)
-			}
+func (it *groupResultsIterator) Next() (struct{}, *types.Document, error) {
+	var unused struct{}
+	if it.gm == nil || it.next >= len(it.gm.docs) {
+		return unused, nil, iterator.ErrIteratorDone
+	}
+	grp := &it.gm.docs[it.next]
+	it.next++
 
-			field := g.groupBy[j].outputField
-
-			if doc.Has(field) {
-				// document has duplicate key
-				return nil, handlererrors.NewCommandErrorMsgWithArgument(
-					handlererrors.ErrStageIndexedStringVectorDuplicate,
-					fmt.Sprintf("duplicate field: %s", field),
-					"$group (stage)",
-				)
-			}
-
-			doc.Set(field, out)
+	doc := must.NotFail(types.NewDocument("_id", grp.groupID))
+	for j, acc := range grp.accs {
+		out, err := acc.Result()
+		if err != nil {
+			return unused, nil, processGroupStageError(err)
 		}
 
-		res = append(res, doc)
+		field := it.g.groupBy[j].outputField
+		if doc.Has(field) {
+			return unused, nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrStageIndexedStringVectorDuplicate,
+				fmt.Sprintf("duplicate field: %s", field),
+				"$group (stage)",
+			)
+		}
+		doc.Set(field, out)
 	}
+	*grp = groupedDocuments{}
+	return unused, doc, nil
+}
 
-	resIter := iterator.Values(iterator.ForSlice(res))
-	closer.Add(resIter)
+func (it *groupResultsIterator) Close() {
+	it.gm = nil
+}
 
-	return resIter, nil
+// useSBE implements sbeAware.
+func (g *group) useSBE() error {
+	for _, spec := range g.groupBy {
+		if err := accumulators.UseSBE(spec.accumulator); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // evalGroupKey computes the _id group key for one document. It mirrors the type
@@ -293,8 +330,12 @@ func validateGroupKeyDocument(groupKey any, topLevel bool) error {
 			return processGroupStageError(err)
 		}
 
+		// Only shape errors matter against an empty document; data errors
+		// surface when documents are grouped, as in mongod.
 		_, err = op.Process(types.MakeDocument(0))
-		if err != nil && !errors.Is(err, operators.ErrMissingValue) {
+		var opErr operators.OperatorError
+		var exErr *aggregations.ExpressionError
+		if err != nil && !errors.Is(err, operators.ErrMissingValue) && (errors.As(err, &opErr) || errors.As(err, &exErr)) {
 			return processGroupStageError(err)
 		}
 
@@ -368,21 +409,13 @@ func validateGroupKeyDocument(groupKey any, topLevel bool) error {
 // fields omits the missing ones.
 func evaluateDocument(expr, doc *types.Document, nestedField bool) (any, error) {
 	if operators.IsOperator(expr) {
-		op, err := operators.NewOperator(expr)
-		if err != nil {
-			// operator error was validated in newGroup
+		v, missing, err := operators.EvalOperand(expr, doc)
+		switch {
+		case err != nil:
 			return nil, processGroupStageError(err)
-		}
-
-		v, err := op.Process(doc)
-		if errors.Is(err, operators.ErrMissingValue) {
+		case missing:
 			return types.Null, nil
 		}
-		if err != nil {
-			// operator and expression errors are validated in newGroup
-			return nil, processGroupStageError(err)
-		}
-
 		return v, nil
 	}
 
@@ -633,6 +666,15 @@ func appendLenString(b *strings.Builder, s string) {
 // expression evaluation and returns CommandError that can be returned by $group
 // aggregation stage.
 func processGroupStageError(err error) error {
+	res := groupStageError(err)
+	var ctxErr *operators.OperatorContextError
+	if res != err && errors.As(err, &ctxErr) {
+		return &operators.OperatorContextError{Op: ctxErr.Op, Err: res}
+	}
+	return res
+}
+
+func groupStageError(err error) error {
 	var opErr operators.OperatorError
 	var exErr *aggregations.ExpressionError
 

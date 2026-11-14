@@ -326,3 +326,18 @@ func (op *dateArithmeticOp) Process(doc *types.Document) (any, error) {
 }
 
 var _ Operator = (*dateArithmeticOp)(nil)
+
+// IsTimeUnit reports whether unit is one of MongoDB's date units.
+func IsTimeUnit(unit string) bool {
+	_, ok := timeUnits[unit]
+	return ok
+}
+
+// DateAddUTC is $dateAdd in UTC: amount units added to t.
+func DateAddUTC(t time.Time, unit string, amount int64) (time.Time, error) {
+	ms, err := mongoDateAdd(t.UnixMilli(), unit, amount, mongoTimeZone{})
+	if err != nil {
+		return time.Time{}, err
+	}
+	return time.UnixMilli(ms).UTC(), nil
+}

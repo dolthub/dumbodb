@@ -75,7 +75,7 @@ func (n *fieldSpecNode) add(spec *types.Document, projection bool) {
 				if v {
 					node.leaf = fieldSpecInclude
 				}
-			case int32, int64, float64:
+			case int32, int64, float64, types.Decimal128:
 				node.leaf = fieldSpecExclude
 				if types.Compare(v, int32(0)) != types.Equal {
 					node.leaf = fieldSpecInclude
@@ -296,19 +296,33 @@ func AddFieldsTree(doc, spec *types.Document) (*types.Document, error) {
 	return res, nil
 }
 
+// addFields evaluates every child against root before changing v, so a field
+// that v and root share is read as it was in the input document.
 func (n *fieldSpecNode) addFields(v, root *types.Document) (*types.Document, error) {
-	for _, key := range n.keys {
+	type computedField struct {
+		value   any
+		missing bool
+	}
+	computed := make([]computedField, len(n.keys))
+	for i, key := range n.keys {
 		child := n.children[key]
+		if empty, ok := child.expr.(*types.Document); ok && child.leaf == fieldSpecExpr && empty.Len() == 0 && len(child.keys) > 0 {
+			// An empty object beside paths within it, as {y: {}, "y.z": 1},
+			// adds nothing of its own: the paths apply to the current value.
+			cur, getErr := v.Get(key)
+			res, err := child.addFieldsValue(cur, getErr == nil, root)
+			if err != nil {
+				return nil, err
+			}
+			computed[i] = computedField{value: res}
+			continue
+		}
 		if child.leaf == fieldSpecExpr {
 			res, missing, err := evalComputed(child.expr, root)
 			if err != nil {
 				return nil, err
 			}
-			if missing {
-				v.Remove(key)
-			} else {
-				v.Set(key, res)
-			}
+			computed[i] = computedField{value: res, missing: missing}
 			continue
 		}
 		cur, err := v.Get(key)
@@ -316,7 +330,14 @@ func (n *fieldSpecNode) addFields(v, root *types.Document) (*types.Document, err
 		if err != nil {
 			return nil, err
 		}
-		v.Set(key, res)
+		computed[i] = computedField{value: res}
+	}
+	for i, key := range n.keys {
+		if computed[i].missing {
+			v.Remove(key)
+		} else {
+			v.Set(key, computed[i].value)
+		}
 	}
 	return v, nil
 }

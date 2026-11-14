@@ -131,7 +131,8 @@ func (h *Handler) MsgValidate(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 	keysPerIndex := must.NotFail(types.NewDocument())
 	indexDetails := must.NotFail(types.NewDocument())
 
-	for _, idx := range indexRes.Indexes {
+	indexes := clientVisibleIndexes(connCtx, db, collection, indexRes.Indexes)
+	for _, idx := range indexes {
 		keysPerIndex.Set(idx.Name, int32(stats.CountDocuments))
 		indexDetails.Set(idx.Name, must.NotFail(types.NewDocument("valid", true)))
 	}
@@ -143,7 +144,7 @@ func (h *Handler) MsgValidate(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 			"nInvalidDocuments", int32(0),
 			"nNonCompliantDocuments", int32(0),
 			"nrecords", int32(stats.CountDocuments),
-			"nIndexes", int32(len(indexRes.Indexes)),
+			"nIndexes", int32(len(indexes)),
 			"keysPerIndex", keysPerIndex,
 			"indexDetails", indexDetails,
 			"valid", true,

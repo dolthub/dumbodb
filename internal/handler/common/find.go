@@ -17,6 +17,7 @@ package common
 import (
 	"log/slog"
 
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -126,6 +127,10 @@ func GetFindParams(doc *types.Document, l *slog.Logger) (*FindParams, error) {
 	}
 
 	CanonicalizeFilter(params.Filter)
+
+	now := operators.CommandNow()
+	params.Filter = operators.BindNowInFilter(params.Filter, now)
+	params.Projection = operators.BindNowInProjection(params.Projection, now)
 
 	return &params, nil
 }

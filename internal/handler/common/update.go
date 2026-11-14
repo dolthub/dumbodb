@@ -129,7 +129,7 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 		}
 
 		if upsert {
-			if err = processFilterEqualityCondition(doc, param.Filter); err != nil {
+			if err = processFilterEqualityCondition(doc, param.Filter, !param.IsPipeline && !param.HasUpdateOperators); err != nil {
 				return failAfterWrites(lazyerrors.Error(err))
 			}
 		} else {
@@ -170,6 +170,13 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 
 		if !doc.Has("_id") {
 			doc.Set("_id", types.NewObjectID())
+		}
+
+		if upsert && !param.IsPipeline && !param.HasUpdateOperators {
+			if _, isArray := must.NotFail(doc.Get("_id")).(*types.Array); isArray {
+				return failAfterWrites(NewUpdateError(handlererrors.ErrNotSingleValueField,
+					"After applying the update to the document, the (immutable) field '_id' was found to be an array or array descendant.", cmd))
+			}
 		}
 
 		if err = doc.ValidateData(); err != nil {
@@ -236,8 +243,150 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 	}
 }
 
-// processFilterEqualityCondition copies the fields with equality condition from filter to doc.
-func processFilterEqualityCondition(doc, filter *types.Document) error {
+// processFilterEqualityCondition copies the fields with equality condition from
+// filter to doc. A replacement takes only the _id equality, as in mongod.
+func processFilterEqualityCondition(doc, filter *types.Document, replacement bool) error {
+	if filterAlwaysFalse(filter) {
+		// mongod simplifies the whole query to $alwaysFalse, which seeds
+		// nothing.
+		return nil
+	}
+	return seedFromFilter(doc, filter, newSeededPaths(), replacement)
+}
+
+// filterAlwaysFalse reports whether mongod's query optimizer simplifies
+// filter to $alwaysFalse: it holds $alwaysFalse, an $in with no values, an
+// $and with such a clause or an $or whose every clause is one.
+func filterAlwaysFalse(filter *types.Document) bool {
+	for _, key := range filter.Keys() {
+		val := must.NotFail(filter.Get(key))
+		switch key {
+		case "$alwaysFalse":
+			return true
+		case "$and", "$or":
+			clauses, ok := val.(*types.Array)
+			if !ok || clauses.Len() == 0 {
+				continue
+			}
+			falseClauses := 0
+			for i := range clauses.Len() {
+				if clause, ok := must.NotFail(clauses.Get(i)).(*types.Document); ok && filterAlwaysFalse(clause) {
+					falseClauses++
+				}
+			}
+			if key == "$and" && falseClauses > 0 || falseClauses == clauses.Len() {
+				return true
+			}
+		default:
+			if cond, ok := val.(*types.Document); ok && isOperatorDocument(cond) {
+				if in, err := cond.Get("$in"); err == nil {
+					if values, ok := in.(*types.Array); ok && values.Len() == 0 {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
+// seededPaths holds the paths an upsert has seeded so far. mongod refuses a
+// path that two equalities set, or that lies within another set one.
+type seededPaths struct {
+	full     map[string]struct{}
+	prefixes map[string]string
+}
+
+func newSeededPaths() *seededPaths {
+	return &seededPaths{full: map[string]struct{}{}, prefixes: map[string]string{}}
+}
+
+func (s *seededPaths) add(key string) error {
+	conflict := func(other string) error {
+		longer, shorter := key, other
+		if len(other) > len(key) {
+			longer, shorter = other, key
+		}
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrNotSingleValueField,
+			fmt.Sprintf("cannot infer query fields to set, both paths '%s' and '%s' are matched", longer, shorter), "update")
+	}
+	if _, ok := s.full[key]; ok {
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrNotSingleValueField,
+			fmt.Sprintf("cannot infer query fields to set, path '%s' is matched twice", key), "update")
+	}
+	if other, ok := s.prefixes[key]; ok {
+		return conflict(other)
+	}
+	for i := range len(key) {
+		if key[i] != '.' {
+			continue
+		}
+		if _, ok := s.full[key[:i]]; ok {
+			return conflict(key[:i])
+		}
+	}
+	s.full[key] = struct{}{}
+	for i := range len(key) {
+		if key[i] != '.' {
+			continue
+		}
+		if _, ok := s.prefixes[key[:i]]; !ok {
+			s.prefixes[key[:i]] = key
+		}
+	}
+	return nil
+}
+
+// filterEqualities returns the values a filter value sets its path to, as
+// mongod extracts them for an upsert: the value itself, or from an operator
+// document each $eq, the element of a one-element $in, and each element of
+// $all; a regex or an $elemMatch is no equality.
+func filterEqualities(val any) []any {
+	switch v := val.(type) {
+	case types.Regex:
+		return nil
+	case *types.Document:
+		if v.Len() == 0 || !strings.HasPrefix(v.Keys()[0], "$") {
+			return []any{v}
+		}
+		var eqs []any
+		for _, op := range v.Keys() {
+			arg := must.NotFail(v.Get(op))
+			switch op {
+			case "$eq":
+				eqs = append(eqs, arg)
+			case "$in":
+				if in, ok := arg.(*types.Array); ok && in.Len() == 1 {
+					if elem := must.NotFail(in.Get(0)); !isRegexOrElemMatch(elem) {
+						eqs = append(eqs, elem)
+					}
+				}
+			case "$all":
+				if all, ok := arg.(*types.Array); ok {
+					for i := range all.Len() {
+						if elem := must.NotFail(all.Get(i)); !isRegexOrElemMatch(elem) {
+							eqs = append(eqs, elem)
+						}
+					}
+				}
+			}
+		}
+		return eqs
+	}
+	return []any{val}
+}
+
+func isRegexOrElemMatch(v any) bool {
+	switch v := v.(type) {
+	case types.Regex:
+		return true
+	case *types.Document:
+		return v.Len() > 0 && v.Keys()[0] == "$elemMatch"
+	}
+	return false
+}
+
+func seedFromFilter(doc, filter *types.Document, seeded *seededPaths, replacement bool) error {
 	iter := filter.Iterator()
 	defer iter.Close()
 
@@ -251,29 +400,50 @@ func processFilterEqualityCondition(doc, filter *types.Document) error {
 			return lazyerrors.Error(err)
 		}
 
-		if key[0] == '$' { // logical operators like $and, $or, $not
+		if key[0] == '$' {
+			// The clauses of $and, and the clause of a one-clause $or, are
+			// equalities of the query itself; other operators seed nothing.
+			// mongod drops the clauses of an $or that are always false first.
+			clauses, ok := val.(*types.Array)
+			if !ok || key != "$and" && key != "$or" {
+				continue
+			}
+			var seedClauses []*types.Document
+			for i := range clauses.Len() {
+				clause, ok := must.NotFail(clauses.Get(i)).(*types.Document)
+				if !ok || key == "$or" && filterAlwaysFalse(clause) {
+					continue
+				}
+				seedClauses = append(seedClauses, clause)
+			}
+			if key == "$or" && len(seedClauses) != 1 {
+				continue
+			}
+			for _, clause := range seedClauses {
+				if err = seedFromFilter(doc, clause, seeded, replacement); err != nil {
+					return err
+				}
+			}
 			continue
 		}
 
-		if valDoc, ok := val.(*types.Document); ok {
-			if valDoc.Len() == 1 {
-				innerKey := valDoc.Keys()[0]
-
-				if innerKey[0] != '$' {
-					// valDoc does not contain an operator
-					val = valDoc
-				} else if innerKey == "$eq" {
-					// valDoc has $eq operator, so extract the inner value
-					val, _ = valDoc.Get("$eq")
-				} else {
-					// valDoc has operators like $lt, $gt, $ne, $in, $exists, $regex
-					continue
-				}
-			} else {
-				// valDoc is a sub-document with many key/val pairs, without any operators
-				val = valDoc
+		eqs := filterEqualities(val)
+		if replacement && key != "_id" {
+			if strings.HasPrefix(key, "_id.") && len(eqs) > 0 {
+				return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrNotExactValueField,
+					fmt.Sprintf("field at '_id' must be exactly specified, field at sub-path '%s'found", key), "update")
+			}
+			continue
+		}
+		if len(eqs) == 0 {
+			continue
+		}
+		for range eqs {
+			if err = seeded.add(key); err != nil {
+				return err
 			}
 		}
+		val = eqs[0]
 
 		path, err := types.NewPathFromString(key)
 		if err != nil {
@@ -295,6 +465,16 @@ var parseUpdatePipeline func(pipeline *types.Array) ([]aggregations.Stage, error
 func RegisterUpdatePipelineParser(parse func(pipeline *types.Array) ([]aggregations.Stage, error)) {
 	parseUpdatePipeline = parse
 }
+
+// MalformedPipelineError is an update pipeline's error from mongod's lite
+// parse, which fails the whole command rather than one statement.
+type MalformedPipelineError struct {
+	Err error
+}
+
+func (e *MalformedPipelineError) Error() string { return e.Err.Error() }
+
+func (e *MalformedPipelineError) Unwrap() error { return e.Err }
 
 // ParseUpdatePipeline returns the stages of a pipeline-style update, or the
 // parse error MongoDB raises for it, a pipeline over the stage limit included.

@@ -193,3 +193,38 @@ func IsSBEScan(ctx context.Context) bool {
 	is, _ := ctx.Value(sbeScanKey{}).(bool)
 	return is
 }
+
+type uncountedReadsKey struct{}
+
+// WithUncountedReads returns a context whose reads count toward neither the
+// server's nor the operation's examined totals; the caller counts what mongod
+// would have read with CountExamined.
+func WithUncountedReads(ctx context.Context) context.Context {
+	return context.WithValue(ctx, uncountedReadsKey{}, true)
+}
+
+// IsUncountedReads reports whether ctx is from WithUncountedReads.
+func IsUncountedReads(ctx context.Context) bool {
+	is, _ := ctx.Value(uncountedReadsKey{}).(bool)
+	return is
+}
+
+// serverExaminedCounter counts keys and documents toward the server's
+// totals; the backend sets it with RegisterServerExaminedCounter.
+var serverExaminedCounter func(keys, docs int)
+
+// RegisterServerExaminedCounter installs the function CountExamined counts
+// the server's totals with.
+func RegisterServerExaminedCounter(fn func(keys, docs int)) {
+	serverExaminedCounter = fn
+}
+
+// CountExamined counts keys and docs read, server-wide and for ctx's
+// operation.
+func CountExamined(ctx context.Context, keys, docs int) {
+	if serverExaminedCounter != nil {
+		serverExaminedCounter(keys, docs)
+	}
+	AddKeysExamined(ctx, keys)
+	AddDocsExamined(ctx, docs)
+}

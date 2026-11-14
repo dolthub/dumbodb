@@ -18,7 +18,9 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strconv"
 
+	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -56,6 +58,7 @@ func accumulatorValues(args []any, doc *types.Document) ([]any, error) {
 type extremeOp struct {
 	args []any
 	want types.CompareResult
+	collated
 }
 
 func newMaxOp(args ...any) (Operator, error) { return &extremeOp{args: args, want: types.Greater}, nil }
@@ -69,19 +72,20 @@ func (op *extremeOp) Process(doc *types.Document) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	var best any
+	var best *collation.Keyed
 	for _, v := range values {
 		if isNullish(v) {
 			continue
 		}
-		if best == nil || types.CompareOrder(v, best, types.Ascending) == op.want {
-			best = v
+		k := &collation.Keyed{V: v}
+		if best == nil || collation.CompareKeyed(op.cmp, k, best, compareAscending) == op.want {
+			best = k
 		}
 	}
 	if best == nil {
 		return types.Null, nil
 	}
-	return best, nil
+	return best.V, nil
 }
 
 // stdDevOp represents { $stdDevPop: <operands> } and { $stdDevSamp: <operands> }.
@@ -148,6 +152,7 @@ type nOp struct {
 	name  string
 	n     any
 	input any
+	collated
 }
 
 func newNOpFunc(name string) newOperatorFunc {
@@ -217,20 +222,11 @@ func (op *nOp) Process(doc *types.Document) (any, error) {
 		values = append(values, must.NotFail(arr.Get(i)))
 	}
 	switch op.name {
-	case "$maxN", "$minN":
-		values = slices.DeleteFunc(values, isNullish)
-		order := types.Ascending
-		if op.name == "$maxN" {
-			order = types.Descending
-		}
-		slices.SortStableFunc(values, func(a, b any) int {
-			c := types.CompareOrder(a, b, types.Ascending)
-			if order == types.Descending {
-				c = -c
-			}
-			return int(c)
-		})
-		values = values[:min(int64(len(values)), n)]
+	case "$minN":
+		// The n smallest, of tied values the earliest, as mongod keeps them.
+		values = smallestN(slices.DeleteFunc(values, isNullish), n, op.cmp)
+	case "$maxN":
+		values = largestN(slices.DeleteFunc(values, isNullish), n, op.cmp)
 	case "$firstN":
 		values = values[:min(int64(len(values)), n)]
 	case "$lastN":
@@ -243,6 +239,12 @@ func (op *nOp) Process(doc *types.Document) (any, error) {
 	return out, nil
 }
 
+// IntegralN validates the 'n' of an N operator or accumulator as mongod's
+// classic engine does.
+func IntegralN(v any, name string) (int64, error) {
+	return integralN(v, name)
+}
+
 // integralN reads the 'n' of an N operator, which must be a positive integral
 // number.
 func integralN(v any, name string) (int64, error) {
@@ -253,6 +255,13 @@ func integralN(v any, name string) (int64, error) {
 	case int64:
 		n = x
 	case float64:
+		if math.IsNaN(x) || math.IsInf(x, 0) || x >= math.MaxInt64 || x < math.MinInt64 {
+			return 0, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrCoerceLongOutOfRange,
+				fmt.Sprintf("Can't coerce out of range value %s to long", formatCoercedDouble(x)),
+				name,
+			)
+		}
 		if x != math.Trunc(x) {
 			return 0, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrNOperatorNFractional,
@@ -288,106 +297,144 @@ func integralN(v any, name string) (int64, error) {
 	return n, nil
 }
 
+// formatCoercedDouble formats a double as mongod's out of range error does.
+func formatCoercedDouble(x float64) string {
+	switch {
+	case math.IsNaN(x):
+		return "nan"
+	case math.IsInf(x, 1):
+		return "inf"
+	case math.IsInf(x, -1):
+		return "-inf"
+	}
+	return strconv.FormatFloat(x, 'g', -1, 64)
+}
+
+// smallestN returns the n smallest values, of tied values the earliest, as
+// mongod's $minN keeps them.
+func smallestN(values []any, n int64, cmp *collation.Comparator) []any {
+	keyed := make([][2]any, len(values))
+	for i, v := range values {
+		keyed[i] = [2]any{v, cmp.KeyValue(v)}
+	}
+	slices.SortStableFunc(keyed, func(a, b [2]any) int {
+		return int(types.CompareOrder(a[1], b[1], types.Ascending))
+	})
+	out := make([]any, min(int64(len(keyed)), n))
+	for i := range out {
+		out[i] = keyed[i][0]
+	}
+	return out
+}
+
+// largestN returns the n largest values, greatest first, as mongod's $maxN
+// keeps them: a value that only ties the least kept one is refused, and a
+// greater one evicts the earliest of the least.
+func largestN(values []any, n int64, cmp *collation.Comparator) []any {
+	type entry struct {
+		v   any
+		key any
+		seq int
+	}
+	order := func(a, b entry) int {
+		if c := types.CompareOrder(a.key, b.key, types.Ascending); c != types.Equal {
+			return int(c)
+		}
+		return a.seq - b.seq
+	}
+	kept := make([]entry, 0, min(int64(len(values)), n))
+	// kept is a heap whose root is the least, earliest entry.
+	down := func(i int) {
+		for {
+			least, l, r := i, 2*i+1, 2*i+2
+			if l < len(kept) && order(kept[l], kept[least]) < 0 {
+				least = l
+			}
+			if r < len(kept) && order(kept[r], kept[least]) < 0 {
+				least = r
+			}
+			if least == i {
+				return
+			}
+			kept[i], kept[least] = kept[least], kept[i]
+			i = least
+		}
+	}
+	for i, v := range values {
+		e := entry{v: v, key: cmp.KeyValue(v), seq: i}
+		if int64(len(kept)) < n {
+			kept = append(kept, e)
+			for j := len(kept) - 1; j > 0 && order(kept[j], kept[(j-1)/2]) < 0; j = (j - 1) / 2 {
+				kept[j], kept[(j-1)/2] = kept[(j-1)/2], kept[j]
+			}
+			continue
+		}
+		if types.CompareOrder(e.key, kept[0].key, types.Ascending) == types.Greater {
+			kept[0] = e
+			down(0)
+		}
+	}
+	slices.SortFunc(kept, func(a, b entry) int { return -order(a, b) })
+	out := make([]any, len(kept))
+	for i, e := range kept {
+		out[i] = e.v
+	}
+	return out
+}
+
 // percentileOp represents { $percentile: { input, p, method } } and
 // { $median: { input, method } }.
 type percentileOp struct {
-	name   string
-	input  any
-	p      any
+	spec   *PercentileSpec
 	median bool
 }
 
 func newPercentileFunc(name string, median bool) newOperatorFunc {
+	notObject := handlererrors.ErrPercentileExprNotObject
+	if median {
+		notObject = handlererrors.ErrMedianExprNotObject
+	}
 	return func(args ...any) (Operator, error) {
-		spec, ok := singleDocumentArg(args)
-		if !ok {
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrFailedToParse,
-				fmt.Sprintf("specification must be an object; found %v", argsForMessage(args)),
-				name,
-			)
-		}
-		op := &percentileOp{name: name, median: median}
-		var method any
-		for _, key := range spec.Keys() {
-			v := must.NotFail(spec.Get(key))
-			switch {
-			case key == "input":
-				op.input = v
-			case key == "p" && !median:
-				op.p = v
-			case key == "method":
-				method = v
-			default:
-				return nil, handlererrors.NewCommandErrorMsgWithArgument(
-					handlererrors.ErrFailedToParse,
-					fmt.Sprintf("BSON field '%s.%s' is an unknown field.", name, key),
-					name,
-				)
+		var arg any = types.MakeArray(0)
+		if len(args) == 1 {
+			arg = args[0]
+		} else if len(args) > 1 {
+			arr := types.MakeArray(len(args))
+			for _, a := range args {
+				arr.Append(a)
 			}
+			arg = arr
 		}
-		if method != "approximate" {
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrBadValue,
-				"Currently only 'approximate' can be used as percentile 'method'.",
-				name,
-			)
+		spec, err := ParsePercentileSpec(name, median, arg, notObject)
+		if err != nil {
+			return nil, err
 		}
-		if op.input == nil || (!median && op.p == nil) {
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrFailedToParse,
-				fmt.Sprintf("BSON field '%s' is missing a required field", name),
-				name,
-			)
-		}
-		return op, nil
+		return &percentileOp{spec: spec, median: median}, nil
 	}
 }
 
 // Process returns the percentiles of the numeric input values, as doubles, or
-// null when there are none. A percentile p is the value at rank ceil(p*n).
+// null when there are none.
 func (op *percentileOp) Process(doc *types.Document) (any, error) {
-	values, err := accumulatorValues([]any{op.input}, doc)
+	values, err := accumulatorValues([]any{op.spec.Input}, doc)
 	if err != nil {
 		return nil, err
 	}
 	nums := numericValues(values)
 	slices.Sort(nums)
-	at := func(p float64) any {
-		if len(nums) == 0 {
-			return types.Null
-		}
-		i := int(math.Ceil(p*float64(len(nums)))) - 1
-		return nums[max(0, min(i, len(nums)-1))]
-	}
 	if op.median {
-		return at(0.5), nil
+		return Percentile(nums, 0.5), nil
 	}
-	pv, err := evalArgValue(op.p, doc)
-	if err != nil {
-		return nil, err
-	}
-	ps, ok := pv.(*types.Array)
-	if !ok || ps.Len() == 0 {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrBadValue,
-			fmt.Sprintf("The 'p' field must be an array of numbers, but found %s", types.FormatAnyValue(pv)),
-			op.name,
-		)
-	}
-	out := types.MakeArray(ps.Len())
-	for i := 0; i < ps.Len(); i++ {
-		p, ok := numericValue(must.NotFail(ps.Get(i)))
-		if !ok || p < 0 || p > 1 {
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrBadValue,
-				"The 'p' field must be an array of numbers in [0.0, 1.0]",
-				op.name,
-			)
-		}
-		out.Append(at(p))
+	out := types.MakeArray(len(op.spec.Ps))
+	for _, p := range op.spec.Ps {
+		out.Append(Percentile(nums, p))
 	}
 	return out, nil
+}
+
+// NumericValue returns a number as a double.
+func NumericValue(v any) (float64, bool) {
+	return numericValue(v)
 }
 
 func numericValue(v any) (float64, bool) {

@@ -27,6 +27,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
@@ -182,6 +183,8 @@ statements:
 		u.ValidationAction = valAction
 
 		cmp := collation.Parse(u.Collation).Comparator()
+		operators.BindCollation(u.Filter, cmp)
+		operators.BindCollation(u.Pipeline, cmp)
 
 		if u.InvalidUpdate != nil {
 			ce := statementWriteError(params.DB, params.Collection, u.InvalidUpdate)
@@ -200,8 +203,9 @@ statements:
 		if err == nil && u.IsPipeline {
 			u.PipelineStages, err = common.ParseUpdatePipeline(u.Pipeline)
 			var ce *handlererrors.CommandError
-			pipelineMalformed = errors.As(err, &ce) && (ce.Code() == handlererrors.ErrStageInvalid ||
-				ce.Code() == handlererrors.ErrStageUnrecognized || ce.Code() == handlererrors.ErrTypeMismatch)
+			var malformed *common.MalformedPipelineError
+			pipelineMalformed = errors.As(err, &malformed) || errors.As(err, &ce) && (ce.Code() == handlererrors.ErrStageInvalid ||
+				ce.Code() == handlererrors.ErrStageUnrecognized || hasNonDocumentElement(u.Pipeline))
 		}
 		if err != nil {
 			// MongoDB reports an update's invalid filter or pipeline as a write
@@ -217,7 +221,7 @@ statements:
 			return 0, 0, nil, nil, err
 		}
 
-		if err = validateHint(ctx, c, u.Hint, "update", nil, u.Upsert); err != nil {
+		if err = validateHint(ctx, db, params.Collection, c, u.Hint, "update", nil, u.Upsert); err != nil {
 			// mongod reports an unusable hint as the statement's write error.
 			var ce *handlererrors.CommandError
 			if errors.As(err, &ce) {
@@ -246,7 +250,7 @@ statements:
 
 		closer.Add(res.Iter)
 
-		iter := common.FilterIteratorColl(iterator.WithContext(ctx, res.Iter), closer, u.Filter, cmp)
+		iter := common.FilterIteratorPlan(iterator.WithContext(ctx, res.Iter), closer, u.Filter, cmp, queryPlanMode(ctx, c, u.Filter, u.Hint, res))
 
 		if !u.Multi {
 			// The one document updated is the first match in the hinted
@@ -295,6 +299,17 @@ statements:
 	}
 
 	return matched, modified, &upserted, writeErrors, nil
+}
+
+// hasNonDocumentElement reports whether an update pipeline has an element
+// that is not a stage document.
+func hasNonDocumentElement(pipeline *types.Array) bool {
+	for i := range pipeline.Len() {
+		if _, ok := must.NotFail(pipeline.Get(i)).(*types.Document); !ok {
+			return true
+		}
+	}
+	return false
 }
 
 // statementWriteError returns the write error an update statement's failed

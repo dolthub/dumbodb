@@ -25,6 +25,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
@@ -102,7 +103,7 @@ func (h *Handler) MsgDelete(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 	for i, p := range params.Deletes {
 		p.Collation = h.effectiveCollation(connCtx, db, params.Collection, p.Collation)
 		var d int32
-		d, err = h.execDelete(connCtx, c, &p)
+		d, err = h.execDelete(connCtx, db, params.Collection, c, &p)
 
 		deleted += d
 
@@ -151,15 +152,16 @@ func (h *Handler) MsgDelete(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 //
 // It returns a number of deleted documents or error.
 // The error is either a (wrapped) *handlererrors.CommandError or something fatal.
-func (h *Handler) execDelete(ctx context.Context, c backends.Collection, p *common.Delete) (int32, error) {
+func (h *Handler) execDelete(ctx context.Context, db backends.Database, collName string, c backends.Collection, p *common.Delete) (int32, error) { //nolint:lll // for readability
 	cmp := collation.Parse(p.Collation).Comparator()
+	operators.BindCollation(p.Filter, cmp)
 
 	common.CanonicalizeFilter(p.Filter)
 	if err := common.ValidateFilter(p.Filter, cmp); err != nil {
 		return 0, err
 	}
 
-	if err := validateHint(ctx, c, p.Hint, "delete", nil, false); err != nil {
+	if err := validateHint(ctx, db, collName, c, p.Hint, "delete", nil, false); err != nil {
 		return 0, err
 	}
 
@@ -185,6 +187,7 @@ func (h *Handler) execDelete(ctx context.Context, c backends.Collection, p *comm
 		}
 	}
 
+	fc := common.NewFilterContext(cmp, queryPlanMode(ctx, c, p.Filter, p.Hint, q))
 	var ids []any
 	for {
 		var doc *types.Document
@@ -200,7 +203,7 @@ func (h *Handler) execDelete(ctx context.Context, c backends.Collection, p *comm
 
 		var matches bool
 
-		if matches, err = common.FilterDocumentColl(doc, p.Filter, cmp); err != nil {
+		if matches, err = fc.Match(doc, p.Filter); err != nil {
 			q.Iter.Close()
 			return 0, lazyerrors.Error(err)
 		}

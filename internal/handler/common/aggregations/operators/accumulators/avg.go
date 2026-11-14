@@ -22,6 +22,13 @@ import (
 
 type avg struct {
 	arg operand
+	sbe bool
+}
+
+// UseSBE implements SBEAccumulator.
+func (a *avg) UseSBE() error {
+	a.sbe = true
+	return nil
 }
 
 func newAvg(args ...any) (Accumulator, error) {
@@ -42,7 +49,11 @@ func newAvg(args ...any) (Accumulator, error) {
 }
 
 func (a *avg) New() Accumulation {
-	return &avgState{spec: a, acc: aggregations.NewNumberAvg()}
+	acc := aggregations.NewNumberAvg()
+	if a.sbe {
+		acc.UseSBE()
+	}
+	return &avgState{spec: a, acc: acc}
 }
 
 type avgState struct {
@@ -66,6 +77,7 @@ func (st *avgState) Result() (any, error) {
 }
 
 var (
-	_ Accumulator  = (*avg)(nil)
-	_ Accumulation = (*avgState)(nil)
+	_ Accumulator    = (*avg)(nil)
+	_ SBEAccumulator = (*avg)(nil)
+	_ Accumulation   = (*avgState)(nil)
 )

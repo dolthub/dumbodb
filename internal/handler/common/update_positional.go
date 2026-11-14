@@ -179,6 +179,7 @@ func findFirstMatchingIndex(arrayPath string, doc *types.Document, filter *types
 	}
 
 	// Test each element against the relevant filter conditions.
+	fc := NewFilterContext(nil, PlanCollectionScan)
 	for i := range arr.Len() {
 		elem := must.NotFail(arr.Get(i))
 
@@ -189,7 +190,7 @@ func findFirstMatchingIndex(arrayPath string, doc *types.Document, filter *types
 			testDoc = must.NotFail(types.NewDocument(arrayPath, elem))
 		}
 
-		matched, matchErr := FilterDocument(testDoc, relevantFilter)
+		matched, matchErr := fc.Match(testDoc, relevantFilter)
 		if matchErr != nil {
 			return -1, lazyerrors.Error(matchErr)
 		}
@@ -253,6 +254,7 @@ func findFilteredIndices(arr *types.Array, identifier string, arrayFilters *type
 
 	var result []int
 
+	fc := NewFilterContext(nil, PlanCollectionScan)
 	for i := range arr.Len() {
 		elem := must.NotFail(arr.Get(i))
 
@@ -260,7 +262,7 @@ func findFilteredIndices(arr *types.Array, identifier string, arrayFilters *type
 		// "identifier" or "identifier.subfield" resolve correctly.
 		testDoc := must.NotFail(types.NewDocument(identifier, elem))
 
-		matched, err := FilterDocument(testDoc, identifierFilter)
+		matched, err := fc.Match(testDoc, identifierFilter)
 		if err != nil {
 			return nil, lazyerrors.Error(err)
 		}

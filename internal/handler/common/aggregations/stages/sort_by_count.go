@@ -18,8 +18,10 @@ import (
 	"context"
 	"errors"
 	stdsort "sort"
+	"strings"
 	"time"
 
+	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
@@ -40,6 +42,7 @@ import (
 //	[{$group: {_id: <expression>, count: {$sum: 1}}}, {$sort: {count: -1, _id: 1}}]
 type sortByCount struct {
 	groupExpression any
+	cmp             *collation.Comparator
 }
 
 func newSortByCount(stage *types.Document) (aggregations.Stage, error) {
@@ -48,20 +51,32 @@ func newSortByCount(stage *types.Document) (aggregations.Stage, error) {
 		return nil, lazyerrors.Error(err)
 	}
 
-	// Validate: null is not allowed.
-	if _, isNull := v.(types.NullType); isNull {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrBadValue,
-			"$sortByCount requires a non-null expression argument",
-			"$sortByCount (stage)",
-		)
+	switch val := v.(type) {
+	case string:
+		if !strings.HasPrefix(val, "$") || val == "$" {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSortByCountString,
+				"the sortByCount field must be defined as a $-prefixed path or an expression inside an object",
+				"$sortByCount (stage)")
+		}
+	case *types.Document:
+		if !isGroupExpression(val) {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSortByCountObject,
+				"the sortByCount field must be defined as a $-prefixed path or an expression inside an object",
+				"$sortByCount (stage)")
+		}
+	default:
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrSortByCountType,
+			"the sortByCount field must be specified as a string or as an object", "$sortByCount (stage)")
 	}
 
+	if err := operators.CheckFieldPaths(v); err != nil {
+		return nil, err
+	}
 	if err := operators.CheckConstantSubexpressions(v); err != nil {
 		return nil, err
 	}
 
-	return &sortByCount{groupExpression: v}, nil
+	return &sortByCount{groupExpression: v, cmp: operators.CollationOf(stage)}, nil
 }
 
 func (s *sortByCount) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
@@ -72,38 +87,31 @@ func (s *sortByCount) Process(ctx context.Context, iter types.DocumentsIterator,
 	}
 
 	// Build a count per group-id.
-	var m sortByCountMap
+	m := sortByCountMap{cmp: s.cmp}
 
 	for _, doc := range docs {
 		id, err := evaluateGroupExpr(s.groupExpression, doc)
 		if err != nil {
-			id = types.Null
+			return nil, err
 		}
 
 		m.increment(id)
 	}
 
-	// Convert to result slice and sort by count desc, then _id asc for ties.
-	res := make([]*types.Document, 0, len(m.entries))
+	// Sort by count desc, then _id asc for ties, as
+	// $group + $sort{count:-1, _id:1}.
+	entries := m.entries
+	stdsort.Slice(entries, func(i, j int) bool {
+		if entries[i].count != entries[j].count {
+			return entries[i].count > entries[j].count
+		}
+		return types.CompareForAggregation(entries[i].key, entries[j].key) == types.Less
+	})
 
-	for _, e := range m.entries {
+	res := make([]*types.Document, 0, len(entries))
+	for _, e := range entries {
 		res = append(res, must.NotFail(types.NewDocument("_id", e.id, "count", e.count)))
 	}
-
-	stdsort.Slice(res, func(i, j int) bool {
-		ci := must.NotFail(res[i].Get("count")).(int32)
-		cj := must.NotFail(res[j].Get("count")).(int32)
-
-		if ci != cj {
-			return ci > cj
-		}
-
-		// Break ties by _id ascending per spec: $sortByCount === $group + $sort{count:-1, _id:1}.
-		idi := must.NotFail(res[i].Get("_id"))
-		idj := must.NotFail(res[j].Get("_id"))
-
-		return types.CompareForAggregation(idi, idj) == types.Less
-	})
 
 	result := iterator.Values(iterator.ForSlice(res))
 	closer.Add(result)
@@ -116,12 +124,14 @@ func evaluateGroupExpr(groupExpr any, doc *types.Document) (any, error) {
 	switch expr := groupExpr.(type) {
 	case *types.Document:
 		if operators.IsOperator(expr) {
-			op, err := operators.NewOperator(expr)
-			if err != nil {
-				return nil, lazyerrors.Error(err)
+			val, missing, err := operators.EvalOperand(expr, doc)
+			switch {
+			case err != nil:
+				return nil, processGroupStageError(err)
+			case missing:
+				return types.Null, nil
 			}
-
-			return op.Process(doc)
+			return val, nil
 		}
 
 		return evaluateDocument(expr, doc, false)
@@ -153,24 +163,27 @@ func evaluateGroupExpr(groupExpr any, doc *types.Document) (any, error) {
 
 type sortByCountEntry struct {
 	id    any
+	key   any
 	count int32
 }
 
 // sortByCountMap accumulates counts per group id.
 type sortByCountMap struct {
 	entries []sortByCountEntry
+	cmp     *collation.Comparator
 }
 
 // increment adds 1 to the count for the given id, creating a new entry if needed.
 func (m *sortByCountMap) increment(id any) {
+	key := m.cmp.KeyValue(id)
 	for i, e := range m.entries {
-		if types.CompareForAggregation(id, e.id) == types.Equal {
+		if types.CompareForAggregation(key, e.key) == types.Equal {
 			m.entries[i].count++
 			return
 		}
 	}
 
-	m.entries = append(m.entries, sortByCountEntry{id: id, count: 1})
+	m.entries = append(m.entries, sortByCountEntry{id: id, key: key, count: 1})
 }
 
 var (

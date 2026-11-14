@@ -16,6 +16,7 @@ package handler
 
 import (
 	"context"
+	"slices"
 	"strings"
 
 	"github.com/dolthub/dumbodb/internal/backends"
@@ -40,8 +41,8 @@ func checkHintType(hint any) error {
 }
 
 // validateHintExists is validateHint for a read without a sort or upsert.
-func validateHintExists(ctx context.Context, coll backends.Collection, hint any, command string) error {
-	return validateHint(ctx, coll, hint, command, nil, false)
+func validateHintExists(ctx context.Context, db backends.Database, collName string, coll backends.Collection, hint any, command string) error { //nolint:lll // for readability
+	return validateHint(ctx, db, collName, coll, hint, command, nil, false)
 }
 
 // validateHint returns mongod's error for a hint the command cannot use: a
@@ -49,8 +50,9 @@ func validateHintExists(ctx context.Context, coll backends.Collection, hint any,
 // $natural sort; or a name or key pattern of no index on the collection. An
 // empty name is no index's. A missing collection has no indexes, which mongod
 // overlooks, even for an empty name, for a read but not for an upsert, which
-// would create it.
-func validateHint(ctx context.Context, coll backends.Collection, hint any, command string, sort *types.Document, upsert bool) error {
+// would create it. A time-series collection's hidden _id index answers a hint
+// by name, as the buckets' _id index does in mongod, but not by key pattern.
+func validateHint(ctx context.Context, db backends.Database, collName string, coll backends.Collection, hint any, command string, sort *types.Document, upsert bool) error { //nolint:lll // for readability
 	if d, ok := hint.(*types.Document); ok && d.Len() > 1 && d.Has("$natural") {
 		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
 			"$natural hint cannot be set to a value other than -1 or 1.", command)
@@ -89,7 +91,11 @@ func validateHint(ctx context.Context, coll backends.Collection, hint any, comma
 		return lazyerrors.Error(err)
 	}
 
-	if hint == "" || backends.MatchHintedIndex(hint, idxRes.Indexes) == "" {
+	indexes := idxRes.Indexes
+	if _, byName := hint.(string); !byName {
+		indexes = clientVisibleIndexes(ctx, db, collName, indexes)
+	}
+	if hint == "" || backends.MatchHintedIndex(hint, indexes) == "" {
 		return notIndexed
 	}
 
@@ -142,7 +148,7 @@ func validateViewHint(ctx context.Context, db backends.Database, view *backends.
 	if err != nil {
 		return nil
 	}
-	return validateHintExists(ctx, coll, hint, command)
+	return validateHintExists(ctx, db, base, coll, hint, command)
 }
 
 // collectionMissing reports whether coll does not exist.
@@ -290,7 +296,7 @@ func hintedFirstMatches(ctx context.Context, coll backends.Collection, hint any,
 			return nil, err
 		}
 		closer.Add(res.Iter)
-		return common.FilterIteratorColl(iterator.WithContext(ctx, res.Iter), closer, filter, cmp), nil
+		return common.FilterIteratorPlan(iterator.WithContext(ctx, res.Iter), closer, filter, cmp, queryPlanMode(ctx, coll, filter, hint, res)), nil
 	case order != nil:
 		return common.SortIteratorInIndexOrder(iter, closer, order, sortFilter, cmp)
 	}
@@ -429,4 +435,81 @@ func recordedClusteredName(ctx context.Context, db backends.Database, collection
 		return info.ClusteredIndexName
 	}
 	return ""
+}
+
+// queryPlanMode is the plan mongod answers a query on c with. The order of a
+// filter's conditions differs between plans only when it uses $expr, so the
+// indexes are read only then: a hinted index, or else the first index whose
+// leading field filter constrains, gives an index scan on that field. The
+// filter must constrain the field in a way an index can serve unless the
+// backend reads an index; a hinted index read in full, or one read only for
+// its order, is filtered as a collection scan.
+func queryPlanMode(ctx context.Context, c backends.Collection, filter *types.Document, hint any, res *backends.QueryResult) common.PlanMode {
+	switch {
+	case backends.HintIsNatural(hint):
+		return common.PlanCollectionScan
+	case !common.FilterUsesExpr(filter):
+		if hintNamesIndex(hint) || res != nil && res.IndexScan {
+			return common.PlanIndexScan
+		}
+		return common.PlanCollectionScan
+	case hintNamesIndex(hint):
+		field, ok := hintedLeadingField(ctx, c, hint)
+		switch {
+		case !ok:
+			return common.PlanIndexScan
+		case common.ConstrainsField(filter, field):
+			return common.PlanIndexScanOn(field)
+		}
+		return common.PlanCollectionScan
+	}
+	list, err := c.ListIndexes(ctx, new(backends.ListIndexesParams))
+	if err != nil {
+		return common.PlanCollectionScan
+	}
+	var fields []string
+	for _, idx := range list.Indexes {
+		if len(idx.Key) > 0 && idx.PartialFilterExpression == nil && common.ConstrainsField(filter, idx.Key[0].Field) &&
+			!slices.Contains(fields, idx.Key[0].Field) {
+			fields = append(fields, idx.Key[0].Field)
+		}
+	}
+	switch len(fields) {
+	case 0:
+		return common.PlanCollectionScan
+	case 1:
+		return common.PlanIndexScanOn(fields[0])
+	}
+	// mongod tries each candidate index, and an error under any of them
+	// fails the query.
+	return common.PlanIndexScan
+}
+
+// hintedLeadingField returns the leading field of the index hint names on c.
+func hintedLeadingField(ctx context.Context, c backends.Collection, hint any) (string, bool) {
+	if h, ok := hint.(*types.Document); ok && h.Len() > 0 {
+		return h.Keys()[0], true
+	}
+	list, err := c.ListIndexes(ctx, new(backends.ListIndexesParams))
+	if err != nil {
+		return "", false
+	}
+	name := backends.MatchHintedIndex(hint, list.Indexes)
+	for _, idx := range list.Indexes {
+		if idx.Name == name && len(idx.Key) > 0 {
+			return idx.Key[0].Field, true
+		}
+	}
+	return "", false
+}
+
+// hintNamesIndex reports whether hint names an index, by name or key pattern.
+func hintNamesIndex(hint any) bool {
+	switch h := hint.(type) {
+	case string:
+		return h != ""
+	case *types.Document:
+		return h.Len() > 0
+	}
+	return false
 }

@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
@@ -27,7 +28,8 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// collectArray evaluates arg to a *types.Array. Returns nil if null, error if not array.
+// collectArray evaluates the input argument of $map or $reduce to an array.
+// It reports a null or missing input as null.
 func collectArray(arg any, doc *types.Document, opName string) (*types.Array, bool, error) {
 	v, err := evalArgValue(arg, doc)
 	if err != nil {
@@ -40,8 +42,12 @@ func collectArray(arg any, doc *types.Document, opName string) (*types.Array, bo
 
 	arr, ok := v.(*types.Array)
 	if !ok {
-		return nil, false, newOperatorError(ErrArgsInvalidLen, opName,
-			fmt.Sprintf("%s argument must be an array, got %T", opName, v))
+		if opName == "$reduce" {
+			return nil, false, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrReduceInputNotArray,
+				"$reduce requires that 'input' be an array, found: "+types.FormatAnyValue(v), opName)
+		}
+		return nil, false, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrMapInputNotArray,
+			"input to $map must be an array not "+handlerparams.AliasFromType(v), opName)
 	}
 
 	return arr, false, nil
@@ -246,13 +252,19 @@ func newReverseArray(args ...any) (Operator, error) {
 }
 
 func (op *reverseArrayOp) Process(doc *types.Document) (any, error) {
-	arr, isNull, err := collectArray(op.arg, doc, "$reverseArray")
+	v, err := evalArgValue(op.arg, doc)
 	if err != nil {
 		return nil, err
 	}
 
-	if isNull {
+	if isNullish(v) {
 		return types.Null, nil
+	}
+
+	arr, ok := v.(*types.Array)
+	if !ok {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrReverseArrayNotArray,
+			"The argument to $reverseArray must be an array, but was of type: "+handlerparams.AliasFromType(v), "$reverseArray")
 	}
 
 	items, err := arrayToSlice(arr)
@@ -374,6 +386,7 @@ type indexOfArrayOp struct {
 	searchArg any
 	startArg  any
 	endArg    any
+	collated
 }
 
 func newIndexOfArray(args ...any) (Operator, error) {
@@ -434,8 +447,9 @@ func (op *indexOfArrayOp) Process(doc *types.Document) (any, error) {
 		end = min(end, len(items))
 	}
 
+	searchKey := op.cmp.KeyValue(search)
 	for i := start; i < end; i++ {
-		if types.Compare(items[i], search) == 0 {
+		if types.CompareForAggregation(op.cmp.KeyValue(items[i]), searchKey) == types.Equal {
 			return int32(i), nil
 		}
 	}
@@ -606,6 +620,7 @@ var _ Operator = (*rangeOp)(nil)
 type inArrayOp struct {
 	valueArg any
 	arrayArg any
+	collated
 }
 
 func newInArray(args ...any) (Operator, error) {
@@ -623,13 +638,18 @@ func (op *inArrayOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	arr, isNull, err := collectArray(op.arrayArg, doc, "$in")
+	v, missing, err := EvalOperand(op.arrayArg, doc)
 	if err != nil {
 		return nil, err
 	}
-
-	if isNull {
-		return false, nil
+	arr, ok := v.(*types.Array)
+	if !ok {
+		typeName := "missing"
+		if !missing {
+			typeName = handlerparams.AliasFromType(v)
+		}
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInRequiresArray,
+			"$in requires an array as a second argument, found: "+typeName, "$in")
 	}
 
 	items, err := arrayToSlice(arr)
@@ -637,8 +657,9 @@ func (op *inArrayOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
+	valKey := op.cmp.KeyValue(val)
 	for _, item := range items {
-		if types.Compare(item, val) == 0 {
+		if types.CompareForAggregation(op.cmp.KeyValue(item), valKey) == types.Equal {
 			return true, nil
 		}
 	}
@@ -648,11 +669,13 @@ func (op *inArrayOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*inArrayOp)(nil)
 
-// filterOp represents { $filter: { input: <array>, as: <var>, cond: <cond-expr> } }.
+// filterOp represents
+// { $filter: { input: <array>, as: <var>, cond: <cond-expr>, limit: <expr> } }.
 type filterOp struct {
 	inputArg any
 	asName   string
 	condArg  any
+	limitArg any
 }
 
 func newFilter(args ...any) (Operator, error) {
@@ -667,49 +690,78 @@ func newFilter(args ...any) (Operator, error) {
 			"$filter requires a document argument")
 	}
 
+	for _, k := range doc.Keys() {
+		switch k {
+		case "input", "as", "cond", "limit":
+		default:
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFilterUnknownArgument,
+				"Unrecognized parameter to $filter: "+k, "$filter")
+		}
+	}
+
 	inputArg, err := doc.Get("input")
 	if err != nil {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$filter", "Missing 'input' parameter to $filter")
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFilterMissingInput,
+			"Missing 'input' parameter to $filter", "$filter")
 	}
 
 	condArg, err := doc.Get("cond")
 	if err != nil {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$filter", "Missing 'cond' parameter to $filter")
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFilterMissingCond,
+			"Missing 'cond' parameter to $filter", "$filter")
 	}
 
-	asName := "this"
-	if asV, err := doc.Get("as"); err == nil {
-		if s, ok := asV.(string); ok {
-			asName = s
-		}
+	asName, err := iterationVariableName(doc)
+	if err != nil {
+		return nil, err
 	}
 
-	return &filterOp{inputArg: inputArg, asName: asName, condArg: condArg}, nil
+	limitArg, _ := doc.Get("limit")
+
+	return &filterOp{inputArg: inputArg, asName: asName, condArg: condArg, limitArg: limitArg}, nil
+}
+
+// iterationVariableName returns the variable named by the 'as' field of a
+// $map or $filter, where mongod reads any non-string value as an empty name.
+func iterationVariableName(spec *types.Document) (string, error) {
+	asV, err := spec.Get("as")
+	if err != nil {
+		return "this", nil
+	}
+	name, _ := asV.(string)
+	if err := CheckUserVariableName(name); err != nil {
+		return "", err
+	}
+	return name, nil
 }
 
 func (op *filterOp) Process(doc *types.Document) (any, error) {
-	arr, isNull, err := collectArray(op.inputArg, doc, "$filter")
+	input, err := evalArgValue(op.inputArg, doc)
 	if err != nil {
 		return nil, err
 	}
-
-	if isNull {
+	if isNullish(input) {
 		return types.Null, nil
 	}
+	arr, ok := input.(*types.Array)
+	if !ok {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFilterInputNotArray,
+			"input to $filter must be an array not "+handlerparams.AliasFromType(input), "$filter")
+	}
+	if arr.Len() == 0 {
+		return arr, nil
+	}
 
-	items, err := arrayToSlice(arr)
+	limit, err := op.limit(doc)
 	if err != nil {
 		return nil, err
 	}
 
-	var result []any
+	result := types.MakeArray(0)
+	for i := 0; i < arr.Len() && (limit == 0 || result.Len() < limit); i++ {
+		item := must.NotFail(arr.Get(i))
 
-	for _, item := range items {
 		iterDoc := copyForVariables(doc)
-		if err != nil {
-			return nil, err
-		}
-
 		bindVariable(iterDoc, op.asName, item, false)
 
 		condVal, err := evalArgValue(op.condArg, iterDoc)
@@ -718,11 +770,63 @@ func (op *filterOp) Process(doc *types.Document) (any, error) {
 		}
 
 		if !isFalsy(condVal) {
-			result = append(result, item)
+			result.Append(item)
 		}
 	}
 
-	return sliceToArray(result), nil
+	return result, nil
+}
+
+// limit evaluates the limit argument; 0 means none.
+func (op *filterOp) limit(doc *types.Document) (int, error) {
+	if op.limitArg == nil {
+		return 0, nil
+	}
+	v, missing, err := EvalOperand(op.limitArg, doc)
+	if err != nil {
+		return 0, err
+	}
+	if missing || isNullish(v) {
+		return 0, nil
+	}
+
+	n, ok := exactInt32(v)
+	if !ok {
+		return 0, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFilterLimitNotInt32,
+			"$filter: limit must be represented as a 32-bit integral value: "+types.FormatAnyValue(v), "$filter")
+	}
+	if n <= 0 {
+		return 0, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFilterLimitNotPositive,
+			fmt.Sprintf("$filter: limit must be greater than 0: %d", n), "$filter")
+	}
+	return int(n), nil
+}
+
+// exactInt32 returns a number that represents a 32-bit integer exactly.
+func exactInt32(v any) (int32, bool) {
+	var n int64
+	switch v := v.(type) {
+	case int32:
+		return v, true
+	case int64:
+		n = v
+	case float64:
+		if v != math.Trunc(v) || v < math.MinInt32 || v > math.MaxInt32 {
+			return 0, false
+		}
+		n = int64(v)
+	case types.Decimal128:
+		var ok bool
+		if n, ok = aggregations.Decimal128ToInt64(v); !ok {
+			return 0, false
+		}
+	default:
+		return 0, false
+	}
+	if n < math.MinInt32 || n > math.MaxInt32 {
+		return 0, false
+	}
+	return int32(n), true
 }
 
 var _ Operator = (*filterOp)(nil)
@@ -735,31 +839,37 @@ type mapOp struct {
 }
 
 func newMap(args ...any) (Operator, error) {
-	if len(args) != 1 {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$map",
-			"$map requires a document with 'input', 'in' fields")
+	fail := func(code handlererrors.ErrorCode, msg string) error {
+		return handlererrors.NewCommandErrorMsgWithArgument(code, msg, "$map")
 	}
-
-	doc, ok := args[0].(*types.Document)
-	if !ok {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$map", "$map requires a document argument")
+	var doc *types.Document
+	if len(args) == 1 {
+		doc, _ = args[0].(*types.Document)
+	}
+	if doc == nil {
+		return nil, fail(handlererrors.ErrMapNotObject, "$map only supports an object as its argument")
+	}
+	for _, k := range doc.Keys() {
+		switch k {
+		case "input", "as", "in":
+		default:
+			return nil, fail(handlererrors.ErrMapUnknownParameter, "Unrecognized parameter to $map: "+k)
+		}
 	}
 
 	inputArg, err := doc.Get("input")
 	if err != nil {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$map", "Missing 'input' parameter to $map")
+		return nil, fail(handlererrors.ErrMapMissingInput, "Missing 'input' parameter to $map")
 	}
 
 	inArg, err := doc.Get("in")
 	if err != nil {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$map", "Missing 'in' parameter to $map")
+		return nil, fail(handlererrors.ErrMapMissingIn, "Missing 'in' parameter to $map")
 	}
 
-	asName := "this"
-	if asV, err := doc.Get("as"); err == nil {
-		if s, ok := asV.(string); ok {
-			asName = s
-		}
+	asName, err := iterationVariableName(doc)
+	if err != nil {
+		return nil, err
 	}
 
 	return &mapOp{inputArg: inputArg, asName: asName, inArg: inArg}, nil
@@ -811,32 +921,31 @@ type reduceOp struct {
 }
 
 func newReduce(args ...any) (Operator, error) {
-	if len(args) != 1 {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$reduce",
-			"$reduce requires a document with 'input', 'initialValue', 'in' fields")
+	op := new(reduceOp)
+	fail := func(code handlererrors.ErrorCode, msg string) error {
+		return handlererrors.NewCommandErrorMsgWithArgument(code, msg, "$reduce")
 	}
-
-	doc, ok := args[0].(*types.Document)
-	if !ok {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$reduce", "$reduce requires a document argument")
+	spec := argObject{
+		notObject: func(arg any) error {
+			return fail(handlererrors.ErrReduceNotObject,
+				"$reduce requires an object as an argument, found: "+handlerparams.AliasFromType(arg))
+		},
+		unknown: func(key string) error {
+			return fail(handlererrors.ErrReduceUnknownField, "$reduce found an unknown argument: "+key)
+		},
+		fields: []argField{
+			{name: "input", set: assign(&op.inputArg, nil),
+				missing: fail(handlererrors.ErrReduceNoInput, "$reduce requires 'input' to be specified")},
+			{name: "initialValue", set: assign(&op.initialValueArg, nil),
+				missing: fail(handlererrors.ErrReduceNoInitialValue, "$reduce requires 'initialValue' to be specified")},
+			{name: "in", set: assign(&op.inArg, nil),
+				missing: fail(handlererrors.ErrReduceNoIn, "$reduce requires 'in' to be specified")},
+		},
 	}
-
-	inputArg, err := doc.Get("input")
-	if err != nil {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$reduce", "Missing 'input' parameter to $reduce")
+	if err := spec.parse(args); err != nil {
+		return nil, err
 	}
-
-	initialValueArg, err := doc.Get("initialValue")
-	if err != nil {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$reduce", "Missing 'initialValue' parameter to $reduce")
-	}
-
-	inArg, err := doc.Get("in")
-	if err != nil {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$reduce", "Missing 'in' parameter to $reduce")
-	}
-
-	return &reduceOp{inputArg: inputArg, initialValueArg: initialValueArg, inArg: inArg}, nil
+	return op, nil
 }
 
 func (op *reduceOp) Process(doc *types.Document) (any, error) {
@@ -890,51 +999,63 @@ type zipOp struct {
 }
 
 func newZip(args ...any) (Operator, error) {
-	if len(args) != 1 {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$zip", "$zip requires a document argument")
+	fail := func(code handlererrors.ErrorCode, msg string) error {
+		return handlererrors.NewCommandErrorMsgWithArgument(code, msg, "$zip")
 	}
-
+	if len(args) != 1 {
+		return nil, fail(handlererrors.ErrZipNotObject, "$zip only supports an object as an argument, found array")
+	}
 	doc, ok := args[0].(*types.Document)
 	if !ok {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$zip", "$zip requires a document argument")
+		return nil, fail(handlererrors.ErrZipNotObject,
+			"$zip only supports an object as an argument, found "+handlerparams.AliasFromType(args[0]))
 	}
 
-	inputsArg, err := doc.Get("inputs")
-	if err != nil {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$zip", "Missing 'inputs' parameter to $zip")
-	}
-
-	useLongest := false
-	if ullV, err := doc.Get("useLongestLength"); err == nil {
-		if b, ok := ullV.(bool); ok {
-			useLongest = b
+	op := &zipOp{}
+	var defaults *types.Array
+	for _, key := range doc.Keys() {
+		v := must.NotFail(doc.Get(key))
+		switch key {
+		case "inputs":
+			if _, isArray := v.(*types.Array); !isArray {
+				return nil, fail(handlererrors.ErrZipInputsNotArray,
+					"inputs must be an array of expressions, found "+handlerparams.AliasFromType(v))
+			}
+			op.inputsArg = v
+		case "defaults":
+			arr, isArray := v.(*types.Array)
+			if !isArray {
+				return nil, fail(handlererrors.ErrZipDefaultsNotArray,
+					"defaults must be an array of expressions, found "+handlerparams.AliasFromType(v))
+			}
+			defaults = arr
+			op.defaultsArg = v
+		case "useLongestLength":
+			b, isBool := v.(bool)
+			if !isBool {
+				return nil, fail(handlererrors.ErrZipUseLongestLengthType,
+					"useLongestLength must be a bool, found "+handlerparams.AliasFromType(v))
+			}
+			op.useLongestLength = b
+		default:
+			return nil, fail(handlererrors.ErrZipUnknownArgument, "$zip found an unknown argument: "+key)
 		}
 	}
 
-	var defaultsArg any
-	if dV, err := doc.Get("defaults"); err == nil {
-		defaultsArg = dV
+	inputs, _ := op.inputsArg.(*types.Array)
+	switch {
+	case inputs == nil || inputs.Len() == 0:
+		return nil, fail(handlererrors.ErrZipNoInputs, "$zip requires at least one input array")
+	case defaults != nil && !op.useLongestLength:
+		return nil, fail(handlererrors.ErrZipDefaultsWithoutLongest, "cannot specify defaults unless useLongestLength is true")
+	case defaults != nil && defaults.Len() != inputs.Len():
+		return nil, fail(handlererrors.ErrZipDefaultsLength, "defaults and inputs must have the same length")
 	}
-
-	return &zipOp{inputsArg: inputsArg, useLongestLength: useLongest, defaultsArg: defaultsArg}, nil
+	return op, nil
 }
 
 func (op *zipOp) Process(doc *types.Document) (any, error) {
-	inputsV, err := evalArgValue(op.inputsArg, doc)
-	if err != nil {
-		return nil, err
-	}
-
-	if isNullish(inputsV) {
-		return types.Null, nil
-	}
-
-	inputsArr, ok := inputsV.(*types.Array)
-	if !ok {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$zip", "$zip 'inputs' must be an array")
-	}
-
-	inputs, err := arrayToSlice(inputsArr)
+	inputs, err := arrayToSlice(op.inputsArg.(*types.Array))
 	if err != nil {
 		return nil, err
 	}
@@ -942,13 +1063,17 @@ func (op *zipOp) Process(doc *types.Document) (any, error) {
 	var arrays [][]any
 
 	for _, inp := range inputs {
-		arr, isNull, err := collectArray(inp, doc, "$zip")
+		v, err := evalArgValue(inp, doc)
 		if err != nil {
 			return nil, err
 		}
-
-		if isNull {
+		if isNullish(v) {
 			return types.Null, nil
+		}
+		arr, isArray := v.(*types.Array)
+		if !isArray {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrZipInputNotArray,
+				"$zip found a non-array expression in input: "+types.FormatAnyValue(v), "$zip")
 		}
 
 		items, err := arrayToSlice(arr)
@@ -1069,7 +1194,10 @@ var _ Operator = (*objectToArrayOp)(nil)
 
 // arrayToObjectOp represents { $arrayToObject: <array-expr> }.
 // Converts an array of {k, v} documents to a single document.
-type arrayToObjectOp struct{ arg any }
+type arrayToObjectOp struct {
+	arg any
+	engine
+}
 
 func newArrayToObject(args ...any) (Operator, error) {
 	if len(args) != 1 {
@@ -1092,53 +1220,97 @@ func (op *arrayToObjectOp) Process(doc *types.Document) (any, error) {
 
 	arr, ok := v.(*types.Array)
 	if !ok {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$arrayToObject",
-			fmt.Sprintf("$arrayToObject requires an array argument, got %T", v))
+		return nil, arrayToObjectError(handlererrors.ErrArrayToObjectInput,
+			"$arrayToObject requires an array input, found: "+handlerparams.AliasFromType(v))
 	}
 
 	result := types.MakeDocument(arr.Len())
+	if arr.Len() == 0 {
+		return result, nil
+	}
 
-	iter := arr.Iterator()
-	defer iter.Close()
-
-	for {
-		_, elem, iterErr := iter.Next()
-		if errors.Is(iterErr, iterator.ErrIteratorDone) {
-			break
+	// The first element decides the format: [k, v] pairs or {k, v} objects.
+	_, pairs := must.NotFail(arr.Get(0)).(*types.Array)
+	for i := range arr.Len() {
+		elem := must.NotFail(arr.Get(i))
+		var key, val any
+		switch e := elem.(type) {
+		case *types.Array:
+			if !pairs {
+				return nil, arrayToObjectError(handlererrors.ErrArrayToObjectObjectsExpected,
+					"$arrayToObject requires a consistent input format. Elements must all be arrays or all be objects. "+
+						"Object was detected, now found: array")
+			}
+			if e.Len() != 2 {
+				return nil, arrayToObjectError(handlererrors.ErrArrayToObjectPairSize,
+					fmt.Sprintf("$arrayToObject requires an array of size 2 arrays,found array of size: %d", e.Len()))
+			}
+			key, val = must.NotFail(e.Get(0)), must.NotFail(e.Get(1))
+			if _, ok := key.(string); !ok {
+				return nil, arrayToObjectError(handlererrors.ErrArrayToObjectPairKeyType,
+					"$arrayToObject requires an array of key-value pairs, where the key must be of type string. Found key type: "+
+						handlerparams.AliasFromType(key))
+			}
+			if strings.IndexByte(key.(string), 0) >= 0 {
+				code := handlererrors.ErrArrayToObjectPairKeyNul
+				if op.sbe {
+					code = handlererrors.ErrArrayToObjectPairKeyNulSBE
+				}
+				return nil, arrayToObjectError(code, "Key field cannot contain an embedded null byte")
+			}
+		case *types.Document:
+			if pairs {
+				return nil, arrayToObjectError(handlererrors.ErrArrayToObjectArraysExpected,
+					"$arrayToObject requires a consistent input format. Elements must all be arrays or all be objects. "+
+						"Array was detected, now found: object")
+			}
+			if e.Len() != 2 {
+				return nil, arrayToObjectError(handlererrors.ErrArrayToObjectObjectSize,
+					fmt.Sprintf("$arrayToObject requires an object keys of 'k' and 'v'. Found incorrect number of keys:%d", e.Len()))
+			}
+			var kErr, vErr error
+			key, kErr = e.Get("k")
+			val, vErr = e.Get("v")
+			if kErr != nil || vErr != nil {
+				return nil, arrayToObjectError(handlererrors.ErrArrayToObjectObjectKeys,
+					"$arrayToObject requires an object with keys 'k' and 'v'. Missing either or both keys from: "+
+						types.FormatAnyValue(e))
+			}
+			if _, ok := key.(string); !ok {
+				return nil, arrayToObjectError(handlererrors.ErrArrayToObjectObjectKeyType,
+					"$arrayToObject requires an object with keys 'k' and 'v', where the value of 'k' must be of type string. Found type: "+
+						handlerparams.AliasFromType(key))
+			}
+			if strings.IndexByte(key.(string), 0) >= 0 {
+				code := handlererrors.ErrArrayToObjectObjectKeyNul
+				if op.sbe {
+					code = handlererrors.ErrArrayToObjectObjectKeyNulSBE
+				}
+				return nil, arrayToObjectError(code, "Key field cannot contain an embedded null byte")
+			}
+		default:
+			switch {
+			case i == 0:
+				return nil, arrayToObjectError(handlererrors.ErrArrayToObjectElementType,
+					"Unrecognised input type format for $arrayToObject: "+handlerparams.AliasFromType(elem))
+			case pairs:
+				return nil, arrayToObjectError(handlererrors.ErrArrayToObjectArraysExpected,
+					"$arrayToObject requires a consistent input format. Elements must all be arrays or all be objects. "+
+						"Array was detected, now found: "+handlerparams.AliasFromType(elem))
+			default:
+				return nil, arrayToObjectError(handlererrors.ErrArrayToObjectObjectsExpected,
+					"$arrayToObject requires a consistent input format. Elements must all be arrays or all be objects. "+
+						"Object was detected, now found: "+handlerparams.AliasFromType(elem))
+			}
 		}
-
-		if iterErr != nil {
-			return nil, iterErr
-		}
-
-		pair, ok := elem.(*types.Document)
-		if !ok {
-			return nil, newOperatorError(ErrArgsInvalidLen, "$arrayToObject",
-				"$arrayToObject requires an array of objects with 'k' and 'v' fields")
-		}
-
-		kv, err := pair.Get("k")
-		if err != nil {
-			return nil, newOperatorError(ErrArgsInvalidLen, "$arrayToObject",
-				"$arrayToObject element must have a 'k' field")
-		}
-
-		key, ok := kv.(string)
-		if !ok {
-			return nil, newOperatorError(ErrArgsInvalidLen, "$arrayToObject",
-				"$arrayToObject element 'k' field must be a string")
-		}
-
-		val, err := pair.Get("v")
-		if err != nil {
-			return nil, newOperatorError(ErrArgsInvalidLen, "$arrayToObject",
-				"$arrayToObject element must have a 'v' field")
-		}
-
-		result.Set(key, val)
+		result.Set(key.(string), val)
 	}
 
 	return result, nil
+}
+
+func arrayToObjectError(code handlererrors.ErrorCode, msg string) error {
+	return handlererrors.NewCommandErrorMsgWithArgument(code, msg, "$arrayToObject")
 }
 
 var _ Operator = (*arrayToObjectOp)(nil)

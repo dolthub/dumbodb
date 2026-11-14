@@ -34,6 +34,7 @@ type sortArrayOp struct {
 	// fields is nil to sort whole values in order (1 or -1).
 	fields []sortArrayField
 	order  int
+	collated
 }
 
 type sortArrayField struct {
@@ -146,17 +147,23 @@ func (op *sortArrayOp) Process(doc *types.Document) (any, error) {
 		return arr, nil
 	}
 
-	values := make([]any, arr.Len())
-	for i := range values {
-		values[i] = must.NotFail(arr.Get(i))
+	// Each element is keyed under the collation once, not per comparison.
+	keyed := make([][2]any, arr.Len())
+	for i := range keyed {
+		v := must.NotFail(arr.Get(i))
+		keyed[i] = [2]any{v, op.cmp.KeyValue(v)}
 	}
-	stdsort.Sort(values, op.less)
+	stdsort.Sort(keyed, func(a, b [2]any) bool { return op.less(a[1], b[1]) })
+	values := make([]any, len(keyed))
+	for i, e := range keyed {
+		values[i] = e[0]
+	}
 	return must.NotFail(types.NewArray(values...)), nil
 }
 
 // less is PatternValueCmp: whole values compare in BSON order; otherwise
 // each element is keyed by the pattern's fields, missing ones and every
-// field of a non-document being null.
+// field of a non-document being null. a and b are collation keys.
 func (op *sortArrayOp) less(a, b any) bool {
 	if op.fields == nil {
 		if op.order < 0 {

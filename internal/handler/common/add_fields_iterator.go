@@ -37,7 +37,7 @@ func AddFieldsIterator(iter types.DocumentsIterator, closer *iterator.MultiClose
 	res := &addFieldsIterator{
 		iter:     iter,
 		newField: newField,
-		tree:     operators.SpecHasComputedPath(newField, false) || specHasArrayValue(newField),
+		tree:     operators.SpecHasComputedPath(newField, false) || specHasArrayValue(newField) || specHasDottedKey(newField),
 	}
 	closer.Add(res)
 
@@ -50,6 +50,15 @@ type addFieldsIterator struct {
 	// tree is set when a field is computed below the top level or is an array
 	// literal, which operators.AddFieldsTree evaluates.
 	tree bool
+}
+
+func specHasDottedKey(spec *types.Document) bool {
+	for _, k := range spec.Keys() {
+		if strings.Contains(k, ".") {
+			return true
+		}
+	}
+	return false
 }
 
 func specHasArrayValue(spec *types.Document) bool {
@@ -79,7 +88,11 @@ func (iter *addFieldsIterator) Next() (struct{}, *types.Document, error) {
 		return unused, doc, nil
 	}
 
-	for _, key := range iter.newField.Keys() {
+	// Every field is evaluated against the input document before any is set.
+	keys := iter.newField.Keys()
+	values := make([]any, len(keys))
+	missing := make([]bool, len(keys))
+	for i, key := range keys {
 		val := must.NotFail(iter.newField.Get(key))
 
 		switch v := val.(type) {
@@ -95,33 +108,47 @@ func (iter *addFieldsIterator) Next() (struct{}, *types.Document, error) {
 
 			val, err = op.Process(doc)
 			if errors.Is(err, operators.ErrMissingValue) {
-				// A missing value removes the field, as in MongoDB.
-				doc.Remove(key)
+				missing[i] = true
 				continue
 			}
 			if err = processAddFieldsError(err); err != nil {
 				return unused, nil, err
 			}
 		case string:
-			// Evaluate field reference expressions like "$fieldName".
 			// Non-expression strings (no "$" prefix) are used as literals.
-			if strings.HasPrefix(v, "$") {
+			if strings.HasPrefix(v, "$$") {
+				evaluated, isMissing, evalErr := operators.EvalOperand(v, doc)
+				if evalErr != nil {
+					return unused, nil, processAddFieldsError(evalErr)
+				}
+				if isMissing {
+					missing[i] = true
+					continue
+				}
+				val = evaluated
+			} else if strings.HasPrefix(v, "$") {
 				expr, exprErr := aggregations.NewExpression(v, nil)
 				if exprErr == nil {
 					evaluated, evalErr := expr.Evaluate(doc)
-					if evalErr == nil {
-						val = evaluated
-					} else {
-						// A missing value removes the field, as in MongoDB.
-						doc.Remove(key)
+					if evalErr != nil {
+						missing[i] = true
 						continue
 					}
+					val = evaluated
 				}
-				// If NewExpression fails (e.g. invalid syntax), fall through and set literal.
 			}
 		}
 
-		doc.Set(key, val)
+		values[i] = val
+	}
+
+	for i, key := range keys {
+		// A missing value removes the field, as in MongoDB.
+		if missing[i] {
+			doc.Remove(key)
+		} else {
+			doc.Set(key, values[i])
+		}
 	}
 
 	return unused, doc, nil
@@ -202,6 +229,9 @@ func ValidateAddFieldsExpressions(stage string, spec *types.Document) error {
 }
 
 func validateSpecValue(stage string, v any) error {
+	if err := operators.CheckFieldPaths(v); err != nil {
+		return stageExpressionError(err, stage)
+	}
 	switch v := v.(type) {
 	case *types.Array:
 		for i := range v.Len() {
