@@ -617,6 +617,18 @@ const (
 	// ErrZipInputsNotArray indicates $zip inputs that are not an array of expressions.
 	ErrZipInputsNotArray = ErrorCode(34461) // Location34461
 
+	// ErrMapNotObject indicates a $map argument that is not an object.
+	ErrMapNotObject = ErrorCode(16878) // Location16878
+
+	// ErrMapUnknownParameter indicates an unknown $map parameter.
+	ErrMapUnknownParameter = ErrorCode(16879) // Location16879
+
+	// ErrMapMissingInput indicates a $map without input.
+	ErrMapMissingInput = ErrorCode(16880) // Location16880
+
+	// ErrMapMissingIn indicates a $map without in.
+	ErrMapMissingIn = ErrorCode(16882) // Location16882
+
 	// ErrZipNotObject indicates a $zip argument that is not an object.
 	ErrZipNotObject = ErrorCode(34460) // Location34460
 

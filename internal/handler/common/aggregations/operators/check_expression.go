@@ -230,20 +230,36 @@ func checkIterating(v *types.Document, scope map[string]bool) error {
 	if spec == nil {
 		return nil
 	}
+	body := "in"
+	allowed := map[string]bool{"input": true, "as": true, "in": true}
+	if v.Command() == "$filter" {
+		body = "cond"
+		allowed = map[string]bool{"input": true, "as": true, "cond": true, "limit": true}
+	}
+	// The operator reports unknown and missing fields first.
+	for _, k := range spec.Keys() {
+		if !allowed[k] {
+			return nil
+		}
+	}
+	if !spec.Has("input") || !spec.Has(body) {
+		return nil
+	}
+	if err := checkExpression(must.NotFail(spec.Get("input")), scope); err != nil {
+		return err
+	}
 	name := "this"
 	if as, err := spec.Get("as"); err == nil {
-		if s, ok := as.(string); ok {
-			if err := CheckUserVariableName(s); err != nil {
-				return err
-			}
-			name = s
+		name, _ = as.(string)
+		if err := CheckUserVariableName(name); err != nil {
+			return err
 		}
 	}
 	inner := withVariables(scope, name)
 	for _, k := range spec.Keys() {
 		switch k {
-		case "as":
-		case "in", "cond":
+		case "input", "as":
+		case body:
 			if err := checkExpression(must.NotFail(spec.Get(k)), inner); err != nil {
 				return err
 			}

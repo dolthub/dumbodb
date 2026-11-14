@@ -711,16 +711,28 @@ func newFilter(args ...any) (Operator, error) {
 			"Missing 'cond' parameter to $filter", "$filter")
 	}
 
-	asName := "this"
-	if asV, err := doc.Get("as"); err == nil {
-		if s, ok := asV.(string); ok {
-			asName = s
-		}
+	asName, err := iterationVariableName(doc)
+	if err != nil {
+		return nil, err
 	}
 
 	limitArg, _ := doc.Get("limit")
 
 	return &filterOp{inputArg: inputArg, asName: asName, condArg: condArg, limitArg: limitArg}, nil
+}
+
+// iterationVariableName returns the variable named by the 'as' field of a
+// $map or $filter, where mongod reads any non-string value as an empty name.
+func iterationVariableName(spec *types.Document) (string, error) {
+	asV, err := spec.Get("as")
+	if err != nil {
+		return "this", nil
+	}
+	name, _ := asV.(string)
+	if err := CheckUserVariableName(name); err != nil {
+		return "", err
+	}
+	return name, nil
 }
 
 func (op *filterOp) Process(doc *types.Document) (any, error) {
@@ -827,31 +839,37 @@ type mapOp struct {
 }
 
 func newMap(args ...any) (Operator, error) {
-	if len(args) != 1 {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$map",
-			"$map requires a document with 'input', 'in' fields")
+	fail := func(code handlererrors.ErrorCode, msg string) error {
+		return handlererrors.NewCommandErrorMsgWithArgument(code, msg, "$map")
 	}
-
-	doc, ok := args[0].(*types.Document)
-	if !ok {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$map", "$map requires a document argument")
+	var doc *types.Document
+	if len(args) == 1 {
+		doc, _ = args[0].(*types.Document)
+	}
+	if doc == nil {
+		return nil, fail(handlererrors.ErrMapNotObject, "$map only supports an object as its argument")
+	}
+	for _, k := range doc.Keys() {
+		switch k {
+		case "input", "as", "in":
+		default:
+			return nil, fail(handlererrors.ErrMapUnknownParameter, "Unrecognized parameter to $map: "+k)
+		}
 	}
 
 	inputArg, err := doc.Get("input")
 	if err != nil {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$map", "Missing 'input' parameter to $map")
+		return nil, fail(handlererrors.ErrMapMissingInput, "Missing 'input' parameter to $map")
 	}
 
 	inArg, err := doc.Get("in")
 	if err != nil {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$map", "Missing 'in' parameter to $map")
+		return nil, fail(handlererrors.ErrMapMissingIn, "Missing 'in' parameter to $map")
 	}
 
-	asName := "this"
-	if asV, err := doc.Get("as"); err == nil {
-		if s, ok := asV.(string); ok {
-			asName = s
-		}
+	asName, err := iterationVariableName(doc)
+	if err != nil {
+		return nil, err
 	}
 
 	return &mapOp{inputArg: inputArg, asName: asName, inArg: inArg}, nil
