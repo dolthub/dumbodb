@@ -32,18 +32,42 @@ type keptMemory struct {
 	bytes int
 	count int
 	sbe   bool
+	// stored says the kept values are read from stored documents, which SBE
+	// keeps as views of their BSON.
+	stored bool
+	// charges is how many times each value is charged; 0 means once.
+	charges int
 }
 
 func (m *keptMemory) size(v any) int {
-	if m.sbe {
-		return sbeValueSize(v)
+	var size int
+	switch {
+	case m.sbe && m.stored:
+		size = sbeStoredValueSize(v)
+	case m.sbe:
+		size = sbeValueSize(v)
+	default:
+		size = classicValueSize(v)
 	}
-	return classicValueSize(v)
+	return size * max(m.charges, 1)
 }
 
-// sbeValueSize approximates the memory of v in an SBE array slot: a type tag
-// and an 8-byte value, and the heap of a long string, a binData, an array or
-// a document.
+// sbeStoredValueSize approximates the memory of a value SBE reads from a
+// stored document: a slot and, for a string, binData, array or document, its
+// BSON.
+func sbeStoredValueSize(v any) int {
+	const slot = 9
+	switch v.(type) {
+	case string, types.Binary, *types.Array, *types.Document:
+		return slot + types.BSONValueSize(v)
+	}
+	return slot
+}
+
+// sbeValueSize approximates the memory of a value SBE builds, in an array
+// slot: a type tag and an 8-byte value, and the heap of a long string, a
+// binData, an array or a document. The arrays and documents it holds are
+// views of stored BSON.
 func sbeValueSize(v any) int {
 	const slot, header = 9, 24
 	switch v := v.(type) {
@@ -56,18 +80,28 @@ func sbeValueSize(v any) int {
 	case *types.Array:
 		size := slot + header
 		for i := range v.Len() {
-			size += sbeValueSize(must.NotFail(v.Get(i)))
+			size += sbeElementSize(must.NotFail(v.Get(i)))
 		}
 		return size
 	case *types.Document:
 		size := slot + header
 		keys, values := v.Keys(), v.Values()
 		for i, k := range keys {
-			size += len(k) + sbeValueSize(values[i])
+			size += len(k) + sbeElementSize(values[i])
 		}
 		return size
 	}
 	return slot
+}
+
+// sbeElementSize is the size of an element of an array or document SBE
+// builds.
+func sbeElementSize(v any) int {
+	switch v.(type) {
+	case *types.Array, *types.Document:
+		return sbeStoredValueSize(v)
+	}
+	return sbeValueSize(v)
 }
 
 // classicValueSize approximates the memory of v as the classic engine's
@@ -121,6 +155,10 @@ func (m *keptMemory) keep(v any, op string) error {
 	case "$firstN", "$lastN", "$minN", "$maxN", "$topN", "$bottomN", "$top", "$bottom":
 		msg = fmt.Sprintf("Accumulator used too much memory and spilling to disk cannot reduce memory consumption any further. "+
 			"Memory limit: %d bytes", accumulatorMemoryLimit)
+		if !m.sbe {
+			msg = fmt.Sprintf("%s used too much memory and spilling to disk cannot reduce memory consumption any further. "+
+				"Used: %d bytes. Memory limit: %d bytes", op, m.bytes, accumulatorMemoryLimit)
+		}
 	}
 	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrExceededMemoryLimit, msg, op)
 }

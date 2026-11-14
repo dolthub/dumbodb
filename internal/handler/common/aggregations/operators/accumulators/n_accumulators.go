@@ -193,12 +193,12 @@ func (a *nAccumulator) UseSBE() error {
 }
 
 func (a *nAccumulator) New() Accumulation {
-	return &nState{spec: a, mem: keptMemory{sbe: a.n.sbe}}
+	return &nState{spec: a, mem: keptMemory{sbe: a.n.sbe, stored: a.input.readsStoredValue()}}
 }
 
 // NewCollated returns an accumulation that orders strings under cmp.
 func (a *nAccumulator) NewCollated(cmp *collation.Comparator) Accumulation {
-	return &nState{spec: a, mem: keptMemory{sbe: a.n.sbe}, cmp: cmp}
+	return &nState{spec: a, mem: keptMemory{sbe: a.n.sbe, stored: a.input.readsStoredValue()}, cmp: cmp}
 }
 
 type nState struct {
