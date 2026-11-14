@@ -20,11 +20,15 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // MergeBatchSize is the most documents $merge passes to its MergeFunc at
@@ -39,8 +43,13 @@ type MergeParams struct {
 	CollName       string
 	Docs           []*types.Document
 	On             []string // match fields; defaults to ["_id"]
-	WhenMatched    string   // "merge" | "replace" | "keepExisting" | "fail"
+	WhenMatched    string   // "merge" | "replace" | "keepExisting" | "fail" | "pipeline"
 	WhenNotMatched string   // "insert" | "discard" | "fail"
+
+	// ApplyWhenMatched, for WhenMatched "pipeline", parses the pipeline for
+	// Docs[i] and returns the matched document existing updated by it, or
+	// nil when existing is nil.
+	ApplyWhenMatched func(ctx context.Context, existing *types.Document, i int) (*types.Document, error)
 }
 
 // MergeFunc is a callback that merges pipeline results into the named collection.
@@ -69,6 +78,11 @@ type merge struct {
 	whenMatched    string
 	whenNotMatched string
 	merger         MergeFunc
+
+	// whenMatchedPipeline, when whenMatched is "pipeline", updates each
+	// matched document; let holds the variables it reads besides new.
+	whenMatchedPipeline *types.Array
+	let                 *types.Document
 }
 
 // validWhenMatched and validWhenNotMatched list accepted option values.
@@ -116,19 +130,7 @@ func NewMergeStage(stage *types.Document, sourceDB string, merger MergeFunc) (ag
 		s.targetColl = v
 
 	case *types.Document:
-		if err = parseMergeInto(v, s); err != nil {
-			return nil, err
-		}
-
-		if err = parseMergeOn(v, s); err != nil {
-			return nil, err
-		}
-
-		if err = parseMergeWhenMatched(v, s); err != nil {
-			return nil, err
-		}
-
-		if err = parseMergeWhenNotMatched(v, s); err != nil {
+		if err = parseMergeSpec(v, s); err != nil {
 			return nil, err
 		}
 
@@ -151,193 +153,241 @@ func NewMergeStage(stage *types.Document, sourceDB string, merger MergeFunc) (ag
 	return s, nil
 }
 
-// parseMergeInto extracts the "into" field from the $merge spec document.
-func parseMergeInto(spec *types.Document, s *merge) error {
-	intoVal, err := spec.Get("into")
-	if err != nil {
-		return handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrBadValue,
-			"$merge requires an 'into' field",
-			"$merge (stage)",
-		)
+// parseMergeSpec parses the $merge specification document, checking its
+// fields in order as mongod's IDL parser does, then the whenMatched pipeline
+// and the let variables.
+func parseMergeSpec(spec *types.Document, s *merge) error {
+	fail := func(code handlererrors.ErrorCode, msg string) error {
+		return handlererrors.NewCommandErrorMsgWithArgument(code, msg, "$merge (stage)")
 	}
 
-	switch v := intoVal.(type) {
+	var hasInto bool
+	values := spec.Values()
+	for i, key := range spec.Keys() {
+		v := values[i]
+		var err error
+		switch key {
+		case "into":
+			hasInto = true
+			err = parseMergeInto(v, s)
+		case "on":
+			err = parseMergeOn(v, s)
+		case "let":
+			switch let := v.(type) {
+			case types.NullType:
+			case *types.Document:
+				s.let = let
+			default:
+				err = fail(handlererrors.ErrTypeMismatch, fmt.Sprintf(
+					"BSON field '$merge.let' is the wrong type '%s', expected type 'object'", handlerparams.AliasFromType(v)))
+			}
+		case "whenMatched":
+			err = parseMergeWhenMatched(v, s)
+		case "whenNotMatched":
+			switch mode := v.(type) {
+			case types.NullType:
+			case string:
+				if _, valid := validWhenNotMatched[mode]; !valid {
+					err = fail(handlererrors.ErrBadValue, fmt.Sprintf(
+						"Enumeration value '%s' for field '$merge.whenNotMatched' is not a valid value.", mode))
+				}
+				s.whenNotMatched = mode
+			default:
+				err = fail(handlererrors.ErrTypeMismatch, fmt.Sprintf(
+					"BSON field '$merge.whenNotMatched' is the wrong type '%s', expected type 'string'", handlerparams.AliasFromType(v)))
+			}
+		default:
+			err = fail(handlererrors.ErrIDLUnknownField, fmt.Sprintf("BSON field '$merge.%s' is an unknown field.", key))
+		}
+		if err != nil {
+			return err
+		}
+	}
+	if !hasInto {
+		return fail(handlererrors.ErrMissingField, "BSON field '$merge.into' is missing but a required field")
+	}
+
+	seen := make(map[string]bool, len(s.on))
+	for _, field := range s.on {
+		if err := checkFieldPathArgument(field, "$merge"); err != nil {
+			return err
+		}
+		if seen[field] {
+			return fail(handlererrors.ErrMergeOnDuplicateField, fmt.Sprintf("Found a duplicate field '%s'", field))
+		}
+		seen[field] = true
+	}
+
+	if s.whenMatchedPipeline != nil {
+		if err := LiteParsePipeline(s.whenMatchedPipeline); err != nil {
+			return err
+		}
+	}
+
+	if s.let == nil {
+		return nil
+	}
+	if s.whenMatchedPipeline == nil {
+		return fail(handlererrors.ErrMergeLetWithoutPipeline,
+			fmt.Sprintf("Cannot use 'let' variables with 'whenMatched: %s' mode", s.whenMatched))
+	}
+	if newVar, err := s.let.Get("new"); err == nil && newVar != "$$ROOT" {
+		return fail(handlererrors.ErrMergeLetNew,
+			"'let' may not define a value for the reserved 'new' variable other than '$$ROOT'")
+	}
+	letValues := s.let.Values()
+	for i, name := range s.let.Keys() {
+		if name == "new" {
+			continue
+		}
+		if err := checkMergeLetExpression(letValues[i]); err != nil {
+			return err
+		}
+		if err := operators.CheckUserVariableName(name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkMergeLetExpression returns the error mongod reports parsing a $merge
+// let value: a bad field path, an undefined variable, or an operator that does
+// not parse.
+func checkMergeLetExpression(expr any) error {
+	if err := operators.CheckFieldPaths(expr); err != nil {
+		return err
+	}
+	switch v := expr.(type) {
+	case *types.Document:
+		if operators.IsOperator(v) {
+			return operators.CheckExpressionShape(v)
+		}
+		for _, field := range v.Values() {
+			if err := checkMergeLetExpression(field); err != nil {
+				return err
+			}
+		}
+	case *types.Array:
+		for i := range v.Len() {
+			if err := checkMergeLetExpression(must.NotFail(v.Get(i))); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// parseMergeInto parses the $merge "into" field.
+func parseMergeInto(into any, s *merge) error {
+	fail := func(code handlererrors.ErrorCode, msg string) error {
+		return handlererrors.NewCommandErrorMsgWithArgument(code, msg, "$merge (stage)")
+	}
+
+	switch v := into.(type) {
 	case string:
 		if v == "" {
-			return handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrInvalidNamespace,
-				"$merge 'into' is an empty string",
-				"$merge (stage)",
-			)
+			return fail(handlererrors.ErrMergeIntoEmpty, "$merge 'into' field cannot be an empty string")
 		}
-
 		s.targetColl = v
 
 	case *types.Document:
-		// optional "db" field
-		if dbVal, dbErr := v.Get("db"); dbErr == nil {
-			dbStr, ok := dbVal.(string)
-			if !ok || dbStr == "" {
-				return handlererrors.NewCommandErrorMsgWithArgument(
-					handlererrors.ErrBadValue,
-					"$merge 'into.db' must be a non-empty string",
-					"$merge (stage)",
-				)
+		values := v.Values()
+		for i, key := range v.Keys() {
+			var dst *string
+			switch key {
+			case "db":
+				dst = &s.targetDB
+			case "coll":
+				dst = &s.targetColl
+			default:
+				return fail(handlererrors.ErrIDLUnknownField, fmt.Sprintf("BSON field 'into.%s' is an unknown field.", key))
 			}
-
-			s.targetDB = dbStr
+			switch name := values[i].(type) {
+			case types.NullType:
+			case string:
+				if name != "" {
+					*dst = name
+				}
+			default:
+				return fail(handlererrors.ErrTypeMismatch, fmt.Sprintf(
+					"BSON field 'into.%s' is the wrong type '%s', expected type 'string'", key, handlerparams.AliasFromType(values[i])))
+			}
 		}
-
-		// required "coll" field
-		collVal, collErr := v.Get("coll")
-		if collErr != nil {
-			return handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrBadValue,
-				"$merge 'into' document must have a 'coll' field",
-				"$merge (stage)",
-			)
+		if s.targetColl == "" {
+			return fail(handlererrors.ErrMergeIntoNoColl,
+				"$merge 'into' field must specify a 'coll' that is not empty, null or undefined")
 		}
-
-		collStr, ok := collVal.(string)
-		if !ok || collStr == "" {
-			return handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrInvalidNamespace,
-				"$merge 'into.coll' is an empty string",
-				"$merge (stage)",
-			)
-		}
-
-		s.targetColl = collStr
 
 	default:
-		return handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrBadValue,
-			fmt.Sprintf("$merge 'into' must be a string or document, got %T", intoVal),
-			"$merge (stage)",
-		)
+		return fail(handlererrors.ErrMergeIntoType,
+			"$merge 'into' field  must be either a string or an object, but found "+handlerparams.AliasFromType(into))
 	}
 
 	return checkTargetNamespace(s.targetDB, s.targetColl, "$merge")
 }
 
-// parseMergeOn extracts the optional "on" field from the $merge spec document.
-func parseMergeOn(spec *types.Document, s *merge) error {
-	onVal, err := spec.Get("on")
-	if err != nil {
-		// "on" is optional; default (_id) already set
-		return nil //nolint:nilerr // intentionally ignoring "field not found" error
+// parseMergeOn parses the $merge "on" field.
+func parseMergeOn(on any, s *merge) error {
+	fail := func(code handlererrors.ErrorCode, msg string) error {
+		return handlererrors.NewCommandErrorMsgWithArgument(code, msg, "$merge (stage)")
 	}
 
-	switch v := onVal.(type) {
+	switch v := on.(type) {
 	case string:
-		if err := checkFieldPathArgument(v, "$merge"); err != nil {
-			return err
-		}
-
 		s.on = []string{v}
 
 	case *types.Array:
+		if v.Len() == 0 {
+			return fail(handlererrors.ErrMergeOnEmpty, "If explicitly specifying $merge 'on', must include at least one field")
+		}
 		fields := make([]string, 0, v.Len())
-
 		for i := range v.Len() {
-			elem, elemErr := v.Get(i)
-			if elemErr != nil {
-				return lazyerrors.Error(elemErr)
-			}
-
-			fieldStr, ok := elem.(string)
+			elem := must.NotFail(v.Get(i))
+			field, ok := elem.(string)
 			if !ok {
-				return handlererrors.NewCommandErrorMsgWithArgument(
-					handlererrors.ErrBadValue,
-					"$merge 'on' array elements must be non-empty strings",
-					"$merge (stage)",
-				)
+				return fail(handlererrors.ErrMergeOnElementType,
+					"$merge 'on' array elements must be strings, but found "+handlerparams.AliasFromType(elem))
 			}
-			if err := checkFieldPathArgument(fieldStr, "$merge"); err != nil {
-				return err
-			}
-
-			fields = append(fields, fieldStr)
+			fields = append(fields, field)
 		}
-
-		if len(fields) == 0 {
-			return handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrBadValue,
-				"$merge 'on' array must not be empty",
-				"$merge (stage)",
-			)
-		}
-
 		s.on = fields
 
 	default:
-		return handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrBadValue,
-			fmt.Sprintf("$merge 'on' must be a string or array of strings, got %T", onVal),
-			"$merge (stage)",
-		)
+		return fail(handlererrors.ErrMergeOnType,
+			"$merge 'on' field  must be either a string or an array of strings, but found "+handlerparams.AliasFromType(on))
 	}
 
 	return nil
 }
 
-// parseMergeWhenMatched extracts the optional "whenMatched" field.
-func parseMergeWhenMatched(spec *types.Document, s *merge) error {
-	val, err := spec.Get("whenMatched")
-	if err != nil {
-		// optional; default already set
-		return nil //nolint:nilerr // intentionally ignoring "field not found" error
+// parseMergeWhenMatched parses the $merge "whenMatched" field: a mode, or a
+// pipeline that updates the matched document.
+func parseMergeWhenMatched(whenMatched any, s *merge) error {
+	fail := func(code handlererrors.ErrorCode, msg string) error {
+		return handlererrors.NewCommandErrorMsgWithArgument(code, msg, "$merge (stage)")
 	}
 
-	str, ok := val.(string)
-	if !ok {
-		return handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrBadValue,
-			fmt.Sprintf("$merge 'whenMatched' must be a string, got %T", val),
-			"$merge (stage)",
-		)
+	switch v := whenMatched.(type) {
+	case string:
+		if _, valid := validWhenMatched[v]; !valid {
+			return fail(handlererrors.ErrBadValue, fmt.Sprintf("Enumeration value '%s' for field 'whenMatched' is not a valid value.", v))
+		}
+		s.whenMatched = v
+		s.whenMatchedPipeline = nil
+
+	case *types.Array:
+		for i := range v.Len() {
+			if _, ok := must.NotFail(v.Get(i)).(*types.Document); !ok {
+				return fail(handlererrors.ErrTypeMismatch, "Each element of the 'pipeline' array must be an object")
+			}
+		}
+		s.whenMatched = "pipeline"
+		s.whenMatchedPipeline = v
+
+	default:
+		return fail(handlererrors.ErrMergeWhenMatchedType,
+			"$merge 'whenMatched' field  must be either a string or an array, but found "+handlerparams.AliasFromType(whenMatched))
 	}
-
-	if _, valid := validWhenMatched[str]; !valid {
-		return handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrBadValue,
-			fmt.Sprintf("$merge 'whenMatched' must be one of: merge, replace, keepExisting, fail; got %q", str),
-			"$merge (stage)",
-		)
-	}
-
-	s.whenMatched = str
-
-	return nil
-}
-
-// parseMergeWhenNotMatched extracts the optional "whenNotMatched" field.
-func parseMergeWhenNotMatched(spec *types.Document, s *merge) error {
-	val, err := spec.Get("whenNotMatched")
-	if err != nil {
-		// optional; default already set
-		return nil //nolint:nilerr // intentionally ignoring "field not found" error
-	}
-
-	str, ok := val.(string)
-	if !ok {
-		return handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrBadValue,
-			fmt.Sprintf("$merge 'whenNotMatched' must be a string, got %T", val),
-			"$merge (stage)",
-		)
-	}
-
-	if _, valid := validWhenNotMatched[str]; !valid {
-		return handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrBadValue,
-			fmt.Sprintf("$merge 'whenNotMatched' must be one of: insert, discard, fail; got %q", str),
-			"$merge (stage)",
-		)
-	}
-
-	s.whenNotMatched = str
 
 	return nil
 }
@@ -351,20 +401,28 @@ func (s *merge) Process(ctx context.Context, iter types.DocumentsIterator, close
 	defer iter.Close()
 
 	var batch []*types.Document
+	var batchVars []map[string]any
 	var batchBytes int
 	flush := func() error {
 		if len(batch) == 0 {
 			return nil
 		}
-		err := s.merger(ctx, &MergeParams{
+		params := &MergeParams{
 			DBName:         s.targetDB,
 			CollName:       s.targetColl,
 			Docs:           batch,
 			On:             s.on,
 			WhenMatched:    s.whenMatched,
 			WhenNotMatched: s.whenNotMatched,
-		})
-		batch, batchBytes = nil, 0
+		}
+		if s.whenMatchedPipeline != nil {
+			vars := batchVars
+			params.ApplyWhenMatched = func(ctx context.Context, existing *types.Document, i int) (*types.Document, error) {
+				return s.applyWhenMatched(ctx, existing, vars[i])
+			}
+		}
+		err := s.merger(ctx, params)
+		batch, batchVars, batchBytes = nil, nil, 0
 		return err
 	}
 
@@ -379,6 +437,14 @@ func (s *merge) Process(ctx context.Context, iter types.DocumentsIterator, close
 
 		if err = s.checkWrittenDocument(doc); err != nil {
 			return nil, err
+		}
+
+		if s.whenMatchedPipeline != nil {
+			vars, err := s.evalLet(doc)
+			if err != nil {
+				return nil, err
+			}
+			batchVars = append(batchVars, vars)
 		}
 
 		batch = append(batch, doc)
@@ -399,6 +465,84 @@ func (s *merge) Process(ctx context.Context, iter types.DocumentsIterator, close
 	closer.Add(empty)
 
 	return empty, nil
+}
+
+// evalLet returns the variables the whenMatched pipeline reads for the
+// incoming document doc: new, and each let variable whose value is not
+// missing.
+func (s *merge) evalLet(doc *types.Document) (map[string]any, error) {
+	vars := map[string]any{"new": doc}
+	if s.let == nil {
+		return vars, nil
+	}
+	values := s.let.Values()
+	for i, name := range s.let.Keys() {
+		if name == "new" {
+			continue
+		}
+		v, missing, err := operators.EvalOperand(values[i], doc)
+		if err != nil {
+			return nil, err
+		}
+		if !missing {
+			vars[name] = v
+		}
+	}
+	return vars, nil
+}
+
+// applyWhenMatched parses the whenMatched pipeline with vars bound and
+// returns existing updated by it, or nil for a nil existing. Like mongod,
+// which parses it for each document it writes, a pipeline that does not parse
+// is an error only once a document reaches $merge.
+func (s *merge) applyWhenMatched(ctx context.Context, existing *types.Document, vars map[string]any) (*types.Document, error) {
+	pipelineStages, err := newUpdatePipeline(substituteVarsInPipeline(s.whenMatchedPipeline, vars))
+	if err != nil {
+		var malformed *common.MalformedPipelineError
+		if errors.As(err, &malformed) {
+			return nil, malformed.Err
+		}
+		return nil, err
+	}
+	if existing == nil {
+		return nil, nil
+	}
+
+	closer := iterator.NewMultiCloser()
+	defer closer.Close()
+
+	var iter types.DocumentsIterator = iterator.Values(iterator.ForSlice([]*types.Document{existing.DeepCopy()}))
+	closer.Add(iter)
+	for _, stage := range pipelineStages {
+		if iter, err = stage.Process(ctx, iter, closer); err != nil {
+			return nil, err
+		}
+	}
+	_, updated, err := iter.Next()
+	if err != nil {
+		return nil, err
+	}
+
+	id, err := existing.Get("_id")
+	if err != nil {
+		return updated, nil
+	}
+	newID, err := updated.Get("_id")
+	if err != nil {
+		withID := must.NotFail(types.NewDocument("_id", id))
+		values := updated.Values()
+		for i, key := range updated.Keys() {
+			withID.Set(key, values[i])
+		}
+		return withID, nil
+	}
+	if types.Compare(newID, id) != types.Equal {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrImmutableField,
+			"$merge failed to update the matching document, did you attempt to modify the _id or the shard key? :: caused by :: "+
+				"After applying the update, the (immutable) field '_id' was found to have been altered to _id: "+types.FormatAnyValue(newID),
+			"$merge")
+	}
+	return updated, nil
 }
 
 var (
