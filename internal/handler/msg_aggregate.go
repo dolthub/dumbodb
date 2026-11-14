@@ -721,9 +721,9 @@ func checkDatabaseStagePositions(pipeline *types.Array) error {
 			return nil
 		}
 		switch name := stage.Command(); name {
-		case "$queryStats", "$listCatalog", "$querySettings":
-			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCollStatsIsNotFirstStage,
-				name+" is only valid as the first stage in a pipeline", name+" (stage)")
+		case "$queryStats", "$listCatalog", "$querySettings", "$currentOp", "$listLocalSessions",
+			"$documents", "$collStats", "$indexStats":
+			return firstStageOnlyError(name)
 		case "$listClusterCatalog":
 			// mongod expands $listClusterCatalog into stages led by
 			// $_internalListCollections and reports that stage's name.
@@ -889,16 +889,21 @@ func (h *Handler) aggregateDatabase(connCtx context.Context, document *types.Doc
 		if err := stages.CheckCurrentOpSpec(firstStage); err != nil {
 			return nil, err
 		}
-	}
-	if stageName == "$currentOp" && dbName != "admin" {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrInvalidNamespace,
-			"$currentOp must be run against the 'admin' database with {aggregate: 1}",
-			document.Command(),
-		)
+		if dbName != "admin" {
+			return nil, currentOpNamespaceError()
+		}
 	}
 
 	switch stageName {
+	case "$currentOp":
+		// DumboDB reports no operations.
+		return h.aggregateSourceDocuments(connCtx, document, nil, pipeline, dbName)
+	case "$listLocalSessions":
+		sessions, err := h.listLocalSessions(connCtx, firstStage)
+		if err != nil {
+			return nil, err
+		}
+		return h.aggregateSourceDocuments(connCtx, document, sessions, pipeline, dbName)
 	case "$documents":
 		return h.aggregateDocuments(connCtx, document, firstStage, pipeline, dbName)
 	case "$queryStats", "$querySettings":
@@ -909,10 +914,6 @@ func (h *Handler) aggregateDatabase(connCtx context.Context, document *types.Doc
 	case "$listCatalog":
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrNotImplemented,
 			stageName+" is not implemented", stageName+" (stage)")
-	}
-
-	if stageName == "$listLocalSessions" {
-		return h.aggregateListLocalSessions(connCtx, dbName, firstStage)
 	}
 
 	return documentOpMsg(
@@ -927,18 +928,18 @@ func (h *Handler) aggregateDatabase(connCtx context.Context, document *types.Doc
 	)
 }
 
-// aggregateListLocalSessions implements the $listLocalSessions source
-// stage: one document per logical session cached on this node and owned by a
+// listLocalSessions returns the documents of the $listLocalSessions source
+// stage: one per logical session cached on this node and owned by a
 // principal the spec selects. Each session's _id.id is the lsid UUID and
 // _id.uid is SHA256("user@db") (SHA256("") when unauthenticated), matching
 // MongoDB's session identity encoding.
-func (h *Handler) aggregateListLocalSessions(connCtx context.Context, dbName string, stage *types.Document) (*wire.OpMsg, error) {
+func (h *Handler) listLocalSessions(connCtx context.Context, stage *types.Document) ([]*types.Document, error) {
 	spec, err := parseListSessionsSpec(stage, conninfo.Get(connCtx).SessionPrincipal())
 	if err != nil {
 		return nil, err
 	}
 
-	firstBatch := types.MakeArray(0)
+	var sessions []*types.Document
 	if reg := h.SessionRegistry(); reg != nil {
 		for _, s := range reg.Snapshot() {
 			principal, id, ok := conninfo.SplitSessionKey(s.Lsid)
@@ -953,7 +954,7 @@ func (h *Handler) aggregateListLocalSessions(connCtx context.Context, dbName str
 				continue
 			}
 			uidSum := sha256.Sum256([]byte(sessionUserDigestName(principal)))
-			firstBatch.Append(must.NotFail(types.NewDocument(
+			sessions = append(sessions, must.NotFail(types.NewDocument(
 				"_id", must.NotFail(types.NewDocument(
 					"id", types.Binary{Subtype: types.BinaryUUID, B: idBytes},
 					"uid", types.Binary{Subtype: types.BinaryGeneric, B: uidSum[:]},
@@ -962,17 +963,7 @@ func (h *Handler) aggregateListLocalSessions(connCtx context.Context, dbName str
 			)))
 		}
 	}
-
-	return documentOpMsg(
-		must.NotFail(types.NewDocument(
-			"cursor", must.NotFail(types.NewDocument(
-				"firstBatch", firstBatch,
-				"id", int64(0),
-				"ns", dbName+".$cmd.aggregate",
-			)),
-			"ok", float64(1),
-		)),
-	)
+	return sessions, nil
 }
 
 // sessionUserDigestName is the "user@db" name MongoDB hashes into a session
@@ -2212,6 +2203,11 @@ func checkOutMergeFinal(pipeline *types.Array) error {
 		}
 	}
 	return nil
+}
+
+func currentOpNamespaceError() error {
+	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace,
+		"$currentOp must be run against the 'admin' database with {aggregate: 1}", "$currentOp (stage)")
 }
 
 // firstStageOnlyError is mongod's error for the stage name, which must be
