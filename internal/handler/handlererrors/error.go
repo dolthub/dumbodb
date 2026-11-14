@@ -1226,6 +1226,9 @@ const (
 	// ErrMergeModesUnsupported indicates a $merge whenMatched and whenNotMatched pair mongod refuses.
 	ErrMergeModesUnsupported = ErrorCode(51181) // Location51181
 
+	// ErrStageNotFinal indicates $out or $merge before the last stage.
+	ErrStageNotFinal = ErrorCode(40601) // Location40601
+
 	// ErrChangeStreamSpecType indicates a $changeStream specification that is not an object.
 	ErrChangeStreamSpecType = ErrorCode(6188500) // Location6188500
 

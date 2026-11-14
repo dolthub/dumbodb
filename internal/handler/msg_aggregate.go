@@ -191,6 +191,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 	if err = stages.LiteParsePipeline(pipeline); err != nil {
 		return nil, err
 	}
+	userPipeline := pipeline
 	pipeline = operators.BindNowInPipeline(pipeline, operators.CommandNow())
 
 	aggregationStages := must.NotFail(iterator.ConsumeValues(pipeline.Iterator()))
@@ -298,6 +299,13 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			stagesDocuments = append(stagesDocuments, s)
 			stagesSpecs = append(stagesSpecs, d)
 			collStatsDocuments = append(collStatsDocuments, s) // It's possible to apply any stage after $collStats stage
+		}
+	}
+
+	for i := 0; i < userPipeline.Len()-1; i++ {
+		if name := must.NotFail(userPipeline.Get(i)).(*types.Document).Command(); name == "$out" || name == "$merge" {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrStageNotFinal,
+				name+" can only be the final stage in the pipeline", name+" (stage)")
 		}
 	}
 
