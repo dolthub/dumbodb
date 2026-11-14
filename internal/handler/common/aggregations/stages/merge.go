@@ -206,6 +206,10 @@ func parseMergeSpec(spec *types.Document, s *merge) error {
 	if !hasInto {
 		return fail(handlererrors.ErrMissingField, "BSON field '$merge.into' is missing but a required field")
 	}
+	if (s.whenMatched == "keepExisting" || s.whenMatched == "fail") && s.whenNotMatched != "insert" {
+		return fail(handlererrors.ErrMergeModesUnsupported, fmt.Sprintf(
+			"Combination of $merge modes 'whenMatched: %s' and 'whenNotMatched: %s' is not supported", s.whenMatched, s.whenNotMatched))
+	}
 
 	seen := make(map[string]bool, len(s.on))
 	for _, field := range s.on {
