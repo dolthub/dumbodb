@@ -990,6 +990,10 @@ func newZip(args ...any) (Operator, error) {
 	if err != nil {
 		return nil, newOperatorError(ErrArgsInvalidLen, "$zip", "Missing 'inputs' parameter to $zip")
 	}
+	if _, isArray := inputsArg.(*types.Array); !isArray {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrZipInputsNotArray,
+			"inputs must be an array of expressions, found "+handlerparams.AliasFromType(inputsArg), "$zip")
+	}
 
 	useLongest := false
 	if ullV, err := doc.Get("useLongestLength"); err == nil {
@@ -1007,21 +1011,7 @@ func newZip(args ...any) (Operator, error) {
 }
 
 func (op *zipOp) Process(doc *types.Document) (any, error) {
-	inputsV, err := evalArgValue(op.inputsArg, doc)
-	if err != nil {
-		return nil, err
-	}
-
-	if isNullish(inputsV) {
-		return types.Null, nil
-	}
-
-	inputsArr, ok := inputsV.(*types.Array)
-	if !ok {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$zip", "$zip 'inputs' must be an array")
-	}
-
-	inputs, err := arrayToSlice(inputsArr)
+	inputs, err := arrayToSlice(op.inputsArg.(*types.Array))
 	if err != nil {
 		return nil, err
 	}
@@ -1029,13 +1019,17 @@ func (op *zipOp) Process(doc *types.Document) (any, error) {
 	var arrays [][]any
 
 	for _, inp := range inputs {
-		arr, isNull, err := collectArray(inp, doc, "$zip")
+		v, err := evalArgValue(inp, doc)
 		if err != nil {
 			return nil, err
 		}
-
-		if isNull {
+		if isNullish(v) {
 			return types.Null, nil
+		}
+		arr, isArray := v.(*types.Array)
+		if !isArray {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrZipInputNotArray,
+				"$zip found a non-array expression in input: "+types.FormatAnyValue(v), "$zip")
 		}
 
 		items, err := arrayToSlice(arr)
