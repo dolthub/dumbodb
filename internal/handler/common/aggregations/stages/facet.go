@@ -353,6 +353,8 @@ func (f *facet) Process(ctx context.Context, iter types.DocumentsIterator, close
 	// Build the output document.
 	outputDoc := new(types.Document)
 
+	// shared says an earlier branch's output may hold the input documents.
+	var shared bool
 	for i, p := range f.pipelines {
 		// Parse stages at process time to avoid initialization cycle.
 		stageList, parseErr := parsePipelineArray(p.pipelineArr, f.fetcher)
@@ -360,10 +362,13 @@ func (f *facet) Process(ctx context.Context, iter types.DocumentsIterator, close
 			return nil, parseErr
 		}
 
-		// Stages may change documents in place; each branch but the last
-		// works on its own copy so the others see the input unchanged.
+		// Stages may change documents in place, so a branch that can works
+		// on its own copy, unless it is the last and no earlier branch's
+		// output holds the input documents.
 		branchDocs := inputDocs
-		if i < len(f.pipelines)-1 && !readsOnly(p.pipelineArr) {
+		readOnly := readsOnly(p.pipelineArr)
+		shared = shared || readOnly
+		if !readOnly && (i < len(f.pipelines)-1 || shared) {
 			branchDocs = make([]*types.Document, len(inputDocs))
 			for j, doc := range inputDocs {
 				branchDocs[j] = doc.DeepCopy()
