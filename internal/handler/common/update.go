@@ -415,6 +415,16 @@ func RegisterUpdatePipelineParser(parse func(pipeline *types.Array) ([]aggregati
 	parseUpdatePipeline = parse
 }
 
+// MalformedPipelineError is an update pipeline's error from mongod's lite
+// parse, which fails the whole command rather than one statement.
+type MalformedPipelineError struct {
+	Err error
+}
+
+func (e *MalformedPipelineError) Error() string { return e.Err.Error() }
+
+func (e *MalformedPipelineError) Unwrap() error { return e.Err }
+
 // ParseUpdatePipeline returns the stages of a pipeline-style update, or the
 // parse error MongoDB raises for it, a pipeline over the stage limit included.
 func ParseUpdatePipeline(pipeline *types.Array) ([]aggregations.Stage, error) {
