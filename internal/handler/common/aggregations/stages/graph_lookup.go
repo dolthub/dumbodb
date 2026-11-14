@@ -76,29 +76,12 @@ func NewGraphLookupStage(stage *types.Document, fetcher CollectionFetcher) (aggr
 		return handlererrors.NewCommandErrorMsgWithArgument(code, msg, "$graphLookup (stage)")
 	}
 
-	specDoc, ok := spec.(*types.Document)
-	if !ok {
-		return nil, fail(handlererrors.ErrFailedToParse,
-			"the $graphLookup stage specification must be an object, but found "+handlerparams.AliasFromType(spec))
-	}
-
 	// mongod reads 'from' first, then the other fields in order.
-	fromVal, err := specDoc.Get("from")
+	from, err := graphLookupFrom(stage)
 	if err != nil {
-		return nil, fail(handlererrors.ErrFailedToParse,
-			"missing 'from' option to $graphLookup stage specification: "+types.FormatAnyValue(specDoc))
+		return nil, err
 	}
-	from, ok := fromVal.(string)
-	if !ok {
-		if fromDoc, isDoc := fromVal.(*types.Document); isDoc {
-			db, _ := fromDoc.Get("db")
-			coll, _ := fromDoc.Get("coll")
-			return nil, fail(handlererrors.ErrFailedToParse, fmt.Sprintf(
-				"$graphLookup with syntax {from: {db:<>, coll:<>},..} is not supported for db: %v and coll: %v", db, coll))
-		}
-		return nil, fail(handlererrors.ErrFailedToParse,
-			"$graphLookup 'from' field must be a string, but found "+handlerparams.AliasFromType(fromVal))
-	}
+	specDoc := spec.(*types.Document)
 
 	gl := &graphLookup{
 		cmp:      operators.CollationOf(stage),

@@ -16,6 +16,7 @@ package stages
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
@@ -95,11 +96,15 @@ func liteParseStage(stage *types.Document) error {
 				"the $lookup stage specification must be an object, but found "+handlerparams.AliasFromType(spec))
 		}
 		if from, err := doc.Get("from"); err == nil {
-			if _, ok := from.(string); !ok {
-				if _, ok := from.(*types.Document); !ok {
-					return fail(handlererrors.ErrFailedToParse,
-						"$lookup 'from' field must be a string, but found "+handlerparams.AliasFromType(from))
+			switch from := from.(type) {
+			case string:
+				if err := checkLiteNamespace(name, from); err != nil {
+					return err
 				}
+			case *types.Document:
+			default:
+				return fail(handlererrors.ErrFailedToParse,
+					"$lookup 'from' field must be a string, but found "+handlerparams.AliasFromType(from))
 			}
 		}
 		if p, err := doc.Get("pipeline"); err == nil {
@@ -176,30 +181,104 @@ func liteParseStage(stage *types.Document) error {
 		return CheckCurrentOpSpec(stage)
 	case "$collStats":
 		return CheckCollStatsSpec(stage)
-	case "$listLocalSessions":
-		return CheckListLocalSessionsSpec(stage)
+	case "$listLocalSessions", "$listSessions":
+		return CheckListSessionsSpec(stage)
+	case "$listCachedAndActiveUsers":
+		_, err := newListCachedAndActiveUsers(stage)
+		return err
+	case "$graphLookup":
+		_, err := graphLookupFrom(stage)
+		return err
 	}
 	return nil
 }
 
-// CheckListLocalSessionsSpec returns the error mongod's IDL parser gives for
-// a $listLocalSessions specification.
-func CheckListLocalSessionsSpec(stage *types.Document) error {
+// graphLookupFrom returns the collection named by the 'from' field of a
+// $graphLookup stage, or mongod's lite parse error for the field.
+func graphLookupFrom(stage *types.Document) (string, error) {
 	fail := func(code handlererrors.ErrorCode, msg string) error {
-		return handlererrors.NewCommandErrorMsgWithArgument(code, msg, "$listLocalSessions (stage)")
+		return handlererrors.NewCommandErrorMsgWithArgument(code, msg, "$graphLookup (stage)")
+	}
+	spec := must.NotFail(stage.Get("$graphLookup"))
+	specDoc, ok := spec.(*types.Document)
+	if !ok {
+		return "", fail(handlererrors.ErrFailedToParse,
+			"the $graphLookup stage specification must be an object, but found "+handlerparams.AliasFromType(spec))
+	}
+	fromVal, err := specDoc.Get("from")
+	if err != nil {
+		return "", fail(handlererrors.ErrFailedToParse,
+			"missing 'from' option to $graphLookup stage specification: "+types.FormatAnyValue(specDoc))
+	}
+	switch from := fromVal.(type) {
+	case string:
+		return from, checkLiteNamespace("$graphLookup", from)
+	case *types.Document:
+		var db, coll string
+		for _, key := range from.Keys() {
+			v := must.NotFail(from.Get(key))
+			if key != "db" && key != "coll" {
+				return "", fail(handlererrors.ErrIDLUnknownField, "BSON field 'from."+key+"' is an unknown field.")
+			}
+			s, isString := v.(string)
+			if !isString {
+				return "", fail(handlererrors.ErrTypeMismatch, fmt.Sprintf(
+					"BSON field 'from.%s' is the wrong type '%s', expected type 'string'", key, handlerparams.AliasFromType(v)))
+			}
+			if key == "db" {
+				db = s
+			} else {
+				coll = s
+			}
+		}
+		return "", fail(handlererrors.ErrFailedToParse, fmt.Sprintf(
+			"$graphLookup with syntax {from: {db:<>, coll:<>},..} is not supported for db: %s and coll: %s", db, coll))
+	default:
+		return "", fail(handlererrors.ErrFailedToParse,
+			"$graphLookup 'from' field must be a string, but found "+handlerparams.AliasFromType(fromVal))
+	}
+}
+
+// checkLiteNamespace returns mongod's error for a collection name that does
+// not form a valid namespace.
+func checkLiteNamespace(stageName, coll string) error {
+	var msg string
+	switch {
+	case strings.HasPrefix(coll, "."):
+		msg = "Collection names cannot start with '.': " + coll
+	case strings.ContainsRune(coll, 0):
+		msg = "namespaces cannot have embedded null characters"
+	case coll == "":
+		msg = "invalid " + stageName + " namespace"
+	default:
+		return nil
+	}
+	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace, msg, stageName+" (stage)")
+}
+
+// CheckListSessionsSpec returns the error mongod's IDL parser gives for a
+// $listLocalSessions or $listSessions specification.
+func CheckListSessionsSpec(stage *types.Document) error {
+	name := stage.Command()
+	fail := func(code handlererrors.ErrorCode, msg string) error {
+		return handlererrors.NewCommandErrorMsgWithArgument(code, msg, name+" (stage)")
 	}
 	wrongType := func(field string, v any, want string) error {
-		return fail(handlererrors.ErrTypeMismatch, fmt.Sprintf("BSON field '$listLocalSessions.%s' is the wrong type '%s', expected type '%s'",
-			field, handlerparams.AliasFromType(v), want))
+		return fail(handlererrors.ErrTypeMismatch, fmt.Sprintf("BSON field '%s.%s' is the wrong type '%s', expected type '%s'",
+			name, field, handlerparams.AliasFromType(v), want))
 	}
-	spec, ok := must.NotFail(stage.Get("$listLocalSessions")).(*types.Document)
+	spec, ok := must.NotFail(stage.Get(name)).(*types.Document)
 	if !ok {
-		return fail(handlererrors.ErrTypeMismatch, "$listLocalSessions options must be specified in an object, but found: "+
-			handlerparams.AliasFromType(must.NotFail(stage.Get("$listLocalSessions"))))
+		return fail(handlererrors.ErrTypeMismatch, name+" options must be specified in an object, but found: "+
+			handlerparams.AliasFromType(must.NotFail(stage.Get(name))))
 	}
 	for _, key := range spec.Keys() {
 		v := must.NotFail(spec.Get(key))
 		switch key {
+		case "$_internalPredicate":
+			if _, isDoc := v.(*types.Document); !isDoc {
+				return wrongType(key, v, "object")
+			}
 		case "allUsers":
 			if _, isBool := v.(bool); !isBool {
 				return wrongType(key, v, "bool")
@@ -223,18 +302,18 @@ func CheckListLocalSessionsSpec(stage *types.Document) error {
 							return wrongType("users."+k, f, "string")
 						}
 					default:
-						return fail(handlererrors.ErrIDLUnknownField, "BSON field '$listLocalSessions.users."+k+"' is an unknown field.")
+						return fail(handlererrors.ErrIDLUnknownField, "BSON field '"+name+".users."+k+"' is an unknown field.")
 					}
 				}
 				for _, k := range []string{"user", "db"} {
 					if !user.Has(k) {
 						return fail(handlererrors.ErrMissingField,
-							"BSON field '$listLocalSessions.users."+k+"' is missing but a required field")
+							"BSON field '"+name+".users."+k+"' is missing but a required field")
 					}
 				}
 			}
 		default:
-			return fail(handlererrors.ErrIDLUnknownField, "BSON field '$listLocalSessions."+key+"' is an unknown field.")
+			return fail(handlererrors.ErrIDLUnknownField, "BSON field '"+name+"."+key+"' is an unknown field.")
 		}
 	}
 	return nil
