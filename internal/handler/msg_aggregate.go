@@ -1843,88 +1843,16 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 				fmt.Sprintf("Namespace %s.%s is a view, not a collection", params.DBName, params.CollName), "$merge")
 		}
 
-		// A target that does not exist yet matches no document.
-		qRes, err := coll.Query(ctx, new(backends.QueryParams))
-		if err != nil && !backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist, backends.ErrorCodeDatabaseDoesNotExist) {
-			return lazyerrors.Error(err)
-		}
-
-		// An entry is a target document or, with insertAt >= 0, a document
-		// this batch inserts, which a later document with the same key
-		// matches as mongod's sequential upserts do.
-		type existingEntry struct {
+		// An entry is a target document this batch wrote or, with insertAt
+		// >= 0, a document it inserts, which a later document with the same
+		// 'on' values matches as mongod's sequential upserts do.
+		type mergeEntry struct {
 			doc      *types.Document
 			insertAt int
 		}
+		pending := make(map[string]*mergeEntry)
 
-		// Only the target documents this batch can match are kept, so memory
-		// follows the batch rather than the target collection.
-		wanted := make(map[string]bool, len(params.Docs))
-		for _, incoming := range params.Docs {
-			wanted[buildMergeKey(incoming, params.On)] = true
-		}
-
-		existingMap := make(map[string]*existingEntry, len(params.Docs))
-
-		// A dotted 'on' field is matched as mongod's update query matches
-		// it, so a path may also reach into the target's arrays.
-		var onFilters []*types.Document
-		var dottedMatches []*existingEntry
-		if mergeOnDotted(params.On) {
-			onFilters = make([]*types.Document, len(params.Docs))
-			for i, incoming := range params.Docs {
-				onFilters[i] = mergeOnFilter(incoming, params.On)
-			}
-			dottedMatches = make([]*existingEntry, len(params.Docs))
-		}
-
-		for qRes != nil {
-			_, existing, nextErr := qRes.Iter.Next()
-			if errors.Is(nextErr, iterator.ErrIteratorDone) {
-				break
-			}
-			if nextErr != nil {
-				qRes.Iter.Close()
-				return lazyerrors.Error(nextErr)
-			}
-			if onFilters != nil {
-				var entry *existingEntry
-				for j, filter := range onFilters {
-					if dottedMatches[j] != nil {
-						continue
-					}
-					ok, err := common.FilterDocument(existing, filter)
-					if err != nil {
-						qRes.Iter.Close()
-						return lazyerrors.Error(err)
-					}
-					if ok {
-						if entry == nil {
-							entry = &existingEntry{doc: existing, insertAt: -1}
-						}
-						dottedMatches[j] = entry
-					}
-				}
-				continue
-			}
-			if key := buildMergeKey(existing, params.On); wanted[key] {
-				existingMap[key] = &existingEntry{doc: existing, insertAt: -1}
-			}
-		}
-		if qRes != nil {
-			qRes.Iter.Close()
-		}
-
-		var toInsert []*types.Document
-		var toUpdate []*types.Document
-		write := func(entry *existingEntry, doc *types.Document) {
-			entry.doc = doc
-			if entry.insertAt >= 0 {
-				toInsert[entry.insertAt] = doc
-				return
-			}
-			toUpdate = append(toUpdate, doc)
-		}
+		var toInsert, toUpdate []*types.Document
 		// mongod writes a batch unordered: each document whose write fails
 		// is skipped, the others are written, and the first failure is
 		// reported.
@@ -1934,14 +1862,39 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 				batchErr = err
 			}
 		}
+		write := func(entry *mergeEntry, doc *types.Document) {
+			entry.doc = doc
+			if entry.insertAt >= 0 {
+				toInsert[entry.insertAt] = doc
+				return
+			}
+			toUpdate = append(toUpdate, doc)
+		}
 
 		for i, incoming := range params.Docs {
-			key := buildMergeKey(incoming, params.On)
-			entry, matched := existingMap[key]
-			if dottedMatches != nil {
-				entry = dottedMatches[i]
-				matched = entry != nil
+			if err = ctx.Err(); err != nil {
+				return err
 			}
+
+			// A generated _id matches no document.
+			keyed := incoming.Has("_id") || !slices.Contains(params.On, "_id")
+			var key string
+			var entry *mergeEntry
+			if keyed {
+				key = buildMergeKey(incoming, params.On)
+				entry = pending[key]
+				if entry == nil {
+					target, err := findMergeTarget(ctx, coll, incoming, params.On)
+					if err != nil {
+						return err
+					}
+					if target != nil {
+						entry = &mergeEntry{doc: target, insertAt: -1}
+						pending[key] = entry
+					}
+				}
+			}
+			matched := entry != nil
 
 			if params.ApplyWhenMatched != nil {
 				var existing *types.Document
@@ -2006,14 +1959,12 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 			} else {
 				switch params.WhenNotMatched {
 				case "insert":
-					// A generated _id matches no later document.
-					keyed := dottedMatches == nil && (incoming.Has("_id") || !slices.Contains(params.On, "_id"))
 					if !incoming.Has("_id") {
 						incoming.Set("_id", types.NewObjectID())
 					}
 					toInsert = append(toInsert, incoming)
 					if keyed {
-						existingMap[key] = &existingEntry{doc: incoming, insertAt: len(toInsert) - 1}
+						pending[key] = &mergeEntry{doc: incoming, insertAt: len(toInsert) - 1}
 					}
 
 				case "discard":
@@ -2029,18 +1980,51 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 			}
 		}
 
-		if err = writeMergeDocuments(ctx, coll, params, toInsert, toUpdate); err != nil {
+		dupErr, err := writeMergeDocuments(ctx, coll, params, toInsert, toUpdate)
+		if err != nil {
 			return err
 		}
+		fail(dupErr)
 		return batchErr
+	}
+}
+
+// findMergeTarget returns the target document matching the 'on' fields of
+// incoming, found with the equality query mongod's update uses, which the
+// unique index on those fields serves; nil when there is none.
+func findMergeTarget(ctx context.Context, coll backends.Collection, incoming *types.Document, on []string) (*types.Document, error) {
+	filter := mergeOnFilter(incoming, on)
+	res, err := coll.Query(ctx, &backends.QueryParams{Filter: filter})
+	if err != nil {
+		if backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist, backends.ErrorCodeDatabaseDoesNotExist) {
+			return nil, nil
+		}
+		return nil, lazyerrors.Error(err)
+	}
+	defer res.Iter.Close()
+	for {
+		_, doc, err := res.Iter.Next()
+		if errors.Is(err, iterator.ErrIteratorDone) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, lazyerrors.Error(err)
+		}
+		ok, err := common.FilterDocument(doc, filter)
+		if err != nil {
+			return nil, lazyerrors.Error(err)
+		}
+		if ok {
+			return doc, nil
+		}
 	}
 }
 
 // writeMergeDocuments inserts and updates the documents a $merge batch wrote.
 // As mongod writes the batch unordered, a document that would duplicate a
-// unique key is skipped, the others are written, and the first such failure
-// is returned.
-func writeMergeDocuments(ctx context.Context, coll backends.Collection, params *stages.MergeParams, toInsert, toUpdate []*types.Document) error {
+// unique key is skipped and the others are written; the first such failure
+// is returned as dupErr.
+func writeMergeDocuments(ctx context.Context, coll backends.Collection, params *stages.MergeParams, toInsert, toUpdate []*types.Document) (dupErr, err error) {
 	insert := func(docs []*types.Document) error {
 		_, err := coll.InsertAll(ctx, &backends.InsertAllParams{Docs: docs})
 		return err
@@ -2049,7 +2033,6 @@ func writeMergeDocuments(ctx context.Context, coll backends.Collection, params *
 		_, err := coll.UpdateAll(ctx, &backends.UpdateAllParams{Docs: docs})
 		return err
 	}
-	var dupErr error
 	for _, w := range []struct {
 		docs  []*types.Document
 		write func([]*types.Document) error
@@ -2057,12 +2040,12 @@ func writeMergeDocuments(ctx context.Context, coll backends.Collection, params *
 		if len(w.docs) == 0 {
 			continue
 		}
-		err := w.write(w.docs)
+		err = w.write(w.docs)
 		if err == nil {
 			continue
 		}
 		if !backends.ErrorCodeIs(err, backends.ErrorCodeInsertDuplicateID) {
-			return mergeWriteError(params, err)
+			return nil, mergeWriteError(params, err)
 		}
 		for _, doc := range w.docs {
 			err = w.write([]*types.Document{doc})
@@ -2073,11 +2056,11 @@ func writeMergeDocuments(ctx context.Context, coll backends.Collection, params *
 					dupErr = mergeWriteError(params, err)
 				}
 			default:
-				return mergeWriteError(params, err)
+				return nil, mergeWriteError(params, err)
 			}
 		}
 	}
-	return dupErr
+	return dupErr, nil
 }
 
 func wrapAggregateExecutorError(err error) error {
