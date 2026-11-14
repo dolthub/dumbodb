@@ -1298,6 +1298,21 @@ const (
 	// ErrReduceInputNotArray indicates a $reduce input that is not an array.
 	ErrReduceInputNotArray = ErrorCode(40080) // Location40080
 
+	// ErrReduceNotObject indicates a $reduce argument that is not an object.
+	ErrReduceNotObject = ErrorCode(40075) // Location40075
+
+	// ErrReduceUnknownField indicates an unknown field in a $reduce argument.
+	ErrReduceUnknownField = ErrorCode(40076) // Location40076
+
+	// ErrReduceNoInput indicates a $reduce argument without input.
+	ErrReduceNoInput = ErrorCode(40077) // Location40077
+
+	// ErrReduceNoInitialValue indicates a $reduce argument without initialValue.
+	ErrReduceNoInitialValue = ErrorCode(40078) // Location40078
+
+	// ErrReduceNoIn indicates a $reduce argument without in.
+	ErrReduceNoIn = ErrorCode(40079) // Location40079
+
 	// ErrFilterLimitNotInt32 indicates a $filter limit that is not a 32-bit integer.
 	ErrFilterLimitNotInt32 = ErrorCode(327391) // Location327391
 
