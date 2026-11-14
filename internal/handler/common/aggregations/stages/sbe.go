@@ -194,8 +194,8 @@ func groupsByIDKeepingOne(spec *types.Document) bool {
 			return false
 		}
 	case *types.Document:
-		// An object of _id paths, as {i: "$_id"}.
-		if id.Len() == 0 || operators.IsOperator(id) {
+		// An object of one _id path, as {i: "$_id"}.
+		if id.Len() != 1 || operators.IsOperator(id) {
 			return false
 		}
 		for _, v := range id.Values() {

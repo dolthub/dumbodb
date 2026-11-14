@@ -1143,10 +1143,9 @@ func filterReadsField(filter *types.Document, field string) bool {
 }
 
 // schemaReadsField reports whether a $jsonSchema may read the top-level
-// field holding field: it names it in required or properties, or constrains
-// the fields it does not name.
+// field holding field: it names a path on it in required or properties, or
+// constrains the fields it does not name.
 func schemaReadsField(schema *types.Document, field string) bool {
-	root, _, _ := strings.Cut(field, ".")
 	for _, key := range schema.Keys() {
 		v := must.NotFail(schema.Get(key))
 		switch key {
@@ -1157,14 +1156,19 @@ func schemaReadsField(schema *types.Document, field string) bool {
 				return true
 			}
 			for i := range names.Len() {
-				if name, _ := must.NotFail(names.Get(i)).(string); name == root {
+				if name, _ := must.NotFail(names.Get(i)).(string); sameRoot(name, field) {
 					return true
 				}
 			}
 		case "properties":
 			props, ok := v.(*types.Document)
-			if !ok || props.Has(root) {
+			if !ok {
 				return true
+			}
+			for _, name := range props.Keys() {
+				if sameRoot(name, field) {
+					return true
+				}
 			}
 		case "allOf", "anyOf", "oneOf":
 			subs, ok := v.(*types.Array)
@@ -1187,6 +1191,13 @@ func schemaReadsField(schema *types.Document, field string) bool {
 		}
 	}
 	return false
+}
+
+// sameRoot reports whether two paths start with the same top-level field.
+func sameRoot(a, b string) bool {
+	rootA, _, _ := strings.Cut(a, ".")
+	rootB, _, _ := strings.Cut(b, ".")
+	return rootA == rootB
 }
 
 // exprReadsField reports whether an expression may read field: through a
