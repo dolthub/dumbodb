@@ -1838,6 +1838,11 @@ func (l *lookup) checkSubPipeline() error {
 			return nil
 		}
 		substituted := substituteVarsInStage(stageDoc, vars)
+		if substituted == stageDoc {
+			// Building caches operators on the stage's documents, which the
+			// run canonicalizes later; a copy keeps them from going stale.
+			substituted = stageDoc.DeepCopy()
+		}
 		if i == 0 && l.from == "" {
 			if substituted.Command() == "$documents" {
 				if err := operators.CheckFieldPaths(must.NotFail(substituted.Get("$documents"))); err != nil {
