@@ -151,6 +151,9 @@ func (m *keptMemory) keep(v any, op string) error {
 			msg = fmt.Sprintf("Used too much memory for a single %s. Memory limit: %d bytes. The %s contains %d elements "+
 				"and is of size %d bytes. The element being added has size %d bytes.",
 				kind, accumulatorMemoryLimit, kind, count, before, size)
+		} else if op == "$addToSet" {
+			msg = fmt.Sprintf("$addToSet used too much memory and cannot spill to disk. Used: %d bytes. Memory limit: %d bytes",
+				m.bytes, accumulatorMemoryLimit)
 		}
 	case "$firstN", "$lastN", "$minN", "$maxN", "$topN", "$bottomN", "$top", "$bottom":
 		msg = fmt.Sprintf("Accumulator used too much memory and spilling to disk cannot reduce memory consumption any further. "+
