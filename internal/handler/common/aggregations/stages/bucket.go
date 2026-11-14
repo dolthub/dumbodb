@@ -17,6 +17,7 @@ package stages
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/dolthub/dumbodb/internal/collation"
@@ -93,31 +94,126 @@ func bucketConstant(v any) (value any, constant bool, err error) {
 
 // bucketMaxSwitchSize is the largest BSON object mongod builds; it
 // desugars $bucket into a $group on a $switch holding the folded boundaries
-// and default, which must fit in one.
+// and default, and each object it builds for that must fit in one.
 const bucketMaxSwitchSize = 16*1024*1024 + 16*1024
 
-// bucketSwitchSize is the BSON size of the folded constants of mongod's
-// $switch for $bucket: each branch reads its lower and upper boundary and
-// returns its lower one.
+// bucketSwitchSize tracks the BSON size of mongod's desugared $bucket:
+//
+//	{$group: {<output fields>, _id: {$switch: {branches: [
+//	  {case: {$and: [{$gte: [<groupBy>, <lower>]}, {$lt: [<groupBy>, <upper>]}]}, then: <lower>}, ...
+//	], default: <default>}}}}
+//
+// Without output, the group counts with count: {$sum: 1}. mongod refuses the
+// first object it builds, innermost first, that is too large.
 type bucketSwitchSize struct {
-	total    int
-	exceeded bool
+	// groupBy is the size of the groupBy value, repeated in every branch.
+	groupBy int
+	// branches is the size of the branches array so far.
+	branches int
+	// lower is the size of the lower bound of the branch being built.
+	lower int
+	// failed is set once an object of a branch is too large; total is then
+	// its size, the one mongod reports.
+	failed bool
+	// overBranches is set once the branches array is too large, which
+	// mongod reports after building every branch.
+	overBranches bool
+	total        int
 }
 
-// add charges a folded value that appears n times in the $switch.
-func (s *bucketSwitchSize) add(v any, n int) {
-	if v != nil {
-		s.total += n * types.BSONValueSize(v)
+func newBucketSwitchSize(groupBy any) *bucketSwitchSize {
+	s := &bucketSwitchSize{branches: 5}
+	if groupBy != nil {
+		s.groupBy = types.BSONValueSize(groupBy)
 	}
-	if s.total > bucketMaxSwitchSize {
-		s.exceeded = true
+	return s
+}
+
+// exceeded reports whether the $switch is known to be too large.
+func (s *bucketSwitchSize) exceeded() bool {
+	return s.failed || s.overBranches
+}
+
+// fail records the first object of a branch that is too large.
+func (s *bucketSwitchSize) fail(size int) bool {
+	if !s.failed && size > bucketMaxSwitchSize {
+		s.failed = true
+		s.total = size
 	}
+	return s.failed
+}
+
+// addBoundary charges boundary i of n, folded to v: it completes branch i-1
+// as its upper bound and starts branch i as its lower bound.
+func (s *bucketSwitchSize) addBoundary(i, n int, v any) {
+	if s.failed {
+		return
+	}
+	valueSize := bsonSizeOrZero(v)
+	if i > 0 {
+		gteDoc := 22 + s.groupBy + s.lower
+		ltArr := 11 + s.groupBy + valueSize
+		ltDoc := ltArr + 10
+		caseDoc := gteDoc + ltDoc + 22
+		branchDoc := caseDoc + s.lower + 17
+		if s.fail(ltArr) || s.fail(ltDoc) || s.fail(caseDoc-11) || s.fail(caseDoc) || s.fail(branchDoc) {
+			return
+		}
+		s.branches += 2 + len(strconv.Itoa(i-1)) + branchDoc
+		if s.branches > bucketMaxSwitchSize {
+			s.overBranches = true
+		}
+	}
+	if i < n-1 {
+		s.lower = valueSize
+		gteArr := 11 + s.groupBy + valueSize
+		if s.fail(gteArr) || s.fail(gteArr+11) {
+			return
+		}
+	}
+}
+
+// check sets total to the size of the first object mongod builds that is too
+// large, once every branch is charged, and reports whether there is one.
+func (s *bucketSwitchSize) check(defaultValue any, hasDefault bool, output *types.Document) bool {
+	if s.failed {
+		return true
+	}
+	if s.overBranches {
+		s.total = s.branches
+		return true
+	}
+	inner := s.branches + 15
+	if hasDefault {
+		inner += 9 + types.BSONValueSize(defaultValue)
+	}
+	wrapper := inner + 14
+	group := wrapper + 10
+	if output == nil {
+		group += 22
+	} else {
+		group += types.BSONValueSize(output) - 5
+	}
+	for _, size := range []int{inner, wrapper, group, group + 13} {
+		if size > bucketMaxSwitchSize {
+			s.total = size
+			return true
+		}
+	}
+	return false
 }
 
 func (s *bucketSwitchSize) err() error {
 	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBSONObjectTooLarge, fmt.Sprintf(
 		"BSONObj size: %d (0x%X) is invalid. Size must be between 0 and %d(16MB)", s.total, s.total, bucketMaxSwitchSize),
 		"$bucket (stage)")
+}
+
+func bsonSizeOrZero(v any) int {
+	if v == nil {
+		return 0
+	}
+	return types.BSONValueSize(v)
 }
 
 // boundaryTypeName names a boundary's type; nil is the missing value.
@@ -131,10 +227,9 @@ func boundaryTypeName(v any) string {
 // parseBucketBoundaries returns $bucket's boundaries, which must be at
 // least two sorted values of one type.
 //
-// Once the folded values outgrow mongod's $switch, which it refuses after
-// parsing the stage, the remaining ones are folded for their errors only
-// and only the lowest and highest boundary are kept, so memory stays
-// bounded.
+// Once the branches of mongod's $switch outgrow a BSON object, which mongod
+// refuses after parsing the stage, only the lowest and highest boundaries
+// are kept, for the default's check.
 func parseBucketBoundaries(v any, size *bucketSwitchSize) ([]any, error) {
 	boundariesArr, ok := v.(*types.Array)
 	if !ok {
@@ -159,26 +254,21 @@ func parseBucketBoundaries(v any, size *bucketSwitchSize) ([]any, error) {
 					operators.FormatExpression(elem)+".", "$bucket (stage)")
 		}
 		// mongod checks the order once every boundary has folded.
-		if i == 0 {
-			first = v
-		} else if orderErr == nil {
+		if i > 0 && orderErr == nil {
 			orderErr = checkBucketBoundaryOrder(i, prev, v)
 		}
+		if n >= 2 {
+			size.addBoundary(i, n, v)
+		}
+		if i == 0 {
+			first = v
+		}
 		prev = v
-
-		uses := 3
-		switch {
-		case n < 2:
-			uses = 0
-		case i == 0:
-			uses = 2
-		case i == n-1:
-			uses = 1
+		if size.exceeded() {
+			boundaries = nil
+			continue
 		}
-		size.add(v, uses)
-		if !size.exceeded {
-			boundaries = append(boundaries, v)
-		}
+		boundaries = append(boundaries, v)
 	}
 
 	if n < 2 {
@@ -191,10 +281,10 @@ func parseBucketBoundaries(v any, size *bucketSwitchSize) ([]any, error) {
 	if orderErr != nil {
 		return nil, orderErr
 	}
-	if size.exceeded {
-		return []any{first, prev}, nil
+	if !size.exceeded() {
+		return boundaries, nil
 	}
-	return boundaries, nil
+	return []any{first, prev}, nil
 }
 
 // checkBucketBoundaryOrder returns mongod's error for boundaries i-1 and i
@@ -236,7 +326,9 @@ func newBucket(stage *types.Document) (aggregations.Stage, error) {
 	var boundaries []any
 	var hasDefault bool
 	var outputDoc *types.Document
-	var size bucketSwitchSize
+	var parsedBoundaries bool
+	groupBySpec, _ := spec.Get("groupBy")
+	size := newBucketSwitchSize(groupBySpec)
 	for _, key := range spec.Keys() {
 		val := must.NotFail(spec.Get(key))
 		switch key {
@@ -248,15 +340,15 @@ func newBucket(stage *types.Document) (aggregations.Stage, error) {
 			}
 			groupByVal = val
 		case "boundaries":
-			if boundaries, err = parseBucketBoundaries(val, &size); err != nil {
+			if boundaries, err = parseBucketBoundaries(val, size); err != nil {
 				return nil, err
 			}
+			parsedBoundaries = true
 		case "default":
 			var constant bool
 			if defaultVal, constant, err = bucketConstant(val); err != nil {
 				return nil, err
 			}
-			size.add(defaultVal, 1)
 			if !constant {
 				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketDefaultNotConstant,
 					"The $bucket 'default' field must be a constant expression, but found: "+operators.FormatExpression(val)+".",
@@ -274,7 +366,7 @@ func newBucket(stage *types.Document) (aggregations.Stage, error) {
 				"Unrecognized option to $bucket: "+key+".", "$bucket (stage)")
 		}
 	}
-	if groupByVal == nil || boundaries == nil {
+	if groupByVal == nil || !parsedBoundaries {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrBucketMissingBoundaries,
 			"$bucket requires 'groupBy' and 'boundaries' to be specified.",
@@ -290,7 +382,7 @@ func newBucket(stage *types.Document) (aggregations.Stage, error) {
 
 	// mongod then builds its $group on a $switch, which must fit in a BSON
 	// object, and parses that group's expressions.
-	if size.exceeded {
+	if size.check(defaultVal, hasDefault, outputDoc) {
 		return nil, size.err()
 	}
 
