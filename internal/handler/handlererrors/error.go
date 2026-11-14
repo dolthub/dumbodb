@@ -960,6 +960,18 @@ const (
 	// ErrMergeOnNoUniqueIndex indicates $merge 'on' fields without a matching unique index.
 	ErrMergeOnNoUniqueIndex = ErrorCode(51183) // Location51183
 
+	// ErrOutSpecialCollection indicates a $out target in a system collection.
+	ErrOutSpecialCollection = ErrorCode(17385) // Location17385
+
+	// ErrOutInternalDatabase indicates a $out target in admin, local or config.
+	ErrOutInternalDatabase = ErrorCode(31321) // Location31321
+
+	// ErrMergeSpecialCollection indicates a $merge target in a system collection.
+	ErrMergeSpecialCollection = ErrorCode(31319) // Location31319
+
+	// ErrMergeInternalDatabase indicates a $merge target in admin, local or config.
+	ErrMergeInternalDatabase = ErrorCode(31320) // Location31320
+
 	// ErrDropClusteredIndex indicates dropping a clustered collection's _id
 	// index.
 	ErrDropClusteredIndex = ErrorCode(5979800) // Location5979800

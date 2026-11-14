@@ -250,7 +250,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			// $merge requires database read/write access to merge into a collection.
 			mergeWriter := makeMergeWriter(h.b, dbName)
 			if s, err = stages.NewMergeStage(d, dbName, mergeWriter); err == nil {
-				err = checkMergeOnIndex(connCtx, h.b, s, collDoc)
+				err = checkMergeTarget(connCtx, h.b, s, collDoc)
 			}
 
 		case "$indexStats":
@@ -784,6 +784,21 @@ func checkDatabasePipelineStages(pipeline *types.Array, dbName string) error {
 			if _, err := stages.ParseListClusterCatalogSpec(stage); err != nil {
 				return err
 			}
+		case "$out":
+			if _, err := stages.NewOutStage(stage.DeepCopy(), dbName, nil); err != nil {
+				return err
+			}
+		case "$merge":
+			// A target with 'on' fields is checked once its index is known.
+			merge, err := stages.NewMergeStage(stage.DeepCopy(), dbName, nil)
+			if err != nil {
+				return err
+			}
+			if _, _, on, _ := stages.MergeTarget(merge); len(on) == 1 && on[0] == "_id" {
+				if err = stages.CheckWriteTarget(merge); err != nil {
+					return err
+				}
+			}
 		case "$documents", "$currentOp", "$listLocalSessions":
 		default:
 			if stages.FailsParsing(stage) {
@@ -1096,7 +1111,7 @@ func (h *Handler) aggregateSourceDocuments(connCtx context.Context, document *ty
 		case "$merge":
 			if s, err = stages.NewMergeStage(sd, dbName, makeMergeWriter(h.b, dbName)); err == nil {
 				collDoc, _ := getOrNilDocument(document, "collation")
-				err = checkMergeOnIndex(connCtx, h.b, s, collDoc)
+				err = checkMergeTarget(connCtx, h.b, s, collDoc)
 			}
 		default:
 			s, err = stages.NewStage(sd)
@@ -1747,6 +1762,15 @@ func mergeImmutableIDError(cause string) error {
 	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrImmutableField,
 		"$merge failed to update the matching document, did you attempt to modify the _id or the shard key? :: caused by :: "+cause,
 		"$merge (stage)")
+}
+
+// checkMergeTarget returns mongod's error for a $merge target: 'on' fields
+// without a unique index, then a system collection or internal database.
+func checkMergeTarget(ctx context.Context, b backends.Backend, stage aggregations.Stage, aggCollation *types.Document) error {
+	if err := checkMergeOnIndex(ctx, b, stage, aggCollation); err != nil {
+		return err
+	}
+	return stages.CheckWriteTarget(stage)
 }
 
 // checkMergeOnIndex returns mongod's error when $merge's 'on' fields other than

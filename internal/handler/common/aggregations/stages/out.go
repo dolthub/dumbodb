@@ -124,6 +124,9 @@ func NewOutStage(stage *types.Document, sourceDB string, writer OutWriter) (aggr
 	if err := checkTargetNamespace(s.targetDB, s.targetColl, "$out"); err != nil {
 		return nil, err
 	}
+	if err := CheckWriteTarget(s); err != nil {
+		return nil, err
+	}
 
 	return s, nil
 }
