@@ -320,7 +320,8 @@ func sbeCompatiblePredicate(pred *types.Document) bool {
 		if sbeClassicQueryOperators[op] {
 			return false
 		}
-		if inner, ok := must.NotFail(pred.Get(op)).(*types.Document); ok {
+		switch inner := must.NotFail(pred.Get(op)).(type) {
+		case *types.Document:
 			switch op {
 			case "$not":
 				if !sbeCompatiblePredicate(inner) {
@@ -328,6 +329,16 @@ func sbeCompatiblePredicate(pred *types.Document) bool {
 				}
 			case "$elemMatch":
 				if !sbeCompatiblePredicate(inner) || !sbeCompatibleFilter(inner) {
+					return false
+				}
+			}
+		case *types.Array:
+			if op != "$all" {
+				continue
+			}
+			for i := range inner.Len() {
+				elem, ok := must.NotFail(inner.Get(i)).(*types.Document)
+				if ok && elem.Command() == "$elemMatch" && !sbeCompatiblePredicate(elem) {
 					return false
 				}
 			}
