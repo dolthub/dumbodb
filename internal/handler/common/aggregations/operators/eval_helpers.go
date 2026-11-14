@@ -449,22 +449,7 @@ func evalArgValue(arg any, doc *types.Document) (any, error) {
 				return base, nil
 			}
 
-			baseDoc, ok := base.(*types.Document)
-			if !ok {
-				return types.Null, nil
-			}
-
-			path, err := types.NewPathFromString(fieldPath)
-			if err != nil {
-				return types.Null, nil
-			}
-
-			result, err := baseDoc.GetByPath(path)
-			if err != nil {
-				return types.Null, nil
-			}
-
-			return result, nil
+			return evalVariablePath(base, fieldPath), nil
 		}
 
 		if strings.HasPrefix(v, "$") {
@@ -491,6 +476,25 @@ func evalArgValue(arg any, doc *types.Document) (any, error) {
 	default:
 		return v, nil
 	}
+}
+
+// evalVariablePath reads fieldPath from a variable's value as a field path
+// reads the document, through arrays too.
+func evalVariablePath(base any, fieldPath string) any {
+	switch base.(type) {
+	case *types.Document, *types.Array:
+	default:
+		return types.Null
+	}
+	expr, err := fieldExpression("$v." + fieldPath)
+	if err != nil {
+		return types.Null
+	}
+	result, err := expr.Evaluate(must.NotFail(types.NewDocument("v", base)))
+	if err != nil {
+		return types.Null
+	}
+	return result
 }
 
 // evalDocumentExpressions evaluates a document literal as MongoDB's
