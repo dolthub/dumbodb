@@ -51,6 +51,9 @@ func duplicateFieldError(path []string) error {
 				"Invalid $project :: caused by :: Path collision at "+last, "$project (stage)")
 		case name == "$sort" && len(rest) == 1:
 			return sortDuplicateError(last)
+		case name == "$listClusterCatalog" && len(rest) == 1:
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIDLDuplicateField,
+				fmt.Sprintf("BSON field '$listClusterCatalog.%s' is a duplicate field", last), "$listClusterCatalog (stage)")
 		case name == "$setWindowFields" && len(rest) == 2 && rest[0] == "output":
 			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrWindowOutputPathCollision,
 				"$setWindowFields 'output' specification contains two conflicting paths", "$setWindowFields (stage)")

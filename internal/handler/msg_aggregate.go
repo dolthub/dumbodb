@@ -717,6 +717,11 @@ func checkDatabaseStagePositions(pipeline *types.Array) error {
 		case "$queryStats", "$listCatalog", "$querySettings":
 			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCollStatsIsNotFirstStage,
 				name+" is only valid as the first stage in a pipeline", name+" (stage)")
+		case "$listClusterCatalog":
+			// mongod expands $listClusterCatalog into stages led by
+			// $_internalListCollections and reports that stage's name.
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCollStatsIsNotFirstStage,
+				"$_internalListCollections is only valid as the first stage in a pipeline", name+" (stage)")
 		}
 	}
 	return nil
@@ -751,6 +756,9 @@ func checkDatabasePipelineStages(pipeline *types.Array, dbName string) error {
 					return err
 				}
 			}
+			if err := stages.CheckFacetListClusterCatalog(stage); err != nil {
+				return err
+			}
 			if _, err := stages.NewStage(stage.DeepCopy()); err != nil {
 				return err
 			}
@@ -760,6 +768,10 @@ func checkDatabasePipelineStages(pipeline *types.Array, dbName string) error {
 			}
 		case "$querySettings":
 			if err := stages.CheckQuerySettingsSpec(stage); err != nil {
+				return err
+			}
+		case "$listClusterCatalog":
+			if _, err := stages.ParseListClusterCatalogSpec(stage); err != nil {
 				return err
 			}
 		case "$documents", "$currentOp", "$listLocalSessions":
@@ -867,7 +879,9 @@ func (h *Handler) aggregateDatabase(connCtx context.Context, document *types.Doc
 	case "$queryStats", "$querySettings":
 		// DumboDB records no query statistics and has no query settings.
 		return h.aggregateDocuments(connCtx, document, must.NotFail(types.NewDocument("$documents", types.MakeArray(0))), pipeline, dbName)
-	case "$listCatalog", "$listClusterCatalog":
+	case "$listClusterCatalog":
+		return h.aggregateListClusterCatalog(connCtx, document, firstStage, pipeline, dbName)
+	case "$listCatalog":
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrNotImplemented,
 			stageName+" is not implemented", stageName+" (stage)")
 	}
@@ -1035,7 +1049,12 @@ func (h *Handler) aggregateDocuments(connCtx context.Context, document, firstSta
 	if err != nil {
 		return nil, err
 	}
+	return h.aggregateSourceDocuments(connCtx, document, srcDocs, pipeline, dbName)
+}
 
+// aggregateSourceDocuments runs the stages of an {aggregate: 1} pipeline after
+// its first, source stage on srcDocs, the documents that stage produced.
+func (h *Handler) aggregateSourceDocuments(connCtx context.Context, document *types.Document, srcDocs []*types.Document, pipeline *types.Array, dbName string) (*wire.OpMsg, error) {
 	pipelineStages := make([]aggregations.Stage, 0, pipeline.Len()-1)
 	for i := 1; i < pipeline.Len(); i++ {
 		sd, ok := must.NotFail(pipeline.Get(i)).(*types.Document)

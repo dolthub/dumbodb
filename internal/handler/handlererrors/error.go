@@ -1112,6 +1112,12 @@ const (
 	// ErrListClusterCatalogOnCollection indicates $listClusterCatalog run on a collection.
 	ErrListClusterCatalogOnCollection = ErrorCode(9621301) // Location9621301
 
+	// ErrListClusterCatalogNotObject indicates a $listClusterCatalog specification that is not an object.
+	ErrListClusterCatalogNotObject = ErrorCode(9621302) // Location9621302
+
+	// ErrIDLDuplicateField indicates a field given twice in a document parsed by an IDL parser.
+	ErrIDLDuplicateField = ErrorCode(40413) // IDLDuplicateField
+
 	// ErrStageIndexedStringVectorDuplicate indicates that input to IndexedStringVector contained duplicate values.
 	ErrStageIndexedStringVectorDuplicate = ErrorCode(7582300) // Location7582300
 

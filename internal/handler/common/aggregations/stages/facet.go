@@ -74,6 +74,22 @@ var notAllowedInFacet = map[string]bool{
 // {aggregate: 1} on admin, where its namespace is right but its place is not.
 // The branches are parsed in order, so an earlier branch's error comes first.
 func CheckFacetQueryStats(stage *types.Document) error {
+	return checkFacetDatabaseStage(stage, "$queryStats", "$queryStats", CheckQueryStatsSpec)
+}
+
+// CheckFacetListClusterCatalog returns mongod's error for a
+// $listClusterCatalog in a $facet of {aggregate: 1}.
+func CheckFacetListClusterCatalog(stage *types.Document) error {
+	return checkFacetDatabaseStage(stage, "$listClusterCatalog", "$_internalListCollections", func(d *types.Document) error {
+		_, err := ParseListClusterCatalogSpec(d)
+		return err
+	})
+}
+
+// checkFacetDatabaseStage returns the error for the stage name, which runs
+// only on {aggregate: 1}, in a $facet there: its specification's error from
+// checkSpec, or that reportedName is not allowed in a $facet.
+func checkFacetDatabaseStage(stage *types.Document, name, reportedName string, checkSpec func(*types.Document) error) error {
 	spec, ok := must.NotFail(stage.Get("$facet")).(*types.Document)
 	if !ok {
 		return nil
@@ -85,7 +101,7 @@ func CheckFacetQueryStats(stage *types.Document) error {
 		}
 		q := -1
 		for i := range pipeline.Len() {
-			if sub, ok := must.NotFail(pipeline.Get(i)).(*types.Document); ok && sub.Command() == "$queryStats" {
+			if sub, ok := must.NotFail(pipeline.Get(i)).(*types.Document); ok && sub.Command() == name {
 				q = i
 				break
 			}
@@ -112,11 +128,11 @@ func CheckFacetQueryStats(stage *types.Document) error {
 		if q < 0 {
 			continue
 		}
-		if err := CheckQueryStatsSpec(must.NotFail(pipeline.Get(q)).(*types.Document)); err != nil {
+		if err := checkSpec(must.NotFail(pipeline.Get(q)).(*types.Document)); err != nil {
 			return err
 		}
 		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrStageNotAllowedInFacet,
-			"$queryStats is not allowed to be used within a $facet stage", "$facet (stage)")
+			reportedName+" is not allowed to be used within a $facet stage", "$facet (stage)")
 	}
 	return nil
 }
