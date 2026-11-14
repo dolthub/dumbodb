@@ -179,20 +179,25 @@ func validateViewPipeline(dbName, viewName string, pipeline *types.Array) error 
 	if err := checkSearchPlacement(pipeline, false, false, false); err != nil {
 		return withPrefix(err)
 	}
+	// Every stage's namespace is checked before any stage's position.
 	for i := range pipeline.Len() {
 		stage, ok := must.NotFail(pipeline.Get(i)).(*types.Document)
 		if !ok || stage.Len() != 1 {
 			continue
 		}
-		name := stage.Command()
-		err := stages.ViewNamespaceError(stage, i)
-		if err == nil && i > 0 && isViewSearchStage(name) {
-			err = handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCollStatsIsNotFirstStage,
-				name+" is only valid as the first stage in a pipeline", name)
-		}
 		var cerr *handlererrors.CommandError
-		if errors.As(err, &cerr) {
+		if errors.As(stages.ViewNamespaceError(stage, i), &cerr) {
 			return cerr.WithMessage(prefix + cerr.Err().Error())
+		}
+	}
+	for i := 1; i < pipeline.Len(); i++ {
+		stage, ok := must.NotFail(pipeline.Get(i)).(*types.Document)
+		if !ok || stage.Len() != 1 {
+			continue
+		}
+		if name := stage.Command(); isViewSearchStage(name) || name == "$collStats" || name == "$indexStats" {
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCollStatsIsNotFirstStage,
+				prefix+name+" is only valid as the first stage in a pipeline", name)
 		}
 	}
 	return nil
