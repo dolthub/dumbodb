@@ -302,11 +302,8 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		}
 	}
 
-	for i := 0; i < userPipeline.Len()-1; i++ {
-		if name := must.NotFail(userPipeline.Get(i)).(*types.Document).Command(); name == "$out" || name == "$merge" {
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrStageNotFinal,
-				name+" can only be the final stage in the pipeline", name+" (stage)")
-		}
+	if err = checkOutMergeFinal(userPipeline); err != nil {
+		return nil, err
 	}
 
 	stages.MarkLookupsUnwound(stagesDocuments, stagesSpecs)
@@ -1088,6 +1085,14 @@ func (h *Handler) aggregateSourceDocuments(connCtx context.Context, document *ty
 				return nil, lazyerrors.Error(dbErr)
 			}
 			s, err = newForeignCollectionStage(sd, db)
+		case "$out":
+			bypass, _ := document.Get("bypassDocumentValidation")
+			s, err = stages.NewOutStage(sd, dbName, makeOutWriter(h.b, dbName, bypass == true))
+		case "$merge":
+			if s, err = stages.NewMergeStage(sd, dbName, makeMergeWriter(h.b, dbName)); err == nil {
+				collDoc, _ := getOrNilDocument(document, "collation")
+				err = checkMergeOnIndex(connCtx, h.b, s, collDoc)
+			}
 		default:
 			s, err = stages.NewStage(sd)
 		}
@@ -1098,6 +1103,9 @@ func (h *Handler) aggregateSourceDocuments(connCtx context.Context, document *ty
 			return nil, firstStageOnlyError("$collStats")
 		}
 		pipelineStages = append(pipelineStages, s)
+	}
+	if err := checkOutMergeFinal(pipeline); err != nil {
+		return nil, err
 	}
 
 	cursorDoc := must.NotFail(document.Get("cursor")).(*types.Document)
@@ -2120,6 +2128,18 @@ func buildMergeKey(doc *types.Document, fields []string) string {
 	}
 
 	return key
+}
+
+// checkOutMergeFinal returns mongod's error for $out or $merge before the last
+// stage of pipeline.
+func checkOutMergeFinal(pipeline *types.Array) error {
+	for i := 0; i < pipeline.Len()-1; i++ {
+		if name := must.NotFail(pipeline.Get(i)).(*types.Document).Command(); name == "$out" || name == "$merge" {
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrStageNotFinal,
+				name+" can only be the final stage in the pipeline", name+" (stage)")
+		}
+	}
+	return nil
 }
 
 // firstStageOnlyError is mongod's error for the stage name, which must be
