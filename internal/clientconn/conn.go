@@ -542,6 +542,8 @@ func (c *conn) route(connCtx context.Context, reqHeader *wire.MsgHeader, reqBody
 			common.NormalizeDuplicateFilterKeys(typedDoc)
 			if dup, dupOK := commandDuplicateField(typedDoc); dupOK {
 				err = duplicateFieldError(dup)
+			} else if dup, dupOK = sequenceDuplicateField(typedDoc, msg); dupOK {
+				err = duplicateFieldError(dup)
 			}
 		}
 

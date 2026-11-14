@@ -18,8 +18,12 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/FerretDB/wire"
+
+	"github.com/dolthub/dumbodb/internal/bson"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // duplicateFieldError returns the error for a command repeating the field at
@@ -61,6 +65,37 @@ func commandDuplicateField(doc *types.Document) ([]string, bool) {
 	}
 
 	return findDuplicateField(doc, nil, skip, modifierLevel(doc.Command()))
+}
+
+// sequenceDuplicateField is commandDuplicateField for the document sequences
+// of msg, whose documents handlers read as the arrays of the command doc,
+// such as an update's or delete's statements sent by a driver. Their
+// filters are normalized first, as handlers read them. An insert's
+// documents are left out, as for commandDuplicateField.
+func sequenceDuplicateField(doc *types.Document, msg *wire.OpMsg) ([]string, bool) {
+	command := doc.Command()
+	for _, section := range msg.Sections() {
+		if section.Kind == 0 || section.Identifier == command ||
+			strings.EqualFold(command, "insert") && section.Identifier == "documents" {
+			continue
+		}
+		raws := section.Documents()
+		statements := types.MakeArray(len(raws))
+		for _, raw := range raws {
+			statement, err := bson.DecodeRawDocument(raw)
+			if err != nil {
+				// The handler reports the invalid document.
+				return nil, false
+			}
+			statements.Append(statement)
+		}
+		sequence := must.NotFail(types.NewDocument(command, "", section.Identifier, statements))
+		common.NormalizeDuplicateFilterKeys(sequence)
+		if path, ok := findDuplicateField(sequence, nil, "", modifierLevel(command)); ok {
+			return path, true
+		}
+	}
+	return nil, false
 }
 
 // modifierLevel returns, for a command whose update modifiers its handler
