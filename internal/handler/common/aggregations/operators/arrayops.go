@@ -28,7 +28,8 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// collectArray evaluates arg to a *types.Array. Returns nil if null, error if not array.
+// collectArray evaluates the input argument of $map or $reduce to an array.
+// It reports a null or missing input as null.
 func collectArray(arg any, doc *types.Document, opName string) (*types.Array, bool, error) {
 	v, err := evalArgValue(arg, doc)
 	if err != nil {
@@ -41,8 +42,12 @@ func collectArray(arg any, doc *types.Document, opName string) (*types.Array, bo
 
 	arr, ok := v.(*types.Array)
 	if !ok {
-		return nil, false, newOperatorError(ErrArgsInvalidLen, opName,
-			fmt.Sprintf("%s argument must be an array, got %T", opName, v))
+		if opName == "$reduce" {
+			return nil, false, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrReduceInputNotArray,
+				"$reduce requires that 'input' be an array, found: "+types.FormatAnyValue(v), opName)
+		}
+		return nil, false, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrMapInputNotArray,
+			"input to $map must be an array not "+handlerparams.AliasFromType(v), opName)
 	}
 
 	return arr, false, nil
