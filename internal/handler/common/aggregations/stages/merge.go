@@ -32,10 +32,10 @@ import (
 )
 
 // MergeBatchSize is the most documents $merge passes to its MergeFunc at
-// once; mergeBatchBytes bounds a batch's total BSON size.
+// once; MergeBatchBytes bounds a batch's total BSON size.
 const (
 	MergeBatchSize  = 1000
-	mergeBatchBytes = 16 * 1024 * 1024
+	MergeBatchBytes = 16 * 1024 * 1024
 )
 
 type MergeParams struct {
@@ -399,7 +399,7 @@ func parseMergeWhenMatched(whenMatched any, s *merge) error {
 // Process implements Stage interface.
 //
 // It reads iter in batches of at most MergeBatchSize documents and
-// mergeBatchBytes, passing each to the MergeFunc callback as it fills. Like
+// MergeBatchBytes, passing each to the MergeFunc callback as it fills. Like
 // $out, $merge returns an empty iterator (no documents to the caller).
 func (s *merge) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
 	defer iter.Close()
@@ -453,7 +453,7 @@ func (s *merge) Process(ctx context.Context, iter types.DocumentsIterator, close
 
 		batch = append(batch, doc)
 		batchBytes += doc.BSONSize()
-		if len(batch) >= MergeBatchSize || batchBytes >= mergeBatchBytes {
+		if len(batch) >= MergeBatchSize || batchBytes >= MergeBatchBytes {
 			if err = flush(); err != nil {
 				return nil, lazyerrors.Error(err)
 			}

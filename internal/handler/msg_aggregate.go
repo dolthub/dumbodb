@@ -1843,7 +1843,7 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 				fmt.Sprintf("Namespace %s.%s is a view, not a collection", params.DBName, params.CollName), "$merge")
 		}
 
-		// An entry is a target document this batch wrote or, with insertAt
+		// An entry is a target document this chunk wrote or, with insertAt
 		// >= 0, a document it inserts, which a later document with the same
 		// 'on' values matches as mongod's sequential upserts do.
 		type mergeEntry struct {
@@ -1853,6 +1853,7 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 		pending := make(map[string]*mergeEntry)
 
 		var toInsert, toUpdate []*types.Document
+		var pendingBytes int
 		// mongod writes a batch unordered: each document whose write fails
 		// is skipped, the others are written, and the first failure is
 		// reported.
@@ -1862,8 +1863,21 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 				batchErr = err
 			}
 		}
+		// Writes are flushed once they reach the batch size limit, so the
+		// documents a whenMatched pipeline grows are not all kept at once.
+		flush := func() error {
+			dupErr, err := writeMergeDocuments(ctx, coll, params, toInsert, toUpdate)
+			if err != nil {
+				return err
+			}
+			fail(dupErr)
+			toInsert, toUpdate, pendingBytes = nil, nil, 0
+			clear(pending)
+			return nil
+		}
 		write := func(entry *mergeEntry, doc *types.Document) {
 			entry.doc = doc
+			pendingBytes += doc.BSONSize()
 			if entry.insertAt >= 0 {
 				toInsert[entry.insertAt] = doc
 				return
@@ -1874,6 +1888,11 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 		for i, incoming := range params.Docs {
 			if err = ctx.Err(); err != nil {
 				return err
+			}
+			if pendingBytes >= stages.MergeBatchBytes {
+				if err = flush(); err != nil {
+					return err
+				}
 			}
 
 			// A generated _id matches no document.
@@ -1963,6 +1982,7 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 						incoming.Set("_id", types.NewObjectID())
 					}
 					toInsert = append(toInsert, incoming)
+					pendingBytes += incoming.BSONSize()
 					if keyed {
 						pending[key] = &mergeEntry{doc: incoming, insertAt: len(toInsert) - 1}
 					}
@@ -1980,11 +2000,9 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 			}
 		}
 
-		dupErr, err := writeMergeDocuments(ctx, coll, params, toInsert, toUpdate)
-		if err != nil {
+		if err = flush(); err != nil {
 			return err
 		}
-		fail(dupErr)
 		return batchErr
 	}
 }
