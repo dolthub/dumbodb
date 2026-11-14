@@ -18,10 +18,12 @@ import (
 	"context"
 
 	"github.com/FerretDB/wire"
+	"github.com/google/uuid"
 
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/stages"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // aggregateListClusterCatalog implements the $listClusterCatalog source stage
@@ -64,7 +66,11 @@ func (h *Handler) listClusterCatalogEntries(connCtx context.Context, spec *stage
 		if err != nil {
 			return nil, lazyerrors.Error(err)
 		}
+		// mongod stores the definitions of views and time-series collections in
+		// system.views.
+		var hasViews bool
 		for _, collection := range res.Collections {
+			hasViews = hasViews || collection.IsView || collection.IsTimeSeries
 			listed, err := collectionCatalogEntry(&collection)
 			if err != nil {
 				return nil, err
@@ -83,6 +89,37 @@ func (h *Handler) listClusterCatalogEntries(connCtx context.Context, spec *stage
 			}
 			entries = append(entries, entry)
 		}
+		if hasViews {
+			entries = append(entries, systemViewsCatalogEntry(name, spec.Shards))
+		}
 	}
 	return entries, nil
+}
+
+// systemViewsCatalogEntry is the entry mongod lists for the system.views
+// collection that holds a database's view definitions. DumboDB keeps views in
+// its catalog instead; its uuid is derived from the namespace.
+func systemViewsCatalogEntry(dbName string, shards bool) *types.Document {
+	ns := dbName + ".system.views"
+	id := uuid.NewSHA1(uuid.NameSpaceOID, []byte(ns))
+	entry := must.NotFail(types.NewDocument(
+		"ns", ns,
+		"db", dbName,
+		"type", "collection",
+		"options", must.NotFail(types.NewDocument()),
+		"info", must.NotFail(types.NewDocument(
+			"readOnly", false,
+			"uuid", types.Binary{Subtype: types.BinaryUUID, B: id[:]},
+		)),
+		"idIndex", must.NotFail(types.NewDocument(
+			"v", int32(2),
+			"key", must.NotFail(types.NewDocument("_id", int32(1))),
+			"name", "_id_",
+		)),
+		"sharded", false,
+	))
+	if shards {
+		entry.Set("shards", types.MakeArray(0))
+	}
+	return entry
 }
