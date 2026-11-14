@@ -59,23 +59,24 @@ func collCompare(a, b any, cmp *collation.Comparator) types.CompareResult {
 // collCompareDocuments is types.Compare for two documents under cmp: field by
 // field, each by value type order, then name, then value.
 func collCompareDocuments(a, b *types.Document, cmp *collation.Comparator) types.CompareResult {
-	aKeys, bKeys := a.Keys(), b.Keys()
-	aValues, bValues := a.Values(), b.Values()
-	for i := range aKeys {
-		if i == len(bKeys) {
+	aLen, bLen := a.Len(), b.Len()
+	for i := range aLen {
+		if i == bLen {
 			return types.Greater
 		}
-		if result := types.CompareTypeOrder(aValues[i], bValues[i]); result != types.Equal {
+		aKey, aValue := a.FieldAt(i)
+		bKey, bValue := b.FieldAt(i)
+		if result := types.CompareTypeOrder(aValue, bValue); result != types.Equal {
 			return result
 		}
-		if result := types.Compare(aKeys[i], bKeys[i]); result != types.Equal {
+		if result := types.Compare(aKey, bKey); result != types.Equal {
 			return result
 		}
-		if result := collCompare(aValues[i], bValues[i], cmp); result != types.Equal {
+		if result := collCompare(aValue, bValue, cmp); result != types.Equal {
 			return result
 		}
 	}
-	if len(aKeys) < len(bKeys) {
+	if aLen < bLen {
 		return types.Less
 	}
 	return types.Equal

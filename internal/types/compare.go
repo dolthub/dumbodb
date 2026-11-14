@@ -484,25 +484,23 @@ func compareDocuments(a, b *Document) CompareResult {
 		return Greater
 	}
 
-	aKeys := a.Keys()
-	bKeys := b.Keys()
-	bValues := b.Values()
-	aValues := a.Values()
-
-	for i, aKey := range aKeys {
-		if b.Len() == i {
+	bLen := b.Len()
+	for i := range a.Len() {
+		if bLen == i {
 			return Greater
 		}
+		aKey, aValue := a.FieldAt(i)
+		bKey, bValue := b.FieldAt(i)
 
-		if result := compareTypeOrder(aValues[i], bValues[i]); result != Equal {
+		if result := compareTypeOrder(aValue, bValue); result != Equal {
 			return result
 		}
 
-		if result := compareScalars(aKey, bKeys[i]); result != Equal {
+		if result := compareScalars(aKey, bKey); result != Equal {
 			return result
 		}
 
-		if result := Compare(aValues[i], bValues[i]); result != Equal {
+		if result := Compare(aValue, bValue); result != Equal {
 			return result
 		}
 	}
