@@ -617,6 +617,10 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 		}
 	}
 
+	if qp.Projection == nil && !qp.CountOnly && pipelineDocs != nil && sbe.distinct == nil && !h.DisablePushdown {
+		qp.Projection, qp.WindowedProjection = dependencyProjection(pipelineDocs, sbe)
+	}
+
 	res, err := coll.Explain(connCtx, qp)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
@@ -875,8 +879,7 @@ func pushdownWindow(stages []any) (skip, limit int64, limited bool) {
 }
 
 // absorbedProjection returns the projection of the $project or $unset the
-// query plan absorbs from stages, when it only includes or excludes fields,
-// or nil.
+// query plan absorbs from stages, or nil.
 func absorbedProjection(stages []any) *types.Document {
 	docs := make([]*types.Document, 0, len(stages))
 	for _, s := range stages {
@@ -896,16 +899,6 @@ func absorbedProjection(stages []any) *types.Document {
 		return must.NotFail(reportedStage(last).Get("$project")).(*types.Document)
 	case "$project":
 		spec, _ := must.NotFail(last.Get("$project")).(*types.Document)
-		if spec == nil {
-			return nil
-		}
-		for _, k := range spec.Keys() {
-			switch must.NotFail(spec.Get(k)).(type) {
-			case bool, int32, int64, float64:
-			default:
-				return nil
-			}
-		}
 		return spec
 	}
 	return nil

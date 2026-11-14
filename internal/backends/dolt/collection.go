@@ -2474,10 +2474,14 @@ func wrapScanPlan(params *backends.ExplainParams, scan *explainStage, sorted boo
 
 	sortPresent := params.Sort.Len() > 0 && !sortIsNatural(params.Sort) && !sorted
 	projStage := ""
-	if params.Projection.Len() > 0 {
+	windowed := sortPresent || params.Skip > 0 || params.Limit != 0 || params.ZeroLimit
+	if params.Projection.Len() > 0 && (windowed || !params.WindowedProjection) {
 		projStage = "PROJECTION_SIMPLE"
-		if covered {
+		switch {
+		case covered:
 			projStage = "PROJECTION_COVERED"
+		case !projectionIsSimple(params.Projection):
+			projStage = "PROJECTION_DEFAULT"
 		}
 	}
 	// The skip drops index keys before their documents are fetched, when the
@@ -2588,6 +2592,17 @@ func projectionIsCoveredBy(projection *types.Document, idx backends.IndexInfo) b
 // (true=include, false=exclude). Returns ok=false for anything else
 // (e.g. {$slice: ...}, {$elemMatch: ...}) since those are not
 // covered-eligible.
+// projectionIsSimple reports whether projection only includes or excludes
+// top-level fields, which mongod runs as PROJECTION_SIMPLE.
+func projectionIsSimple(projection *types.Document) bool {
+	for _, k := range projection.Keys() {
+		if _, ok := projectionInclusion(must.NotFail(projection.Get(k))); !ok || strings.Contains(k, ".") {
+			return false
+		}
+	}
+	return true
+}
+
 func projectionInclusion(v any) (bool, bool) {
 	switch x := v.(type) {
 	case int32:

@@ -307,11 +307,67 @@ func queryAbsorbedStages(docs []*types.Document) int {
 		}
 		phase = p
 	}
-	// A $unset is absorbed only as the last stage.
-	if i < len(docs) && (docs[i].Command() == "$project" || (docs[i].Command() == "$unset" && i == len(docs)-1)) {
+	// A $unset is absorbed only as the last stage, and a $project computing
+	// a field only by a query without a sort, skip or limit.
+	if i < len(docs) && (docs[i].Command() == "$project" && (i == 0 || phase == 0 && !hasSort(docs[:i]) || !computesFields(docs[i])) ||
+		docs[i].Command() == "$unset" && i == len(docs)-1) {
 		i++
 	}
 	return i
+}
+
+func hasSort(docs []*types.Document) bool {
+	for _, d := range docs {
+		if d.Command() == "$sort" {
+			return true
+		}
+	}
+	return false
+}
+
+// computesFields reports whether a $project sets a field to an expression
+// rather than only including or excluding fields.
+func computesFields(project *types.Document) bool {
+	spec, _ := must.NotFail(project.Get("$project")).(*types.Document)
+	if spec == nil {
+		return true
+	}
+	for _, v := range spec.Values() {
+		switch v.(type) {
+		case bool, int32, int64, float64, types.Decimal128:
+		default:
+			return true
+		}
+	}
+	return false
+}
+
+// dependencyProjection is the projection mongod's query applies for the
+// stages of docs it does not absorb, when they read only some fields, and
+// whether it shows only under a blocking sort, a skip or a limit, as beneath
+// SBE's stages. It is nil when the query absorbs a projection or the stages
+// read the whole document.
+func dependencyProjection(docs []*types.Document, sbe sbePlan) (*types.Document, bool) {
+	absorbed := queryAbsorbedStages(docs)
+	if absorbed == len(docs) || absorbed > 0 && docs[absorbed-1].Command() == "$project" {
+		return nil, false
+	}
+	rest := make([]any, 0, len(docs)-absorbed)
+	for _, d := range docs[absorbed:] {
+		rest = append(rest, d)
+	}
+	roots, ok := pipelineRootFields(rest)
+	if !ok || len(roots) == 0 {
+		return nil, false
+	}
+	projection := types.MakeDocument(len(roots) + 1)
+	for _, root := range roots {
+		projection.Set(root, true)
+	}
+	if !projection.Has("_id") {
+		projection.Set("_id", false)
+	}
+	return projection, sbe.end > absorbed
 }
 
 // stageReturns runs the pipeline on the documents qp's query reads and
