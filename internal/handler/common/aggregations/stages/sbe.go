@@ -44,6 +44,14 @@ func SBEPrefixLen(specs []*types.Document, isView func(string) bool) int {
 	return end
 }
 
+// SBEPushableLen returns how many leading stages of a top-level pipeline
+// mongod could push down into SBE at all, which bounds the $lookup stages it
+// runs there.
+func SBEPushableLen(specs []*types.Document, isView func(string) bool) int {
+	_, pushable := sbePrefix(specs, isView)
+	return pushable
+}
+
 // sbePrefix returns SBEPrefixLen and the number of leading stages mongod could
 // push down into SBE at all, which bounds the $lookup stages it runs there.
 func sbePrefix(specs []*types.Document, isView func(string) bool) (int, int) {

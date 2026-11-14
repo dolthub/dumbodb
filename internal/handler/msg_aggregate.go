@@ -570,17 +570,16 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			stages.MarkLookupsUnwound(stagesDocuments, stagesSpecs)
 		}
 
-		collectionIsView := func(name string) bool {
-			info, err := lookupCollectionInfo(ctx, db, name)
-			return err == nil && info != nil && info.IsView
-		}
-		// mongod answers a missing collection with an empty plan, and a
-		// leading equality on _id with its express plan; neither runs in SBE.
-		if collectionExists && !stages.IsExpressMatch(stagesSpecs) {
+		collectionIsView := viewChecker(ctx, db)
+		// mongod answers a missing collection with an empty plan, which does
+		// not run in SBE.
+		var sbe sbePlan
+		if collectionExists {
+			sbe = classifySBE(ctx, db, stagesSpecs, collDoc, !isView, collectionIsView)
 			if !isView {
-				stages.MarkSBELookups(stagesDocuments, stagesSpecs, collectionIsView)
+				stages.MarkSBELookups(stagesDocuments, sbe.specs, collectionIsView)
 			}
-			stages.WrapSBEStages(stagesDocuments, stagesSpecs, stages.SBEPrefixLen(stagesSpecs, collectionIsView))
+			stages.WrapSBEStages(stagesDocuments, stagesSpecs, sbe.groups)
 		}
 
 		switch {
@@ -628,7 +627,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			}
 		}
 
-		if runsInSBE(aggregationStages) {
+		if sbe.runsInSBE() {
 			ctx = backends.WithSBEScan(ctx)
 		}
 		iter, err = processStagesDocuments(ctx, closer, &stagesDocumentsParams{
@@ -1222,17 +1221,6 @@ func sortLimitBound(aggregationStages []any, i int) int64 {
 	}
 
 	return 0
-}
-
-// runsInSBE reports whether mongod runs a pipeline in SBE: one with a stage
-// SBE executes, such as $group or $lookup.
-func runsInSBE(stages []any) bool {
-	for _, s := range stages {
-		if d, _ := s.(*types.Document); d != nil && sbeStages[d.Command()] {
-			return true
-		}
-	}
-	return false
 }
 
 // pushdownLimit returns the $limit that directly follows the stages
