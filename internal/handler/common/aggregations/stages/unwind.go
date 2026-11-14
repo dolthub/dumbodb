@@ -187,6 +187,9 @@ func newUnwindFromDocument(doc *types.Document) (aggregations.Stage, error) {
 func parseUnwindPath(field string) (*aggregations.Expression, error) {
 	// The path is a field path, never a variable.
 	switch {
+	case strings.HasPrefix(field, "$") && strings.ContainsRune(field, 0):
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrUnwindPathNulByte,
+			"field path must not contain embedded null characters", "$unwind (stage)")
 	case field == "$":
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrEmptyFieldPath,
 			"FieldPath cannot be constructed with empty string", "$unwind (stage)")
