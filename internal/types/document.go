@@ -33,7 +33,7 @@ import (
 // that is not a field and can't be accessed by most methods.
 // It is used to locate the document in the backend.
 type Document struct {
-	keys   map[string]int // nil until the document has keyIndexMinFields fields
+	keys   map[string]keyIndex // nil until the document has keyIndexMinFields fields
 	fields []field
 	// extra holds rarely set state, keeping Document in a small size class.
 	extra    *documentExtra
@@ -185,10 +185,34 @@ func NewDocument(pairs ...any) (*Document, error) {
 	return d, nil
 }
 
+// keyIndex counts a key's fields and locates the first, so lookups in a wide
+// document need not scan it.
+type keyIndex struct {
+	count int32
+	first int32
+}
+
 func (d *Document) buildKeyIndex() {
-	d.keys = make(map[string]int, len(d.fields))
-	for _, f := range d.fields {
-		d.keys[f.key]++
+	d.keys = make(map[string]keyIndex, len(d.fields))
+	for i, f := range d.fields {
+		d.indexKey(f.key, i)
+	}
+}
+
+// indexKey records a field with key at position i of an indexed document.
+func (d *Document) indexKey(key string, i int) {
+	k, ok := d.keys[key]
+	if !ok {
+		k.first = int32(i)
+	}
+	k.count++
+	d.keys[key] = k
+}
+
+// reindex rebuilds the key index after fields moved.
+func (d *Document) reindex() {
+	if d.keys != nil {
+		d.buildKeyIndex()
 	}
 }
 
@@ -469,9 +493,15 @@ func (d *Document) Get(key string) (any, error) {
 		panic(fmt.Sprintf("types.Document.Get: key is duplicated: %s", key))
 	}
 
-	for _, field := range d.fields {
-		if field.key == key {
-			return field.value, nil
+	if d.keys != nil {
+		if k, ok := d.keys[key]; ok {
+			return d.fields[k.first].value, nil
+		}
+	} else {
+		for _, field := range d.fields {
+			if field.key == key {
+				return field.value, nil
+			}
 		}
 	}
 
@@ -512,10 +542,17 @@ func (d *Document) Set(key string, value any) {
 		panic(fmt.Sprintf("types.Document.Set: key is duplicated: %s", key))
 	}
 
-	for i, f := range d.fields {
-		if f.key == key {
-			d.fields[i].value = value
+	if d.keys != nil {
+		if k, ok := d.keys[key]; ok {
+			d.fields[k.first].value = value
 			return
+		}
+	} else {
+		for i, f := range d.fields {
+			if f.key == key {
+				d.fields[i].value = value
+				return
+			}
 		}
 	}
 
@@ -525,7 +562,7 @@ func (d *Document) Set(key string, value any) {
 	})
 
 	if d.keys != nil {
-		d.keys[key]++
+		d.indexKey(key, len(d.fields)-1)
 	} else if len(d.fields) >= keyIndexMinFields {
 		d.buildKeyIndex()
 	}
@@ -537,7 +574,7 @@ func (d *Document) AppendDecoded(key string, value any) {
 	d.modify()
 	d.fields = append(d.fields, field{key: key, value: value})
 	if d.keys != nil {
-		d.keys[key]++
+		d.indexKey(key, len(d.fields)-1)
 	} else if len(d.fields) >= keyIndexMinFields {
 		d.buildKeyIndex()
 	}
@@ -555,8 +592,16 @@ func (d *Document) Remove(key string) any {
 
 	for i, field := range d.fields {
 		if field.key == key {
-			delete(d.keys, key)
 			d.fields = slices.Delete(d.fields, i, i+1)
+			if d.keys != nil {
+				delete(d.keys, key)
+				for j := i; j < len(d.fields); j++ {
+					if k := d.keys[d.fields[j].key]; k.first == int32(j+1) {
+						k.first = int32(j)
+						d.keys[d.fields[j].key] = k
+					}
+				}
+			}
 			return field.value
 		}
 	}
@@ -648,12 +693,13 @@ func (d *Document) SortFieldsByKey() {
 	slices.SortFunc(d.fields, func(a, b field) int {
 		return cmp.Compare(a.key, b.key)
 	})
+	d.reindex()
 }
 
 // isKeyDuplicate expects d loaded.
 func (d *Document) isKeyDuplicate(targetKey string) bool {
 	if d.keys != nil {
-		return d.keys[targetKey] > 1
+		return d.keys[targetKey].count > 1
 	}
 	seen := false
 	for _, f := range d.fields {
@@ -694,6 +740,7 @@ func (d *Document) moveIDToTheFirstIndex() {
 	})
 
 	d.fields = slices.Delete(d.fields, idIdx+1, idIdx+2)
+	d.reindex()
 }
 
 func (doc *Document) LogValue() slog.Value {
