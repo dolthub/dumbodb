@@ -27,7 +27,7 @@ import (
 func init() {
 	// The backend evaluates _id membership through the registered find()
 	// matcher (an internal {_id: {$in: [...]}} filter); wire it up for tests.
-	backends.RegisterPartialFilterMatcher(common.FilterDocument)
+	backends.RegisterPartialFilterMatcher(common.FilterDocumentColl)
 }
 
 func updateDocOnBranch(t *testing.T, b *Backend, db, branch, coll string, doc *types.Document) {

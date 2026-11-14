@@ -347,6 +347,10 @@ func processIndex(command string, indexDoc *types.Document, ignoreUnknownIndexOp
 				}
 			}
 
+			if index.PartialFilterExpression != nil {
+				index.MatchesPartialFilter = backends.PartialFilterMembership(index.PartialFilterExpression, index.Collation)
+			}
+
 			return &index, nil
 		default:
 			return nil, lazyerrors.Error(err)
@@ -478,11 +482,6 @@ func processIndex(command string, indexDoc *types.Document, ignoreUnknownIndexOp
 			// exclude documents that don't satisfy the filter.
 			if pfe, ok := must.NotFail(indexDoc.Get("partialFilterExpression")).(*types.Document); ok {
 				index.PartialFilterExpression = pfe
-				// Capture pfe for the closure so it survives loop iteration.
-				captured := pfe
-				index.MatchesPartialFilter = func(doc *types.Document) (bool, error) {
-					return common.FilterDocument(doc, captured)
-				}
 			}
 
 		case "expireAfterSeconds":

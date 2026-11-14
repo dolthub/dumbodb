@@ -753,7 +753,7 @@ func readIndexLookup(ctx context.Context, ns tree.NodeStore, primary prolly.Map,
 		return planOrUnion(ctx, ns, primary, idxInfos, idxMaps, must.NotFail(filter.Get("$or")), queryCollation)
 	}
 
-	choice, ok := chooseIndexRange(idxInfos, filter, hint, queryCollation, nil)
+	choice, ok := chooseIndexRange(ctx, idxInfos, filter, hint, queryCollation, nil)
 	if !ok {
 		return nil, nil
 	}
@@ -897,7 +897,7 @@ func (choice indexRangeChoice) ranges() [][2][]byte {
 // chooseIndexRange picks the index serving filter's first indexable field and
 // the range to scan in it, without scanning. fields, when set, are the only
 // fields the read returns, so an index holding them all covers it.
-func chooseIndexRange(idxInfos []backends.IndexInfo, filter *types.Document, hint any, queryCollation *types.Document, fields []string) (indexRangeChoice, bool) {
+func chooseIndexRange(ctx context.Context, idxInfos []backends.IndexInfo, filter *types.Document, hint any, queryCollation *types.Document, fields []string) (indexRangeChoice, bool) {
 	queryColl := collation.Parse(queryCollation)
 	queryIdentity := queryColl.Identity()
 	queryCmp := queryColl.Comparator()
@@ -941,7 +941,7 @@ func chooseIndexRange(idxInfos []backends.IndexInfo, filter *types.Document, hin
 			}
 		}
 		partial := idx.PartialFilterExpression != nil
-		if partial && !filterImpliesPartial(filter, idx.PartialFilterExpression, collation.Parse(idx.Collation).IsSimple()) {
+		if partial && !partialIndexServes(ctx, filter, idx, queryCollation) {
 			continue
 		}
 		leading := idx.Key[0].Field
@@ -1075,7 +1075,7 @@ func planOrUnion(ctx context.Context, ns tree.NodeStore, primary prolly.Map, idx
 	}
 	choices := make([]indexRangeChoice, len(flat))
 	for i, branch := range flat {
-		if choices[i], ok = chooseIndexRange(idxInfos, branch, nil, queryCollation, nil); !ok {
+		if choices[i], ok = chooseIndexRange(ctx, idxInfos, branch, nil, queryCollation, nil); !ok {
 			return nil, nil
 		}
 	}
@@ -1969,191 +1969,13 @@ func explainAmount(n int64) any {
 	return n
 }
 
-// partialFilterScalar extracts the scalar a condition pins a field to:
-// a bare scalar v, or {$eq: scalar}. Returns ok=false for any other
-// shape (other operators, arrays, null, regex, documents).
-func partialFilterScalar(v any) (any, bool) {
-	if doc, isDoc := v.(*types.Document); isDoc {
-		if doc.Len() != 1 || doc.Keys()[0] != "$eq" {
-			return nil, false
-		}
-		inner, err := doc.Get("$eq")
-		if err != nil {
-			return nil, false
-		}
-		v = inner
-	}
-	switch v.(type) {
-	case nil, types.NullType, *types.Array, *types.Document, types.Regex:
-		return nil, false
-	}
-	return v, true
-}
-
-// filterImpliesPartial reports whether filter guarantees every condition in a
-// partial index's filter expression pfe. A scalar equality in pfe must appear
-// as the identical equality in filter; $exists: true in pfe needs a filter
-// condition on the field that cannot match a missing field; a numeric range in
-// pfe ($gt, $gte, $lt, $lte), or a string range when stringRanges (the index is
-// binary-collated, so bounds compare bytewise), must have each bound implied by
-// a bound in the same direction, or an equality, on the same field in filter.
-// Any other shape yields false, leaving the index unused (a sound collection
-// scan). When true, every document matching filter lies within the partial
-// index, so scanning the index and re-filtering is sound.
-func filterImpliesPartial(filter, pfe *types.Document, stringRanges bool) bool {
-	if pfe == nil || pfe.Len() == 0 {
-		return true
-	}
-	if filter == nil {
-		return false
-	}
-	for _, pk := range pfe.Keys() {
-		pv, err := pfe.Get(pk)
-		if err != nil {
-			return false
-		}
-		fv, err := filter.Get(pk)
-		if err != nil {
-			return false
-		}
-		if ps, ok := partialFilterScalar(pv); ok {
-			fs, ok := partialFilterScalar(fv)
-			if !ok || compareScalars(ps, fs) != 0 {
-				return false
-			}
-			continue
-		}
-		if isExistsTrue(pv) {
-			if !conditionExcludesMissing(fv) {
-				return false
-			}
-			continue
-		}
-		pr, ok := parseScalarRange(pv)
-		if !ok || (!stringRanges && pr.hasString()) {
-			return false
-		}
-		fr, ok := parseScalarRange(fv)
-		if !ok || !fr.within(pr) {
-			return false
-		}
-	}
-	return true
-}
-
-// scalarRange is a condition's bounds on one field; an equality has both,
-// inclusive and equal.
-type scalarRange struct {
-	lo, hi                   any
-	hasLo, hasHi             bool
-	loInclusive, hiInclusive bool
-}
-
-// parseScalarRange reads a bare number or string, or an operator document of
-// $eq, $gt, $gte, $lt and $lte over numbers or strings, as bounds.
-func parseScalarRange(v any) (scalarRange, bool) {
-	var r scalarRange
-	if !rangeComparable(v) {
-		doc, ok := v.(*types.Document)
-		if !ok || doc.Len() == 0 {
-			return r, false
-		}
-		first := must.NotFail(doc.Get(doc.Keys()[0]))
-		for _, op := range doc.Keys() {
-			ov := must.NotFail(doc.Get(op))
-			if !rangeComparable(ov) || !sameRangeBracket(ov, first) {
-				return r, false
-			}
-			switch op {
-			case "$eq":
-				r.setLo(ov, true)
-				r.setHi(ov, true)
-			case "$gt":
-				r.setLo(ov, false)
-			case "$gte":
-				r.setLo(ov, true)
-			case "$lt":
-				r.setHi(ov, false)
-			case "$lte":
-				r.setHi(ov, true)
-			default:
-				return r, false
-			}
-		}
-		return r, true
-	}
-	r.setLo(v, true)
-	r.setHi(v, true)
-	return r, true
-}
-
-func (r scalarRange) hasString() bool {
-	_, lo := r.lo.(string)
-	_, hi := r.hi.(string)
-	return lo || hi
-}
-
-func rangeComparable(v any) bool {
-	switch t := v.(type) {
-	case int32, int64, string:
-		return true
-	case float64:
-		return !math.IsNaN(t)
-	}
-	return false
-}
-
-func sameRangeBracket(a, b any) bool {
-	_, aStr := a.(string)
-	_, bStr := b.(string)
-	return aStr == bStr
-}
-
-// setLo keeps the tighter of the current and the given lower bound.
-func (r *scalarRange) setLo(v any, inclusive bool) {
-	if r.hasLo {
-		c := compareScalars(v, r.lo)
-		if c < 0 || (c == 0 && inclusive) {
-			return
-		}
-	}
-	r.lo, r.loInclusive, r.hasLo = v, inclusive, true
-}
-
-// setHi keeps the tighter of the current and the given upper bound.
-func (r *scalarRange) setHi(v any, inclusive bool) {
-	if r.hasHi {
-		c := compareScalars(v, r.hi)
-		if c > 0 || (c == 0 && inclusive) {
-			return
-		}
-	}
-	r.hi, r.hiInclusive, r.hasHi = v, inclusive, true
-}
-
-// within reports whether every value r admits is admitted by outer. Each bound
-// is checked on its own, which also holds for array fields, where each bound
-// may be met by a different element.
-func (r scalarRange) within(outer scalarRange) bool {
-	if outer.hasLo {
-		if !r.hasLo || !sameRangeBracket(r.lo, outer.lo) {
-			return false
-		}
-		c := compareScalars(r.lo, outer.lo)
-		if c < 0 || (c == 0 && r.loInclusive && !outer.loInclusive) {
-			return false
-		}
-	}
-	if outer.hasHi {
-		if !r.hasHi || !sameRangeBracket(r.hi, outer.hi) {
-			return false
-		}
-		c := compareScalars(r.hi, outer.hi)
-		if c > 0 || (c == 0 && r.hiInclusive && !outer.hiInclusive) {
-			return false
-		}
-	}
-	return true
+// partialIndexServes reports whether every document filter matches under
+// queryCollation lies in idx's partial index, as mongod decides it
+// (backends.QueryImpliesPartialFilter). A filter expression it does not model,
+// or a done ctx, counts as not, leaving the index unused.
+func partialIndexServes(ctx context.Context, filter *types.Document, idx backends.IndexInfo, queryCollation *types.Document) bool {
+	implied, known, err := backends.QueryImpliesPartialFilter(ctx, filter, idx.PartialFilterExpression, queryCollation, idx.Collation)
+	return err == nil && known && implied
 }
 
 // indexCandidateScore orders indexes sharing a leading field, as MongoDB's
@@ -2221,7 +2043,7 @@ func boundedKeyFields(idx backends.IndexInfo, filter *types.Document) int {
 // pickIndexForFilter returns the index a count or distinct explains reading
 // for filter. arrayFilters admits an $elemMatch of operators and an equality
 // to [], which a count reads from the index and fetches.
-func pickIndexForFilter(filter *types.Document, idxInfos []backends.IndexInfo, queryCollation *types.Document, arrayFilters bool) (backends.IndexInfo, bool) {
+func pickIndexForFilter(ctx context.Context, filter *types.Document, idxInfos []backends.IndexInfo, queryCollation *types.Document, arrayFilters bool) (backends.IndexInfo, bool) {
 	queryIdentity := collation.Parse(queryCollation).Identity()
 	if filter == nil || filter.Len() == 0 {
 		return backends.IndexInfo{}, false
@@ -2265,7 +2087,7 @@ func pickIndexForFilter(filter *types.Document, idxInfos []backends.IndexInfo, q
 				continue
 			}
 			partial := idx.PartialFilterExpression != nil
-			if partial && !filterImpliesPartial(filter, idx.PartialFilterExpression, collation.Parse(idx.Collation).IsSimple()) {
+			if partial && !partialIndexServes(ctx, filter, idx, queryCollation) {
 				continue
 			}
 			score := scoreIndexCandidate(idx, filter, nil, partial)
@@ -2520,7 +2342,7 @@ func buildCountOrDistinctPlan(ctx context.Context, params *backends.ExplainParam
 			}
 		}
 		if !indexPicked {
-			picked, indexPicked = pickIndexForFilter(equalitiesAlone(params.Filter, collation.Parse(params.Collation).IsSimple()), idxInfos, params.Collation, params.Command == "count")
+			picked, indexPicked = pickIndexForFilter(ctx, equalitiesAlone(params.Filter, collation.Parse(params.Collation).IsSimple()), idxInfos, params.Collation, params.Command == "count")
 		}
 	}
 	if params.Command == "count" {
@@ -3846,7 +3668,7 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 		if idx.Lossy {
 			continue
 		}
-		if idx.PartialFilterExpression != nil && !filterImpliesPartial(filter, idx.PartialFilterExpression, collation.Parse(idx.Collation).IsSimple()) {
+		if idx.PartialFilterExpression != nil && !partialIndexServes(ctx, filter, idx, queryCollation) {
 			continue
 		}
 		if collation.Parse(idx.Collation).Identity() != queryIdentity && !backends.CollationFree(must.NotFail(filter.Get(field))) {
@@ -3950,7 +3772,7 @@ func (c *collection) tryExactIndexedCount(ctx context.Context, state *dbState, f
 	var start, end []byte
 	for i, idx := range idxInfos {
 		if idx.Lossy || collation.Parse(idx.Collation).Identity() != queryColl.Identity() && !allCollationFree(filter) ||
-			idx.PartialFilterExpression != nil && !filterImpliesPartial(filter, idx.PartialFilterExpression, collation.Parse(idx.Collation).IsSimple()) ||
+			idx.PartialFilterExpression != nil && !partialIndexServes(ctx, filter, idx, queryCollation) ||
 			backends.HintRequiresExistingIndex(hint) && backends.MatchHintedIndex(hint, []backends.IndexInfo{idx}) != idx.Name {
 			continue
 		}

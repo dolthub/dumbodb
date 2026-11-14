@@ -292,9 +292,7 @@ func decodeIndexDefinition(doc *types.Document) (backends.IndexInfo, error) {
 	info.PartialFilterExpression = getDoc("partial")
 	info.Collation = getDoc("collation")
 	if pf := info.PartialFilterExpression; pf != nil {
-		info.MatchesPartialFilter = func(doc *types.Document) (bool, error) {
-			return backends.MatchPartialFilter(doc, pf)
-		}
+		info.MatchesPartialFilter = backends.PartialFilterMembership(pf, info.Collation)
 	}
 	return info, nil
 }

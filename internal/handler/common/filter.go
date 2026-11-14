@@ -31,6 +31,7 @@ import (
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 
+	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
@@ -190,7 +191,7 @@ func equalsOrHasElement(value, target any, cmp *collation.Comparator) bool {
 		return false
 	}
 	for i := 0; i < arr.Len(); i++ {
-		if elem, ok := must.NotFail(arr.Get(i)).(*types.Array); ok && types.Compare(elem, targetArr) == types.Equal {
+		if elem, ok := must.NotFail(arr.Get(i)).(*types.Array); ok && collCompare(elem, targetArr, cmp) == types.Equal {
 			return true
 		}
 	}
@@ -1402,13 +1403,7 @@ func filterFieldExprAll(doc *types.Document, filterKey, filterSuffix string, fie
 			}
 			continue
 		}
-		if arr, ok := fieldValue.(*types.Array); ok {
-			if !arr.Contains(q) {
-				return false, nil
-			}
-			continue
-		}
-		if types.Compare(fieldValue, q) != types.Equal {
+		if !equalsOrHasElement(fieldValue, q, cmp) {
 			return false, nil
 		}
 	}
@@ -1769,7 +1764,7 @@ func filterFieldMod(fieldValue, exprValue any) (bool, error) {
 
 // filterFieldExprExists handles {field: {$exists: value}} filter.
 func filterFieldExprExists(fieldExist bool, exprValue any) (bool, error) {
-	expr := existsOperandTrue(exprValue)
+	expr := backends.ExistsOperandTrue(exprValue)
 
 	switch {
 	case fieldExist && expr:
@@ -1827,35 +1822,6 @@ func arrayHasUndefined(arr *types.Array) bool {
 
 func errCompareToUndefined(argument string) error {
 	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue, "cannot compare to undefined", argument)
-}
-
-// existsOperandTrue reports whether $exists's operand asks for the field to
-// exist: false, zero numbers and null mean no, any other value yes.
-func existsOperandTrue(v any) bool {
-	switch v := v.(type) {
-	case bool:
-		return v
-	case int32:
-		return v != 0
-	case int64:
-		return v != 0
-	case float64:
-		return v != 0
-	case types.Decimal128:
-		return !decimal128IsZero(v)
-	case types.NullType, types.UndefinedType:
-		return false
-	}
-	return true
-}
-
-// decimal128IsZero reports whether d, an IEEE 754 BID decimal, is a zero of
-// any sign and exponent; a non-canonical coefficient counts as zero.
-func decimal128IsZero(d types.Decimal128) bool {
-	if (d.H>>61)&3 == 3 {
-		return (d.H>>58)&0x1f < 0x1e
-	}
-	return d.H&(1<<49-1) == 0 && d.L == 0
 }
 
 // filterFieldExprType handles {field: {$type: value}} filter.
@@ -2273,11 +2239,14 @@ func renameIDInFilter(filter *types.Document) *types.Document {
 }
 
 func elemMatchArrayElement(elem *types.Array, filterKey, filterSuffix string, expr *types.Document, cmp *collation.Comparator) (bool, error) {
+	compareElem := func(v any) types.CompareResult {
+		return collCompareOrder(elem, v, cmp)
+	}
 	equalsElem := func(v any) bool {
 		if _, isRegex := v.(types.Regex); isRegex {
 			return false
 		}
-		return types.CompareOrder(elem, v, types.Ascending) == types.Equal
+		return compareElem(v) == types.Equal
 	}
 	for _, op := range expr.Keys() {
 		v := must.NotFail(expr.Get(op))
@@ -2290,8 +2259,8 @@ func elemMatchArrayElement(elem *types.Array, filterKey, filterSuffix string, ex
 		case "$ne":
 			ok = !equalsElem(v)
 		case "$gt", "$gte", "$lt", "$lte":
-			if other, isArray := v.(*types.Array); isArray {
-				c := types.CompareOrder(elem, other, types.Ascending)
+			if _, isArray := v.(*types.Array); isArray {
+				c := compareElem(v)
 				switch op {
 				case "$gt":
 					ok = c == types.Greater
@@ -2337,7 +2306,7 @@ func elemMatchArrayElement(elem *types.Array, filterKey, filterSuffix string, ex
 				ok = true
 			}
 		case "$exists":
-			ok = existsOperandTrue(v)
+			ok = backends.ExistsOperandTrue(v)
 		case "$type":
 			codes := []any{v}
 			if list, isArray := v.(*types.Array); isArray {

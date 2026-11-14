@@ -15,17 +15,19 @@
 package dolt
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 
+	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // A partial index whose condition is {$exists: true} serves a query whose
 // condition on the field cannot match a missing field.
-func TestFilterImpliesPartialExists(t *testing.T) {
+func TestPartialIndexServesExists(t *testing.T) {
 	doc := func(pairs ...any) *types.Document { return must.NotFail(types.NewDocument(pairs...)) }
 	arr := func(vs ...any) *types.Array { return must.NotFail(types.NewArray(vs...)) }
 	exists := doc("opt", doc("$exists", true))
@@ -47,7 +49,7 @@ func TestFilterImpliesPartialExists(t *testing.T) {
 		{"$exists false in pfe", doc("opt", doc("$exists", true)), doc("opt", doc("$exists", false)), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, filterImpliesPartial(tc.filter, tc.pfe, true))
+			assert.Equal(t, tc.want, partialIndexServes(context.Background(), tc.filter, backends.IndexInfo{PartialFilterExpression: tc.pfe}, nil))
 		})
 	}
 }

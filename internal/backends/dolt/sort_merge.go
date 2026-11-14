@@ -46,7 +46,7 @@ func tryStreamMergedRanges(ctx context.Context, state *dbState, primary prolly.M
 			}
 		}
 	}
-	choice, ok := chooseIndexRange(idxInfos, params.Filter, hint, params.Collation, params.Fields)
+	choice, ok := chooseIndexRange(ctx, idxInfos, params.Filter, hint, params.Collation, params.Fields)
 	if !ok || len(choice.pointRanges) < 2 || len(choice.pointRanges) > maxMergedScans {
 		return nil, nil, false, nil
 	}
