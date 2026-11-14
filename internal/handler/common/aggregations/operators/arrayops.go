@@ -921,32 +921,31 @@ type reduceOp struct {
 }
 
 func newReduce(args ...any) (Operator, error) {
-	if len(args) != 1 {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$reduce",
-			"$reduce requires a document with 'input', 'initialValue', 'in' fields")
+	op := new(reduceOp)
+	fail := func(code handlererrors.ErrorCode, msg string) error {
+		return handlererrors.NewCommandErrorMsgWithArgument(code, msg, "$reduce")
 	}
-
-	doc, ok := args[0].(*types.Document)
-	if !ok {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$reduce", "$reduce requires a document argument")
+	spec := argObject{
+		notObject: func(arg any) error {
+			return fail(handlererrors.ErrReduceNotObject,
+				"$reduce requires an object as an argument, found: "+handlerparams.AliasFromType(arg))
+		},
+		unknown: func(key string) error {
+			return fail(handlererrors.ErrReduceUnknownField, "$reduce found an unknown argument: "+key)
+		},
+		fields: []argField{
+			{name: "input", set: assign(&op.inputArg, nil),
+				missing: fail(handlererrors.ErrReduceNoInput, "$reduce requires 'input' to be specified")},
+			{name: "initialValue", set: assign(&op.initialValueArg, nil),
+				missing: fail(handlererrors.ErrReduceNoInitialValue, "$reduce requires 'initialValue' to be specified")},
+			{name: "in", set: assign(&op.inArg, nil),
+				missing: fail(handlererrors.ErrReduceNoIn, "$reduce requires 'in' to be specified")},
+		},
 	}
-
-	inputArg, err := doc.Get("input")
-	if err != nil {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$reduce", "Missing 'input' parameter to $reduce")
+	if err := spec.parse(args); err != nil {
+		return nil, err
 	}
-
-	initialValueArg, err := doc.Get("initialValue")
-	if err != nil {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$reduce", "Missing 'initialValue' parameter to $reduce")
-	}
-
-	inArg, err := doc.Get("in")
-	if err != nil {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$reduce", "Missing 'in' parameter to $reduce")
-	}
-
-	return &reduceOp{inputArg: inputArg, initialValueArg: initialValueArg, inArg: inArg}, nil
+	return op, nil
 }
 
 func (op *reduceOp) Process(doc *types.Document) (any, error) {

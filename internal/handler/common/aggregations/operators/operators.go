@@ -231,6 +231,7 @@ var wholeArgumentOperators = map[string]struct{}{
 	"$minute":         {},
 	"$month":          {},
 	"$rand":           {},
+	"$reduce":         {},
 	"$regexFind":      {},
 	"$regexFindAll":   {},
 	"$regexMatch":     {},
