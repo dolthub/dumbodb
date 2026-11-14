@@ -131,7 +131,7 @@ func normalizeFilter(filter *types.Document) *types.Document {
 	keys, values := filter.Keys(), filter.Values()
 	var changed []any
 	for i, key := range keys {
-		if v := normalizeCondition(key, values[i]); v != values[i] {
+		if v, ok := normalizeCondition(key, values[i]); ok {
 			if changed == nil {
 				changed = slices.Clone(values)
 			}
@@ -169,14 +169,15 @@ func normalizeFilter(filter *types.Document) *types.Document {
 	return must.NotFail(types.NewDocument("$and", and))
 }
 
-// normalizeCondition normalizes the filters nested in one filter field: the
-// clauses of a logical operator and an $elemMatch query.
-func normalizeCondition(key string, value any) any {
+// normalizeCondition normalizes the filters nested in one filter field (the
+// clauses of a logical operator and an $elemMatch query), reporting whether
+// it changed the value.
+func normalizeCondition(key string, value any) (any, bool) {
 	switch key {
 	case "$and", "$or", "$nor":
 		clauses, ok := value.(*types.Array)
 		if !ok {
-			return value
+			return value, false
 		}
 		var out *types.Array
 		for i := range clauses.Len() {
@@ -195,24 +196,24 @@ func normalizeCondition(key string, value any) any {
 			}
 		}
 		if out == nil {
-			return value
+			return value, false
 		}
-		return out
+		return out, true
 	}
 	if strings.HasPrefix(key, "$") {
-		return value
+		return value, false
 	}
 	cond, ok := value.(*types.Document)
 	if !ok || !isOperatorDocument(cond) {
-		return value
+		return value, false
 	}
 	query, ok := uniqueField(cond, "$elemMatch").(*types.Document)
 	if !ok || isFieldOperatorExpression(query) {
-		return value
+		return value, false
 	}
 	normalized := normalizeFilter(query)
 	if normalized == query {
-		return value
+		return value, false
 	}
 	out := types.MakeDocument(cond.Len())
 	for i, op := range cond.Keys() {
@@ -222,7 +223,7 @@ func normalizeCondition(key string, value any) any {
 		}
 		out.Set(op, v)
 	}
-	return out
+	return out, true
 }
 
 // splitRepeatedOperators returns one {key: {op: value}} clause per operator
