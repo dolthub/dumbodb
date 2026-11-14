@@ -1068,6 +1068,9 @@ func (h *Handler) aggregateSourceDocuments(connCtx context.Context, document *ty
 		if err := documentsNotFirst(sd, i); err != nil {
 			return nil, err
 		}
+		if sd.Command() == "$listLocalSessions" {
+			return nil, firstStageOnlyError("$listLocalSessions")
+		}
 		var s aggregations.Stage
 		var err error
 		switch sd.Command() {
@@ -1082,6 +1085,9 @@ func (h *Handler) aggregateSourceDocuments(connCtx context.Context, document *ty
 		}
 		if err != nil {
 			return nil, err
+		}
+		if sd.Command() == "$collStats" {
+			return nil, firstStageOnlyError("$collStats")
 		}
 		pipelineStages = append(pipelineStages, s)
 	}
@@ -1984,6 +1990,13 @@ func buildMergeKey(doc *types.Document, fields []string) string {
 	}
 
 	return key
+}
+
+// firstStageOnlyError is mongod's error for the stage name, which must be
+// first, in a later position.
+func firstStageOnlyError(name string) error {
+	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCollStatsIsNotFirstStage,
+		name+" is only valid as the first stage in a pipeline", name+" (stage)")
 }
 
 // documentsNotFirst is mongod's error for $documents after the first stage.
