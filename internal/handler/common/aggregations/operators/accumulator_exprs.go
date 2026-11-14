@@ -72,13 +72,14 @@ func (op *extremeOp) Process(doc *types.Document) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	var best any
+	var best, bestKey any
 	for _, v := range values {
 		if isNullish(v) {
 			continue
 		}
-		if best == nil || types.CompareOrder(op.cmp.KeyValue(v), op.cmp.KeyValue(best), types.Ascending) == op.want {
-			best = v
+		key := op.cmp.KeyValue(v)
+		if best == nil || types.CompareOrder(key, bestKey, types.Ascending) == op.want {
+			best, bestKey = v, key
 		}
 	}
 	if best == nil {
@@ -223,11 +224,7 @@ func (op *nOp) Process(doc *types.Document) (any, error) {
 	switch op.name {
 	case "$minN":
 		// The n smallest, of tied values the earliest, as mongod keeps them.
-		values = slices.DeleteFunc(values, isNullish)
-		slices.SortStableFunc(values, func(a, b any) int {
-			return int(types.CompareOrder(op.cmp.KeyValue(a), op.cmp.KeyValue(b), types.Ascending))
-		})
-		values = values[:min(int64(len(values)), n)]
+		values = smallestN(slices.DeleteFunc(values, isNullish), n, op.cmp)
 	case "$maxN":
 		values = largestN(slices.DeleteFunc(values, isNullish), n, op.cmp)
 	case "$firstN":
@@ -313,16 +310,34 @@ func formatCoercedDouble(x float64) string {
 	return strconv.FormatFloat(x, 'g', -1, 64)
 }
 
+// smallestN returns the n smallest values, of tied values the earliest, as
+// mongod's $minN keeps them.
+func smallestN(values []any, n int64, cmp *collation.Comparator) []any {
+	keyed := make([][2]any, len(values))
+	for i, v := range values {
+		keyed[i] = [2]any{v, cmp.KeyValue(v)}
+	}
+	slices.SortStableFunc(keyed, func(a, b [2]any) int {
+		return int(types.CompareOrder(a[1], b[1], types.Ascending))
+	})
+	out := make([]any, min(int64(len(keyed)), n))
+	for i := range out {
+		out[i] = keyed[i][0]
+	}
+	return out
+}
+
 // largestN returns the n largest values, greatest first, as mongod's $maxN
 // keeps them: a value that only ties the least kept one is refused, and a
 // greater one evicts the earliest of the least.
 func largestN(values []any, n int64, cmp *collation.Comparator) []any {
 	type entry struct {
 		v   any
+		key any
 		seq int
 	}
 	order := func(a, b entry) int {
-		if c := types.CompareOrder(cmp.KeyValue(a.v), cmp.KeyValue(b.v), types.Ascending); c != types.Equal {
+		if c := types.CompareOrder(a.key, b.key, types.Ascending); c != types.Equal {
 			return int(c)
 		}
 		return a.seq - b.seq
@@ -346,7 +361,7 @@ func largestN(values []any, n int64, cmp *collation.Comparator) []any {
 		}
 	}
 	for i, v := range values {
-		e := entry{v: v, seq: i}
+		e := entry{v: v, key: cmp.KeyValue(v), seq: i}
 		if int64(len(kept)) < n {
 			kept = append(kept, e)
 			for j := len(kept) - 1; j > 0 && order(kept[j], kept[(j-1)/2]) < 0; j = (j - 1) / 2 {
@@ -354,7 +369,7 @@ func largestN(values []any, n int64, cmp *collation.Comparator) []any {
 			}
 			continue
 		}
-		if types.CompareOrder(cmp.KeyValue(v), cmp.KeyValue(kept[0].v), types.Ascending) == types.Greater {
+		if types.CompareOrder(e.key, kept[0].key, types.Ascending) == types.Greater {
 			kept[0] = e
 			down(0)
 		}

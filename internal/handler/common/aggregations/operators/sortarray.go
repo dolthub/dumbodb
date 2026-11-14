@@ -147,27 +147,33 @@ func (op *sortArrayOp) Process(doc *types.Document) (any, error) {
 		return arr, nil
 	}
 
-	values := make([]any, arr.Len())
-	for i := range values {
-		values[i] = must.NotFail(arr.Get(i))
+	// Each element is keyed under the collation once, not per comparison.
+	keyed := make([][2]any, arr.Len())
+	for i := range keyed {
+		v := must.NotFail(arr.Get(i))
+		keyed[i] = [2]any{v, op.cmp.KeyValue(v)}
 	}
-	stdsort.Sort(values, op.less)
+	stdsort.Sort(keyed, func(a, b [2]any) bool { return op.less(a[1], b[1]) })
+	values := make([]any, len(keyed))
+	for i, e := range keyed {
+		values[i] = e[0]
+	}
 	return must.NotFail(types.NewArray(values...)), nil
 }
 
 // less is PatternValueCmp: whole values compare in BSON order; otherwise
 // each element is keyed by the pattern's fields, missing ones and every
-// field of a non-document being null.
+// field of a non-document being null. a and b are collation keys.
 func (op *sortArrayOp) less(a, b any) bool {
 	if op.fields == nil {
 		if op.order < 0 {
 			a, b = b, a
 		}
-		return types.CompareOrder(op.cmp.KeyValue(a), op.cmp.KeyValue(b), types.Ascending) == types.Less
+		return types.CompareOrder(a, b, types.Ascending) == types.Less
 	}
 
 	for _, f := range op.fields {
-		c := types.CompareOrder(op.cmp.KeyValue(sortArrayKey(a, f.path)), op.cmp.KeyValue(sortArrayKey(b, f.path)), types.Ascending)
+		c := types.CompareOrder(sortArrayKey(a, f.path), sortArrayKey(b, f.path), types.Ascending)
 		if c == types.Equal {
 			continue
 		}

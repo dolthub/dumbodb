@@ -16,7 +16,6 @@ package common
 
 import (
 	"github.com/dolthub/dumbodb/internal/collation"
-	"github.com/dolthub/dumbodb/internal/handler/commonpath"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
@@ -181,29 +180,4 @@ func arrayStringKeys(v any, cmp *collation.Comparator) any {
 		return out
 	}
 	return v
-}
-
-// lessFuncCollated returns a sort comparator that orders strings under cmp,
-// also inside documents and arrays.
-func lessFuncCollated(sortPath types.Path, sortType types.SortType, cmp *collation.Comparator) func(a, b *types.Document) bool {
-	return func(a, b *types.Document) bool {
-		aField := commonpath.SortKeyValue(a, sortPath)
-		bField := commonpath.SortKeyValue(b, sortPath)
-
-		aStr, aIsStr := aField.(string)
-		bStr, bIsStr := bField.(string)
-
-		if aIsStr && bIsStr {
-			sign := cmp.CompareStrings(aStr, bStr)
-			if sign == 0 {
-				return false
-			}
-			if sortType == types.Ascending {
-				return sign < 0
-			}
-			return sign > 0
-		}
-
-		return types.CompareOrderForSort(cmp.KeyValue(aField), cmp.KeyValue(bField), sortType) == types.Less
-	}
 }

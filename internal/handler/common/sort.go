@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"math"
 	"slices"
-	"sort"
 	"strings"
 
 	"github.com/dolthub/dumbodb/internal/collation"
@@ -36,29 +35,71 @@ import (
 //
 // If sort path is invalid, it returns a possibly wrapped types.PathError.
 func SortDocuments(docs []*types.Document, sortDoc *types.Document) error {
+	return sortDocuments(docs, sortDoc, nil)
+}
+
+// sortDocuments sorts docs with strings ordered under coll, nil for binary.
+func sortDocuments(docs []*types.Document, sortDoc *types.Document, coll *collation.Comparator) error {
 	if sortDoc.Len() == 0 {
 		return nil
 	}
 
+	sk, err := newSortKeyer(sortDoc, coll)
+	if err != nil {
+		return err
+	}
+
+	// Decorate-sort-undecorate: extract all sort keys for each doc once
+	// up front, then sort into that table. This drops per-compare
+	// GetByPath and collation key calls (~2*N*log N) to N.
+	rows := make([]sortRow, len(docs))
+	for i, d := range docs {
+		rows[i] = sortRow{doc: d, keys: sk.keysOf(d)}
+	}
+	sk.sortRows(rows)
+	for i, r := range rows {
+		docs[i] = r.doc
+	}
+
+	return nil
+}
+
+// sortRow is a document with its extracted sort keys.
+type sortRow struct {
+	doc  *types.Document
+	keys []any
+}
+
+// sortKeyer extracts and compares the sort keys of a sort specification.
+type sortKeyer struct {
+	sortTypes []types.SortType
+	// isMeta[k] short-circuits comparison when key k is {$meta: "textScore"}.
+	isMeta []bool
+	paths  []types.Path
+	// wholeID: mongod assumes _id is never an array, as in stored documents,
+	// so a sort on _id alone compares whole values, arrays included.
+	wholeID bool
+	coll    *collation.Comparator
+}
+
+func newSortKeyer(sortDoc *types.Document, coll *collation.Comparator) (*sortKeyer, error) {
 	if sortDoc.Len() > 32 {
-		return lazyerrors.Errorf("maximum sort keys exceeded: %v", sortDoc.Len())
+		return nil, lazyerrors.Errorf("maximum sort keys exceeded: %v", sortDoc.Len())
 	}
 
 	nKeys := sortDoc.Len()
-	sortTypes := make([]types.SortType, nKeys)
-	// isMeta[k] short-circuits comparison when key k is {$meta: "textScore"}.
-	isMeta := make([]bool, nKeys)
-	paths := make([]types.Path, nKeys)
+	sk := &sortKeyer{
+		sortTypes: make([]types.SortType, nKeys),
+		isMeta:    make([]bool, nKeys),
+		paths:     make([]types.Path, nKeys),
+		coll:      coll,
+	}
 
 	for i, sortKey := range sortDoc.Keys() {
-		fields := strings.Split(sortKey, ".")
-
-		switch {
-		case sortKey == "$natural":
-		default:
-			for _, field := range fields {
+		if sortKey != "$natural" {
+			for _, field := range strings.Split(sortKey, ".") {
 				if strings.HasPrefix(field, "$") {
-					return handlererrors.NewCommandErrorMsgWithArgument(
+					return nil, handlererrors.NewCommandErrorMsgWithArgument(
 						handlererrors.ErrFieldPathInvalidName,
 						"FieldPath field names may not start with '$'. Consider using $getField or $setField.",
 						"sort",
@@ -71,64 +112,86 @@ func SortDocuments(docs []*types.Document, sortDoc *types.Document) error {
 
 		if isMetaTextScore(sortField) {
 			// All docs have the same text score (0.0); preserve stable order.
-			isMeta[i] = true
-			sortTypes[i] = types.Ascending
+			sk.isMeta[i] = true
+			sk.sortTypes[i] = types.Ascending
 			continue
 		}
 
 		sortType, err := GetSortType(sortKey, sortField)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		sortPath, err := types.NewPathFromString(sortKey)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
-		sortTypes[i] = sortType
-		paths[i] = sortPath
+		sk.sortTypes[i] = sortType
+		sk.paths[i] = sortPath
 	}
 
-	// Decorate-sort-undecorate: extract all sort keys for each doc once
-	// up front, then sort indices into that table. This drops per-compare
-	// GetByPath calls (~2*N*log N) to N.
-	// mongod assumes _id is never an array, as in stored documents, so a
-	// sort on _id alone compares whole values, arrays included.
-	wholeID := nKeys == 1 && !isMeta[0] && sortDoc.Command() == "_id"
-	keys := make([][]any, len(docs))
-	for di, d := range docs {
-		row := make([]any, nKeys)
-		for k := 0; k < nKeys; k++ {
-			if isMeta[k] {
-				continue
-			}
-			if wholeID {
-				id, err := d.Get("_id")
-				if err != nil {
-					id = types.Null
-				}
-				row[k] = must.NotFail(types.NewArray(id))
-				continue
-			}
-			row[k] = commonpath.SortKeyValue(d, paths[k])
+	sk.wholeID = nKeys == 1 && !sk.isMeta[0] && sortDoc.Command() == "_id"
+
+	return sk, nil
+}
+
+// keysOf returns d's sort keys, collation-keyed.
+func (sk *sortKeyer) keysOf(d *types.Document) []any {
+	row := make([]any, len(sk.paths))
+	for k := range row {
+		if sk.isMeta[k] {
+			continue
 		}
-		keys[di] = row
+		if sk.wholeID {
+			id, err := d.Get("_id")
+			if err != nil {
+				id = types.Null
+			}
+			row[k] = sk.coll.KeyValue(must.NotFail(types.NewArray(id)))
+			continue
+		}
+		row[k] = sortElement(sk.coll.KeyValue(commonpath.SortKeyValue(d, sk.paths[k])), sk.sortTypes[k])
 	}
+	return row
+}
 
-	// Sorting positions with ties broken by position is stable, and pdqsort
-	// does far fewer comparisons than sort.Stable's insertion-merge.
-	order := make([]int, len(docs))
+// sortElement returns the element of a non-empty array that a sort in order
+// compares, its least or greatest, so comparisons need not find it again.
+// Other values, and arrays whose element is itself an array, are returned
+// unchanged.
+func sortElement(v any, order types.SortType) any {
+	arr, ok := v.(*types.Array)
+	if !ok || arr.Len() == 0 {
+		return v
+	}
+	var e any
+	if order == types.Ascending {
+		e = arr.Min()
+	} else {
+		e = arr.Max()
+	}
+	if _, nested := e.(*types.Array); nested {
+		return v
+	}
+	return e
+}
+
+// sortRows sorts rows stably by their keys. Sorting positions with ties
+// broken by position is stable, and pdqsort does far fewer comparisons than
+// sort.Stable's insertion-merge.
+func (sk *sortKeyer) sortRows(rows []sortRow) {
+	order := make([]int, len(rows))
 	for i := range order {
 		order[i] = i
 	}
 	slices.SortFunc(order, func(i, j int) int {
-		a, b := keys[i], keys[j]
-		for k := 0; k < nKeys; k++ {
-			if isMeta[k] {
+		a, b := rows[i].keys, rows[j].keys
+		for k := range a {
+			if sk.isMeta[k] {
 				continue
 			}
-			switch compareSortKeys(a[k], b[k], sortTypes[k]) {
+			switch compareSortKeys(a[k], b[k], sk.sortTypes[k]) {
 			case types.Less:
 				return -1
 			case types.Greater:
@@ -137,13 +200,11 @@ func SortDocuments(docs []*types.Document, sortDoc *types.Document) error {
 		}
 		return cmp.Compare(i, j)
 	})
-	sorted := make([]*types.Document, len(docs))
+	sorted := make([]sortRow, len(rows))
 	for i, o := range order {
-		sorted[i] = docs[o]
+		sorted[i] = rows[o]
 	}
-	copy(docs, sorted)
-
-	return nil
+	copy(rows, sorted)
 }
 
 // compareSortKeys is types.CompareOrderForSort with a fast path for two
@@ -196,68 +257,10 @@ func compareSortKeys(a, b any, order types.SortType) types.CompareResult {
 	return types.Equal
 }
 
-// SortDocumentsWithCollation sorts documents like SortDocuments but uses
-// case-insensitive string comparison when caseInsensitive is true.
+// SortDocumentsWithCollation sorts documents like SortDocuments, with
+// strings ordered under cmp, also inside documents and arrays.
 func SortDocumentsWithCollation(docs []*types.Document, sortDoc *types.Document, cmp *collation.Comparator) error {
-	if cmp == nil {
-		return SortDocuments(docs, sortDoc)
-	}
-
-	if sortDoc.Len() == 0 {
-		return nil
-	}
-
-	if sortDoc.Len() > 32 {
-		return lazyerrors.Errorf("maximum sort keys exceeded: %v", sortDoc.Len())
-	}
-
-	sortFuncs := make([]sortFunc, sortDoc.Len())
-
-	for i, sortKey := range sortDoc.Keys() {
-		fields := strings.Split(sortKey, ".")
-
-		switch {
-		case sortKey == "$natural":
-		default:
-			for _, field := range fields {
-				if strings.HasPrefix(field, "$") {
-					return handlererrors.NewCommandErrorMsgWithArgument(
-						handlererrors.ErrFieldPathInvalidName,
-						"FieldPath field names may not start with '$'. Consider using $getField or $setField.",
-						"sort",
-					)
-				}
-			}
-		}
-
-		sortField := must.NotFail(sortDoc.Get(sortKey))
-
-		if isMetaTextScore(sortField) {
-			sortFuncs[i] = func(a, b *types.Document) bool { return false }
-			continue
-		}
-
-		sortType, err := GetSortType(sortKey, sortField)
-		if err != nil {
-			return err
-		}
-
-		sortPath, err := types.NewPathFromString(sortKey)
-		if err != nil {
-			return err
-		}
-
-		sortFuncs[i] = lessFuncCollated(sortPath, sortType, cmp)
-	}
-
-	if len(sortFuncs) == 0 {
-		return nil
-	}
-
-	sorter := &docsSorter{docs: docs, sorts: sortFuncs}
-	sort.Stable(sorter)
-
-	return nil
+	return sortDocuments(docs, sortDoc, cmp)
 }
 
 // ValidateSortDocument validates sort documents, and return
@@ -319,43 +322,6 @@ func ValidateSortDocument(sortDoc *types.Document) (*types.Document, error) {
 	}
 
 	return res, nil
-}
-
-type sortFunc func(a, b *types.Document) bool
-
-type docsSorter struct {
-	docs  []*types.Document
-	sorts []sortFunc
-}
-
-func (ds *docsSorter) Len() int {
-	return len(ds.docs)
-}
-
-func (ds *docsSorter) Swap(i, j int) {
-	ds.docs[i], ds.docs[j] = ds.docs[j], ds.docs[i]
-}
-
-func (ds *docsSorter) Less(i, j int) bool {
-	p, q := ds.docs[i], ds.docs[j]
-	// Try all but the last comparison.
-	var k int
-	for k = 0; k < len(ds.sorts)-1; k++ {
-		sortFunc := ds.sorts[k]
-
-		switch {
-		case sortFunc(p, q):
-			// p < q, so we have a decision.
-			return true
-		case sortFunc(q, p):
-			// p > q, so we have a decision.
-			return false
-		}
-		// p == q; try the next comparison.
-	}
-	// All comparisons to here said "equal", so just return whatever
-	// the final comparison reports.
-	return ds.sorts[k](p, q)
 }
 
 // GetSortType determines SortType from input sort value.

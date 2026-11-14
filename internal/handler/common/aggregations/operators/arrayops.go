@@ -442,8 +442,9 @@ func (op *indexOfArrayOp) Process(doc *types.Document) (any, error) {
 		end = min(end, len(items))
 	}
 
+	searchKey := op.cmp.KeyValue(search)
 	for i := start; i < end; i++ {
-		if compareCollated(op.cmp, items[i], search) == types.Equal {
+		if types.CompareForAggregation(op.cmp.KeyValue(items[i]), searchKey) == types.Equal {
 			return int32(i), nil
 		}
 	}
@@ -646,8 +647,9 @@ func (op *inArrayOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
+	valKey := op.cmp.KeyValue(val)
 	for _, item := range items {
-		if compareCollated(op.cmp, item, val) == types.Equal {
+		if types.CompareForAggregation(op.cmp.KeyValue(item), valKey) == types.Equal {
 			return true, nil
 		}
 	}

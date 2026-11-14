@@ -98,27 +98,20 @@ func (s *sortByCount) Process(ctx context.Context, iter types.DocumentsIterator,
 		m.increment(id)
 	}
 
-	// Convert to result slice and sort by count desc, then _id asc for ties.
-	res := make([]*types.Document, 0, len(m.entries))
+	// Sort by count desc, then _id asc for ties, as
+	// $group + $sort{count:-1, _id:1}.
+	entries := m.entries
+	stdsort.Slice(entries, func(i, j int) bool {
+		if entries[i].count != entries[j].count {
+			return entries[i].count > entries[j].count
+		}
+		return types.CompareForAggregation(entries[i].key, entries[j].key) == types.Less
+	})
 
-	for _, e := range m.entries {
+	res := make([]*types.Document, 0, len(entries))
+	for _, e := range entries {
 		res = append(res, must.NotFail(types.NewDocument("_id", e.id, "count", e.count)))
 	}
-
-	stdsort.Slice(res, func(i, j int) bool {
-		ci := must.NotFail(res[i].Get("count")).(int32)
-		cj := must.NotFail(res[j].Get("count")).(int32)
-
-		if ci != cj {
-			return ci > cj
-		}
-
-		// Break ties by _id ascending per spec: $sortByCount === $group + $sort{count:-1, _id:1}.
-		idi := must.NotFail(res[i].Get("_id"))
-		idj := must.NotFail(res[j].Get("_id"))
-
-		return types.CompareForAggregation(s.cmp.KeyValue(idi), s.cmp.KeyValue(idj)) == types.Less
-	})
 
 	result := iterator.Values(iterator.ForSlice(res))
 	closer.Add(result)
@@ -175,6 +168,7 @@ func evaluateGroupExpr(groupExpr any, doc *types.Document) (any, error) {
 
 type sortByCountEntry struct {
 	id    any
+	key   any
 	count int32
 }
 
@@ -186,14 +180,15 @@ type sortByCountMap struct {
 
 // increment adds 1 to the count for the given id, creating a new entry if needed.
 func (m *sortByCountMap) increment(id any) {
+	key := m.cmp.KeyValue(id)
 	for i, e := range m.entries {
-		if types.CompareForAggregation(m.cmp.KeyValue(id), m.cmp.KeyValue(e.id)) == types.Equal {
+		if types.CompareForAggregation(key, e.key) == types.Equal {
 			m.entries[i].count++
 			return
 		}
 	}
 
-	m.entries = append(m.entries, sortByCountEntry{id: id, count: 1})
+	m.entries = append(m.entries, sortByCountEntry{id: id, key: key, count: 1})
 }
 
 var (

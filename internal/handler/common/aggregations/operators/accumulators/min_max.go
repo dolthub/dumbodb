@@ -78,7 +78,9 @@ type extremeState struct {
 	arg    operand
 	want   types.CompareResult
 	result any
-	cmp    *collation.Comparator
+	// resultKey is result's collation key, computed once per kept value.
+	resultKey any
+	cmp       *collation.Comparator
 	// lastTie replaces the running value with an equal one, as SBE does.
 	lastTie bool
 }
@@ -94,13 +96,14 @@ func (s *extremeState) Accumulate(doc *types.Document) error {
 		return nil
 	}
 
+	key := s.cmp.KeyValue(val)
 	if s.result == nil {
-		s.result = val
+		s.result, s.resultKey = val, key
 		return nil
 	}
 
-	if c := types.CompareOrder(s.cmp.KeyValue(val), s.cmp.KeyValue(s.result), types.Ascending); c == s.want || (s.lastTie && c == types.Equal) {
-		s.result = val
+	if c := types.CompareOrder(key, s.resultKey, types.Ascending); c == s.want || (s.lastTie && c == types.Equal) {
+		s.result, s.resultKey = val, key
 	}
 
 	return nil

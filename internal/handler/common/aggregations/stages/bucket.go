@@ -55,6 +55,8 @@ type bucket struct {
 	hasDefault   bool
 	output       []bucketOutput
 	cmp          *collation.Comparator
+	// boundaryKeys are the boundaries keyed under cmp.
+	boundaryKeys []any
 }
 
 // useSBE implements sbeAware.
@@ -239,6 +241,10 @@ func newBucket(stage *types.Document) (aggregations.Stage, error) {
 		output:       output,
 		cmp:          operators.CollationOf(stage),
 	}
+	b.boundaryKeys = make([]any, len(boundaries))
+	for i, boundary := range boundaries {
+		b.boundaryKeys[i] = b.cmp.KeyValue(boundary)
+	}
 
 	if hasDefault {
 		lower, upper := boundaries[0], boundaries[len(boundaries)-1]
@@ -357,22 +363,25 @@ func (s *bucketState) appendTo(doc *types.Document) error {
 
 // findBucket returns the bucket index for a value, or -1 if out of range.
 func (b *bucket) findBucket(val any) int {
+	bounds := b.boundaryKeys
+	key := b.cmp.KeyValue(val)
+
 	// Binary search for the bucket where boundaries[i] <= val < boundaries[i+1].
-	lo, hi := 0, len(b.boundaries)-2
+	lo, hi := 0, len(bounds)-2
 
 	// First check if val is below the first boundary or at/above the last.
-	if types.CompareOrder(b.cmp.KeyValue(val), b.cmp.KeyValue(b.boundaries[0]), types.Ascending) == types.Less {
+	if types.CompareOrder(key, bounds[0], types.Ascending) == types.Less {
 		return -1
 	}
 
-	if types.CompareOrder(b.cmp.KeyValue(val), b.cmp.KeyValue(b.boundaries[len(b.boundaries)-1]), types.Ascending) != types.Less {
+	if types.CompareOrder(key, bounds[len(bounds)-1], types.Ascending) != types.Less {
 		return -1
 	}
 
 	for lo <= hi {
 		mid := (lo + hi) / 2
-		cmpLower := types.CompareOrder(b.cmp.KeyValue(val), b.cmp.KeyValue(b.boundaries[mid]), types.Ascending)
-		cmpUpper := types.CompareOrder(b.cmp.KeyValue(val), b.cmp.KeyValue(b.boundaries[mid+1]), types.Ascending)
+		cmpLower := types.CompareOrder(key, bounds[mid], types.Ascending)
+		cmpUpper := types.CompareOrder(key, bounds[mid+1], types.Ascending)
 
 		if cmpLower != types.Less && cmpUpper == types.Less {
 			return mid

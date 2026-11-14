@@ -223,9 +223,9 @@ func (s *nState) Accumulate(doc *types.Document) error {
 		s.n, s.ready = n, true
 		switch s.spec.name {
 		case "$minN":
-			s.ranked = newRankedSet(n, compareValuesUnder(s.cmp), false, s.spec.n.sbe)
+			s.ranked = newRankedSet(n, compareKeyed, false, s.spec.n.sbe)
 		case "$maxN":
-			s.ranked = newRankedSet(n, compareValuesUnder(s.cmp), true, s.spec.n.sbe)
+			s.ranked = newRankedSet(n, compareKeyed, true, s.spec.n.sbe)
 		}
 		if s.ranked != nil {
 			s.ranked.all = s.all
@@ -241,7 +241,7 @@ func (s *nState) Accumulate(doc *types.Document) error {
 	}
 	if s.ranked != nil {
 		if !missing && !isNull(v) {
-			return s.ranked.add(v, v, &s.mem, s.spec.name)
+			return s.ranked.add(s.cmp.KeyValue(v), v, &s.mem, s.spec.name)
 		}
 		return nil
 	}
@@ -276,12 +276,9 @@ func (s *nState) Result() (any, error) {
 	return out, nil
 }
 
-// compareValuesUnder returns an ascending comparison of values, with strings
-// compared under cmp when it is set.
-func compareValuesUnder(cmp *collation.Comparator) func(a, b any) int {
-	return func(a, b any) int {
-		return int(types.CompareOrder(cmp.KeyValue(a), cmp.KeyValue(b), types.Ascending))
-	}
+// compareKeyed compares two collation-keyed values in ascending order.
+func compareKeyed(a, b any) int {
+	return int(types.CompareOrder(a, b, types.Ascending))
 }
 
 func isNull(v any) bool {

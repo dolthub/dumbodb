@@ -54,31 +54,61 @@ func setOperandError(code handlererrors.ErrorCode, opName, msg string) error {
 	return handlererrors.NewCommandErrorMsgWithArgument(code, msg, opName)
 }
 
-// toSet converts an array to a deduplicated slice.
-func toSet(arr *types.Array, cmp *collation.Comparator) ([]any, error) {
+// keyedValue is a set element with its collation key, computed once so
+// comparisons do not rebuild it.
+type keyedValue struct {
+	v   any
+	key any
+}
+
+// keyedValues returns arr's elements with their collation keys.
+func keyedValues(arr *types.Array, cmp *collation.Comparator) ([]keyedValue, error) {
 	items, err := arrayToSlice(arr)
 	if err != nil {
 		return nil, err
 	}
+	out := make([]keyedValue, len(items))
+	for i, item := range items {
+		out[i] = keyedValue{v: item, key: cmp.KeyValue(item)}
+	}
+	return out, nil
+}
 
-	var result []any
-
-	for _, item := range items {
-		found := false
-
-		for _, existing := range result {
-			if compareCollated(cmp, item, existing) == types.Equal {
-				found = true
-				break
-			}
-		}
-
-		if !found {
-			result = append(result, item)
+// containsKey reports whether set holds an element whose key equals key.
+func containsKey(set []keyedValue, key any) bool {
+	for _, e := range set {
+		if types.CompareForAggregation(key, e.key) == types.Equal {
+			return true
 		}
 	}
+	return false
+}
 
-	return result, nil
+// appendNew appends the elements of items not yet in set.
+func appendNew(set, items []keyedValue) []keyedValue {
+	for _, item := range items {
+		if !containsKey(set, item.key) {
+			set = append(set, item)
+		}
+	}
+	return set
+}
+
+// toSet converts an array to a deduplicated slice.
+func toSet(arr *types.Array, cmp *collation.Comparator) ([]keyedValue, error) {
+	items, err := keyedValues(arr, cmp)
+	if err != nil {
+		return nil, err
+	}
+	return appendNew(nil, items), nil
+}
+
+func keyedToArray(set []keyedValue) *types.Array {
+	arr := types.MakeArray(len(set))
+	for _, e := range set {
+		arr.Append(e.v)
+	}
+	return arr
 }
 
 type setUnionOp struct {
@@ -92,7 +122,7 @@ func newSetUnion(args ...any) (Operator, error) {
 }
 
 func (op *setUnionOp) Process(doc *types.Document) (any, error) {
-	var result []any
+	var result []keyedValue
 	sawNull := false
 	notArray := ""
 
@@ -120,25 +150,12 @@ func (op *setUnionOp) Process(doc *types.Document) (any, error) {
 			continue
 		}
 
-		items, err := arrayToSlice(arr)
+		items, err := keyedValues(arr, op.cmp)
 		if err != nil {
 			return nil, err
 		}
 
-		for _, item := range items {
-			found := false
-
-			for _, existing := range result {
-				if compareCollated(op.cmp, item, existing) == types.Equal {
-					found = true
-					break
-				}
-			}
-
-			if !found {
-				result = append(result, item)
-			}
-		}
+		result = appendNew(result, items)
 	}
 
 	switch {
@@ -148,7 +165,7 @@ func (op *setUnionOp) Process(doc *types.Document) (any, error) {
 		return nil, op.notArrayError(notArray)
 	}
 
-	return sliceToArray(result), nil
+	return keyedToArray(result), nil
 }
 
 func (op *setUnionOp) notArrayError(typeName string) error {
@@ -174,7 +191,7 @@ func (op *setIntersectionOp) notArrayError(typeName string) error {
 }
 
 func (op *setIntersectionOp) Process(doc *types.Document) (any, error) {
-	var candidates []any
+	var candidates []keyedValue
 	sawNull := false
 	notArray := ""
 
@@ -213,19 +230,16 @@ func (op *setIntersectionOp) Process(doc *types.Document) (any, error) {
 			continue
 		}
 
-		items, err := arrayToSlice(arr)
+		items, err := keyedValues(arr, op.cmp)
 		if err != nil {
 			return nil, err
 		}
 
-		var next []any
+		var next []keyedValue
 
 		for _, c := range candidates {
-			for _, item := range items {
-				if compareCollated(op.cmp, c, item) == types.Equal {
-					next = append(next, c)
-					break
-				}
+			if containsKey(items, c.key) {
+				next = append(next, c)
 			}
 		}
 
@@ -239,7 +253,7 @@ func (op *setIntersectionOp) Process(doc *types.Document) (any, error) {
 		return nil, op.notArrayError(notArray)
 	}
 
-	return sliceToArray(candidates), nil
+	return keyedToArray(candidates), nil
 }
 
 var _ Operator = (*setIntersectionOp)(nil)
@@ -287,29 +301,20 @@ func (op *setDifferenceOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	set2items, err := arrayToSlice(arr2)
+	set2items, err := keyedValues(arr2, op.cmp)
 	if err != nil {
 		return nil, err
 	}
 
-	var result []any
+	var result []keyedValue
 
 	for _, item := range set1 {
-		inSet2 := false
-
-		for _, s2 := range set2items {
-			if compareCollated(op.cmp, item, s2) == types.Equal {
-				inSet2 = true
-				break
-			}
-		}
-
-		if !inSet2 {
+		if !containsKey(set2items, item.key) {
 			result = append(result, item)
 		}
 	}
 
-	return sliceToArray(result), nil
+	return keyedToArray(result), nil
 }
 
 var _ Operator = (*setDifferenceOp)(nil)
@@ -346,7 +351,7 @@ func (op *setEqualsOp) Process(doc *types.Document) (any, error) {
 		arrs[i], typeNames[i] = arr, typeName
 	}
 
-	var sets [][]any
+	var sets [][]keyedValue
 
 	for i, arr := range arrs {
 		if arr == nil {
@@ -370,16 +375,7 @@ func (op *setEqualsOp) Process(doc *types.Document) (any, error) {
 		}
 
 		for _, item := range base {
-			found := false
-
-			for _, o := range other {
-				if compareCollated(op.cmp, item, o) == types.Equal {
-					found = true
-					break
-				}
-			}
-
-			if !found {
+			if !containsKey(other, item.key) {
 				return false, nil
 			}
 		}
@@ -450,22 +446,13 @@ func (op *setIsSubsetOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	set2items, err := arrayToSlice(arr2)
+	set2items, err := keyedValues(arr2, op.cmp)
 	if err != nil {
 		return nil, err
 	}
 
 	for _, item := range set1 {
-		found := false
-
-		for _, s2 := range set2items {
-			if compareCollated(op.cmp, item, s2) == types.Equal {
-				found = true
-				break
-			}
-		}
-
-		if !found {
+		if !containsKey(set2items, item.key) {
 			return false, nil
 		}
 	}

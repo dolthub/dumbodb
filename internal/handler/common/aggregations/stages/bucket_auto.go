@@ -174,8 +174,9 @@ func (ba *bucketAuto) Process(ctx context.Context, iter types.DocumentsIterator,
 
 	// Evaluate the groupBy expression for each document, keeping only non-null comparable values.
 	type docWithKey struct {
-		doc *types.Document
-		key any
+		doc    *types.Document
+		key    any
+		cmpKey any
 	}
 
 	keyed := make([]docWithKey, 0, len(docs))
@@ -186,7 +187,7 @@ func (ba *bucketAuto) Process(ctx context.Context, iter types.DocumentsIterator,
 			return nil, err
 		}
 
-		keyed = append(keyed, docWithKey{doc: doc, key: val})
+		keyed = append(keyed, docWithKey{doc: doc, key: val, cmpKey: ba.cmp.KeyValue(val)})
 	}
 
 	if ba.rounder != nil {
@@ -198,7 +199,7 @@ func (ba *bucketAuto) Process(ctx context.Context, iter types.DocumentsIterator,
 	}
 
 	stdsort.SliceStable(keyed, func(i, j int) bool {
-		return types.CompareOrder(ba.cmp.KeyValue(keyed[i].key), ba.cmp.KeyValue(keyed[j].key), types.Ascending) == types.Less
+		return types.CompareOrder(keyed[i].cmpKey, keyed[j].cmpKey, types.Ascending) == types.Less
 	})
 
 	// mongod fills each bucket with about n/buckets documents, keeps equal
@@ -230,8 +231,8 @@ func (ba *bucketAuto) Process(ctx context.Context, iter types.DocumentsIterator,
 				i++
 			}
 		}
-		maxKey := keyed[i-1].key
-		for i < total && types.CompareForAggregation(ba.cmp.KeyValue(keyed[i].key), ba.cmp.KeyValue(maxKey)) == types.Equal {
+		maxKey, maxCmpKey := keyed[i-1].key, keyed[i-1].cmpKey
+		for i < total && types.CompareForAggregation(keyed[i].cmpKey, maxCmpKey) == types.Equal {
 			i++
 		}
 
