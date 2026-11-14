@@ -295,7 +295,7 @@ func hintedFirstMatches(ctx context.Context, coll backends.Collection, hint any,
 			return nil, err
 		}
 		closer.Add(res.Iter)
-		return common.FilterIteratorColl(iterator.WithContext(ctx, res.Iter), closer, filter, cmp), nil
+		return common.FilterIteratorPlan(iterator.WithContext(ctx, res.Iter), closer, filter, cmp, queryPlanMode(ctx, coll, filter, hint, res)), nil
 	case order != nil:
 		return common.SortIteratorInIndexOrder(iter, closer, order, sortFilter, cmp)
 	}
@@ -434,4 +434,41 @@ func recordedClusteredName(ctx context.Context, db backends.Database, collection
 		return info.ClusteredIndexName
 	}
 	return ""
+}
+
+// queryPlanMode is the plan mongod answers a query on c with: an index scan
+// when the backend reads an index, when an index is hinted, or when the
+// filter uses $expr and has a condition an index of c can serve. The order of
+// a filter's conditions differs only when it uses $expr, so the indexes are
+// read only then.
+func queryPlanMode(ctx context.Context, c backends.Collection, filter *types.Document, hint any, res *backends.QueryResult) common.PlanMode {
+	switch {
+	case res != nil && res.IndexScan:
+		return common.PlanIndexScan
+	case backends.HintIsNatural(hint) || !common.FilterUsesExpr(filter):
+		return common.PlanCollectionScan
+	case hintNamesIndex(hint):
+		return common.PlanIndexScan
+	}
+	list, err := c.ListIndexes(ctx, new(backends.ListIndexesParams))
+	if err != nil {
+		return common.PlanCollectionScan
+	}
+	for _, idx := range list.Indexes {
+		if len(idx.Key) > 0 && idx.PartialFilterExpression == nil && common.IndexablePredicateOn(filter, idx.Key[0].Field) {
+			return common.PlanIndexScan
+		}
+	}
+	return common.PlanCollectionScan
+}
+
+// hintNamesIndex reports whether hint names an index, by name or key pattern.
+func hintNamesIndex(hint any) bool {
+	switch h := hint.(type) {
+	case string:
+		return h != ""
+	case *types.Document:
+		return h.Len() > 0
+	}
+	return false
 }

@@ -1245,6 +1245,14 @@ func processStagesDocuments(ctx context.Context, closer *iterator.MultiCloser, p
 
 	closer.Add(queryRes.Iter)
 
+	// The leading $match stages are those mongod pushes into the query.
+	planMode := queryPlanMode(ctx, p.c, p.qp.Filter, p.qp.Hint, queryRes)
+	for _, s := range p.stages {
+		if !stages.SetPushedMatchPlan(s, planMode) {
+			break
+		}
+	}
+
 	// Stages evaluate expressions per document; stop between documents once
 	// maxTimeMS expires or the client goes away.
 	var iter types.DocumentsIterator = iterator.WithContext(ctx, queryRes.Iter)

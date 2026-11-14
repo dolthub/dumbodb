@@ -256,7 +256,7 @@ func (h *Handler) execCountReading(ctx context.Context, c backends.Collection, p
 	closer := iterator.NewMultiCloser(queryRes.Iter)
 	defer closer.Close()
 
-	iter = common.FilterIteratorColl(iter, closer, params.Filter, cmp)
+	iter = common.FilterIteratorPlan(iter, closer, params.Filter, cmp, queryPlanMode(ctx, c, params.Filter, params.Hint, queryRes))
 
 	matched := &countingIterator{DocumentsIterator: iter}
 	iter = common.SkipIterator(matched, closer, params.Skip)

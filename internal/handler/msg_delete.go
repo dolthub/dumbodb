@@ -187,6 +187,7 @@ func (h *Handler) execDelete(ctx context.Context, db backends.Database, collName
 		}
 	}
 
+	fc := common.NewFilterContext(cmp, queryPlanMode(ctx, c, p.Filter, p.Hint, q))
 	var ids []any
 	for {
 		var doc *types.Document
@@ -202,7 +203,7 @@ func (h *Handler) execDelete(ctx context.Context, db backends.Database, collName
 
 		var matches bool
 
-		if matches, err = common.FilterDocumentColl(doc, p.Filter, cmp); err != nil {
+		if matches, err = fc.Match(doc, p.Filter); err != nil {
 			q.Iter.Close()
 			return 0, lazyerrors.Error(err)
 		}

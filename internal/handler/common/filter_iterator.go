@@ -34,10 +34,17 @@ func FilterIterator(iter types.DocumentsIterator, closer *iterator.MultiCloser, 
 // FilterIteratorColl is FilterIterator with an optional collation comparator
 // applied to string comparisons in the filter.
 func FilterIteratorColl(iter types.DocumentsIterator, closer *iterator.MultiCloser, filter *types.Document, cmp *collation.Comparator) types.DocumentsIterator {
+	return FilterIteratorPlan(iter, closer, filter, cmp, PlanCollectionScan)
+}
+
+// FilterIteratorPlan is FilterIteratorColl checking the filter's conditions
+// in the order mongod's plan of mode does.
+func FilterIteratorPlan(iter types.DocumentsIterator, closer *iterator.MultiCloser, filter *types.Document, cmp *collation.Comparator, mode PlanMode) types.DocumentsIterator { //nolint:lll // for readability
 	res := &filterIterator{
 		iter:   iter,
 		filter: filter,
 		cmp:    cmp,
+		fc:     NewFilterContext(cmp, mode),
 	}
 	closer.Add(res)
 
@@ -48,6 +55,7 @@ type filterIterator struct {
 	iter      types.DocumentsIterator
 	filter    *types.Document
 	cmp       *collation.Comparator
+	fc        *FilterContext
 	validated bool
 }
 
@@ -67,7 +75,7 @@ func (iter *filterIterator) Next() (struct{}, *types.Document, error) {
 			return unused, nil, lazyerrors.Error(err)
 		}
 
-		matches, err := FilterDocumentColl(doc, iter.filter, iter.cmp)
+		matches, err := iter.fc.Match(doc, iter.filter)
 		if err != nil {
 			return unused, nil, lazyerrors.Error(err)
 		}

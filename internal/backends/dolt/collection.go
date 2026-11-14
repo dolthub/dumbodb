@@ -97,7 +97,10 @@ func (c *collection) getMap(ctx context.Context) (prolly.Map, bool, *dbState, er
 }
 
 func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*backends.QueryResult, error) {
-	res, _, err := c.query(ctx, params)
+	res, stage, err := c.query(ctx, params)
+	if res != nil {
+		res.IndexScan = stage.usesIndex()
+	}
 	return res, err
 }
 
@@ -1932,6 +1935,27 @@ type explainStage struct {
 	subplan bool
 	// amount is a LIMIT's limitAmount or a SKIP's skipAmount.
 	amount int64
+}
+
+// usesIndex reports whether the plan reads an index rather than scanning
+// the collection.
+func (s *explainStage) usesIndex() bool {
+	if s == nil {
+		return false
+	}
+	switch s.stage {
+	case "IXSCAN", "CLUSTERED_IXSCAN", "COUNT_SCAN", "DISTINCT_SCAN":
+		return true
+	}
+	if s.input.usesIndex() {
+		return true
+	}
+	for _, in := range s.inputs {
+		if in.usesIndex() {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *explainStage) toDoc() *types.Document {

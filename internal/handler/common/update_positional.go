@@ -190,6 +190,7 @@ func positionalMatchIndex(arrayPath string, doc *types.Document, filter *types.D
 		suffix = arrayPath[dot+1:]
 	}
 
+	fc := NewFilterContext(nil, PlanCollectionScan)
 	for p := len(preds) - 1; p >= 0; p-- {
 		pred := preds[p]
 		for i := range arr.Len() {
@@ -197,7 +198,7 @@ func positionalMatchIndex(arrayPath string, doc *types.Document, filter *types.D
 
 			var matched bool
 			if pred.elemMatch != nil && pred.path == arrayPath {
-				matched, err = elemMatchElement(elem, arrayPath, suffix, pred.elemMatch, pred.pureOperator, nil)
+				matched, err = elemMatchElement(elem, arrayPath, suffix, pred.elemMatch, pred.pureOperator, fc)
 			} else {
 				matched, err = FilterDocument(buildNestedDoc(arrayPath, elem), pred.filter)
 			}

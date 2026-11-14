@@ -232,6 +232,7 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 	closer := iterator.NewMultiCloser(iterator.CloserFunc(cancel))
 
 	var srcIter types.DocumentsIterator
+	planMode := common.PlanCollectionScan
 	var sorted bool
 	if isView {
 		viewCmp := collation.Parse(params.Collation).Comparator()
@@ -246,14 +247,14 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 		if queryRes, err = coll.Query(ctx, qp); err != nil {
 			return nil, handleMaxTimeMSError(err, params.MaxTimeMS, "find")
 		}
-		srcIter, sorted = queryRes.Iter, queryRes.Sorted
+		srcIter, sorted, planMode = queryRes.Iter, queryRes.Sorted, queryPlanMode(ctx, coll, params.Filter, params.Hint, queryRes)
 	}
 
 	if err != nil {
 		return nil, handleMaxTimeMSError(err, params.MaxTimeMS, "find")
 	}
 
-	iter, err := h.makeFindIter(iterator.WithContext(ctx, srcIter), closer, params, sorted)
+	iter, err := h.makeFindIter(iterator.WithContext(ctx, srcIter), closer, params, sorted, planMode)
 	if err != nil {
 		return nil, handleMaxTimeMSError(err, params.MaxTimeMS, "find")
 	}
@@ -430,7 +431,7 @@ func geoNearSource(ctx context.Context, coll backends.Collection, filter *types.
 // limit stops reading early.
 //
 //nolint:lll // for readability
-func (h *Handler) makeFindIter(iter types.DocumentsIterator, closer *iterator.MultiCloser, params *common.FindParams, sorted bool) (types.DocumentsIterator, error) {
+func (h *Handler) makeFindIter(iter types.DocumentsIterator, closer *iterator.MultiCloser, params *common.FindParams, sorted bool, planMode common.PlanMode) (types.DocumentsIterator, error) { //nolint:lll // for readability
 	closer.Add(iter)
 
 	// A non-simple collation compares strings locale-aware in both the filter
@@ -439,7 +440,7 @@ func (h *Handler) makeFindIter(iter types.DocumentsIterator, closer *iterator.Mu
 	cmp := collation.Parse(params.Collation).Comparator()
 	operators.BindCollation(filterDoc, cmp)
 
-	iter = common.FilterIteratorColl(iter, closer, filterDoc, cmp)
+	iter = common.FilterIteratorPlan(iter, closer, filterDoc, cmp, planMode)
 
 	if params.Min != nil || params.Max != nil {
 		hintDoc, _ := params.Hint.(*types.Document)

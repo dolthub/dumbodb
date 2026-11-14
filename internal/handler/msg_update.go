@@ -249,7 +249,7 @@ statements:
 
 		closer.Add(res.Iter)
 
-		iter := common.FilterIteratorColl(iterator.WithContext(ctx, res.Iter), closer, u.Filter, cmp)
+		iter := common.FilterIteratorPlan(iterator.WithContext(ctx, res.Iter), closer, u.Filter, cmp, queryPlanMode(ctx, c, u.Filter, u.Hint, res))
 
 		if !u.Multi {
 			// The one document updated is the first match in the hinted

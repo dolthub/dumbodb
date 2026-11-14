@@ -189,7 +189,7 @@ func (h *Handler) findAndModifyDocument(ctx context.Context, params *common.Find
 
 	closer.Add(queryRes.Iter)
 
-	iter := common.FilterIteratorColl(iterator.WithContext(ctx, queryRes.Iter), closer, params.Query, cmp)
+	iter := common.FilterIteratorPlan(iterator.WithContext(ctx, queryRes.Iter), closer, params.Query, cmp, queryPlanMode(ctx, c, params.Query, params.Hint, queryRes))
 
 	if params.Sort.Len() > 0 {
 		iter, err = common.SortIteratorWithCollation(iter, closer, params.Sort, cmp)
