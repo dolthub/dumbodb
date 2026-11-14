@@ -19,6 +19,7 @@ import (
 	"github.com/FerretDB/wire/wirebson"
 
 	"github.com/dolthub/dumbodb/internal/bson"
+	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 )
@@ -58,6 +59,8 @@ func opMsgDocument(msg *wire.OpMsg) (*types.Document, error) {
 
 		res.Set(section.Identifier, a)
 	}
+
+	common.NormalizeDuplicateFilterKeys(res)
 
 	return res, nil
 }

@@ -536,8 +536,10 @@ func (c *conn) route(connCtx context.Context, reqHeader *wire.MsgHeader, reqBody
 		cmd := c.h.Commands()[command]
 
 		// A command may not repeat a field, at any depth. See
-		// findDuplicateField for why reading one is unsafe.
+		// findDuplicateField for why reading one is unsafe. Filters that
+		// repeat a key are checked as handlers read them, rewritten.
 		if err == nil {
+			common.NormalizeDuplicateFilterKeys(typedDoc)
 			if dup, dupOK := commandDuplicateField(typedDoc); dupOK {
 				err = duplicateFieldError(dup)
 			}
