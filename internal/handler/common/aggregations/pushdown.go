@@ -15,6 +15,7 @@
 package aggregations
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/dolthub/dumbodb/internal/types"
@@ -78,8 +79,10 @@ func GetPushdownQuery(stagesDocs []any) (match *types.Document, sort *types.Docu
 // MoveMatchesAhead moves each $match ahead of a $project, $set or $addFields
 // before it when every field the match reads passes through that stage
 // unchanged or renamed from a plain path ({z: "$a"}), rewriting renamed fields
-// to their source, as mongod's optimizer does. The result is equivalent, and
-// the moved match can be pushed down to an index.
+// to their source, as mongod's optimizer does. A $match after a $lookup or
+// $unwind is split, and the conditions that do not read the fields that stage
+// writes move ahead of it. The result is equivalent, and the moved match can
+// be pushed down to an index.
 //
 // One pass: after a match moves, it is compared with the stage now before it,
 // so each match moves as far as it can. The cost is bounded by the pipeline
@@ -91,6 +94,16 @@ func MoveMatchesAhead(stagesDocs []any) []any {
 		match, _ := out[i+1].(*types.Document)
 		if moved, ok := moveMatchAhead(shape, match); ok {
 			out[i], out[i+1] = moved, shape
+			if i > 0 {
+				i--
+			}
+			continue
+		}
+		if ahead, behind, ok := splitMatchAhead(shape, match); ok {
+			out[i], out[i+1] = ahead, shape
+			if behind != nil {
+				out = slices.Insert(out, i+2, any(behind))
+			}
 			if i > 0 {
 				i--
 			}
