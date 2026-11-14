@@ -154,8 +154,11 @@ func findFirstMatchingIndex(arrayPath string, doc *types.Document, filter *types
 		return -1, nil
 	}
 
-	// Collect filter conditions that apply to this array field.
+	// Collect filter conditions that apply to this array field. An $elemMatch
+	// on the array tests each element itself and alone decides the position,
+	// as in mongod; operators beside it, such as $size, test the whole array.
 	relevantFilter := must.NotFail(types.NewDocument())
+	var elemMatches []*types.Document
 
 	filterIter := filter.Iterator()
 	defer filterIter.Close()
@@ -169,18 +172,55 @@ func findFirstMatchingIndex(arrayPath string, doc *types.Document, filter *types
 			return -1, lazyerrors.Error(iterErr)
 		}
 
+		if filterKey == arrayPath {
+			if ops, ok := filterVal.(*types.Document); ok && ops.Has("$elemMatch") {
+				expr, ok := must.NotFail(ops.Get("$elemMatch")).(*types.Document)
+				if !ok {
+					return -1, nil
+				}
+				elemMatches = append(elemMatches, expr)
+				continue
+			}
+		}
+
 		if filterKey == arrayPath || strings.HasPrefix(filterKey, arrayPath+".") {
 			relevantFilter.Set(filterKey, filterVal)
 		}
 	}
 
-	if relevantFilter.Len() == 0 {
+	if relevantFilter.Len() == 0 && len(elemMatches) == 0 {
 		return -1, nil
 	}
 
+	suffix := arrayPath
+	if dot := strings.LastIndexByte(arrayPath, '.'); dot >= 0 {
+		suffix = arrayPath[dot+1:]
+	}
+	pureOperator := make([]bool, len(elemMatches))
+	for j, expr := range elemMatches {
+		if pureOperator[j], err = elemMatchKind(expr); err != nil {
+			return -1, err
+		}
+	}
+
 	// Test each element against the relevant filter conditions.
+elements:
 	for i := range arr.Len() {
 		elem := must.NotFail(arr.Get(i))
+
+		for j, expr := range elemMatches {
+			matched, matchErr := elemMatchElement(elem, arrayPath, suffix, expr, pureOperator[j], nil)
+			if matchErr != nil {
+				return -1, lazyerrors.Error(matchErr)
+			}
+			if !matched {
+				continue elements
+			}
+		}
+
+		if relevantFilter.Len() == 0 {
+			return i, nil
+		}
 
 		var testDoc *types.Document
 		if strings.ContainsRune(arrayPath, '.') {

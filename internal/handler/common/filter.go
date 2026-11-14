@@ -2086,26 +2086,9 @@ func filterFieldExprElemMatch(doc *types.Document, filterKey, filterSuffix strin
 		)
 	}
 
-	// Classify the expression type by scanning its keys.
-	isPureOperator := true // all keys start with "$"
-	hasLogical := false    // contains $and, $or, or $nor
-
-	for _, key := range expr.Keys() {
-		if slices.Contains([]string{"$text", "$where"}, key) {
-			return false, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrBadValue,
-				fmt.Sprintf("%s can only be applied to the top-level document", key),
-				"$elemMatch",
-			)
-		}
-
-		if slices.Contains([]string{"$and", "$or", "$nor"}, key) {
-			hasLogical = true
-		}
-
-		if !strings.HasPrefix(key, "$") {
-			isPureOperator = false
-		}
+	pureOperator, err := elemMatchKind(expr)
+	if err != nil {
+		return false, err
 	}
 
 	value, err := doc.Get(filterSuffix)
@@ -2131,29 +2114,7 @@ func filterFieldExprElemMatch(doc *types.Document, filterKey, filterSuffix strin
 			return false, lazyerrors.Error(iterErr)
 		}
 
-		var matches bool
-
-		if isPureOperator && !hasLogical {
-			// Pure operator conditions (e.g. {$gte: 80, $lt: 90}): check all conditions
-			// against each individual element. This ensures multi-condition $elemMatch
-			// correctly requires ALL conditions to be satisfied by the SAME element,
-			// rather than allowing different elements to satisfy different conditions.
-			if elemArr, isArray := elem.(*types.Array); isArray {
-				matches, err = elemMatchArrayElement(elemArr, filterKey, filterSuffix, expr, cmp)
-			} else {
-				tempDoc := must.NotFail(types.NewDocument(filterSuffix, elem))
-				matches, err = filterFieldExpr(tempDoc, filterKey, filterSuffix, expr, cmp)
-			}
-		} else {
-			// Logical operators ($and/$or/$nor) or field conditions: the element must be
-			// a document and satisfy the expression as a document filter.
-			elemDoc, ok := elem.(*types.Document)
-			if !ok {
-				continue
-			}
-			matches, err = filterElementDocument(elemDoc, expr, cmp)
-		}
-
+		matches, err := elemMatchElement(elem, filterKey, filterSuffix, expr, pureOperator, cmp)
 		if err != nil {
 			return false, err
 		}
@@ -2166,10 +2127,47 @@ func filterFieldExprElemMatch(doc *types.Document, filterKey, filterSuffix strin
 	return false, nil
 }
 
-// elemMatchArrayElement applies the operators of an $elemMatch to an element
-// that is itself an array. As in MongoDB they test the element as a whole
-// value and do not look inside it, except $size and a nested $elemMatch,
-// which apply to arrays.
+// elemMatchKind reports whether an $elemMatch expression holds only operators
+// (e.g. {$gte: 80, $lt: 90}), which test each element as a value, rather than
+// field conditions or $and, $or and $nor, which test each element as a
+// document.
+func elemMatchKind(expr *types.Document) (pureOperator bool, err error) {
+	pureOperator = true
+	for _, key := range expr.Keys() {
+		switch key {
+		case "$text", "$where":
+			return false, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrBadValue,
+				fmt.Sprintf("%s can only be applied to the top-level document", key),
+				"$elemMatch",
+			)
+		case "$and", "$or", "$nor":
+			pureOperator = false
+		}
+		if !strings.HasPrefix(key, "$") {
+			pureOperator = false
+		}
+	}
+	return pureOperator, nil
+}
+
+// elemMatchElement reports whether one array element satisfies the $elemMatch
+// expression expr, of the kind elemMatchKind reported. Every operator must
+// hold for the same element.
+func elemMatchElement(elem any, filterKey, filterSuffix string, expr *types.Document, pureOperator bool, cmp *collation.Comparator) (bool, error) {
+	if pureOperator {
+		if elemArr, isArray := elem.(*types.Array); isArray {
+			return elemMatchArrayElement(elemArr, filterKey, filterSuffix, expr, cmp)
+		}
+		return filterFieldExpr(must.NotFail(types.NewDocument(filterSuffix, elem)), filterKey, filterSuffix, expr, cmp)
+	}
+	elemDoc, ok := elem.(*types.Document)
+	if !ok {
+		return false, nil
+	}
+	return filterElementDocument(elemDoc, expr, cmp)
+}
+
 // nestedIDKey stands for an embedded document's _id while filtering it. BSON
 // field names cannot hold a NUL byte, so it names no real field.
 const nestedIDKey = "\x00_id"
@@ -2238,6 +2236,10 @@ func renameIDInFilter(filter *types.Document) *types.Document {
 	return out
 }
 
+// elemMatchArrayElement applies the operators of an $elemMatch to an element
+// that is itself an array. As in MongoDB they test the element as a whole
+// value and do not look inside it, except $size and a nested $elemMatch,
+// which apply to arrays.
 func elemMatchArrayElement(elem *types.Array, filterKey, filterSuffix string, expr *types.Document, cmp *collation.Comparator) (bool, error) {
 	compareElem := func(v any) types.CompareResult {
 		return collCompareOrder(elem, v, cmp)
@@ -2259,7 +2261,9 @@ func elemMatchArrayElement(elem *types.Array, filterKey, filterSuffix string, ex
 		case "$ne":
 			ok = !equalsElem(v)
 		case "$gt", "$gte", "$lt", "$lte":
-			if _, isArray := v.(*types.Array); isArray {
+			// An array compares only with an array, and with MinKey and
+			// MaxKey, which compare with every type.
+			if _, isArray := v.(*types.Array); isArray || v == types.MinKey || v == types.MaxKey {
 				c := compareElem(v)
 				switch op {
 				case "$gt":
