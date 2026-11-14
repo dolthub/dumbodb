@@ -125,18 +125,17 @@ func newFill(stage *types.Document) (aggregations.Stage, error) {
 		for _, key := range fieldSpec.Keys() {
 			switch v := must.NotFail(fieldSpec.Get(key)); key {
 			case "method":
+				// mongod's IDL parser checks the type as it reads the field.
 				if _, isNull := v.(types.NullType); !isNull {
+					if _, ok := v.(string); !ok {
+						return nil, fillWrongType("method", v, "string")
+					}
 					method = v
 				}
 			case "value":
 				value = v
 			default:
 				return nil, fillError(handlererrors.ErrIDLUnknownField, "BSON field '$fill."+key+"' is an unknown field.")
-			}
-		}
-		if method != nil {
-			if _, ok := method.(string); !ok {
-				return nil, fillWrongType("method", method, "string")
 			}
 		}
 		switch {

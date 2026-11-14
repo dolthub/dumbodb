@@ -80,8 +80,24 @@ func newDensify(stage *types.Document) (aggregations.Stage, error) {
 			}
 			fieldVal = val
 		case "range":
+			if err := checkDensifyRangeIDL(val); err != nil {
+				return nil, err
+			}
 			rangeVal = val
 		case "partitionByFields":
+			arr, isArray := val.(*types.Array)
+			if !isArray {
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrTypeMismatch,
+					"BSON field '$densify.partitionByFields' is the wrong type '"+handlerparams.AliasFromType(val)+
+						"', expected type 'array'", "$densify (stage)")
+			}
+			for i := range arr.Len() {
+				if e := must.NotFail(arr.Get(i)); !isString(e) {
+					return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrTypeMismatch,
+						fmt.Sprintf("BSON field '$densify.partitionByFields.%d' is the wrong type '%s', expected type 'string'",
+							i, handlerparams.AliasFromType(e)), "$densify (stage)")
+				}
+			}
 			partitionsVal = val
 		default:
 			return nil, densifyUnknownField("$densify." + key)
@@ -124,6 +140,51 @@ func newDensify(stage *types.Document) (aggregations.Stage, error) {
 		return nil, err
 	}
 	return d, nil
+}
+
+// checkDensifyRangeIDL returns the error mongod's IDL parser gives for the
+// range field as it reads it: its type, its fields' types, unknown fields,
+// and then its missing fields.
+func checkDensifyRangeIDL(v any) error {
+	spec, ok := v.(*types.Document)
+	if !ok {
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrTypeMismatch,
+			"BSON field '$densify.range' is the wrong type '"+handlerparams.AliasFromType(v)+"', expected type 'object'",
+			"$densify (stage)")
+	}
+	var hasStep, hasBounds bool
+	for _, key := range spec.Keys() {
+		val := must.NotFail(spec.Get(key))
+		if _, isNull := val.(types.NullType); isNull && key != "bounds" {
+			continue
+		}
+		switch key {
+		case "step":
+			if !isDensifyNumber(val) {
+				return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrTypeMismatch,
+					"BSON field '$densify.range.step' is the wrong type '"+handlerparams.AliasFromType(val)+
+						"', expected types '[int, double, long, decimal']", "$densify (stage)")
+			}
+			hasStep = true
+		case "bounds":
+			hasBounds = true
+		case "unit":
+			if _, isString := val.(string); !isString {
+				return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrTypeMismatch,
+					"BSON field '$densify.range.unit' is the wrong type '"+handlerparams.AliasFromType(val)+
+						"', expected type 'string'", "$densify (stage)")
+			}
+		default:
+			return densifyUnknownField("$densify.range." + key)
+		}
+	}
+	switch {
+	case !hasStep:
+		return densifyMissingField("$densify.range.step")
+	case !hasBounds:
+		return densifyMissingField("$densify.range.bounds")
+	}
+	return nil
 }
 
 func (d *densify) parseRange(v any) error {
@@ -627,3 +688,8 @@ func (it *densifyIterator) advance(cur any) (any, error) {
 }
 
 var _ aggregations.Stage = (*densify)(nil)
+
+func isString(v any) bool {
+	_, ok := v.(string)
+	return ok
+}
