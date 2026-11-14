@@ -312,6 +312,13 @@ func (d *Document) Len() int {
 	return len(d.fields)
 }
 
+// FieldAt returns the key and value of the field at index i, which must be
+// less than Len.
+func (d *Document) FieldAt(i int) (string, any) {
+	d.load()
+	return d.fields[i].key, d.fields[i].value
+}
+
 // Iterator returns an iterator over the document fields.
 //
 // It returns valid (done) iterator for nil Document.

@@ -200,7 +200,7 @@ func positionalMatchIndex(arrayPath string, doc *types.Document, filter *types.D
 			if pred.elemMatch != nil && pred.path == arrayPath {
 				matched, err = elemMatchElement(elem, arrayPath, suffix, pred.elemMatch, pred.pureOperator, fc)
 			} else {
-				matched, err = FilterDocument(buildNestedDoc(arrayPath, elem), pred.filter)
+				matched, err = fc.Match(buildNestedDoc(arrayPath, elem), pred.filter)
 			}
 			if err != nil {
 				return -1, lazyerrors.Error(err)
@@ -428,6 +428,7 @@ func findFilteredIndices(arr *types.Array, identifier string, arrayFilters *type
 
 	var result []int
 
+	fc := NewFilterContext(nil, PlanCollectionScan)
 	for i := range arr.Len() {
 		elem := must.NotFail(arr.Get(i))
 
@@ -435,7 +436,7 @@ func findFilteredIndices(arr *types.Array, identifier string, arrayFilters *type
 		// "identifier" or "identifier.subfield" resolve correctly.
 		testDoc := must.NotFail(types.NewDocument(identifier, elem))
 
-		matched, err := FilterDocument(testDoc, identifierFilter)
+		matched, err := fc.Match(testDoc, identifierFilter)
 		if err != nil {
 			return nil, lazyerrors.Error(err)
 		}

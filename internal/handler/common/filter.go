@@ -118,29 +118,25 @@ func NewFilterContext(cmp *collation.Comparator, mode PlanMode) *FilterContext {
 
 // Match reports whether doc satisfies filter.
 func (fc *FilterContext) Match(doc, filter *types.Document) (bool, error) {
-	if filter.Len() == 0 {
+	n := filter.Len()
+	if n == 0 {
 		return true, nil
 	}
-	if filter.Len() == 1 {
-		// One condition has no order to choose.
-		if key := filter.Command(); !isLogicalOperator(key) {
-			matches, err := filterDocumentPair(doc, key, must.NotFail(filter.Get(key)), fc)
-			if err != nil {
-				return false, lazyerrors.Error(err)
-			}
-			return matches, nil
-		}
-	}
 
-	// Top-level conditions are ANDed together, in the plan's order.
-	keys, values := filter.Keys(), filter.Values()
-	order := fc.planFor(filter, keys, values)
-	for k := range keys {
+	// Top-level conditions are ANDed together, in the plan's order. Only a
+	// $expr, at the top level or in a logical operator, can make the order
+	// observable.
+	var order []int
+	if n > 1 && hasPlannedCondition(filter) {
+		order = fc.planFor(filter)
+	}
+	for k := range n {
 		i := k
 		if order != nil {
 			i = order[k]
 		}
-		matches, err := filterDocumentPair(doc, keys[i], values[i], fc)
+		key, value := filter.FieldAt(i)
+		matches, err := filterDocumentPair(doc, key, value, fc)
 		if err != nil {
 			return false, lazyerrors.Error(err)
 		}
@@ -149,6 +145,18 @@ func (fc *FilterContext) Match(doc, filter *types.Document) (bool, error) {
 		}
 	}
 	return true, nil
+}
+
+// hasPlannedCondition reports whether filter has a condition whose place in
+// the plan's order can differ from its written place.
+func hasPlannedCondition(filter *types.Document) bool {
+	for i := range filter.Len() {
+		switch key, _ := filter.FieldAt(i); key {
+		case "$expr", "$and", "$or", "$nor":
+			return true
+		}
+	}
+	return false
 }
 
 // conditionRank orders a conjunction's conditions for fc's plan: lower ranks
@@ -178,10 +186,11 @@ func (fc *FilterContext) conditionRank(key string, value any) int {
 
 // planFor returns the order to check filter's conditions in, or nil for the
 // written order.
-func (fc *FilterContext) planFor(filter *types.Document, keys []string, values []any) []int {
+func (fc *FilterContext) planFor(filter *types.Document) []int {
 	if order, ok := fc.plans[filter]; ok {
 		return order
 	}
+	keys, values := filter.Keys(), filter.Values()
 	ranks := make([]int, len(keys))
 	sorted := true
 	for i, k := range keys {
