@@ -805,6 +805,9 @@ const (
 	// ErrFieldPathNulByte indicates a field path with a null byte.
 	ErrFieldPathNulByte = ErrorCode(16411) // Location16411
 
+	// ErrUnwindPathNulByte indicates a $unwind path with a null byte.
+	ErrUnwindPathNulByte = ErrorCode(16419) // Location16419
+
 	// ErrStageCountNulByte indicates a $count field name with a null byte.
 	ErrStageCountNulByte = ErrorCode(40159) // Location40159
 
