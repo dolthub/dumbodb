@@ -1614,6 +1614,10 @@ func substituteVarsInStage(stage *types.Document, vars map[string]any) *types.Do
 	name := stage.Command()
 	spec := must.NotFail(stage.Get(name))
 	switch name {
+	case "$unwind":
+		// Its path and options are field names, not expressions: "$$v"
+		// is an invalid path, not the variable.
+		return stage
 	case "$match":
 		if query, ok := spec.(*types.Document); ok {
 			spec = substituteVarsInQuery(query, vars)
