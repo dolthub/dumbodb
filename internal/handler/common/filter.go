@@ -447,6 +447,16 @@ func filterDocumentPair(doc *types.Document, filterKey string, filterValue any, 
 	return false, nil
 }
 
+// compareKeyed compares two values like types.Compare, with every string,
+// inside documents too, compared under cmp. It keys both values, so it suits
+// one comparison per condition, not one per element.
+func compareKeyed(a, b any, cmp *collation.Comparator) types.CompareResult {
+	if cmp == nil {
+		return types.Compare(a, b)
+	}
+	return types.Compare(cmp.KeyValue(a), cmp.KeyValue(b))
+}
+
 // equalsOrHasElement is MongoDB's equality match: value equals target, or is
 // an array with an element equal to target. collCompare already compares an
 // array's elements with a scalar or document target; an array target is
@@ -1024,7 +1034,7 @@ func filterFieldOperators(doc *types.Document, filterKey, filterSuffix string, e
 			// An array matches if it, or one of its elements, equals expr.
 			switch fieldValue.(type) {
 			case *types.Document, *types.Array:
-				return types.Compare(fieldValue, expr) == types.Equal, nil
+				return compareKeyed(fieldValue, expr, fc.cmp) == types.Equal, nil
 			}
 			return false, nil
 		}
