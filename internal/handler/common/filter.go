@@ -781,6 +781,12 @@ func filterOperator(doc *types.Document, operator string, filterValue any, fc *F
 	case "$comment":
 		return true, nil
 
+	case "$alwaysTrue", "$alwaysFalse":
+		if err := checkAlwaysOperand(operator, filterValue); err != nil {
+			return false, err
+		}
+		return operator == "$alwaysTrue", nil
+
 	case "$sampleRate":
 		return filterSampleRate(filterValue)
 

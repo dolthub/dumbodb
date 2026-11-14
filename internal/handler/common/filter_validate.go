@@ -15,12 +15,17 @@
 package common
 
 import (
+	"fmt"
+	"math"
+	"strconv"
 	"strings"
 
 	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 // ValidateFilter returns the error MongoDB raises when it parses filter, which
@@ -64,6 +69,10 @@ func validateFilter(filter *types.Document, cmp *collation.Comparator, foldExpr 
 				return err
 			}
 		case "$where", "$text", "$comment":
+		case "$alwaysTrue", "$alwaysFalse":
+			if err := checkAlwaysOperand(key, value); err != nil {
+				return err
+			}
 		default:
 			if err := validateFieldPredicate(empty, key, value, cmp); err != nil {
 				return err
@@ -147,7 +156,7 @@ func isFieldOperatorExpression(doc *types.Document) bool {
 		return false
 	}
 	switch first := doc.Keys()[0]; first {
-	case "$and", "$or", "$nor", "$expr", "$where", "$text", "$comment":
+	case "$and", "$or", "$nor", "$expr", "$where", "$text", "$comment", "$alwaysTrue", "$alwaysFalse":
 		return false
 	default:
 		return strings.HasPrefix(first, "$")
@@ -177,6 +186,34 @@ func ValidateFilterExprs(filter *types.Document) error {
 				}
 			}
 		}
+	}
+	return nil
+}
+
+// checkAlwaysOperand returns mongod's error for an $alwaysTrue or
+// $alwaysFalse operand, which must be the number 1.
+func checkAlwaysOperand(op string, v any) error {
+	var n float64
+	switch v := v.(type) {
+	case int32:
+		n = float64(v)
+	case int64:
+		n = float64(v)
+	case float64:
+		n = v
+	case types.Decimal128:
+		n, _ = strconv.ParseFloat(primitive.NewDecimal128(v.H, v.L).String(), 64)
+	default:
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFailedToParse,
+			fmt.Sprintf("Expected a number in: %s: %s", op, types.FormatAnyValue(v)), op)
+	}
+	if n != math.Trunc(n) {
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFailedToParse,
+			fmt.Sprintf("Expected an integer: %s: %s", op, types.FormatAnyValue(v)), op)
+	}
+	if n != 1 {
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFailedToParse,
+			op+" must be an integer value of 1", op)
 	}
 	return nil
 }
