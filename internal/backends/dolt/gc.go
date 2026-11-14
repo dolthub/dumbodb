@@ -73,7 +73,7 @@ func (p *backgroundGCRootsProvider) pinRoot(db string, root hash.Hash) (release 
 	}
 }
 
-func (p *backgroundGCRootsProvider) VisitGCRoots(_ context.Context, db string, keep func(hash.Hash) bool) error {
+func (p *backgroundGCRootsProvider) VisitGCRoots(_ context.Context, db string, keep func(hash.Hash)) error {
 	p.mu.Lock()
 	roots := make([]hash.Hash, 0, len(p.pinned[db]))
 	for root := range p.pinned[db] {
@@ -82,9 +82,7 @@ func (p *backgroundGCRootsProvider) VisitGCRoots(_ context.Context, db string, k
 	p.mu.Unlock()
 
 	for _, root := range roots {
-		if keep(root) {
-			return fmt.Errorf("gc safepoint: could not keep root %s of an open cursor", root)
-		}
+		keep(root)
 	}
 	return nil
 }
@@ -126,7 +124,11 @@ type sessionAwareSafepoint struct {
 }
 
 func (sc *sessionAwareSafepoint) visit(ctx context.Context, sess gcctx.GCRootsProvider) error {
-	return sess.VisitGCRoots(ctx, sc.dbname, sc.keeper)
+	return sess.VisitGCRoots(ctx, sc.dbname, func(h hash.Hash) {
+		if sc.keeper(h) {
+			panic("gc safepoint visit could not keep a chunk; the safepoint was not established before finalize")
+		}
+	})
 }
 
 func (sc *sessionAwareSafepoint) BeginGC(ctx context.Context, keeper func(hash.Hash) bool) error {

@@ -219,10 +219,6 @@ func (s *dbState) tryCommitBranchWS(ctx context.Context, branch, message, author
 		return false, nil
 	}
 
-	headRef, err := wsRef.ToHeadRef()
-	if err != nil {
-		return false, fmt.Errorf("commitBranchWS: head ref for %q: %w", branch, err)
-	}
 	if author == "" {
 		author = "dumbodb <dumbodb@localhost>"
 	}
@@ -240,8 +236,7 @@ func (s *dbState) tryCommitBranchWS(ctx context.Context, branch, message, author
 	}
 
 	cleanWS := current.WithStagedRoot(workingRoot).ClearMerge()
-	var rsc doltdb.ReplicationStatusController
-	if _, err := s.doltDB.CommitWithWorkingSet(ctx, headRef, wsRef, pending, cleanWS, forkPoint, doltdb.TodoWorkingSetMeta(), &rsc); err != nil {
+	if _, err := commitWithWorkingSet(ctx, s.doltDB, pending, cleanWS, forkPoint); err != nil {
 		if autoCommitRaceLost(err) {
 			return false, fmt.Errorf("%w: %q moved while auto-committing it", backends.ErrWriteRaced, branch)
 		}
@@ -263,4 +258,23 @@ func (s *dbState) tryCommitBranchWS(ctx context.Context, branch, message, author
 	e.wsHash = newHash
 	e.mu.Unlock()
 	return true, nil
+}
+
+// commitWithWorkingSet publishes pending as a commit on ws's branch and
+// writes ws, in one storage transaction that requires the working set to
+// still be prevHash. It returns the new commit's hash.
+func commitWithWorkingSet(ctx context.Context, ddb *doltdb.DoltDB, pending *doltdb.PendingCommit, ws *doltdb.WorkingSet, prevHash hash.Hash) (hash.Hash, error) {
+	headRef, err := ws.Ref().ToHeadRef()
+	if err != nil {
+		return hash.Hash{}, err
+	}
+	var rsc doltdb.ReplicationStatusController
+	heads, err := ddb.CommitHeadUpdates(ctx, []doltdb.HeadUpdate{
+		doltdb.WorkingSetUpdate{WorkingSet: ws, PrevHash: prevHash, Meta: doltdb.TodoWorkingSetMeta()},
+		doltdb.BranchHeadUpdate{HeadRef: headRef, Root: pending.Roots.Staged, CommitOptions: pending.CommitOptions},
+	}, &rsc)
+	if err != nil {
+		return hash.Hash{}, err
+	}
+	return heads[1], nil
 }

@@ -9,16 +9,22 @@ import (
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/branch_control"
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb/gcctx"
+	"github.com/dolthub/dolt/go/libraries/doltcore/sqle"
 	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/dsess"
 	"github.com/dolthub/dolt/go/libraries/utils/config"
 )
 
+// engineVariables holds Dolt's system variable definitions. dsess reads
+// them (e.g. dolt_transactions_disabled) from the session's bundle, so every
+// session must share one that has them.
+var engineVariables = sqle.NewEngineVariables()
+
 func NewSession(provider dsess.DoltDatabaseProvider, writeSessFunc dsess.WriteSessFunc) *dsess.DoltSession {
-	return dsess.DefaultSession(provider, writeSessFunc)
+	return dsess.DefaultSessionWithVariables(provider, writeSessFunc, engineVariables)
 }
 
 func NewSessionWithGlobals(provider dsess.DoltDatabaseProvider, writeSessFunc dsess.WriteSessFunc, globals config.ReadWriteConfig) *dsess.DoltSession {
-	return dsess.DefaultSession(provider, writeSessFunc).WithGlobals(globals)
+	return dsess.DefaultSessionWithVariables(provider, writeSessFunc, engineVariables).WithGlobals(globals)
 }
 
 func NewSessionWithGC(
@@ -27,7 +33,7 @@ func NewSessionWithGC(
 	gc *gcctx.GCSafepointController,
 ) (*dsess.DoltSession, error) {
 	conf := config.NewMapConfig(make(map[string]string))
-	return dsess.NewDetachedSession(
+	return dsess.NewDetachedSessionWithVariables(
 		provider,
 		conf,
 		branch_control.CreateDefaultController(context.TODO()),
@@ -35,6 +41,7 @@ func NewSessionWithGC(
 		writeSessFunc,
 		gc,
 		nil,
+		engineVariables,
 	)
 }
 
