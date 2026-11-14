@@ -113,6 +113,9 @@ func checkPathString(v string, scope map[string]bool) error {
 		case strings.HasPrefix(part, "$") && !(i == 0 && strings.HasPrefix(v, "$$")):
 			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFieldPathInvalidName,
 				advice+"FieldPath field names may not start with '$', given '"+part+"'.", v)
+		case strings.ContainsRune(part, 0):
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFieldPathNulByte,
+				advice+"FieldPath field names may not contain '"+part+"'.", v)
 		}
 	}
 	return nil
