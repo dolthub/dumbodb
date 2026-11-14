@@ -16,15 +16,18 @@ package stages
 
 import (
 	"context"
+	"math"
 	"math/rand/v2"
+	"strconv"
 
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
-	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
+	"github.com/dolthub/dumbodb/internal/util/must"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 // sample represents $sample stage.
@@ -37,43 +40,57 @@ func newSample(stage *types.Document) (aggregations.Stage, error) {
 	if err != nil {
 		return nil, lazyerrors.Error(err)
 	}
+	fail := func(code handlererrors.ErrorCode, msg string) error {
+		return handlererrors.NewCommandErrorMsgWithArgument(code, msg, "$sample (stage)")
+	}
 
 	doc, ok := spec.(*types.Document)
 	if !ok {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrStageSampleInvalidArg,
-			"$sample stage requires a size field, and it must be a non-negative integral number",
-			"$sample (stage)",
-		)
+		return nil, fail(handlererrors.ErrStageSampleInvalidArg, "the $sample stage specification must be an object")
 	}
 
-	sizeVal, err := doc.Get("size")
-	if err != nil {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrStageSampleInvalidArg,
-			"$sample stage requires a size field, and it must be a non-negative integral number",
-			"$sample (stage)",
-		)
+	s := &sample{size: -1}
+	for _, key := range doc.Keys() {
+		if key != "size" {
+			return nil, fail(handlererrors.ErrStageSampleUnknownOption, "unrecognized option to $sample: "+key)
+		}
+		var size float64
+		switch v := must.NotFail(doc.Get(key)).(type) {
+		case int32:
+			size = float64(v)
+		case int64:
+			if v < 0 {
+				return nil, fail(handlererrors.ErrStageSampleNegativeSize, "size argument to $sample must not be negative")
+			}
+			s.size = v
+			continue
+		case float64:
+			size = v
+		case types.Decimal128:
+			size, err = strconv.ParseFloat(primitive.NewDecimal128(v.H, v.L).String(), 64)
+			if err != nil {
+				size = math.NaN()
+			}
+		default:
+			return nil, fail(handlererrors.ErrStageSampleSizeNotNumber, "size argument to $sample must be a number")
+		}
+		if size < 0 {
+			return nil, fail(handlererrors.ErrStageSampleNegativeSize, "size argument to $sample must not be negative")
+		}
+		switch {
+		case math.IsNaN(size):
+			s.size = 0
+		case size >= math.MaxInt64:
+			s.size = math.MaxInt64
+		default:
+			s.size = int64(size)
+		}
+	}
+	if s.size < 0 {
+		return nil, fail(handlererrors.ErrStageSampleMissingSize, "$sample stage must specify a size")
 	}
 
-	size, parseErr := handlerparams.GetWholeNumberParam(sizeVal)
-	if parseErr != nil {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrStageSampleInvalidArg,
-			"$sample stage requires a size field, and it must be a non-negative integral number",
-			"$sample (stage)",
-		)
-	}
-
-	if size < 0 {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrStageSampleNegativeSize,
-			"size argument to $sample must not be negative",
-			"$sample (stage)",
-		)
-	}
-
-	return &sample{size: size}, nil
+	return s, nil
 }
 
 // Process implements Stage interface.

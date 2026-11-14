@@ -584,6 +584,21 @@ const (
 	// ErrStageSampleNegativeSize indicates that $sample size must not be negative.
 	ErrStageSampleNegativeSize = ErrorCode(28747) // Location28747
 
+	// ErrStageSampleSizeNotNumber indicates a $sample size that is not a number.
+	ErrStageSampleSizeNotNumber = ErrorCode(28746) // Location28746
+
+	// ErrStageSampleUnknownOption indicates an unknown $sample option.
+	ErrStageSampleUnknownOption = ErrorCode(28748) // Location28748
+
+	// ErrStageSampleMissingSize indicates a $sample without a size.
+	ErrStageSampleMissingSize = ErrorCode(28749) // Location28749
+
+	// ErrGeoNearMissingNear indicates a $geoNear without near.
+	ErrGeoNearMissingNear = ErrorCode(5860400) // Location5860400
+
+	// ErrGeoNearDistanceFieldNotString indicates a $geoNear distanceField that is not a string.
+	ErrGeoNearDistanceFieldNotString = ErrorCode(16606) // Location16606
+
 	// ErrStageUnwindNoPath indicates that $unwind aggregation stage is empty.
 	ErrStageUnwindNoPath = ErrorCode(28812) // Location28812
 
