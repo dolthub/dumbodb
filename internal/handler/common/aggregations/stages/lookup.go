@@ -1113,11 +1113,63 @@ func filterReadsField(filter *types.Document, field string) bool {
 			if exprReadsField(must.NotFail(filter.Get(key)), field) {
 				return true
 			}
+		case "$jsonSchema":
+			schema, ok := must.NotFail(filter.Get(key)).(*types.Document)
+			if !ok || schemaReadsField(schema, field) {
+				return true
+			}
 		default:
 			if strings.HasPrefix(key, "$") || key == field ||
 				strings.HasPrefix(key, field+".") || strings.HasPrefix(field, key+".") {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// schemaReadsField reports whether a $jsonSchema may read the top-level
+// field holding field: it names it in required or properties, or constrains
+// the fields it does not name.
+func schemaReadsField(schema *types.Document, field string) bool {
+	root, _, _ := strings.Cut(field, ".")
+	for _, key := range schema.Keys() {
+		v := must.NotFail(schema.Get(key))
+		switch key {
+		case "bsonType", "type", "title", "description":
+		case "required":
+			names, ok := v.(*types.Array)
+			if !ok {
+				return true
+			}
+			for i := range names.Len() {
+				if name, _ := must.NotFail(names.Get(i)).(string); name == root {
+					return true
+				}
+			}
+		case "properties":
+			props, ok := v.(*types.Document)
+			if !ok || props.Has(root) {
+				return true
+			}
+		case "allOf", "anyOf", "oneOf":
+			subs, ok := v.(*types.Array)
+			if !ok {
+				return true
+			}
+			for i := range subs.Len() {
+				sub, ok := must.NotFail(subs.Get(i)).(*types.Document)
+				if !ok || schemaReadsField(sub, field) {
+					return true
+				}
+			}
+		case "not":
+			sub, ok := v.(*types.Document)
+			if !ok || schemaReadsField(sub, field) {
+				return true
+			}
+		default:
+			return true
 		}
 	}
 	return false
