@@ -20,9 +20,10 @@ import (
 )
 
 // rankedSet keeps the n best values as mongod's $topN, $bottomN, $minN and
-// $maxN do. A value that only ties the worst kept value is refused. A better
-// one evicts the worst, which for the smallest-keeping sets is the latest of
-// the tied worst values and for the largest-keeping sets the earliest.
+// $maxN do. In the classic engine a value that only ties the worst kept
+// value is refused, and a better one evicts the worst, which for the
+// smallest-keeping sets is the latest of the tied worst values and for the
+// largest-keeping sets the earliest. In SBE the heap layout decides (sbe).
 type rankedSet struct {
 	entries []rankedEntry
 	n       int64
