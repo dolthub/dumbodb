@@ -179,7 +179,23 @@ func IsExpressMatch(specs []*types.Document) bool {
 // one value per group ($first, $last, $top, $bottom), which mongod rewrites
 // into a stage of its classic engine.
 func groupsByIDKeepingOne(spec *types.Document) bool {
-	if id, _ := spec.Get("_id"); id != "$_id" {
+	id, _ := spec.Get("_id")
+	switch id := id.(type) {
+	case string:
+		if !isIDPath(id) {
+			return false
+		}
+	case *types.Document:
+		// An object of _id paths, as {i: "$_id"}.
+		if id.Len() == 0 || operators.IsOperator(id) {
+			return false
+		}
+		for _, v := range id.Values() {
+			if path, ok := v.(string); !ok || !isIDPath(path) {
+				return false
+			}
+		}
+	default:
 		return false
 	}
 	for _, field := range spec.Keys() {
@@ -197,6 +213,11 @@ func groupsByIDKeepingOne(spec *types.Document) bool {
 		}
 	}
 	return true
+}
+
+// isIDPath reports whether path is the input document's _id.
+func isIDPath(path string) bool {
+	return path == "$_id" || path == "$$CURRENT._id" || path == "$$ROOT._id"
 }
 
 // sbeCompatibleStage reports whether every expression of a stage, and for a
