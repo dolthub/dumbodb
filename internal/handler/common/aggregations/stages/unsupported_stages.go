@@ -15,12 +15,16 @@
 package stages
 
 import (
+	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/iterator"
+	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
@@ -438,6 +442,59 @@ func CheckCurrentOpSpec(stage *types.Document) error {
 		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrTypeMismatch,
 			"$currentOp options must be specified in an object, but found: "+handlerparams.AliasFromType(must.NotFail(stage.Get("$currentOp"))),
 			"$currentOp (stage)")
+	}
+	return nil
+}
+
+// currentOpBoolOptions lists the $currentOp options, all booleans.
+var currentOpBoolOptions = []string{
+	"allUsers", "idleConnections", "idleCursors", "idleSessions", "localOps", "truncateOps", "backtrace", "targetAllNodes",
+}
+
+// CheckCurrentOpOptions returns mongod's error for the options of a $currentOp
+// stage on the admin database: allUsers and localOps first, then each field
+// in order, then targetAllNodes, which needs a sharded cluster.
+func CheckCurrentOpOptions(stage *types.Document) error {
+	options := must.NotFail(stage.Get("$currentOp")).(*types.Document)
+	for _, name := range options.Keys() {
+		if name != "allUsers" && name != "localOps" {
+			continue
+		}
+		v := must.NotFail(options.Get(name))
+		if _, ok := v.(bool); !ok {
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrTypeMismatch,
+				"The '"+name+"' parameter of the $currentOp stage must be a boolean value, but found: "+handlerparams.AliasFromType(v),
+				"$currentOp (stage)")
+		}
+	}
+	seen := make(map[string]bool, options.Len())
+	iter := options.Iterator()
+	defer iter.Close()
+	for {
+		name, v, err := iter.Next()
+		if errors.Is(err, iterator.ErrIteratorDone) {
+			break
+		}
+		if err != nil {
+			return lazyerrors.Error(err)
+		}
+		switch {
+		case seen[name]:
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIDLDuplicateField,
+				"BSON field '$currentOp."+name+"' is a duplicate field", "$currentOp (stage)")
+		case !slices.Contains(currentOpBoolOptions, name):
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIDLUnknownField,
+				"BSON field '$currentOp."+name+"' is an unknown field.", "$currentOp (stage)")
+		}
+		seen[name] = true
+		if _, ok := v.(bool); !ok {
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrTypeMismatch,
+				"Field '"+name+"' should be a boolean value, but found: "+handlerparams.AliasFromType(v), "$currentOp (stage)")
+		}
+	}
+	if v, _ := options.Get("targetAllNodes"); v == true {
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFailedToParse,
+			"$currentOp supports targetAllNodes parameter only for sharded clusters", "$currentOp (stage)")
 	}
 	return nil
 }
