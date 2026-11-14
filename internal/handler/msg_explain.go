@@ -28,6 +28,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/stages"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -436,9 +437,9 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 	// derive the pushdown from the view's resolved pipeline (the same leading
 	// $match viewSourceIterator pushes), so the plan reflects a base-collection
 	// index used through the view instead of scanning the view namespace.
-	var viaView bool
+	var viaView, targetIsView bool
 	if info, ierr := lookupCollectionInfo(connCtx, db, params.Collection); ierr == nil && info != nil && info.IsView {
-		viaView = true
+		viaView, targetIsView = true, true
 		baseName, _, rawStages, rerr := resolveViewChain(connCtx, db, info.Name, info.ViewOn, info.ViewPipeline, nil)
 		if rerr != nil {
 			return nil, rerr
@@ -492,9 +493,11 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 	var zeroLimit bool
 
 	if params.Aggregate {
-		// A match may need to pass shaping stages to reach a $lookup it can
-		// pass, then more shaping stages before that.
-		moved := moveMatchesBeforeLookups(aggregations.MoveMatchesAhead(moveWindowBeforeLookups(params.StagesDocs)))
+		// $skip and $limit stages move ahead as aggregate moves them. A match
+		// may need to pass shaping stages to reach a $lookup it can pass, then
+		// more shaping stages before that.
+		optimized := stages.OptimizeSkipsAndLimits(aggregations.MoveMatchesAhead(stages.OptimizeSkipsAndLimits(params.StagesDocs, true)), true)
+		moved := moveMatchesBeforeLookups(aggregations.MoveMatchesAhead(moveWindowBeforeLookups(optimized)))
 		params.StagesDocs = mergeLeadingMatches(dropShapingBeforeCount(aggregations.MoveMatchesAhead(moved)))
 		params.Filter, params.Sort = aggregations.GetPushdownQuery(params.StagesDocs)
 		common.CanonicalizeFilter(params.Filter)
@@ -588,6 +591,15 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 		qp.Limit = params.Limit
 	}
 
+	var pipelineDocs []*types.Document
+	var sbe sbePlan
+	if params.Aggregate && !viaView {
+		pipelineDocs = explainedStageDocs(params.StagesDocs)
+		if info, ierr := lookupCollectionInfo(connCtx, db, hintCollection); pipelineDocs != nil && ierr == nil && info != nil {
+			sbe = classifySBE(connCtx, db, pipelineDocs, effColl, !targetIsView, viewChecker(connCtx, db))
+		}
+	}
+
 	res, err := coll.Explain(connCtx, qp)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
@@ -618,6 +630,9 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 		if qp.CountOnly {
 			runCtx = backends.WithSeekEachRange(connCtx)
 		}
+		if sbe.runsInSBE() {
+			runCtx = backends.WithSBEScan(runCtx)
+		}
 		run := h.runExplained(runCtx, coll, params, qp, viaView)
 		// A counting GROUP returns one document, the count.
 		if qp.CountOnly || (viaView && params.CommandName == "count") {
@@ -642,9 +657,8 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 
 	if params.Aggregate && !viaView && !h.explainStatsStages(connCtx, db, params.DB, params.Collection, coll, params.StagesDocs, response,
 		params.Verbosity != "queryPlanner") {
-		explainLookups(connCtx, db, coll, qp, params.DB, params.StagesDocs, response, params.Verbosity != "queryPlanner", qp.Collated)
-		if !qp.CountOnly && !response.Has("stages") {
-			explainClassicStages(connCtx, coll, qp, params.StagesDocs, response, params.Verbosity != "queryPlanner")
+		if !qp.CountOnly && pipelineDocs != nil {
+			explainPipelineStages(connCtx, db, coll, qp, params.DB, pipelineDocs, sbe, response, params.Verbosity != "queryPlanner")
 		}
 	}
 
