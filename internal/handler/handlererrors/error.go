@@ -608,6 +608,9 @@ const (
 	// ErrGeoNearDistanceFieldNotString indicates a $geoNear distanceField that is not a string.
 	ErrGeoNearDistanceFieldNotString = ErrorCode(16606) // Location16606
 
+	// ErrInRequiresArray indicates an expression $in whose second argument is not an array.
+	ErrInRequiresArray = ErrorCode(40081) // Location40081
+
 	// ErrStageUnwindNoPath indicates that $unwind aggregation stage is empty.
 	ErrStageUnwindNoPath = ErrorCode(28812) // Location28812
 

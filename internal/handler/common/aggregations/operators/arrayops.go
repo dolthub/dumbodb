@@ -633,13 +633,18 @@ func (op *inArrayOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	arr, isNull, err := collectArray(op.arrayArg, doc, "$in")
+	v, missing, err := EvalOperand(op.arrayArg, doc)
 	if err != nil {
 		return nil, err
 	}
-
-	if isNull {
-		return false, nil
+	arr, ok := v.(*types.Array)
+	if !ok {
+		typeName := "missing"
+		if !missing {
+			typeName = handlerparams.AliasFromType(v)
+		}
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInRequiresArray,
+			"$in requires an array as a second argument, found: "+typeName, "$in")
 	}
 
 	items, err := arrayToSlice(arr)
