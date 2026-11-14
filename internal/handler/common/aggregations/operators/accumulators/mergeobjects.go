@@ -78,7 +78,8 @@ func (s *mergeObjectsState) Accumulate(doc *types.Document) error {
 			if s.bytes > accumulatorMemoryLimit {
 				return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrExceededMemoryLimit,
 					fmt.Sprintf("$mergeObjects used too much memory: the merged document reached %d bytes, "+
-						"the limit DumboDB applies to one accumulator (mongod applies none)", s.bytes), "$mergeObjects")
+						"over the %d-byte limit DumboDB applies to one accumulator (mongod applies none)",
+						s.bytes, accumulatorMemoryLimit), "$mergeObjects")
 			}
 			s.result.Set(k, values[i])
 		}
