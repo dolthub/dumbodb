@@ -22,13 +22,16 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"math/big"
 	"net"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/FerretDB/wire"
+	"github.com/cockroachdb/apd/v3"
 	"github.com/google/uuid"
 
 	"github.com/dolthub/dumbodb/internal/backends"
@@ -2120,7 +2123,7 @@ func buildMergeKey(doc *types.Document, fields []string) string {
 			return ""
 		}
 
-		return fmt.Sprintf("%v", v)
+		return mergeKeyValue(v)
 	}
 
 	key := ""
@@ -2132,10 +2135,57 @@ func buildMergeKey(doc *types.Document, fields []string) string {
 			continue
 		}
 
-		key += fmt.Sprintf("|%v", v)
+		key += "|" + mergeKeyValue(v)
 	}
 
 	return key
+}
+
+// mergeKeyValue returns a key for v under which values that compare equal,
+// such as 1, NumberLong(1) and NumberDecimal("1.0"), are the same.
+func mergeKeyValue(v any) string {
+	var r *big.Rat
+	switch n := v.(type) {
+	case int32:
+		r = new(big.Rat).SetInt64(int64(n))
+	case int64:
+		r = new(big.Rat).SetInt64(n)
+	case float64:
+		switch {
+		case math.IsNaN(n):
+			return "n:NaN"
+		case math.IsInf(n, 1):
+			return "n:Infinity"
+		case math.IsInf(n, -1):
+			return "n:-Infinity"
+		}
+		r = new(big.Rat).SetFloat64(n)
+	case types.Decimal128:
+		d := aggregations.DecimalToAPD(n)
+		if d.Form != apd.Finite {
+			return "n:" + d.String()
+		}
+		var ok bool
+		if r, ok = new(big.Rat).SetString(d.Text('f')); !ok {
+			return fmt.Sprintf("%v", v)
+		}
+	case *types.Document:
+		key := "{"
+		values := n.Values()
+		for i, k := range n.Keys() {
+			key += strconv.Quote(k) + ":" + mergeKeyValue(values[i]) + ","
+		}
+		return key + "}"
+	case *types.Array:
+		key := "["
+		for i := range n.Len() {
+			key += mergeKeyValue(must.NotFail(n.Get(i))) + ","
+		}
+		return key + "]"
+	default:
+		return fmt.Sprintf("%T:%v", v, v)
+	}
+	return "n:" + r.RatString()
 }
 
 // checkOutMergeFinal returns mongod's error for $out or $merge before the last
