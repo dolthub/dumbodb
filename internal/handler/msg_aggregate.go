@@ -2058,20 +2058,47 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 }
 
 // writeMergeDocuments inserts and updates the documents a $merge batch wrote.
+// As mongod writes the batch unordered, a document that would duplicate a
+// unique key is skipped, the others are written, and the first such failure
+// is returned.
 func writeMergeDocuments(ctx context.Context, coll backends.Collection, params *stages.MergeParams, toInsert, toUpdate []*types.Document) error {
-	if len(toInsert) > 0 {
-		if _, err := coll.InsertAll(ctx, &backends.InsertAllParams{Docs: toInsert}); err != nil {
+	insert := func(docs []*types.Document) error {
+		_, err := coll.InsertAll(ctx, &backends.InsertAllParams{Docs: docs})
+		return err
+	}
+	update := func(docs []*types.Document) error {
+		_, err := coll.UpdateAll(ctx, &backends.UpdateAllParams{Docs: docs})
+		return err
+	}
+	var dupErr error
+	for _, w := range []struct {
+		docs  []*types.Document
+		write func([]*types.Document) error
+	}{{toInsert, insert}, {toUpdate, update}} {
+		if len(w.docs) == 0 {
+			continue
+		}
+		err := w.write(w.docs)
+		if err == nil {
+			continue
+		}
+		if !backends.ErrorCodeIs(err, backends.ErrorCodeInsertDuplicateID) {
 			return mergeWriteError(params, err)
 		}
-	}
-
-	if len(toUpdate) > 0 {
-		if _, err := coll.UpdateAll(ctx, &backends.UpdateAllParams{Docs: toUpdate}); err != nil {
-			return mergeWriteError(params, err)
+		for _, doc := range w.docs {
+			err = w.write([]*types.Document{doc})
+			switch {
+			case err == nil:
+			case backends.ErrorCodeIs(err, backends.ErrorCodeInsertDuplicateID):
+				if dupErr == nil {
+					dupErr = mergeWriteError(params, err)
+				}
+			default:
+				return mergeWriteError(params, err)
+			}
 		}
 	}
-
-	return nil
+	return dupErr
 }
 
 func wrapAggregateExecutorError(err error) error {
