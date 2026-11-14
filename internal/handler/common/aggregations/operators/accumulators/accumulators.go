@@ -214,6 +214,10 @@ func NewAccumulator(stage, key string, value any) (Accumulator, error) {
 	if n, ok := acc.(*nAccumulator); ok {
 		n.stopWhenFull = stage == "$group" || stage == "$bucket"
 	}
+	// mongod's classic $bucketAuto charges each value $push keeps twice.
+	if p, ok := acc.(*pushAccumulator); ok && stage == "$bucketAuto" {
+		p.charges = 2
+	}
 	return acc, nil
 }
 

@@ -147,12 +147,12 @@ func (a *topBottomAccumulator) UseSBE() error {
 }
 
 func (a *topBottomAccumulator) New() Accumulation {
-	return &topBottomState{spec: a, mem: keptMemory{sbe: a.n.sbe}}
+	return &topBottomState{spec: a, mem: keptMemory{sbe: a.n.sbe, stored: a.output.readsStoredValue()}}
 }
 
 // NewCollated returns an accumulation that orders strings under cmp.
 func (a *topBottomAccumulator) NewCollated(cmp *collation.Comparator) Accumulation {
-	return &topBottomState{spec: a, mem: keptMemory{sbe: a.n.sbe}, cmp: cmp}
+	return &topBottomState{spec: a, mem: keptMemory{sbe: a.n.sbe, stored: a.output.readsStoredValue()}, cmp: cmp}
 }
 
 // compareKeys compares two documents' collation-keyed sort keys in sortBy
