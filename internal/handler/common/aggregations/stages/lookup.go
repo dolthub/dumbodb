@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	stdsort "sort"
 	"strconv"
 	"strings"
@@ -247,6 +248,9 @@ type lookup struct {
 	// optimized is pipeline as it runs on the from documents; see
 	// OptimizeSubPipeline.
 	optimized *types.Array
+	// pushedPlan is the plan of the query the sub-pipeline's leading $match
+	// stages are pushed into, once known.
+	pushedPlan *common.PlanMode
 	// unwind is the following $unwind of as, which this stage performs by
 	// emitting one document per match (see MarkLookupsUnwound).
 	unwind *unwind
@@ -1252,6 +1256,9 @@ func (l *lookup) pipelineIter(ctx context.Context, fetcher CollectionFetcher, fr
 		}
 	}
 	MarkLookupsUnwound(built, specs)
+	if l.from != "" {
+		l.setPushedMatchPlans(ctx, fetcher, built)
+	}
 	if len(specs) > 0 && specs[0].Command() == "$collStats" && l.from != "" {
 		sf, ok := fetcher.(StatsFetcher)
 		if !ok {
@@ -1308,6 +1315,40 @@ func (l *lookup) pipelineIter(ctx context.Context, fetcher CollectionFetcher, fr
 		closer.Add(current)
 	}
 	return current, closer, nil
+}
+
+// setPushedMatchPlans gives the sub-pipeline's $match stages that mongod
+// pushes into the query on the foreign collection the plan of that query:
+// an index scan when an index serves one of its fields, the foreign field of
+// a localField join included, else a collection scan.
+func (l *lookup) setPushedMatchPlans(ctx context.Context, fetcher CollectionFetcher, built []aggregations.Stage) {
+	pushed, filter := PushedMatches(built)
+	if len(pushed) == 0 || !common.FilterUsesExpr(filter) {
+		return
+	}
+	if l.pushedPlan == nil {
+		var indexed []string
+		for _, field := range filterFields(filter, nil) {
+			if common.ConstrainsField(filter, field) && fetcher.IndexedField(ctx, l.from, field) {
+				indexed = append(indexed, field)
+			}
+		}
+		if l.localField != "" && !slices.Contains(indexed, l.foreignField) && fetcher.IndexedField(ctx, l.from, l.foreignField) {
+			indexed = append(indexed, l.foreignField)
+		}
+		plan := common.PlanCollectionScan
+		switch len(indexed) {
+		case 0:
+		case 1:
+			plan = common.PlanIndexScanOn(indexed[0])
+		default:
+			plan = common.PlanIndexScan
+		}
+		l.pushedPlan = &plan
+	}
+	for _, stage := range pushed {
+		SetPushedMatchPlan(stage, *l.pushedPlan)
+	}
 }
 
 // collectMatches drains a sub-pipeline's output. mongod refuses a further

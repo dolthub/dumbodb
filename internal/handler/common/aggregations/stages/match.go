@@ -16,6 +16,8 @@ package stages
 
 import (
 	"context"
+	"slices"
+	"strings"
 
 	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
@@ -153,4 +155,56 @@ func SeesStoredDocuments(pipeline []any, i int) bool {
 func KeepsRecordID(s aggregations.Stage) bool {
 	_, ok := s.(*match)
 	return ok
+}
+
+// PushedMatches returns the $match stages of pipeline mongod pushes into the
+// query that reads its input: the leading ones, also those after a leading
+// $sort, which mongod moves ahead of it. filter is their conjunction, nil
+// when there are none.
+func PushedMatches(pipeline []aggregations.Stage) (matches []aggregations.Stage, filter *types.Document) {
+	clauses := types.MakeArray(0)
+stages:
+	for _, stage := range pipeline {
+		inner := stage
+		if s, ok := inner.(*sbeStage); ok {
+			inner = s.inner
+		}
+		switch inner := inner.(type) {
+		case *sort:
+		case *match:
+			matches = append(matches, stage)
+			clauses.Append(inner.filter)
+		default:
+			break stages
+		}
+	}
+	switch clauses.Len() {
+	case 0:
+		return nil, nil
+	case 1:
+		return matches, must.NotFail(clauses.Get(0)).(*types.Document)
+	}
+	return matches, must.NotFail(types.NewDocument("$and", clauses))
+}
+
+// filterFields returns the fields filter has conditions on, at the top level
+// or in logical operators' clauses.
+func filterFields(filter *types.Document, fields []string) []string {
+	keys, values := filter.Keys(), filter.Values()
+	for i, key := range keys {
+		switch key {
+		case "$and", "$or", "$nor":
+			clauses, _ := values[i].(*types.Array)
+			for j := 0; clauses != nil && j < clauses.Len(); j++ {
+				if clause, ok := must.NotFail(clauses.Get(j)).(*types.Document); ok {
+					fields = filterFields(clause, fields)
+				}
+			}
+		default:
+			if !strings.HasPrefix(key, "$") && !slices.Contains(fields, key) {
+				fields = append(fields, key)
+			}
+		}
+	}
+	return fields
 }
