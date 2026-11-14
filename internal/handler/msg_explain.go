@@ -596,7 +596,7 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 	if params.Aggregate && !viaView {
 		pipelineDocs = explainedStageDocs(params.StagesDocs)
 		if info, ierr := lookupCollectionInfo(connCtx, db, hintCollection); pipelineDocs != nil && ierr == nil && info != nil {
-			sbe = classifySBE(connCtx, db, pipelineDocs, effColl, !targetIsView, viewChecker(connCtx, db))
+			sbe = classifySBE(connCtx, db, hintCollection, pipelineDocs, effColl, !targetIsView, viewChecker(connCtx, db))
 		}
 	}
 

@@ -70,6 +70,10 @@ var sourceStages = map[string]struct{}{
 // $lookup also naming the foreign indexes it reads. A pipeline every stage of
 // which runs in the query keeps the plain form.
 func explainPipelineStages(ctx context.Context, db backends.Database, coll backends.Collection, qp *backends.ExplainParams, dbName string, docs []*types.Document, sbe sbePlan, response *types.Document, execStats bool) { //nolint:lll // for readability
+	if sbe.distinct != nil {
+		explainDistinctScanGroup(ctx, db, coll, qp, docs, sbe.distinct, response, execStats)
+		return
+	}
 	absorbed := queryAbsorbedStages(docs)
 	end := absorbed
 	for i := absorbed; i < sbe.end && sbeQueryPlanStages[docs[i].Command()]; i++ {
@@ -121,6 +125,14 @@ func explainPipelineStages(ctx context.Context, db backends.Database, coll backe
 	if returned != nil {
 		setStageReturned(must.NotFail(out.Get(0)).(*types.Document), returned[0])
 	}
+	appendReportedStages(ctx, fetcher, out, rest, returned, execStats)
+	response.Set("stages", reportSorts(out))
+}
+
+// appendReportedStages appends to out the explain entries of rest, the
+// stages after the query, with returned[i+1] the documents rest[i] returned
+// when returned is set.
+func appendReportedStages(ctx context.Context, fetcher *foreignFetcher, out *types.Array, rest []*types.Document, returned []int32, execStats bool) {
 	for i := 0; i < len(rest); i++ {
 		stage := rest[i]
 		n := i + 1
@@ -145,7 +157,6 @@ func explainPipelineStages(ctx context.Context, db backends.Database, coll backe
 			out.Append(entry)
 		}
 	}
-	response.Set("stages", reportSorts(out))
 }
 
 // sbeQueryPlanStages are the stages SBE runs inside the query plan.
