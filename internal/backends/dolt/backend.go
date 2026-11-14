@@ -66,6 +66,7 @@ import (
 	dolttypes "github.com/dolthub/dolt/go/store/types"
 
 	"github.com/dolthub/dumbodb/internal/backends"
+	idxpkg "github.com/dolthub/dumbodb/internal/index"
 	"github.com/dolthub/dumbodb/internal/sqlctx"
 	"github.com/dolthub/dumbodb/internal/types"
 )
@@ -574,6 +575,10 @@ func (b *Backend) Close() {
 		}
 	}
 
+	if b.provider != nil {
+		b.provider.closeDatabases()
+	}
+
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -753,6 +758,7 @@ func (b *Backend) dropDatabaseLocked(params *backends.DropDatabaseParams) error 
 			fmt.Errorf("database %q does not exist", params.Name))
 	}
 
+	b.provider.forgetDatabase(params.Name)
 	if db, ok := b.dbs[params.Name]; ok {
 		db.mu.Lock()
 		_ = db.doltDB.Close()
@@ -760,7 +766,6 @@ func (b *Backend) dropDatabaseLocked(params *backends.DropDatabaseParams) error 
 		forgetEmptySecondaryIndexes(db.ns)
 		delete(b.dbs, params.Name)
 	}
-	b.provider.forgetDatabase(params.Name)
 
 	// Soft delete: move (not remove) into the preserved-drops store so UndropDatabase can restore it.
 	dest, err := b.preservedDest(params.Name)
@@ -1127,7 +1132,7 @@ func (b *Backend) getOrOpenDBLocked(ctx context.Context, dbName string, create b
 
 	// Write the shared DSCH chunk once; the empty secondary indexes are
 	// memoized per-NodeStore in emptySecondaryIndexesCache (see index_resolve.go).
-	schemaMsg := buildCollectionTableSchema()
+	schemaMsg := buildCollectionTableSchema(idxpkg.MaxKeyLength)
 	schemaRef, err := vs.WriteValue(ctx, dolttypes.SerialMessage(schemaMsg))
 	if err != nil {
 		_ = doltDB.Close()

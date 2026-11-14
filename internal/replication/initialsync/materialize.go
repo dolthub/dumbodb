@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/dolthub/dumbodb/internal/index"
 	"github.com/dolthub/dumbodb/internal/replication/catalog"
 	"github.com/dolthub/dumbodb/internal/replication/control"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -90,9 +91,15 @@ func MaterializeCollection(
 				BSONType:  unsupported.BSONType,
 			}
 		}
+		if errors.Is(err, index.ErrKeyTooLong) {
+			return result, &UnstorableKeyError{Namespace: database + "." + collection.Name, Err: err}
+		}
 		return result, fmt.Errorf("cloning %s.%s: %w", database, collection.Name, err)
 	}
 	if err := catalogApplier.CreateIndexes(ctx, collection.SourceUUID, plan.Indexes); err != nil {
+		if errors.Is(err, index.ErrKeyTooLong) {
+			return result, &UnstorableKeyError{Namespace: database + "." + collection.Name, Err: err}
+		}
 		return result, fmt.Errorf("building %s.%s indexes: %w", database, collection.Name, err)
 	}
 	return result, nil

@@ -17,12 +17,15 @@ package tests
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
+
+	idxpkg "github.com/dolthub/dumbodb/internal/index"
 )
 
 const keyTooLongCode = 17280
@@ -41,15 +44,15 @@ func requireKeyTooLong(t *testing.T, err error) {
 	require.Equal(t, int32(keyTooLongCode), ce.Code, ce.Message)
 }
 
-// TestKeyLength checks that keys over DumboDB's 4096-byte limit are refused
+// TestKeyLength checks that keys over DumboDB's 1024-byte limit are refused
 // with KeyTooLong on every write path, keep the connection open, and leave
 // lookups by such a key returning nothing.
 func TestKeyLength(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.Collection(t)
-	long := strings.Repeat("x", 5000)
-	fits := strings.Repeat("y", 4000)
+	long := strings.Repeat("x", 3000)
+	fits := strings.Repeat("y", 1000)
 
 	_, err := coll.InsertOne(ctx, bson.D{{Key: "_id", Value: long}})
 	requireKeyTooLong(t, err)
@@ -61,7 +64,7 @@ func TestKeyLength(t *testing.T) {
 	require.NoError(t, err)
 	require.Zero(t, n)
 	// Range bounds over the limit still order correctly against stored keys.
-	above := strings.Repeat("z", 5000)
+	above := strings.Repeat("z", 3000)
 	n, err = coll.CountDocuments(ctx, bson.D{{Key: "_id", Value: bson.D{{Key: "$gte", Value: above}}}})
 	require.NoError(t, err)
 	require.Zero(t, n)
@@ -90,4 +93,49 @@ func TestKeyLength(t *testing.T) {
 	n, err = coll.CountDocuments(ctx, bson.D{})
 	require.NoError(t, err)
 	require.Equal(t, int64(3), n, "refused writes change nothing")
+}
+
+// TestKeyLength_ManyKeysAtLimit inserts enough keys at the length limit to
+// grow the primary and secondary trees deep, which panicked Dolt when the cap
+// was 4096 bytes.
+func TestKeyLength_ManyKeysAtLimit(t *testing.T) {
+	env := startDumboDB(t)
+	ctx := context.Background()
+	const counterWidth = 8
+	// A string's KeyString adds a type byte and a terminator.
+	pad := strings.Repeat("x", idxpkg.MaxKeyLength-2-counterWidth)
+
+	t.Run("primary", func(t *testing.T) {
+		insertManyKeys(t, env.Collection(t), func(counter string, _ int) bson.D {
+			return bson.D{{Key: "_id", Value: counter + pad}}
+		})
+	})
+
+	t.Run("secondary", func(t *testing.T) {
+		coll := env.Collection(t)
+		_, err := coll.Indexes().CreateOne(ctx, mongo.IndexModel{Keys: bson.D{{Key: "a", Value: 1}}})
+		require.NoError(t, err)
+		// The entry also holds the int32 _id's KeyString.
+		fieldPad := pad[:len(pad)-8]
+		insertManyKeys(t, coll, func(counter string, i int) bson.D {
+			return bson.D{{Key: "_id", Value: int32(i)}, {Key: "a", Value: counter + fieldPad}}
+		})
+	})
+}
+
+func insertManyKeys(t *testing.T, coll *mongo.Collection, makeDoc func(counter string, i int) bson.D) {
+	t.Helper()
+	ctx := context.Background()
+	const total, batch = 30000, 500
+	for start := 0; start < total; start += batch {
+		docs := make([]any, 0, batch)
+		for i := start; i < start+batch; i++ {
+			docs = append(docs, makeDoc(fmt.Sprintf("%08d", i), i))
+		}
+		_, err := coll.InsertMany(ctx, docs)
+		require.NoError(t, err, "batch starting at %d", start)
+	}
+	n, err := coll.CountDocuments(ctx, bson.D{})
+	require.NoError(t, err)
+	require.Equal(t, int64(total), n)
 }

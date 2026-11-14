@@ -28,8 +28,18 @@ import (
 )
 
 // Tables reference this version's collection schema; one referencing another
-// schema, as an older version's hash-keyed tables do, is refused.
+// is refused: an older version's hash-keyed tables, or tables written under
+// the 4096-byte key cap, whose schema declared _id varbinary(16383).
 func TestOpenCollectionRefusesOtherSchema(t *testing.T) {
+	for name, schemaHash := range map[string]hash.Hash{
+		"hash-keyed":    hash.Of([]byte("binary(20) schema")),
+		"4096-byte cap": hash.Of(buildCollectionTableSchema(16383)),
+	} {
+		t.Run(name, func(t *testing.T) { requireSchemaRefused(t, schemaHash) })
+	}
+}
+
+func requireSchemaRefused(t *testing.T, schemaHash hash.Hash) {
 	ctx := context.Background()
 	b := newTestBackend(t)
 	insertDoc(t, b, "layoutdb", "coll", mustDoc(t, "_id", int32(1)))
@@ -38,7 +48,7 @@ func TestOpenCollectionRefusesOtherSchema(t *testing.T) {
 
 	primary := must.NotFail(newEmptyMap(ctx, state.ns))
 	indexes := must.NotFail(newSecondaryIndexes(ctx, state.ns))
-	old := buildDoltTableFlatbuffer(primary, hash.Of([]byte("binary(20) schema")), indexes.tableBytes(), hash.Hash{})
+	old := buildDoltTableFlatbuffer(primary, schemaHash, indexes.tableBytes(), hash.Hash{})
 	ref, err := state.vs.WriteValue(ctx, dolttypes.SerialMessage(old))
 	require.NoError(t, err)
 

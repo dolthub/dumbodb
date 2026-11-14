@@ -158,6 +158,42 @@ func autoCommitRaceLost(err error) bool {
 	return errors.Is(err, datas.ErrOptimisticLockFailed) || errors.Is(err, datas.ErrMergeNeeded)
 }
 
+// commitWithWorkingSet commits pending to ws's branch and writes ws in one
+// atomic update, provided the branch's working set still hashes to prevWSHash
+// and its HEAD is still expectedHead, the commit pending was built on (zero
+// skips that check).
+// It returns the new commit's hash. A lost race fails with
+// datas.ErrOptimisticLockFailed or datas.ErrMergeNeeded.
+func commitWithWorkingSet(
+	ctx context.Context,
+	ddb *doltdb.DoltDB,
+	pending *doltdb.PendingCommit,
+	ws *doltdb.WorkingSet,
+	prevWSHash hash.Hash,
+	expectedHead hash.Hash,
+	rsc *doltdb.ReplicationStatusController,
+) (hash.Hash, error) {
+	headRef, err := ws.Ref().ToHeadRef()
+	if err != nil {
+		return hash.Hash{}, err
+	}
+	heads, err := ddb.CommitHeadUpdates(ctx, []doltdb.HeadUpdate{
+		doltdb.WorkingSetUpdate{WorkingSet: ws, PrevHash: prevWSHash, Meta: doltdb.TodoWorkingSetMeta()},
+		doltdb.BranchHeadUpdate{
+			HeadRef:       headRef,
+			Root:          pending.Roots.Staged,
+			CommitOptions: pending.CommitOptions,
+			ExpectedHead:  expectedHead,
+			WorkingSetRef: ws.Ref(),
+			PrevWsHash:    prevWSHash,
+		},
+	}, rsc)
+	if err != nil {
+		return hash.Hash{}, err
+	}
+	return heads[1], nil
+}
+
 // commitBranchWS commits branch's working root as one Dolt commit, or returns
 // false without committing when the root already matches HEAD. Caller must hold
 // state.mu.
@@ -203,7 +239,7 @@ func (s *dbState) tryCommitBranchWS(ctx context.Context, branch, message, author
 	}
 
 	workingRoot := current.WorkingRoot()
-	headRoot, err := headRootValueForBranch(ctx, s, branch)
+	headRoot, headAddr, err := branchHead(ctx, s, branch)
 	if err != nil {
 		return false, fmt.Errorf("commitBranchWS: reading HEAD root for %q: %w", branch, err)
 	}
@@ -219,10 +255,6 @@ func (s *dbState) tryCommitBranchWS(ctx context.Context, branch, message, author
 		return false, nil
 	}
 
-	headRef, err := wsRef.ToHeadRef()
-	if err != nil {
-		return false, fmt.Errorf("commitBranchWS: head ref for %q: %w", branch, err)
-	}
 	if author == "" {
 		author = "dumbodb <dumbodb@localhost>"
 	}
@@ -241,7 +273,7 @@ func (s *dbState) tryCommitBranchWS(ctx context.Context, branch, message, author
 
 	cleanWS := current.WithStagedRoot(workingRoot).ClearMerge()
 	var rsc doltdb.ReplicationStatusController
-	if _, err := s.doltDB.CommitWithWorkingSet(ctx, headRef, wsRef, pending, cleanWS, forkPoint, doltdb.TodoWorkingSetMeta(), &rsc); err != nil {
+	if _, err := commitWithWorkingSet(ctx, s.doltDB, pending, cleanWS, forkPoint, headAddr, &rsc); err != nil {
 		if autoCommitRaceLost(err) {
 			return false, fmt.Errorf("%w: %q moved while auto-committing it", backends.ErrWriteRaced, branch)
 		}

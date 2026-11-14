@@ -164,6 +164,23 @@ func (h *Handler) MsgDropIndexes(connCtx context.Context, msg *wire.OpMsg) (*wir
 	)
 }
 
+// storedKeyPattern returns key as mongod stores it, which dropIndexes matches:
+// a text index's fields become {_fts: "text", _ftsx: 1}.
+func storedKeyPattern(key []backends.IndexKeyPair) []backends.IndexKeyPair {
+	i := slices.IndexFunc(key, func(p backends.IndexKeyPair) bool { return p.Text })
+	if i < 0 {
+		return key
+	}
+	res := slices.Clone(key[:i])
+	res = append(res, backends.IndexKeyPair{Field: "_fts", Text: true}, backends.IndexKeyPair{Field: "_ftsx"})
+	for _, p := range key[i:] {
+		if !p.Text {
+			res = append(res, p)
+		}
+	}
+	return res
+}
+
 // processDropIndexOptions parses and validates index doc and returns the list of indexes to delete
 // and true if a flag to drop all indexes except _id_ was set.
 func processDropIndexOptions(command, ns string, v any, existing []backends.IndexInfo) ([]string, bool, error) { //nolint:lll // for readability
@@ -190,16 +207,7 @@ func processDropIndexOptions(command, ns string, v any, existing []backends.Inde
 		}
 
 		for _, index := range existing {
-			matches := true
-
-			for i, key := range index.Key {
-				if key.Field != spec[i].Field || key.Descending != spec[i].Descending {
-					matches = false
-					break
-				}
-			}
-
-			if matches {
+			if slices.Equal(storedKeyPattern(index.Key), spec) {
 				return []string{index.Name}, false, nil
 			}
 		}

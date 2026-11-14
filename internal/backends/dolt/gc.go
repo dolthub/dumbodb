@@ -73,7 +73,7 @@ func (p *backgroundGCRootsProvider) pinRoot(db string, root hash.Hash) (release 
 	}
 }
 
-func (p *backgroundGCRootsProvider) VisitGCRoots(_ context.Context, db string, keep func(hash.Hash) bool) error {
+func (p *backgroundGCRootsProvider) VisitGCRoots(_ context.Context, db string, visit func(hash.Hash)) error {
 	p.mu.Lock()
 	roots := make([]hash.Hash, 0, len(p.pinned[db]))
 	for root := range p.pinned[db] {
@@ -82,9 +82,7 @@ func (p *backgroundGCRootsProvider) VisitGCRoots(_ context.Context, db string, k
 	p.mu.Unlock()
 
 	for _, root := range roots {
-		if keep(root) {
-			return fmt.Errorf("gc safepoint: could not keep root %s of an open cursor", root)
-		}
+		visit(root)
 	}
 	return nil
 }
@@ -125,8 +123,22 @@ type sessionAwareSafepoint struct {
 	waiter      *gcctx.GCSafepointWaiter
 }
 
+// visit returns an error where dolt's controller panics: every visit
+// completes before the GC finalizes, so the keeper must accept each root.
 func (sc *sessionAwareSafepoint) visit(ctx context.Context, sess gcctx.GCRootsProvider) error {
-	return sess.VisitGCRoots(ctx, sc.dbname, sc.keeper)
+	var unkept []hash.Hash
+	err := sess.VisitGCRoots(ctx, sc.dbname, func(h hash.Hash) {
+		if sc.keeper(h) {
+			unkept = append(unkept, h)
+		}
+	})
+	if err != nil {
+		return err
+	}
+	if len(unkept) > 0 {
+		return fmt.Errorf("gc safepoint: could not keep %d roots, first %s", len(unkept), unkept[0])
+	}
+	return nil
 }
 
 func (sc *sessionAwareSafepoint) BeginGC(ctx context.Context, keeper func(hash.Hash) bool) error {

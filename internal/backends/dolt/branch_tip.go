@@ -109,7 +109,14 @@ func (s *dbState) unpublishedSessionWrites(ctx context.Context, branch string) (
 	if err != nil {
 		return false, fmt.Errorf("reading the session's state of %q: %w", branch, err)
 	}
-	if !ok || sessState.WorkingSet() == nil {
+	if !ok {
+		return false, nil
+	}
+	ours, err := sessState.WorkingSet(sqlCtx)
+	if err != nil {
+		return false, fmt.Errorf("reading the session's working set of %q: %w", branch, err)
+	}
+	if ours == nil {
 		return false, nil
 	}
 	startRoot, ok := dtx.GetInitialRoot(s.name)
@@ -128,7 +135,7 @@ func (s *dbState) unpublishedSessionWrites(ctx context.Context, branch string) (
 	default:
 		baseRoot = base.WorkingRoot()
 	}
-	oursHash, err := sessState.WorkingSet().WorkingRoot().HashOf()
+	oursHash, err := ours.WorkingRoot().HashOf()
 	if err != nil {
 		return false, err
 	}
@@ -197,7 +204,7 @@ func (s *dbState) commitOverTipWith(
 	if tip.lost {
 		return hash.Hash{}, tip.raced()
 	}
-	pending, err := s.pendingCommit(ctx, tip.branch, commitRV, opts.Parents, opts.Meta)
+	pending, headAddr, err := s.pendingCommit(ctx, tip.branch, commitRV, opts.Parents, opts.Meta)
 	if err != nil {
 		return hash.Hash{}, err
 	}
@@ -211,22 +218,13 @@ func (s *dbState) commitOverTipWith(
 	if err := runBranchOpHook(ctx); err != nil {
 		return hash.Hash{}, err
 	}
-	wsRef := doltref.NewWorkingSetRef("heads/" + tip.branch)
-	headRef, err := wsRef.ToHeadRef()
-	if err != nil {
-		return hash.Hash{}, fmt.Errorf("head ref for %q: %w", tip.branch, err)
-	}
 	var rsc doltdb.ReplicationStatusController
-	commit, err := s.doltDB.CommitWithWorkingSet(ctx, headRef, wsRef, pending, newWS, tip.hash, doltdb.TodoWorkingSetMeta(), &rsc)
-	if errors.Is(err, datas.ErrOptimisticLockFailed) || errors.Is(err, datas.ErrMergeNeeded) {
+	commitHash, err := commitWithWorkingSet(ctx, s.doltDB, pending, newWS, tip.hash, headAddr, &rsc)
+	if autoCommitRaceLost(err) {
 		return hash.Hash{}, tip.raced()
 	}
 	if err != nil {
 		return hash.Hash{}, fmt.Errorf("committing %q: %w", tip.branch, err)
-	}
-	commitHash, err := commit.HashOf()
-	if err != nil {
-		return hash.Hash{}, fmt.Errorf("hashing the new commit on %q: %w", tip.branch, err)
 	}
 	return commitHash, s.advanceTip(ctx, tip, newWS)
 }
@@ -288,17 +286,18 @@ func (s *dbState) setHeadOverTip(ctx context.Context, tip *branchTip, target has
 	return nil
 }
 
-// pendingCommit builds the commit for commitRV with exactly parents.
-func (s *dbState) pendingCommit(ctx context.Context, branch string, commitRV doltdb.RootValue, parents []hash.Hash, cm *datas.CommitMeta) (*doltdb.PendingCommit, error) {
-	headRoot, err := headRootValueForBranch(ctx, s, branch)
+// pendingCommit builds the commit for commitRV with exactly parents, and
+// returns the HEAD it read, which the commit must still sit on when written.
+func (s *dbState) pendingCommit(ctx context.Context, branch string, commitRV doltdb.RootValue, parents []hash.Hash, cm *datas.CommitMeta) (*doltdb.PendingCommit, hash.Hash, error) {
+	headRoot, headAddr, err := branchHead(ctx, s, branch)
 	if err != nil {
-		return nil, fmt.Errorf("reading HEAD root for %q: %w", branch, err)
+		return nil, hash.Hash{}, fmt.Errorf("reading HEAD root for %q: %w", branch, err)
 	}
 	parentCommits := make([]*doltdb.Commit, 0, len(parents))
 	for _, p := range parents {
 		c, cErr := commitForHash(ctx, s, p)
 		if cErr != nil {
-			return nil, cErr
+			return nil, hash.Hash{}, cErr
 		}
 		if c != nil {
 			parentCommits = append(parentCommits, c)
@@ -306,15 +305,15 @@ func (s *dbState) pendingCommit(ctx context.Context, branch string, commitRV dol
 	}
 	pending, err := s.doltDB.NewPendingCommit(ctx, doltdb.Roots{Head: headRoot, Working: commitRV, Staged: commitRV}, parentCommits, hash.Hash{}, cm)
 	if err != nil {
-		return nil, fmt.Errorf("pending commit for %q: %w", branch, err)
+		return nil, hash.Hash{}, fmt.Errorf("pending commit for %q: %w", branch, err)
 	}
-	return pending, nil
+	return pending, headAddr, nil
 }
 
 // commitDangling writes a commit of commitRV with exactly parents, referenced
 // by no branch.
 func (s *dbState) commitDangling(ctx context.Context, branch string, commitRV doltdb.RootValue, parents []hash.Hash, cm *datas.CommitMeta) (hash.Hash, error) {
-	pending, err := s.pendingCommit(ctx, branch, commitRV, parents, cm)
+	pending, _, err := s.pendingCommit(ctx, branch, commitRV, parents, cm)
 	if err != nil {
 		return hash.Hash{}, err
 	}

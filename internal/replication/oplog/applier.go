@@ -31,6 +31,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/bson"
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
+	"github.com/dolthub/dumbodb/internal/index"
 	"github.com/dolthub/dumbodb/internal/replication/catalog"
 	"github.com/dolthub/dumbodb/internal/replication/control"
 	"github.com/dolthub/dumbodb/internal/replication/idlookup"
@@ -96,7 +97,24 @@ func (e *ApplyPanicError) Error() string {
 	return fmt.Sprintf("panic applying oplog entry at %v (op %q, ns %q): %v", e.OpTime, e.Operation, e.Namespace, e.Value)
 }
 
-// Apply applies entry. A panic is recovered and returned as *ApplyPanicError.
+// UnstorableKeyError reports an oplog entry whose document has a key longer
+// than DumboDB stores. Reapplying the entry fails the same way, so
+// replication must stop.
+type UnstorableKeyError struct {
+	OpTime    control.OpTime
+	Namespace string
+	Operation string
+	Err       error
+}
+
+func (e *UnstorableKeyError) Error() string {
+	return fmt.Sprintf("oplog entry at %v (op %q, ns %q) has a key DumboDB cannot store: %v", e.OpTime, e.Operation, e.Namespace, e.Err)
+}
+
+func (e *UnstorableKeyError) Unwrap() error { return e.Err }
+
+// Apply applies entry. A panic is recovered and returned as *ApplyPanicError,
+// and a key too long to store as *UnstorableKeyError.
 func (a *Applier) Apply(ctx context.Context, entry Entry) (err error) {
 	defer func() {
 		if value := recover(); value != nil {
@@ -110,7 +128,11 @@ func (a *Applier) Apply(ctx context.Context, entry Entry) (err error) {
 			}
 		}
 	}()
-	return a.apply(ctx, entry)
+	err = a.apply(ctx, entry)
+	if errors.Is(err, index.ErrKeyTooLong) {
+		err = &UnstorableKeyError{OpTime: entry.OpTime, Namespace: entry.Namespace, Operation: entry.Operation, Err: err}
+	}
+	return err
 }
 
 func (a *Applier) apply(ctx context.Context, entry Entry) error {

@@ -274,14 +274,30 @@ func (p *dumbodbProvider) getOrBuildSqleDatabase(ctx *sql.Context, baseName stri
 	return db, true, nil
 }
 
-// forgetDatabase drops the cached sqle.Database for name. The cache pins a
-// *doltdb.DoltDB, so a database dropped and recreated under the same name
-// would otherwise keep serving the closed store, and a read through it fails
-// with an empty file ID.
+// forgetDatabase closes and drops the cached sqle.Database for name. The
+// cache pins a *doltdb.DoltDB, so a database dropped and recreated under the
+// same name would otherwise keep serving the closed store, and a read through
+// it fails with an empty file ID. Call it before closing the store: closing
+// the sqle.Database waits for its sequence trackers, which read the store in
+// the background.
 func (p *dumbodbProvider) forgetDatabase(name string) {
 	p.dbCacheMu.Lock()
 	defer p.dbCacheMu.Unlock()
-	delete(p.dbCache, strings.ToLower(name))
+	key := strings.ToLower(name)
+	if db, ok := p.dbCache[key]; ok {
+		db.Close()
+		delete(p.dbCache, key)
+	}
+}
+
+// closeDatabases closes every cached sqle.Database; see forgetDatabase.
+func (p *dumbodbProvider) closeDatabases() {
+	p.dbCacheMu.Lock()
+	defer p.dbCacheMu.Unlock()
+	for key, db := range p.dbCache {
+		db.Close()
+		delete(p.dbCache, key)
+	}
 }
 
 // writer.NewWriteSession is required, not optional: dsess.addDB invokes the
