@@ -617,6 +617,27 @@ const (
 	// ErrZipInputsNotArray indicates $zip inputs that are not an array of expressions.
 	ErrZipInputsNotArray = ErrorCode(34461) // Location34461
 
+	// ErrZipNotObject indicates a $zip argument that is not an object.
+	ErrZipNotObject = ErrorCode(34460) // Location34460
+
+	// ErrZipDefaultsNotArray indicates $zip defaults that are not an array of expressions.
+	ErrZipDefaultsNotArray = ErrorCode(34462) // Location34462
+
+	// ErrZipUseLongestLengthType indicates a $zip useLongestLength that is not a bool.
+	ErrZipUseLongestLengthType = ErrorCode(34463) // Location34463
+
+	// ErrZipUnknownArgument indicates an unknown $zip argument.
+	ErrZipUnknownArgument = ErrorCode(34464) // Location34464
+
+	// ErrZipNoInputs indicates a $zip without input arrays.
+	ErrZipNoInputs = ErrorCode(34465) // Location34465
+
+	// ErrZipDefaultsWithoutLongest indicates $zip defaults without useLongestLength.
+	ErrZipDefaultsWithoutLongest = ErrorCode(34466) // Location34466
+
+	// ErrZipDefaultsLength indicates $zip defaults and inputs of different lengths.
+	ErrZipDefaultsLength = ErrorCode(34467) // Location34467
+
 	// ErrZipInputNotArray indicates a $zip input that is not an array.
 	ErrZipInputNotArray = ErrorCode(34468) // Location34468
 
