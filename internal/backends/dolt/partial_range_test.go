@@ -15,14 +15,16 @@
 package dolt
 
 import (
+	"context"
 	"math"
 	"testing"
 
+	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-func TestFilterImpliesPartialRange(t *testing.T) {
+func TestPartialIndexServesRange(t *testing.T) {
 	doc := func(pairs ...any) *types.Document { return must.NotFail(types.NewDocument(pairs...)) }
 	lt100 := doc("grp", doc("$lt", int32(100)))
 	between := doc("grp", doc("$gte", int32(10), "$lt", int32(100)))
@@ -47,21 +49,22 @@ func TestFilterImpliesPartialRange(t *testing.T) {
 		{"lower too loose", doc("grp", doc("$gte", int32(9), "$lt", int32(20))), between, false},
 		{"string range", doc("s", doc("$gte", "b", "$lt", "c")), doc("s", doc("$gte", "a")), true},
 		{"field missing from filter", doc("k", int32(1)), lt100, false},
-		{"unsupported operator in filter", doc("grp", doc("$in", must.NotFail(types.NewArray(int32(1))))), lt100, false},
+		{"$in inside", doc("grp", doc("$in", must.NotFail(types.NewArray(int32(1), int32(99))))), lt100, true},
+		{"$in reaching the bound", doc("grp", doc("$in", must.NotFail(types.NewArray(int32(1), int32(100))))), lt100, false},
 		{"unsupported operator in pfe", lt100, doc("grp", doc("$type", "int")), false},
 		{"mixed brackets in pfe", lt100, doc("grp", doc("$lt", int32(100), "$gt", "a")), false},
 		{"NaN", doc("grp", doc("$lt", math.NaN())), lt100, false},
 		{"scalar equality", doc("grp", int32(5)), doc("grp", int32(5)), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := filterImpliesPartial(tc.filter, tc.pfe, true); got != tc.want {
-				t.Fatalf("filterImpliesPartial(%v, %v) = %v, want %v", tc.filter, tc.pfe, got, tc.want)
+			if got := partialIndexServes(context.Background(), tc.filter, backends.IndexInfo{PartialFilterExpression: tc.pfe}, nil); got != tc.want {
+				t.Fatalf("partialIndexServes(%v, %v) = %v, want %v", tc.filter, tc.pfe, got, tc.want)
 			}
 		})
 	}
 }
 
-func TestFilterImpliesPartialCollatedStringRange(t *testing.T) {
+func TestPartialIndexServesCollatedIndex(t *testing.T) {
 	doc := func(pairs ...any) *types.Document { return must.NotFail(types.NewDocument(pairs...)) }
 	for _, tc := range []struct {
 		name   string
@@ -71,11 +74,13 @@ func TestFilterImpliesPartialCollatedStringRange(t *testing.T) {
 	}{
 		{"string range", doc("s", doc("$lt", "Z")), doc("s", doc("$lt", "a")), false},
 		{"numeric range", doc("grp", doc("$lt", int32(50))), doc("grp", doc("$lt", int32(100))), true},
-		{"string equality", doc("s", "a"), doc("s", "a"), true},
+		// mongod compares no string across collations, equal or not.
+		{"string equality", doc("s", "a"), doc("s", "a"), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := filterImpliesPartial(tc.filter, tc.pfe, false); got != tc.want {
-				t.Fatalf("filterImpliesPartial(%v, %v) = %v, want %v", tc.filter, tc.pfe, got, tc.want)
+			idx := backends.IndexInfo{PartialFilterExpression: tc.pfe, Collation: doc("locale", "en", "strength", int32(2))}
+			if got := partialIndexServes(context.Background(), tc.filter, idx, nil); got != tc.want {
+				t.Fatalf("partialIndexServes(%v, %v) = %v, want %v", tc.filter, tc.pfe, got, tc.want)
 			}
 		})
 	}

@@ -20,6 +20,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
@@ -57,7 +58,7 @@ func TestExistsOperandTrue(t *testing.T) {
 		{"array", must.NotFail(types.NewArray()), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, tc.want, existsOperandTrue(tc.v))
+			require.Equal(t, tc.want, backends.ExistsOperandTrue(tc.v))
 		})
 	}
 }

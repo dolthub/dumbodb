@@ -39,7 +39,7 @@ func streamIndexRanges(ctx context.Context, state *dbState, primary prolly.Map, 
 	if (params.Filter.Len() == 0 && !hinted) || params.Filter.Has("$or") {
 		return nil, backends.IndexInfo{}, false, nil
 	}
-	choice, ok := chooseIndexRange(idxInfos, params.Filter, params.Hint, params.Collation, params.Fields)
+	choice, ok := chooseIndexRange(ctx, idxInfos, params.Filter, params.Hint, params.Collation, params.Fields)
 	if !ok {
 		return nil, backends.IndexInfo{}, false, nil
 	}

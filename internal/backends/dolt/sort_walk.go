@@ -363,7 +363,7 @@ func tryStreamSortedRange(ctx context.Context, state *dbState, primary prolly.Ma
 	if params.LimitHint <= 0 || params.Filter == nil || params.Filter.Has("$or") {
 		return nil, backends.IndexInfo{}, false, nil
 	}
-	choice, ok := chooseIndexRange(idxInfos, params.Filter, params.Hint, params.Collation, params.Fields)
+	choice, ok := chooseIndexRange(ctx, idxInfos, params.Filter, params.Hint, params.Collation, params.Fields)
 	if !ok || choice.pointRanges != nil {
 		return nil, backends.IndexInfo{}, false, nil
 	}

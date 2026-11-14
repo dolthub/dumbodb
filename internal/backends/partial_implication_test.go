@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package common
+package backends
 
 import (
 	"context"
@@ -59,6 +59,8 @@ func TestQueryImpliesPartialFilter(t *testing.T) {
 		"elemMatch":          {b("$elemMatch", doc("$gt", int32(1))), true},
 		"size":               {b("$size", int32(1)), true},
 		"mod":                {b("$mod", arr(int32(2), int32(0))), true},
+		"all null":           {b("$all", arr(types.Null)), false},
+		"all null and 1":     {b("$all", arr(types.Null, int32(1))), true},
 		"not eq null":        {b("$not", doc("$eq", types.Null)), true},
 		"not in null":        {b("$not", doc("$in", arr(types.Null))), true},
 		"not gt":             {b("$not", doc("$gt", int32(1))), false},
@@ -77,7 +79,7 @@ func TestQueryImpliesPartialFilter(t *testing.T) {
 		"beside other field": {doc("a", int32(1), "b", doc("$gt", int32(1))), true},
 		"range with null":    {doc("b", doc("$gte", int32(-1), "$lte", types.Null)), true},
 	} {
-		got, known, err := QueryImpliesPartialFilter(context.Background(), tc.query, bExists)
+		got, known, err := QueryImpliesPartialFilter(context.Background(), tc.query, bExists, nil, nil)
 		if err != nil || !known || got != tc.want {
 			t.Errorf("$exists: %s: got %v (known %v), want %v", name, got, known, tc.want)
 		}
@@ -120,7 +122,7 @@ func TestQueryImpliesPartialFilter(t *testing.T) {
 		"$or one outside":    {doc("$or", arr(doc("a", int32(1)), doc("a", int32(-2)))), false},
 		"beside other field": {doc("a", doc("$gte", int32(0)), "b", int32(1)), true},
 	} {
-		got, known, err := QueryImpliesPartialFilter(context.Background(), tc.query, aNonNegative)
+		got, known, err := QueryImpliesPartialFilter(context.Background(), tc.query, aNonNegative, nil, nil)
 		if err != nil || !known || got != tc.want {
 			t.Errorf("$gte 0: %s: got %v (known %v), want %v", name, got, known, tc.want)
 		}
@@ -132,7 +134,7 @@ func TestQueryImpliesPartialFilter(t *testing.T) {
 		"$in":          a("$in", arr(int32(1))),
 		"exists false": doc("a", doc("$exists", false)),
 	} {
-		if _, known, _ := QueryImpliesPartialFilter(context.Background(), doc("a", int32(1)), pfe); known {
+		if _, known, _ := QueryImpliesPartialFilter(context.Background(), doc("a", int32(1)), pfe, nil, nil); known {
 			t.Errorf("%s: a filter expression it does not model must be unknown", name)
 		}
 	}
@@ -153,7 +155,7 @@ func TestQueryImpliesPartialFilterWideFilter(t *testing.T) {
 	pfe := wideConjunction(100_000, "$gte", int32(0))
 	query := must.NotFail(types.NewDocument("a", must.NotFail(types.NewDocument("$gt", int32(0)))))
 	start := time.Now()
-	implied, known, err := QueryImpliesPartialFilter(context.Background(), query, pfe)
+	implied, known, err := QueryImpliesPartialFilter(context.Background(), query, pfe, nil, nil)
 	elapsed := time.Since(start)
 	if err != nil || !known || implied {
 		t.Fatalf("got implied %v, known %v, err %v; want not implied", implied, known, err)
@@ -175,13 +177,51 @@ func TestQueryImpliesPartialFilterHonorsContext(t *testing.T) {
 	query := must.NotFail(types.NewDocument("$or", or))
 	pfe := wideConjunction(500, "$exists", true)
 
-	if implied, _, err := QueryImpliesPartialFilter(context.Background(), query, pfe); err != nil || !implied {
+	if implied, _, err := QueryImpliesPartialFilter(context.Background(), query, pfe, nil, nil); err != nil || !implied {
 		t.Fatalf("got implied %v, err %v; want implied", implied, err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, _, err := QueryImpliesPartialFilter(ctx, query, pfe); !errors.Is(err, context.Canceled) {
+	if _, _, err := QueryImpliesPartialFilter(ctx, query, pfe, nil, nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+}
+
+// mongod compares collatable values only when the query's and the index's
+// collations match, and then under that collation; NaN implies only NaN.
+func TestQueryImpliesPartialFilterCollationAndNaN(t *testing.T) {
+	doc := func(pairs ...any) *types.Document { return must.NotFail(types.NewDocument(pairs...)) }
+	arr := func(vs ...any) *types.Array { return must.NotFail(types.NewArray(vs...)) }
+	en2 := doc("locale", "en", "strength", int32(2))
+	for _, tc := range []struct {
+		name                 string
+		query, pfe           *types.Document
+		queryColl, indexColl *types.Document
+		want                 bool
+	}{
+		{"string range, both simple", doc("s", doc("$gte", "n")), doc("s", doc("$gte", "m")), nil, nil, true},
+		{"string range, collated index", doc("s", doc("$gte", "n")), doc("s", doc("$gte", "m")), nil, en2, false},
+		{"string equality, collated index", doc("s", "a"), doc("s", "a"), nil, en2, false},
+		{"case variant, both en/2", doc("s", "A"), doc("s", "a"), en2, en2, true},
+		{"case variant bound, both en/2", doc("s", doc("$gte", "N")), doc("s", doc("$gte", "m")), en2, en2, true},
+		{"case variant bound, both simple", doc("s", doc("$gte", "N")), doc("s", doc("$gte", "m")), nil, nil, false},
+		{"number, collated index", doc("n", doc("$lt", int32(50))), doc("n", doc("$lt", int32(100))), nil, en2, true},
+		{"document, collated index", doc("d", doc("x", int32(1))), doc("d", doc("x", int32(1))), nil, en2, false},
+		{"array operand in filter", doc("v", arr(int32(1))), doc("v", arr(int32(1))), nil, nil, false},
+		{"in within range", doc("n", doc("$in", arr(int32(1)))), doc("n", doc("$lt", int32(100))), nil, nil, true},
+		{"mixed numeric types", doc("n", doc("$lt", int64(99))), doc("n", doc("$lte", 99.0)), nil, nil, true},
+		{"NaN under a range", doc("n", doc("$lte", math.NaN())), doc("n", doc("$lte", int32(100))), nil, nil, false},
+		{"NaN eq NaN", doc("n", math.NaN()), doc("n", math.NaN()), nil, nil, true},
+		{"NaN lte under NaN gte", doc("n", doc("$lte", math.NaN())), doc("n", doc("$gte", math.NaN())), nil, nil, true},
+		{"NaN lt under NaN lte", doc("n", doc("$lt", math.NaN())), doc("n", doc("$lte", math.NaN())), nil, nil, false},
+		{"NaN under NaN lt", doc("n", math.NaN()), doc("n", doc("$lt", math.NaN())), nil, nil, false},
+		{"range under NaN gte", doc("n", doc("$gt", int32(-1))), doc("n", doc("$gte", math.NaN())), nil, nil, false},
+		{"mixed brackets in pfe", doc("n", doc("$lt", int32(100))), doc("n", doc("$lt", int32(100), "$gt", "a")), nil, nil, false},
+	} {
+		got, known, err := QueryImpliesPartialFilter(context.Background(), tc.query, tc.pfe, tc.queryColl, tc.indexColl)
+		if err != nil || !known || got != tc.want {
+			t.Errorf("%s: got %v (known %v, err %v), want %v", tc.name, got, known, err, tc.want)
+		}
 	}
 }

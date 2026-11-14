@@ -12,31 +12,35 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package common
+package backends
 
 import (
 	"context"
+	"math"
 	"strings"
 	"time"
 
+	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// QueryImpliesPartialFilter reports whether query implies a partial index's
-// filter expression pfe by mongod's subset rules (expression::isSubsetOf),
-// which decide whether a hinted scan of the index takes query's bounds or
-// reads the whole index. known is false for a pfe shape it does not model.
-//
-// Unlike the backend's check for choosing an index, this follows mongod
-// exactly rather than erring toward a collection scan. It returns ctx's error
-// once ctx is done.
-func QueryImpliesPartialFilter(ctx context.Context, query, pfe *types.Document) (implied, known bool, err error) {
+// QueryImpliesPartialFilter reports whether query, under queryCollation,
+// implies the filter expression pfe of a partial index of indexCollation by
+// mongod's subset rules (expression::isSubsetOf), which decide whether the
+// index may serve query. known is false for a pfe shape it does not model.
+// It returns ctx's error once ctx is done.
+func QueryImpliesPartialFilter(ctx context.Context, query, pfe, queryCollation, indexCollation *types.Document) (implied, known bool, err error) {
 	rhs := parseSubsetExpr(pfe)
 	if !rhs.modeledAsPartialFilter() {
 		return false, false, nil
 	}
-	c := &subsetChecker{ctx: ctx}
+	indexColl := collation.Parse(indexCollation)
+	c := &subsetChecker{
+		ctx:             ctx,
+		collationsMatch: collation.Parse(queryCollation).Identity() == indexColl.Identity(),
+		cmp:             indexColl.Comparator(),
+	}
 	implied = c.implies(parseSubsetExpr(query), rhs)
 	if c.err != nil {
 		return false, false, c.err
@@ -82,7 +86,7 @@ func parseSubsetExpr(filter *types.Document) subsetExpr {
 			if k == "$or" {
 				node.kind = subsetOr
 			}
-			for _, b := range filterBranches(v) {
+			for _, b := range logicalBranches(v) {
 				node.children = append(node.children, parseSubsetExpr(b))
 			}
 			node.indexChildren()
@@ -113,7 +117,7 @@ func (e *subsetExpr) indexChildren() {
 // parseNor reads a $nor of one single-field branch as that branch's negation,
 // as mongod's canonical form does; any other $nor is opaque.
 func parseNor(v any) subsetExpr {
-	branches := filterBranches(v)
+	branches := logicalBranches(v)
 	if len(branches) != 1 || branches[0].Len() != 1 || strings.HasPrefix(branches[0].Keys()[0], "$") {
 		return subsetExpr{kind: subsetOther}
 	}
@@ -150,17 +154,20 @@ func (e subsetExpr) modeledAsPartialFilter() bool {
 		case "$eq", "$gt", "$gte", "$lt", "$lte":
 			return true
 		case "$exists":
-			return existsOperandTrue(e.value)
+			return ExistsOperandTrue(e.value)
 		}
 	}
 	return false
 }
 
 // subsetChecker runs implies, stopping with ctx's error once ctx is done.
+// cmp is the index's comparator, nil for the simple collation.
 type subsetChecker struct {
-	ctx   context.Context
-	steps int
-	err   error
+	ctx             context.Context
+	collationsMatch bool
+	cmp             *collation.Comparator
+	steps           int
+	err             error
 }
 
 // implies follows mongod's order: every conjunct of rhs, then any conjunct
@@ -216,25 +223,25 @@ func (c *subsetChecker) implies(e, rhs subsetExpr) bool {
 		}
 		return true
 	case subsetLeaf:
-		return rhs.kind == subsetLeaf && e.path == rhs.path && e.leafImplies(rhs)
+		return rhs.kind == subsetLeaf && e.path == rhs.path && c.leafImplies(e, rhs)
 	}
 	return false
 }
 
-func (e subsetExpr) leafImplies(rhs subsetExpr) bool {
+func (c *subsetChecker) leafImplies(e, rhs subsetExpr) bool {
 	if rhs.op == "$exists" {
 		return e.excludesMissing()
 	}
 	switch e.op {
 	case "$eq", "$gt", "$gte", "$lt", "$lte":
-		return comparisonWithin(e.op, e.value, rhs.op, rhs.value)
+		return c.comparisonWithin(e.op, e.value, rhs.op, rhs.value)
 	case "$in":
 		values, ok := e.value.(*types.Array)
 		if !ok || values.Len() == 0 {
 			return false
 		}
 		for i := 0; i < values.Len(); i++ {
-			if !comparisonWithin("$eq", must.NotFail(values.Get(i)), rhs.op, rhs.value) {
+			if !c.comparisonWithin("$eq", must.NotFail(values.Get(i)), rhs.op, rhs.value) {
 				return false
 			}
 		}
@@ -245,7 +252,7 @@ func (e subsetExpr) leafImplies(rhs subsetExpr) bool {
 			return false
 		}
 		for i := 0; i < values.Len(); i++ {
-			if comparisonWithin("$eq", must.NotFail(values.Get(i)), rhs.op, rhs.value) {
+			if c.comparisonWithin("$eq", must.NotFail(values.Get(i)), rhs.op, rhs.value) {
 				return true
 			}
 		}
@@ -255,7 +262,8 @@ func (e subsetExpr) leafImplies(rhs subsetExpr) bool {
 
 // excludesMissing reports whether mongod deems predicate e unable to match a
 // document missing its path. Comparisons count unless against null, even
-// against MinKey or MaxKey; of negations only those of null count.
+// against MinKey or MaxKey; of negations only those of null count. An $all
+// is a conjunction of equalities, so it counts when one is not to null.
 func (e subsetExpr) excludesMissing() bool {
 	switch e.op {
 	case "$eq", "$gt", "$gte", "$lt", "$lte":
@@ -264,9 +272,20 @@ func (e subsetExpr) excludesMissing() bool {
 		values, ok := e.value.(*types.Array)
 		return ok && !values.Contains(types.Null)
 	case "$exists":
-		return existsOperandTrue(e.value)
-	case "$type", "$regex", "$mod", "$size", "$elemMatch", "$all":
+		return ExistsOperandTrue(e.value)
+	case "$type", "$regex", "$mod", "$size", "$elemMatch":
 		return true
+	case "$all":
+		values, ok := e.value.(*types.Array)
+		if !ok {
+			return false
+		}
+		for i := 0; i < values.Len(); i++ {
+			if must.NotFail(values.Get(i)) != types.Null {
+				return true
+			}
+		}
+		return false
 	case "$ne":
 		return e.value == types.Null
 	case "$nin":
@@ -300,12 +319,31 @@ func negatesNull(v any) bool {
 }
 
 // comparisonWithin reports whether every value lop lv matches is matched by
-// rop rv: both in one canonical type bracket, lv's range inside rv's.
-func comparisonWithin(lop string, lv any, rop string, rv any) bool {
-	if typeBracket(lv) != typeBracket(rv) {
+// rop rv: both in one canonical type bracket, lv's range inside rv's. As in
+// mongod, rv may not be an array, a collatable rv needs the query's and the
+// index's collations to match and then compares under it, and NaN implies
+// only NaN, both inclusive.
+func (c *subsetChecker) comparisonWithin(lop string, lv any, rop string, rv any) bool {
+	bracket := typeBracket(rv)
+	if bracket != typeBracket(lv) || bracket == "array" {
 		return false
 	}
-	c := types.CompareOrder(lv, rv, types.Ascending)
+	if bracket == "string" || bracket == "object" {
+		if !c.collationsMatch {
+			return false
+		}
+		lv, rv = c.cmp.KeyValue(lv), c.cmp.KeyValue(rv)
+	}
+	if lNaN, rNaN := isNaN(lv), isNaN(rv); lNaN || rNaN {
+		inclusive := func(op string) bool { return op == "$eq" || op == "$lte" || op == "$gte" }
+		return lNaN && rNaN && inclusive(lop) && inclusive(rop)
+	}
+	return orderWithin(lop, types.CompareOrder(lv, rv, types.Ascending), rop)
+}
+
+// orderWithin reports whether lop's range lies inside rop's, given c, the
+// order of lop's operand against rop's.
+func orderWithin(lop string, c types.CompareResult, rop string) bool {
 	switch rop {
 	case "$eq":
 		return lop == "$eq" && c == types.Equal
@@ -329,6 +367,12 @@ func comparisonWithin(lop string, lv any, rop string, rv any) bool {
 		}
 	}
 	return false
+}
+
+// isNaN reports whether v is a NaN double or decimal, which sort below every
+// other number.
+func isNaN(v any) bool {
+	return typeBracket(v) == "number" && types.CompareOrder(v, math.Inf(-1), types.Ascending) == types.Less
 }
 
 // typeBracket is v's canonical type for comparisons; numbers, NaN included,
@@ -363,4 +407,48 @@ func typeBracket(v any) string {
 		return "date"
 	}
 	return "other"
+}
+
+// logicalBranches returns the documents of an $and, $or or $nor operand.
+func logicalBranches(v any) []*types.Document {
+	arr, ok := v.(*types.Array)
+	if !ok {
+		return nil
+	}
+	out := make([]*types.Document, 0, arr.Len())
+	for i := 0; i < arr.Len(); i++ {
+		if d, ok := must.NotFail(arr.Get(i)).(*types.Document); ok {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// ExistsOperandTrue reports whether $exists's operand asks for the field to
+// exist: false, zero numbers and null mean no, any other value yes.
+func ExistsOperandTrue(v any) bool {
+	switch v := v.(type) {
+	case bool:
+		return v
+	case int32:
+		return v != 0
+	case int64:
+		return v != 0
+	case float64:
+		return v != 0
+	case types.Decimal128:
+		return !decimal128IsZero(v)
+	case types.NullType, types.UndefinedType:
+		return false
+	}
+	return true
+}
+
+// decimal128IsZero reports whether d, an IEEE 754 BID decimal, is a zero of
+// any sign and exponent; a non-canonical coefficient counts as zero.
+func decimal128IsZero(d types.Decimal128) bool {
+	if (d.H>>61)&3 == 3 {
+		return (d.H>>58)&0x1f < 0x1e
+	}
+	return d.H&(1<<49-1) == 0 && d.L == 0
 }

@@ -31,6 +31,7 @@ import (
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 
+	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
@@ -1769,7 +1770,7 @@ func filterFieldMod(fieldValue, exprValue any) (bool, error) {
 
 // filterFieldExprExists handles {field: {$exists: value}} filter.
 func filterFieldExprExists(fieldExist bool, exprValue any) (bool, error) {
-	expr := existsOperandTrue(exprValue)
+	expr := backends.ExistsOperandTrue(exprValue)
 
 	switch {
 	case fieldExist && expr:
@@ -1827,35 +1828,6 @@ func arrayHasUndefined(arr *types.Array) bool {
 
 func errCompareToUndefined(argument string) error {
 	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue, "cannot compare to undefined", argument)
-}
-
-// existsOperandTrue reports whether $exists's operand asks for the field to
-// exist: false, zero numbers and null mean no, any other value yes.
-func existsOperandTrue(v any) bool {
-	switch v := v.(type) {
-	case bool:
-		return v
-	case int32:
-		return v != 0
-	case int64:
-		return v != 0
-	case float64:
-		return v != 0
-	case types.Decimal128:
-		return !decimal128IsZero(v)
-	case types.NullType, types.UndefinedType:
-		return false
-	}
-	return true
-}
-
-// decimal128IsZero reports whether d, an IEEE 754 BID decimal, is a zero of
-// any sign and exponent; a non-canonical coefficient counts as zero.
-func decimal128IsZero(d types.Decimal128) bool {
-	if (d.H>>61)&3 == 3 {
-		return (d.H>>58)&0x1f < 0x1e
-	}
-	return d.H&(1<<49-1) == 0 && d.L == 0
 }
 
 // filterFieldExprType handles {field: {$type: value}} filter.
@@ -2337,7 +2309,7 @@ func elemMatchArrayElement(elem *types.Array, filterKey, filterSuffix string, ex
 				ok = true
 			}
 		case "$exists":
-			ok = existsOperandTrue(v)
+			ok = backends.ExistsOperandTrue(v)
 		case "$type":
 			codes := []any{v}
 			if list, isArray := v.(*types.Array); isArray {
