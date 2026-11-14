@@ -124,17 +124,12 @@ func evaluateGroupExpr(groupExpr any, doc *types.Document) (any, error) {
 	switch expr := groupExpr.(type) {
 	case *types.Document:
 		if operators.IsOperator(expr) {
-			op, err := operators.NewOperator(expr)
-			if err != nil {
-				return nil, lazyerrors.Error(err)
-			}
-
-			val, err := op.Process(doc)
-			if errors.Is(err, operators.ErrMissingValue) {
-				return types.Null, nil
-			}
-			if err != nil {
+			val, missing, err := operators.EvalOperand(expr, doc)
+			switch {
+			case err != nil:
 				return nil, processGroupStageError(err)
+			case missing:
+				return types.Null, nil
 			}
 			return val, nil
 		}

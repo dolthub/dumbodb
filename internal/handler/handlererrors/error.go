@@ -509,6 +509,15 @@ const (
 	ErrSBEInput4997903           = ErrorCode(4997903) // Location4997903
 	ErrSBEInput4997908           = ErrorCode(4997908) // Location4997908
 	ErrSBEInput7158003           = ErrorCode(7158003) // Location7158003
+	ErrSBEInput7158004           = ErrorCode(7158004) // Location7158004
+	ErrSBEInput7158005           = ErrorCode(7158005) // Location7158005
+	ErrSBEInput7158006           = ErrorCode(7158006) // Location7158006
+	ErrSBEInput7157920           = ErrorCode(7157920) // Location7157920
+	ErrSBEInput7157926           = ErrorCode(7157926) // Location7157926
+	ErrSBEInput7157940           = ErrorCode(7157940) // Location7157940
+	ErrSBEInput7157944           = ErrorCode(7157944) // Location7157944
+	ErrSBEInput5126603           = ErrorCode(5126603) // Location5126603
+	ErrSBEInput5153201           = ErrorCode(5153201) // Location5153201
 	ErrSBEInput7158009           = ErrorCode(7158009) // Location7158009
 	ErrSBEInput7157711           = ErrorCode(7157711) // Location7157711
 	ErrSBEInput7157713           = ErrorCode(7157713) // Location7157713

@@ -552,6 +552,12 @@ func (e *OperatorContextError) Error() string { return e.Err.Error() }
 
 func (e *OperatorContextError) Unwrap() error { return e.Err }
 
+// WithOperatorContext returns err marked as raised by the operator op, unless
+// it already names an operator.
+func WithOperatorContext(err error, op string) error {
+	return withOperatorContext(err, op)
+}
+
 func withOperatorContext(err error, op string) error {
 	var ctxErr *OperatorContextError
 	if err == nil || errors.As(err, &ctxErr) {

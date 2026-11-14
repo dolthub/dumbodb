@@ -409,21 +409,13 @@ func validateGroupKeyDocument(groupKey any, topLevel bool) error {
 // fields omits the missing ones.
 func evaluateDocument(expr, doc *types.Document, nestedField bool) (any, error) {
 	if operators.IsOperator(expr) {
-		op, err := operators.NewOperator(expr)
-		if err != nil {
-			// operator error was validated in newGroup
+		v, missing, err := operators.EvalOperand(expr, doc)
+		switch {
+		case err != nil:
 			return nil, processGroupStageError(err)
-		}
-
-		v, err := op.Process(doc)
-		if errors.Is(err, operators.ErrMissingValue) {
+		case missing:
 			return types.Null, nil
 		}
-		if err != nil {
-			// operator and expression errors are validated in newGroup
-			return nil, processGroupStageError(err)
-		}
-
 		return v, nil
 	}
 

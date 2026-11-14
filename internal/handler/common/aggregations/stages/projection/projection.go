@@ -189,7 +189,7 @@ func projectID(doc, projection *types.Document) (*types.Document, error) {
 					break
 				}
 
-				return nil, err
+				return nil, operators.WithOperatorContext(err, idValue.Command())
 			}
 
 			set = true
@@ -309,7 +309,7 @@ func projectDocumentWithoutID(doc *types.Document, projection *types.Document, i
 					continue
 				}
 
-				return nil, err
+				return nil, operators.WithOperatorContext(err, value.Command())
 			}
 
 			projected.Set(key, v)
