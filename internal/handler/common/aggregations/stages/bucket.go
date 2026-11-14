@@ -156,7 +156,7 @@ func parseBucketBoundaries(v any, size *bucketSwitchSize) ([]any, error) {
 		if !constant {
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketBoundaryNotConstant,
 				"The $bucket 'boundaries' field must be an array of constant values, but found value: "+
-					types.FormatAnyValue(elem)+".", "$bucket (stage)")
+					operators.FormatExpression(elem)+".", "$bucket (stage)")
 		}
 		// mongod checks the order once every boundary has folded.
 		if i == 0 {
@@ -259,7 +259,7 @@ func newBucket(stage *types.Document) (aggregations.Stage, error) {
 			size.add(defaultVal, 1)
 			if !constant {
 				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBucketDefaultNotConstant,
-					"The $bucket 'default' field must be a constant expression, but found: "+types.FormatAnyValue(val)+".",
+					"The $bucket 'default' field must be a constant expression, but found: "+operators.FormatExpression(val)+".",
 					"$bucket (stage)")
 			}
 			hasDefault = defaultVal != nil
