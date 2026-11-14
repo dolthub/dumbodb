@@ -48,6 +48,21 @@ func QueryImpliesPartialFilter(ctx context.Context, query, pfe, queryCollation, 
 	return implied, true, nil
 }
 
+// tick counts one step of work, reporting false once ctx is done. Every loop
+// whose length grows with the query or the filter expression ticks.
+func (c *subsetChecker) tick() bool {
+	if c.err != nil {
+		return false
+	}
+	if c.steps%subsetCheckInterval == 0 {
+		if c.err = c.ctx.Err(); c.err != nil {
+			return false
+		}
+	}
+	c.steps++
+	return true
+}
+
 // subsetCheckInterval is how many steps of implies run between checks of the
 // context.
 const subsetCheckInterval = 1024
@@ -173,15 +188,9 @@ type subsetChecker struct {
 // implies follows mongod's order: every conjunct of rhs, then any conjunct
 // of e, then every branch of e, then any branch of rhs.
 func (c *subsetChecker) implies(e, rhs subsetExpr) bool {
-	if c.err != nil {
+	if !c.tick() {
 		return false
 	}
-	if c.steps%subsetCheckInterval == 0 {
-		if c.err = c.ctx.Err(); c.err != nil {
-			return false
-		}
-	}
-	c.steps++
 	if rhs.kind == subsetAnd {
 		for _, r := range rhs.children {
 			if !c.implies(e, r) {
@@ -230,7 +239,7 @@ func (c *subsetChecker) implies(e, rhs subsetExpr) bool {
 
 func (c *subsetChecker) leafImplies(e, rhs subsetExpr) bool {
 	if rhs.op == "$exists" {
-		return e.excludesMissing()
+		return c.excludesMissing(e)
 	}
 	switch e.op {
 	case "$eq", "$gt", "$gte", "$lt", "$lte":
@@ -241,7 +250,7 @@ func (c *subsetChecker) leafImplies(e, rhs subsetExpr) bool {
 			return false
 		}
 		for i := 0; i < values.Len(); i++ {
-			if !c.comparisonWithin("$eq", must.NotFail(values.Get(i)), rhs.op, rhs.value) {
+			if !c.tick() || !c.comparisonWithin("$eq", must.NotFail(values.Get(i)), rhs.op, rhs.value) {
 				return false
 			}
 		}
@@ -252,6 +261,9 @@ func (c *subsetChecker) leafImplies(e, rhs subsetExpr) bool {
 			return false
 		}
 		for i := 0; i < values.Len(); i++ {
+			if !c.tick() {
+				return false
+			}
 			if c.comparisonWithin("$eq", must.NotFail(values.Get(i)), rhs.op, rhs.value) {
 				return true
 			}
@@ -264,13 +276,13 @@ func (c *subsetChecker) leafImplies(e, rhs subsetExpr) bool {
 // document missing its path. Comparisons count unless against null, even
 // against MinKey or MaxKey; of negations only those of null count. An $all
 // is a conjunction of equalities, so it counts when one is not to null.
-func (e subsetExpr) excludesMissing() bool {
+func (c *subsetChecker) excludesMissing(e subsetExpr) bool {
 	switch e.op {
 	case "$eq", "$gt", "$gte", "$lt", "$lte":
 		return e.value != types.Null
 	case "$in":
-		values, ok := e.value.(*types.Array)
-		return ok && !values.Contains(types.Null)
+		holds, ok := c.holdsNull(e.value)
+		return ok && !holds && c.err == nil
 	case "$exists":
 		return ExistsOperandTrue(e.value)
 	case "$type", "$regex", "$mod", "$size", "$elemMatch":
@@ -281,6 +293,9 @@ func (e subsetExpr) excludesMissing() bool {
 			return false
 		}
 		for i := 0; i < values.Len(); i++ {
+			if !c.tick() {
+				return false
+			}
 			if must.NotFail(values.Get(i)) != types.Null {
 				return true
 			}
@@ -289,17 +304,35 @@ func (e subsetExpr) excludesMissing() bool {
 	case "$ne":
 		return e.value == types.Null
 	case "$nin":
-		values, ok := e.value.(*types.Array)
-		return ok && values.Contains(types.Null)
+		holds, _ := c.holdsNull(e.value)
+		return holds
 	case "$not":
-		return negatesNull(e.value)
+		return c.negatesNull(e.value)
 	}
 	return false
 }
 
+// holdsNull reports whether v, an $in or $nin operand, holds an element equal
+// to null, and whether v is an array at all.
+func (c *subsetChecker) holdsNull(v any) (holds, isArray bool) {
+	values, ok := v.(*types.Array)
+	if !ok {
+		return false, false
+	}
+	for i := 0; i < values.Len(); i++ {
+		if !c.tick() {
+			return false, true
+		}
+		if types.Compare(must.NotFail(values.Get(i)), types.Null) == types.Equal {
+			return true, true
+		}
+	}
+	return false, true
+}
+
 // negatesNull reports whether a $not or $nor operand matches null, so its
 // negation cannot match a missing field.
-func negatesNull(v any) bool {
+func (c *subsetChecker) negatesNull(v any) bool {
 	ops, ok := v.(*types.Document)
 	if !ok || ops.Len() == 0 || !strings.HasPrefix(ops.Keys()[0], "$") {
 		return v == types.Null
@@ -312,8 +345,8 @@ func negatesNull(v any) bool {
 	case "$eq":
 		return operand == types.Null
 	case "$in":
-		values, ok := operand.(*types.Array)
-		return ok && values.Contains(types.Null)
+		holds, _ := c.holdsNull(operand)
+		return holds
 	}
 	return false
 }

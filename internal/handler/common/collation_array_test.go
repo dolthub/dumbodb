@@ -15,7 +15,9 @@
 package common
 
 import (
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -49,6 +51,33 @@ func TestFilterCollationArrayElements(t *testing.T) {
 		}
 		if got != tc.want {
 			t.Errorf("%s: matched %v, want %v", name, got, tc.want)
+		}
+	}
+}
+
+// Under a collation, comparing arrays walks them element by element: a
+// document of 20,000 small arrays against a query array of 20,000 strings
+// does not copy the query array per element.
+func TestFilterCollationArrayElementsWide(t *testing.T) {
+	const n = 20_000
+	elems := types.MakeArray(n)
+	strs := types.MakeArray(n)
+	for i := 0; i < n; i++ {
+		elems.Append(must.NotFail(types.NewArray(int32(1))))
+		strs.Append("s" + strconv.Itoa(i))
+	}
+	target := must.NotFail(types.NewDocument("_id", int32(1), "a", elems))
+	cmp := collation.Parse(must.NotFail(types.NewDocument("locale", "en", "strength", int32(2)))).Comparator()
+	for name, filter := range map[string]*types.Document{
+		"equality": must.NotFail(types.NewDocument("a", strs)),
+		"$all":     must.NotFail(types.NewDocument("a", must.NotFail(types.NewDocument("$all", must.NotFail(types.NewArray(strs)))))),
+	} {
+		start := time.Now()
+		if _, err := FilterDocumentColl(target, filter, cmp); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if elapsed := time.Since(start); elapsed > time.Second {
+			t.Errorf("%s took %v", name, elapsed)
 		}
 	}
 }

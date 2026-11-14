@@ -248,6 +248,12 @@ func CompareOrderForOperator(a, b any, order SortType) CompareResult {
 	return Compare(a, b)
 }
 
+// CompareTypeOrder compares only the BSON type order of a and b; all numbers
+// share one type.
+func CompareTypeOrder(a, b any) CompareResult {
+	return compareTypeOrder(a, b)
+}
+
 func compareTypeOrder(a, b any) CompareResult {
 	aType := detectDataType(a)
 	bType := detectDataType(b)

@@ -225,3 +225,31 @@ func TestQueryImpliesPartialFilterCollationAndNaN(t *testing.T) {
 		}
 	}
 }
+
+// Each $in element compared against a filter condition counts toward the
+// context check: 200,000 values against 50,000 same-field conditions stops at
+// its deadline.
+func TestQueryImpliesPartialFilterInHonorsDeadline(t *testing.T) {
+	conds := types.MakeArray(50_000)
+	for i := 1; i <= 50_000; i++ {
+		conds.Append(must.NotFail(types.NewDocument("a", must.NotFail(types.NewDocument("$gte", int32(-i))))))
+	}
+	pfe := must.NotFail(types.NewDocument("$and", conds))
+	values := types.MakeArray(200_000)
+	for i := 0; i < 200_000; i++ {
+		values.Append(int32(i))
+	}
+	query := must.NotFail(types.NewDocument("a", must.NotFail(types.NewDocument("$in", values))))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, _, err := QueryImpliesPartialFilter(ctx, query, pfe, nil, nil)
+	elapsed := time.Since(start)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want context.DeadlineExceeded", err)
+	}
+	if elapsed > 2*time.Second {
+		t.Errorf("returned %v after a 200ms deadline", elapsed)
+	}
+}

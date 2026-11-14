@@ -82,11 +82,16 @@ func sortDocumentsInIndexOrder(docs []*types.Document, pattern, filter *types.Do
 		}
 	}
 
+	// Under a collation each key's strings become sort keys once here, so the
+	// sort compares them bytewise.
 	keys := make([][]any, len(docs))
 	for d, doc := range docs {
 		row := make([]any, len(fields))
 		for i := range fields {
 			row[i] = indexKeyValue(indexKeys(doc, paths[i]), admits[i])
+			if cmp != nil {
+				row[i] = arrayStringKeys(row[i], cmp)
+			}
 		}
 		keys[d] = row
 	}
@@ -97,7 +102,7 @@ func sortDocumentsInIndexOrder(docs []*types.Document, pattern, filter *types.Do
 	}
 	slices.SortStableFunc(order, func(a, b int) int {
 		for i := range fields {
-			switch compareIndexOrderKeys(keys[a][i], keys[b][i], orders[i], cmp) {
+			switch compareIndexOrderKeys(keys[a][i], keys[b][i], orders[i], nil) {
 			case types.Less:
 				return -1
 			case types.Greater:
@@ -820,9 +825,6 @@ func compareIndexOrderKeys(a, b any, order types.SortType, cmp *collation.Compar
 	aStr, aIsStr := a.(string)
 	bStr, bIsStr := b.(string)
 	if cmp == nil || !aIsStr || !bIsStr {
-		if cmp != nil {
-			a, b = collArrayKeys(a, b, cmp)
-		}
 		return types.CompareOrderForSort(a, b, order)
 	}
 	sign := cmp.CompareStrings(aStr, bStr)

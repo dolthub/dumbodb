@@ -2240,11 +2240,7 @@ func renameIDInFilter(filter *types.Document) *types.Document {
 
 func elemMatchArrayElement(elem *types.Array, filterKey, filterSuffix string, expr *types.Document, cmp *collation.Comparator) (bool, error) {
 	compareElem := func(v any) types.CompareResult {
-		a, b := any(elem), v
-		if cmp != nil {
-			a, b = collArrayKeys(a, b, cmp)
-		}
-		return types.CompareOrder(a, b, types.Ascending)
+		return collCompareOrder(elem, v, cmp)
 	}
 	equalsElem := func(v any) bool {
 		if _, isRegex := v.(types.Regex); isRegex {
