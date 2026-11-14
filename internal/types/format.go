@@ -70,38 +70,61 @@ func FormatAnyValue(value any) string {
 }
 
 func formatDocument(doc *Document) string {
-	doc.load()
-	if len(doc.fields) == 0 {
-		return "{}"
-	}
-
-	result := "{ "
-
-	for i, f := range doc.fields {
-		if i > 0 {
-			result += ", "
-		}
-
-		result += fmt.Sprintf("%s: %s", f.key, FormatAnyValue(f.value))
-	}
-
-	return result + " }"
+	var b strings.Builder
+	writeDocument(&b, doc)
+	return b.String()
 }
 
 func formatArray(array *Array) string {
+	var b strings.Builder
+	writeArray(&b, array)
+	return b.String()
+}
+
+// writeValue writes FormatAnyValue(value) to b, so that formatting a nested
+// value takes time linear in its size.
+func writeValue(b *strings.Builder, value any) {
+	switch value := value.(type) {
+	case *Document:
+		writeDocument(b, value)
+	case *Array:
+		writeArray(b, value)
+	default:
+		b.WriteString(FormatAnyValue(value))
+	}
+}
+
+func writeDocument(b *strings.Builder, doc *Document) {
+	doc.load()
+	if len(doc.fields) == 0 {
+		b.WriteString("{}")
+		return
+	}
+	b.WriteString("{ ")
+	for i, f := range doc.fields {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(f.key)
+		b.WriteString(": ")
+		writeValue(b, f.value)
+	}
+	b.WriteString(" }")
+}
+
+func writeArray(b *strings.Builder, array *Array) {
 	if len(array.s) == 0 {
-		return "[]"
+		b.WriteString("[]")
+		return
 	}
-
-	result := "[ "
-
-	for _, elem := range array.s {
-		result += fmt.Sprintf("%s, ", FormatAnyValue(elem))
+	b.WriteString("[ ")
+	for i, elem := range array.s {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		writeValue(b, elem)
 	}
-
-	result = strings.TrimSuffix(result, ", ")
-
-	return result + " ]"
+	b.WriteString(" ]")
 }
 
 // formatDouble formats f as MongoDB's StringBuilder::appendDoubleNice does:
