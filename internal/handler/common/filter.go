@@ -106,6 +106,8 @@ type FilterContext struct {
 	// written order.
 	clauseOrders map[*types.Array][]int
 	exprs        map[*types.Document]operators.Operator
+	// inElements holds the $in and $nin document elements already checked.
+	inElements map[*types.Document]struct{}
 	// elementDepth counts the array elements being filtered as documents.
 	elementDepth int
 	// indexedArrays are the arrays the current path reaches through a
@@ -277,7 +279,7 @@ func isNegationCondition(key string, value any) bool {
 		return false
 	}
 	cond, ok := value.(*types.Document)
-	if !ok || cond.Len() == 0 || !strings.HasPrefix(cond.Keys()[0], "$") {
+	if !ok || cond.Len() == 0 || !strings.HasPrefix(cond.Command(), "$") {
 		return false
 	}
 	for _, op := range cond.Keys() {
@@ -361,7 +363,7 @@ func constrainsByCondition(key string, value any, field string) bool {
 // bounds: any but a lone $size.
 func boundsIndex(cond any) bool {
 	ops, isDoc := cond.(*types.Document)
-	return !isDoc || ops.Len() != 1 || ops.Keys()[0] != "$size"
+	return !isDoc || ops.Len() != 1 || ops.Command() != "$size"
 }
 
 func getOrNilArray(doc *types.Document, key string) (*types.Array, bool) {
@@ -378,7 +380,7 @@ func indexableCondition(v any) bool {
 		return false
 	}
 	cond, ok := v.(*types.Document)
-	if !ok || cond.Len() == 0 || !strings.HasPrefix(cond.Keys()[0], "$") {
+	if !ok || cond.Len() == 0 || !strings.HasPrefix(cond.Command(), "$") {
 		return true
 	}
 	for _, op := range cond.Keys() {
@@ -585,8 +587,8 @@ func positionalDocumentEquality(doc *types.Document, filterKey string, vals []an
 		if filter.Len() != 1 {
 			return false, false
 		}
-		operand := must.NotFail(filter.Get(filter.Keys()[0]))
-		switch op := filter.Keys()[0]; op {
+		operand := must.NotFail(filter.Get(filter.Command()))
+		switch op := filter.Command(); op {
 		case "$eq", "$ne":
 			doc, isDoc := operand.(*types.Document)
 			if !isDoc {
@@ -629,12 +631,15 @@ func positionalDocumentEquality(doc *types.Document, filterKey string, vals []an
 // hasBitwiseOperator reports whether a field condition applies a bitwise
 // operator, directly or under $not.
 func hasBitwiseOperator(expr *types.Document) bool {
-	for _, op := range expr.Keys() {
-		switch op {
+	if !strings.HasPrefix(expr.Command(), "$") {
+		return false
+	}
+	for i := range expr.Len() {
+		switch op, operand := expr.FieldAt(i); op {
 		case "$bitsAllSet", "$bitsAnySet", "$bitsAllClear", "$bitsAnyClear":
 			return true
 		case "$not":
-			if inner, ok := must.NotFail(expr.Get(op)).(*types.Document); ok && hasBitwiseOperator(inner) {
+			if inner, ok := operand.(*types.Document); ok && hasBitwiseOperator(inner) {
 				return true
 			}
 		}
@@ -685,7 +690,7 @@ func filterFieldExprBranches(branches []*types.Document, filterKey, filterSuffix
 	// Zero branches still evaluate once so invalid operator arguments surface.
 	errProbe := types.MakeDocument(0)
 
-	if expr.Len() == 0 || !strings.HasPrefix(expr.Keys()[0], "$") || isDBRefLiteral(expr) {
+	if expr.Len() == 0 || !strings.HasPrefix(expr.Command(), "$") || isDBRefLiteral(expr) {
 		if _, err := filterFieldExpr(errProbe, filterKey, filterSuffix, expr, fc); err != nil {
 			return false, err
 		}
@@ -1037,14 +1042,30 @@ func validatedExpr(exprValue any) (operators.Operator, error) {
 	return operators.NewExpr(must.NotFail(types.NewDocument("$expr", exprValue)), "$expr")
 }
 
+// checkInElement is checkNoOperatorUnderIn, run once per element document
+// for the context's command.
+func (fc *FilterContext) checkInElement(element *types.Document, operator string) error {
+	if _, ok := fc.inElements[element]; ok {
+		return nil
+	}
+	if err := checkNoOperatorUnderIn(element, operator); err != nil {
+		return err
+	}
+	if fc.inElements == nil {
+		fc.inElements = map[*types.Document]struct{}{}
+	}
+	fc.inElements[element] = struct{}{}
+	return nil
+}
+
 // checkNoOperatorUnderIn rejects an operator expression as an $in or $nin
 // element. A DBRef is a literal value.
 func checkNoOperatorUnderIn(element *types.Document, operator string) error {
 	if isDBRefLiteral(element) {
 		return nil
 	}
-	for _, key := range element.Keys() {
-		if strings.HasPrefix(key, "$") {
+	for i := range element.Len() {
+		if key, _ := element.FieldAt(i); strings.HasPrefix(key, "$") {
 			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue, "cannot nest $ under $in", operator)
 		}
 	}
@@ -1059,7 +1080,7 @@ func isDBRefLiteral(doc *types.Document) bool {
 	if doc.Len() == 0 {
 		return false
 	}
-	switch doc.Keys()[0] {
+	switch doc.Command() {
 	case "$ref", "$id", "$db":
 		return doc.Has("$ref") && doc.Has("$id")
 	}
@@ -1119,13 +1140,13 @@ func filterFieldOperators(doc *types.Document, filterKey, filterSuffix string, e
 	// ValidateFilter raises an undefined operand before any document is read,
 	// even behind an operator that does not match; checking each operator as
 	// it is reached keeps the same error for other callers.
-	for _, exprKey := range expr.Keys() {
+	for i := range expr.Len() {
+		exprKey, exprValue := expr.FieldAt(i)
 		if exprKey == "$options" {
 			// handled by $regex
 			continue
 		}
 
-		exprValue := must.NotFail(expr.Get(exprKey))
 		if err := checkUndefinedOperand(exprKey, exprValue); err != nil {
 			return false, err
 		}
@@ -1301,7 +1322,7 @@ func filterFieldOperators(doc *types.Document, filterKey, filterSuffix string, e
 
 				switch arrValue := must.NotFail(arr.Get(i)).(type) {
 				case *types.Document:
-					if err := checkNoOperatorUnderIn(arrValue, exprKey); err != nil {
+					if err := fc.checkInElement(arrValue, exprKey); err != nil {
 						return false, err
 					}
 
@@ -1346,7 +1367,7 @@ func filterFieldOperators(doc *types.Document, filterKey, filterSuffix string, e
 
 				switch arrValue := must.NotFail(arr.Get(i)).(type) {
 				case *types.Document:
-					if err := checkNoOperatorUnderIn(arrValue, exprKey); err != nil {
+					if err := fc.checkInElement(arrValue, exprKey); err != nil {
 						return false, err
 					}
 

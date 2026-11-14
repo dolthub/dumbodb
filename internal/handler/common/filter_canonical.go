@@ -185,7 +185,7 @@ func isDocumentLiteral(v any) bool {
 	if !isOperatorDocument(doc) {
 		return true
 	}
-	if doc.Len() == 1 && doc.Keys()[0] == "$literal" {
+	if doc.Len() == 1 && doc.Command() == "$literal" {
 		_, isDoc := must.NotFail(doc.Get("$literal")).(*types.Document)
 		return isDoc
 	}
@@ -202,7 +202,7 @@ func sortedLiteral(v any) any {
 }
 
 func isOperatorDocument(doc *types.Document) bool {
-	return doc.Len() > 0 && strings.HasPrefix(doc.Keys()[0], "$")
+	return doc.Len() > 0 && strings.HasPrefix(doc.Command(), "$")
 }
 
 // sortedKeys returns a copy of v with the keys of every document in it in

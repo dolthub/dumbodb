@@ -110,7 +110,7 @@ func withoutExpr(v any) any {
 
 func validateFieldPredicate(empty *types.Document, key string, value any, cmp *collation.Comparator) error {
 	expr, ok := value.(*types.Document)
-	if !ok || expr.Len() == 0 || !strings.HasPrefix(expr.Keys()[0], "$") || isDBRefLiteral(expr) {
+	if !ok || expr.Len() == 0 || !strings.HasPrefix(expr.Command(), "$") || isDBRefLiteral(expr) {
 		_, err := FilterDocumentColl(empty, must.NotFail(types.NewDocument(key, value)), cmp)
 		return err
 	}
@@ -153,7 +153,7 @@ func isFieldOperatorExpression(doc *types.Document) bool {
 	if doc.Len() == 0 {
 		return false
 	}
-	switch first := doc.Keys()[0]; first {
+	switch first := doc.Command(); first {
 	case "$and", "$or", "$nor", "$expr", "$where", "$text", "$comment", "$alwaysTrue", "$alwaysFalse":
 		return false
 	default:
