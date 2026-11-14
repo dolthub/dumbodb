@@ -138,6 +138,11 @@ type QueryResult struct {
 	// Sorted reports that Iter yields documents in QueryParams.Sort order, so
 	// the caller need not sort them.
 	Sorted bool
+
+	// IndexScan reports that an index, the _id one included, serves the
+	// query rather than a collection scan; mongod orders the remaining
+	// predicates differently then.
+	IndexScan bool
 }
 
 // Query executes a query against the collection.

@@ -31,6 +31,9 @@ import (
 type match struct {
 	filter *types.Document
 	cmp    *collation.Comparator
+	// plan is the order mongod checks the filter's conditions in: that of
+	// the query it is pushed into, or, by default, $expr first.
+	plan common.PlanMode
 }
 
 func newMatch(stage *types.Document) (aggregations.Stage, error) {
@@ -69,7 +72,7 @@ func NewMatchStage(stage *types.Document, cmp *collation.Comparator, storedInput
 		return nil, err
 	}
 
-	return &match{filter: filter, cmp: cmp}, nil
+	return &match{filter: filter, cmp: cmp, plan: common.PlanUnpushed}, nil
 }
 
 // newValidatedMatchStage is NewMatchStage for a $match stage whose filter
@@ -79,11 +82,25 @@ func newValidatedMatchStage(stage *types.Document, storedInput bool) aggregation
 	if storedInput {
 		common.CanonicalizeFilter(filter)
 	}
-	return &match{filter: filter, cmp: operators.CollationOf(stage)}
+	return &match{filter: filter, cmp: operators.CollationOf(stage), plan: common.PlanUnpushed}
 }
 
 func (m *match) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
-	return common.FilterIteratorColl(iter, closer, m.filter, m.cmp), nil
+	return common.FilterIteratorPlan(iter, closer, m.filter, m.cmp, m.plan), nil
+}
+
+// SetPushedMatchPlan gives a $match that mongod pushes into the query layer
+// the plan mode of the query answering it, and reports whether stage is a
+// $match.
+func SetPushedMatchPlan(stage aggregations.Stage, mode common.PlanMode) bool {
+	if s, ok := stage.(*sbeStage); ok {
+		stage = s.inner
+	}
+	m, ok := stage.(*match)
+	if ok {
+		m.plan = mode
+	}
+	return ok
 }
 
 // validateMatch validates $expr field if any.

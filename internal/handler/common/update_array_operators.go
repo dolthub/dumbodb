@@ -655,7 +655,7 @@ func canonicalPullCondition(condition any) any {
 // that matches embedded documents only.
 func pullConditionMatches(elem any, condition *types.Document) (bool, error) {
 	if isFieldOperatorExpression(condition) {
-		return filterDocumentPair(must.NotFail(types.NewDocument("v", elem)), "v", condition, nil)
+		return filterDocumentPair(must.NotFail(types.NewDocument("v", elem)), "v", condition, NewFilterContext(nil, PlanCollectionScan))
 	}
 	elemDoc, ok := elem.(*types.Document)
 	if !ok {

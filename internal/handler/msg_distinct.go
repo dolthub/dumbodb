@@ -209,7 +209,7 @@ func (h *Handler) execDistinct(ctx context.Context, c backends.Collection, param
 
 	closer.Add(queryRes.Iter)
 
-	iter := common.FilterIteratorColl(iterator.WithContext(ctx, queryRes.Iter), closer, params.Filter, cmp)
+	iter := common.FilterIteratorPlan(iterator.WithContext(ctx, queryRes.Iter), closer, params.Filter, cmp, queryPlanMode(ctx, c, params.Filter, params.Hint, queryRes))
 
 	distinct, err := common.FilterDistinctValues(iter, params.Key, cmp)
 	if err != nil {

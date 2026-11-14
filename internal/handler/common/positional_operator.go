@@ -123,7 +123,7 @@ func getPositionalProjection(arr *types.Array, filter *types.Document, positiona
 			// matched the filter.
 			// In this call, we already know that the array matched the filter,
 			// and we want to find out which array element matched the filter.
-			matched := must.NotFail(filterFieldExpr(doc, key, key, expr, nil))
+			matched := must.NotFail(filterFieldExpr(doc, key, key, expr, NewFilterContext(nil, PlanCollectionScan)))
 
 			if !matched {
 				break

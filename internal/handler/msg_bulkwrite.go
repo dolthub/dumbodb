@@ -530,7 +530,7 @@ func execBulkWriteUpdate(ctx context.Context, db backends.Database, c backends.C
 	defer closer.Close()
 	closer.Add(queryRes.Iter)
 
-	iter := common.FilterIterator(iterator.WithContext(ctx, queryRes.Iter), closer, filter)
+	iter := common.FilterIteratorPlan(iterator.WithContext(ctx, queryRes.Iter), closer, filter, nil, queryPlanMode(ctx, c, filter, nil, queryRes))
 	if !multi {
 		iter = common.LimitIterator(iter, closer, 1)
 	}
