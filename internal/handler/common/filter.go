@@ -2259,7 +2259,9 @@ func elemMatchArrayElement(elem *types.Array, filterKey, filterSuffix string, ex
 		case "$ne":
 			ok = !equalsElem(v)
 		case "$gt", "$gte", "$lt", "$lte":
-			if _, isArray := v.(*types.Array); isArray {
+			// An array compares only with an array, and with MinKey and
+			// MaxKey, which compare with every type.
+			if _, isArray := v.(*types.Array); isArray || v == types.MinKey || v == types.MaxKey {
 				c := compareElem(v)
 				switch op {
 				case "$gt":
