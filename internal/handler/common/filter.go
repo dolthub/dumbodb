@@ -1778,7 +1778,13 @@ func filterFieldExprAll(doc *types.Document, filterKey, filterSuffix string, fie
 	}
 
 	// Each query element must match on its own: a regex as a regex query
-	// does, any other value as an array element or an equal scalar.
+	// does, any other value as an array element or an equal scalar. Under a
+	// collation an array field is keyed once, so its strings are not
+	// collated again for every query element.
+	cmp, keyedField := fc.cmp, fieldValue
+	if _, isArray := fieldValue.(*types.Array); isArray && cmp != nil && query.Len() > 1 {
+		cmp, keyedField = nil, arrayStringKeys(fieldValue, fc.cmp)
+	}
 	for i := 0; i < query.Len(); i++ {
 		q := must.NotFail(query.Get(i))
 		if re, ok := q.(types.Regex); ok {
@@ -1788,7 +1794,10 @@ func filterFieldExprAll(doc *types.Document, filterKey, filterSuffix string, fie
 			}
 			continue
 		}
-		if !equalsOrHasElement(fieldValue, q, fc.cmp) {
+		if cmp == nil && fc.cmp != nil {
+			q = arrayStringKeys(q, fc.cmp)
+		}
+		if !equalsOrHasElement(keyedField, q, cmp) {
 			return false, nil
 		}
 	}
