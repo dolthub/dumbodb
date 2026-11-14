@@ -61,19 +61,38 @@ func FilterDocumentColl(doc, filter *types.Document, cmp *collation.Comparator) 
 
 // PlanMode is the kind of plan mongod answers a query with, which decides the
 // order it checks the query's predicates in.
-type PlanMode int
+type PlanMode struct {
+	kind planKind
+	// boundField is the leading field of the index an index scan reads.
+	boundField string
+}
+
+type planKind int
 
 const (
+	planCollectionScan planKind = iota
+	planIndexScan
+	planUnpushed
+)
+
+var (
 	// PlanCollectionScan checks $expr last.
-	PlanCollectionScan PlanMode = iota
+	PlanCollectionScan = PlanMode{kind: planCollectionScan}
 	// PlanIndexScan, when an index serves the query, checks $expr first
 	// among the clauses of $or and $nor, and in a conjunction after $ne,
 	// $not, $nin and $exists: false but before the other predicates.
-	PlanIndexScan
+	PlanIndexScan = PlanMode{kind: planIndexScan}
 	// PlanUnpushed is a $match mongod does not push into the query layer,
 	// which checks conditions in their written order.
-	PlanUnpushed
+	PlanUnpushed = PlanMode{kind: planUnpushed}
 )
+
+// PlanIndexScanOn is PlanIndexScan reading an index led by field. The
+// index's bounds drop documents before any other predicate is checked, so
+// the conditions on field go first.
+func PlanIndexScanOn(field string) PlanMode {
+	return PlanMode{kind: planIndexScan, boundField: field}
+}
 
 // FilterContext holds what one command's filter evaluation keeps across
 // documents: its collation, the order to check each (sub)filter's conditions
@@ -136,16 +155,18 @@ func (fc *FilterContext) Match(doc, filter *types.Document) (bool, error) {
 // are checked first, and equal ranks keep their written order.
 func (fc *FilterContext) conditionRank(key string, value any) int {
 	expr := key == "$expr" || clausesUseExpr(key, value)
-	switch fc.mode {
-	case PlanIndexScan:
+	switch fc.mode.kind {
+	case planIndexScan:
 		switch {
+		case fc.mode.boundField != "" && fc.elementDepth == 0 && constrainsByCondition(key, value, fc.mode.boundField):
+			return -1
 		case expr:
 			return 1
 		case isNegationCondition(key, value):
 			return 0
 		}
 		return 2
-	case PlanUnpushed:
+	case planUnpushed:
 		return 0
 	default:
 		if expr {
@@ -200,9 +221,9 @@ func (fc *FilterContext) clauseOrderFor(operator string, clauses *types.Array) [
 		case clause == nil:
 		case operator == "$and":
 			ranks[i] = fc.clauseRank(clause)
-		case filterUsesExpr(clause) && fc.mode == PlanCollectionScan:
+		case filterUsesExpr(clause) && fc.mode.kind == planCollectionScan:
 			ranks[i] = 1
-		case filterUsesExpr(clause) && fc.mode == PlanIndexScan:
+		case filterUsesExpr(clause) && fc.mode.kind == planIndexScan:
 			ranks[i] = -1
 		}
 		if i > 0 && ranks[i] < ranks[i-1] {
@@ -284,6 +305,51 @@ func IndexablePredicateOn(filter *types.Document, field string) bool {
 		}
 	}
 	return false
+}
+
+// ConstrainsField reports whether filter has a condition that bounds an index
+// on field: one on field itself, a top-level $and clause constraining it, or
+// an $or or $nor all of whose clauses constrain it.
+func ConstrainsField(filter *types.Document, field string) bool {
+	keys, values := filter.Keys(), filter.Values()
+	for i, key := range keys {
+		if constrainsByCondition(key, values[i], field) {
+			return true
+		}
+	}
+	return false
+}
+
+func constrainsByCondition(key string, value any, field string) bool {
+	switch key {
+	case field:
+		return boundsIndex(value)
+	case "$and", "$or", "$nor":
+	default:
+		return false
+	}
+	clauses, ok := value.(*types.Array)
+	if !ok || clauses.Len() == 0 {
+		return false
+	}
+	for i := range clauses.Len() {
+		clause, ok := must.NotFail(clauses.Get(i)).(*types.Document)
+		constrains := ok && ConstrainsField(clause, field)
+		if key == "$and" && constrains {
+			return true
+		}
+		if key != "$and" && !constrains {
+			return false
+		}
+	}
+	return key != "$and"
+}
+
+// boundsIndex reports whether a field condition gives an index on the field
+// bounds: any but a lone $size.
+func boundsIndex(cond any) bool {
+	ops, isDoc := cond.(*types.Document)
+	return !isDoc || ops.Len() != 1 || ops.Keys()[0] != "$size"
 }
 
 func getOrNilArray(doc *types.Document, key string) (*types.Array, bool) {
