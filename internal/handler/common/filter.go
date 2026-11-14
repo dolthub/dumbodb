@@ -2460,7 +2460,7 @@ func elemMatchKind(expr *types.Document) (pureOperator bool, err error) {
 	pureOperator = true
 	for _, key := range expr.Keys() {
 		switch key {
-		case "$text", "$where":
+		case "$text", "$where", "$expr":
 			return false, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrBadValue,
 				fmt.Sprintf("%s can only be applied to the top-level document", key),
