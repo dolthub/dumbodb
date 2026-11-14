@@ -15,8 +15,12 @@
 package common
 
 import (
+	"context"
+	"errors"
 	"math"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
@@ -73,8 +77,8 @@ func TestQueryImpliesPartialFilter(t *testing.T) {
 		"beside other field": {doc("a", int32(1), "b", doc("$gt", int32(1))), true},
 		"range with null":    {doc("b", doc("$gte", int32(-1), "$lte", types.Null)), true},
 	} {
-		got, known := QueryImpliesPartialFilter(tc.query, bExists)
-		if !known || got != tc.want {
+		got, known, err := QueryImpliesPartialFilter(context.Background(), tc.query, bExists)
+		if err != nil || !known || got != tc.want {
 			t.Errorf("$exists: %s: got %v (known %v), want %v", name, got, known, tc.want)
 		}
 	}
@@ -116,8 +120,8 @@ func TestQueryImpliesPartialFilter(t *testing.T) {
 		"$or one outside":    {doc("$or", arr(doc("a", int32(1)), doc("a", int32(-2)))), false},
 		"beside other field": {doc("a", doc("$gte", int32(0)), "b", int32(1)), true},
 	} {
-		got, known := QueryImpliesPartialFilter(tc.query, aNonNegative)
-		if !known || got != tc.want {
+		got, known, err := QueryImpliesPartialFilter(context.Background(), tc.query, aNonNegative)
+		if err != nil || !known || got != tc.want {
 			t.Errorf("$gte 0: %s: got %v (known %v), want %v", name, got, known, tc.want)
 		}
 	}
@@ -128,8 +132,56 @@ func TestQueryImpliesPartialFilter(t *testing.T) {
 		"$in":          a("$in", arr(int32(1))),
 		"exists false": doc("a", doc("$exists", false)),
 	} {
-		if _, known := QueryImpliesPartialFilter(doc("a", int32(1)), pfe); known {
+		if _, known, _ := QueryImpliesPartialFilter(context.Background(), doc("a", int32(1)), pfe); known {
 			t.Errorf("%s: a filter expression it does not model must be unknown", name)
 		}
+	}
+}
+
+// wideConjunction is {k0: {op: v}, ..., k<n-1>: {op: v}}.
+func wideConjunction(n int, op string, v any) *types.Document {
+	d := types.MakeDocument(n)
+	for i := 0; i < n; i++ {
+		d.AppendDecoded("k"+strconv.Itoa(i), must.NotFail(types.NewDocument(op, v)))
+	}
+	return d
+}
+
+// A partial filter is read on every hinted query, so deciding implication
+// must take time linear in its size.
+func TestQueryImpliesPartialFilterWideFilter(t *testing.T) {
+	pfe := wideConjunction(100_000, "$gte", int32(0))
+	query := must.NotFail(types.NewDocument("a", must.NotFail(types.NewDocument("$gt", int32(0)))))
+	start := time.Now()
+	implied, known, err := QueryImpliesPartialFilter(context.Background(), query, pfe)
+	elapsed := time.Since(start)
+	if err != nil || !known || implied {
+		t.Fatalf("got implied %v, known %v, err %v; want not implied", implied, known, err)
+	}
+	if elapsed > time.Second {
+		t.Errorf("took %v for a 100,000-conjunct filter", elapsed)
+	}
+	t.Logf("took %v", elapsed)
+}
+
+// A wide query against a wide filter stops when its context is done: each of
+// the query's $or branches implies every conjunct of the filter.
+func TestQueryImpliesPartialFilterHonorsContext(t *testing.T) {
+	branch := wideConjunction(500, "$eq", int32(1))
+	or := types.MakeArray(500)
+	for i := 0; i < 500; i++ {
+		or.Append(branch)
+	}
+	query := must.NotFail(types.NewDocument("$or", or))
+	pfe := wideConjunction(500, "$exists", true)
+
+	if implied, _, err := QueryImpliesPartialFilter(context.Background(), query, pfe); err != nil || !implied {
+		t.Fatalf("got implied %v, err %v; want implied", implied, err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, err := QueryImpliesPartialFilter(ctx, query, pfe); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
 	}
 }

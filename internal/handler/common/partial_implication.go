@@ -15,6 +15,7 @@
 package common
 
 import (
+	"context"
 	"strings"
 	"time"
 
@@ -28,14 +29,24 @@ import (
 // reads the whole index. known is false for a pfe shape it does not model.
 //
 // Unlike the backend's check for choosing an index, this follows mongod
-// exactly rather than erring toward a collection scan.
-func QueryImpliesPartialFilter(query, pfe *types.Document) (implied, known bool) {
+// exactly rather than erring toward a collection scan. It returns ctx's error
+// once ctx is done.
+func QueryImpliesPartialFilter(ctx context.Context, query, pfe *types.Document) (implied, known bool, err error) {
 	rhs := parseSubsetExpr(pfe)
 	if !rhs.modeledAsPartialFilter() {
-		return false, false
+		return false, false, nil
 	}
-	return parseSubsetExpr(query).implies(rhs), true
+	c := &subsetChecker{ctx: ctx}
+	implied = c.implies(parseSubsetExpr(query), rhs)
+	if c.err != nil {
+		return false, false, c.err
+	}
+	return implied, true, nil
 }
+
+// subsetCheckInterval is how many steps of implies run between checks of the
+// context.
+const subsetCheckInterval = 1024
 
 type subsetKind int
 
@@ -47,19 +58,24 @@ const (
 )
 
 // subsetExpr is a filter as mongod's subset rules see it: conjunctions,
-// disjunctions and single-operator predicates on a path.
+// disjunctions and single-operator predicates on a path. A conjunction also
+// holds its leaf children by path and the indexes of the others, so a leaf
+// finds the children that can imply it without visiting the rest.
 type subsetExpr struct {
 	kind     subsetKind
 	children []subsetExpr
 	path     string
 	op       string
 	value    any
+	leaves   map[string][]int
+	compound []int
 }
 
 func parseSubsetExpr(filter *types.Document) subsetExpr {
 	and := subsetExpr{kind: subsetAnd}
-	for _, k := range filter.Keys() {
-		v := must.NotFail(filter.Get(k))
+	keys, values := filter.Keys(), filter.Values()
+	for i, k := range keys {
+		v := values[i]
 		switch {
 		case k == "$and" || k == "$or":
 			node := subsetExpr{kind: subsetAnd}
@@ -69,6 +85,7 @@ func parseSubsetExpr(filter *types.Document) subsetExpr {
 			for _, b := range filterBranches(v) {
 				node.children = append(node.children, parseSubsetExpr(b))
 			}
+			node.indexChildren()
 			and.children = append(and.children, node)
 		case k == "$nor":
 			and.children = append(and.children, parseNor(v))
@@ -78,7 +95,19 @@ func parseSubsetExpr(filter *types.Document) subsetExpr {
 			and.children = append(and.children, parseFieldCondition(k, v)...)
 		}
 	}
+	and.indexChildren()
 	return and
+}
+
+func (e *subsetExpr) indexChildren() {
+	e.leaves = make(map[string][]int)
+	for i, c := range e.children {
+		if c.kind == subsetLeaf {
+			e.leaves[c.path] = append(e.leaves[c.path], i)
+		} else {
+			e.compound = append(e.compound, i)
+		}
+	}
 }
 
 // parseNor reads a $nor of one single-field branch as that branch's negation,
@@ -97,9 +126,10 @@ func parseFieldCondition(path string, v any) []subsetExpr {
 	if !ok || ops.Len() == 0 || !strings.HasPrefix(ops.Keys()[0], "$") {
 		return []subsetExpr{{kind: subsetLeaf, path: path, op: "$eq", value: v}}
 	}
-	leaves := make([]subsetExpr, 0, ops.Len())
-	for _, op := range ops.Keys() {
-		leaves = append(leaves, subsetExpr{kind: subsetLeaf, path: path, op: op, value: must.NotFail(ops.Get(op))})
+	opKeys, opValues := ops.Keys(), ops.Values()
+	leaves := make([]subsetExpr, 0, len(opKeys))
+	for i, op := range opKeys {
+		leaves = append(leaves, subsetExpr{kind: subsetLeaf, path: path, op: op, value: opValues[i]})
 	}
 	return leaves
 }
@@ -126,12 +156,28 @@ func (e subsetExpr) modeledAsPartialFilter() bool {
 	return false
 }
 
+// subsetChecker runs implies, stopping with ctx's error once ctx is done.
+type subsetChecker struct {
+	ctx   context.Context
+	steps int
+	err   error
+}
+
 // implies follows mongod's order: every conjunct of rhs, then any conjunct
 // of e, then every branch of e, then any branch of rhs.
-func (e subsetExpr) implies(rhs subsetExpr) bool {
+func (c *subsetChecker) implies(e, rhs subsetExpr) bool {
+	if c.err != nil {
+		return false
+	}
+	if c.steps%subsetCheckInterval == 0 {
+		if c.err = c.ctx.Err(); c.err != nil {
+			return false
+		}
+	}
+	c.steps++
 	if rhs.kind == subsetAnd {
-		for _, c := range rhs.children {
-			if !e.implies(c) {
+		for _, r := range rhs.children {
+			if !c.implies(e, r) {
 				return false
 			}
 		}
@@ -139,8 +185,22 @@ func (e subsetExpr) implies(rhs subsetExpr) bool {
 	}
 	switch e.kind {
 	case subsetAnd:
-		for _, c := range e.children {
-			if c.implies(rhs) {
+		// Only a leaf on rhs's path, or a compound child, can imply a leaf.
+		if rhs.kind == subsetLeaf {
+			for _, i := range e.leaves[rhs.path] {
+				if c.implies(e.children[i], rhs) {
+					return true
+				}
+			}
+			for _, i := range e.compound {
+				if c.implies(e.children[i], rhs) {
+					return true
+				}
+			}
+			return false
+		}
+		for _, child := range e.children {
+			if c.implies(child, rhs) {
 				return true
 			}
 		}
@@ -149,8 +209,8 @@ func (e subsetExpr) implies(rhs subsetExpr) bool {
 		if len(e.children) == 0 {
 			return false
 		}
-		for _, c := range e.children {
-			if !c.implies(rhs) {
+		for _, child := range e.children {
+			if !c.implies(child, rhs) {
 				return false
 			}
 		}

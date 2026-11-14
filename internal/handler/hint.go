@@ -217,7 +217,10 @@ func hintedIndexOrder(ctx context.Context, coll backends.Collection, hint any, f
 			// mongod bounds a hinted partial index only by a query that
 			// implies its filter expression; otherwise it reads every key.
 			if idx.PartialFilterExpression != nil {
-				implied, known := common.QueryImpliesPartialFilter(filter, idx.PartialFilterExpression)
+				implied, known, ierr := common.QueryImpliesPartialFilter(ctx, filter, idx.PartialFilterExpression)
+				if ierr != nil {
+					return nil, nil, nil, ierr
+				}
 				if known && !implied {
 					return order, common.AsOneIndexScan(filter), nil, nil
 				}
