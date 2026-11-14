@@ -17,6 +17,7 @@ package common
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -94,7 +95,7 @@ func expandPositionalOps(key string, doc *types.Document, filter *types.Document
 		case part == "$":
 			// $  -- positional first match
 			arrayPath := strings.Join(parts[:i], ".")
-			idx, err := findFirstMatchingIndex(arrayPath, doc, filter)
+			idx, err := positionalMatchIndex(arrayPath, doc, filter)
 			if err != nil {
 				return nil, err
 			}
@@ -137,11 +138,13 @@ func getArrayByPath(doc *types.Document, path string) (*types.Array, error) {
 	return arr, nil
 }
 
-// findFirstMatchingIndex finds the index of the first array element in the document
-// at arrayPath that satisfies the query filter conditions for that path.
+// positionalMatchIndex returns the array index that the positional $ operator
+// names for the array at arrayPath, as mongod picks it: each filter predicate
+// on the array that matches an element records that element's index, and the
+// last one in mongod's evaluation order wins.
 //
-// Returns -1 if no matching element is found or the filter has no conditions for the array.
-func findFirstMatchingIndex(arrayPath string, doc *types.Document, filter *types.Document) (int, error) {
+// Returns -1 if no predicate records an index.
+func positionalMatchIndex(arrayPath string, doc *types.Document, filter *types.Document) (int, error) {
 	if filter == nil {
 		return -1, nil
 	}
@@ -154,11 +157,7 @@ func findFirstMatchingIndex(arrayPath string, doc *types.Document, filter *types
 		return -1, nil
 	}
 
-	// Collect filter conditions that apply to this array field. An $elemMatch
-	// on the array tests each element itself and alone decides the position,
-	// as in mongod; operators beside it, such as $size, test the whole array.
-	relevantFilter := must.NotFail(types.NewDocument())
-	var elemMatches []*types.Document
+	var preds []positionPredicate
 
 	filterIter := filter.Iterator()
 	defer filterIter.Close()
@@ -172,74 +171,209 @@ func findFirstMatchingIndex(arrayPath string, doc *types.Document, filter *types
 			return -1, lazyerrors.Error(iterErr)
 		}
 
-		if filterKey == arrayPath {
-			if ops, ok := filterVal.(*types.Document); ok && ops.Has("$elemMatch") {
-				expr, ok := must.NotFail(ops.Get("$elemMatch")).(*types.Document)
-				if !ok {
-					return -1, nil
-				}
-				elemMatches = append(elemMatches, expr)
-				continue
+		if filterKey == arrayPath || strings.HasPrefix(filterKey, arrayPath+".") {
+			if preds, err = appendPositionPredicates(preds, filterKey, filterVal); err != nil {
+				return -1, err
 			}
 		}
+	}
 
-		if filterKey == arrayPath || strings.HasPrefix(filterKey, arrayPath+".") {
-			relevantFilter.Set(filterKey, filterVal)
+	sort.SliceStable(preds, func(i, j int) bool {
+		if preds[i].rank != preds[j].rank {
+			return preds[i].rank < preds[j].rank
 		}
-	}
-
-	if relevantFilter.Len() == 0 && len(elemMatches) == 0 {
-		return -1, nil
-	}
+		return preds[i].path < preds[j].path
+	})
 
 	suffix := arrayPath
 	if dot := strings.LastIndexByte(arrayPath, '.'); dot >= 0 {
 		suffix = arrayPath[dot+1:]
 	}
-	pureOperator := make([]bool, len(elemMatches))
-	for j, expr := range elemMatches {
-		if pureOperator[j], err = elemMatchKind(expr); err != nil {
-			return -1, err
-		}
-	}
 
-	// Test each element against the relevant filter conditions.
-elements:
-	for i := range arr.Len() {
-		elem := must.NotFail(arr.Get(i))
+	for p := len(preds) - 1; p >= 0; p-- {
+		pred := preds[p]
+		for i := range arr.Len() {
+			elem := must.NotFail(arr.Get(i))
 
-		for j, expr := range elemMatches {
-			matched, matchErr := elemMatchElement(elem, arrayPath, suffix, expr, pureOperator[j], nil)
-			if matchErr != nil {
-				return -1, lazyerrors.Error(matchErr)
+			var matched bool
+			if pred.elemMatch != nil && pred.path == arrayPath {
+				matched, err = elemMatchElement(elem, arrayPath, suffix, pred.elemMatch, pred.pureOperator, nil)
+			} else {
+				matched, err = FilterDocument(buildNestedDoc(arrayPath, elem), pred.filter)
 			}
-			if !matched {
-				continue elements
+			if err != nil {
+				return -1, lazyerrors.Error(err)
 			}
-		}
-
-		if relevantFilter.Len() == 0 {
-			return i, nil
-		}
-
-		var testDoc *types.Document
-		if strings.ContainsRune(arrayPath, '.') {
-			testDoc = buildNestedDoc(arrayPath, elem)
-		} else {
-			testDoc = must.NotFail(types.NewDocument(arrayPath, elem))
-		}
-
-		matched, matchErr := FilterDocument(testDoc, relevantFilter)
-		if matchErr != nil {
-			return -1, lazyerrors.Error(matchErr)
-		}
-
-		if matched {
-			return i, nil
+			if matched {
+				return i, nil
+			}
 		}
 	}
 
 	return -1, nil
+}
+
+// positionPredicate is one predicate of the filter's top-level conjunction on
+// an array path, as mongod evaluates it after optimizing the query.
+type positionPredicate struct {
+	rank int
+	path string
+
+	// filter is {path: condition}, for every predicate but an $elemMatch on
+	// the array itself.
+	filter *types.Document
+
+	elemMatch    *types.Document
+	pureOperator bool
+}
+
+// Ranks follow mongod's MatchExpression::MatchType, by which it sorts the
+// children of an AND before matching.
+const (
+	rankElemMatchObject = iota
+	rankElemMatchValue
+	rankEq
+	rankLte
+	rankLt
+	rankGt
+	rankGte
+	rankRegex
+	rankMod
+	rankExists
+	rankIn
+	rankBitsAllSet
+	rankBitsAllClear
+	rankBitsAnySet
+	rankBitsAnyClear
+	rankType
+	rankGeo
+)
+
+// positionOperatorRanks holds the operators that record an array index.
+// Negations ($ne, $nin, $not) and $size never do.
+var positionOperatorRanks = map[string]int{
+	"$eq":            rankEq,
+	"$lte":           rankLte,
+	"$lt":            rankLt,
+	"$gt":            rankGt,
+	"$gte":           rankGte,
+	"$regex":         rankRegex,
+	"$mod":           rankMod,
+	"$exists":        rankExists,
+	"$in":            rankIn,
+	"$bitsAllSet":    rankBitsAllSet,
+	"$bitsAllClear":  rankBitsAllClear,
+	"$bitsAnySet":    rankBitsAnySet,
+	"$bitsAnyClear":  rankBitsAnyClear,
+	"$type":          rankType,
+	"$geoWithin":     rankGeo,
+	"$geoIntersects": rankGeo,
+}
+
+// appendPositionPredicates appends the predicates of {path: value}, split the
+// way mongod's optimizer splits them: one per operator, a one-value $in as an
+// equality or regex, and each $all value as its own predicate.
+func appendPositionPredicates(preds []positionPredicate, path string, value any) ([]positionPredicate, error) {
+	single := func(rank int, cond any) positionPredicate {
+		return positionPredicate{rank: rank, path: path, filter: must.NotFail(types.NewDocument(path, cond))}
+	}
+	literal := func(v any) positionPredicate {
+		if _, isRegex := v.(types.Regex); isRegex {
+			return single(rankRegex, v)
+		}
+		return single(rankEq, must.NotFail(types.NewDocument("$eq", v)))
+	}
+
+	ops, ok := value.(*types.Document)
+	if !ok || !isOperatorDocument(ops) || isDBRefLiteral(ops) {
+		return append(preds, literal(value)), nil
+	}
+
+	for _, op := range ops.Keys() {
+		v := must.NotFail(ops.Get(op))
+		switch op {
+		case "$elemMatch":
+			expr, ok := v.(*types.Document)
+			if !ok {
+				continue
+			}
+			pred, err := elemMatchPositionPredicate(path, expr)
+			if err != nil {
+				return nil, err
+			}
+			preds = append(preds, pred)
+
+		case "$all":
+			values, ok := v.(*types.Array)
+			if !ok {
+				continue
+			}
+			for i := range values.Len() {
+				item := must.NotFail(values.Get(i))
+				if inner, ok := elemMatchOperand(item); ok {
+					pred, err := elemMatchPositionPredicate(path, inner)
+					if err != nil {
+						return nil, err
+					}
+					preds = append(preds, pred)
+					continue
+				}
+				preds = append(preds, literal(item))
+			}
+
+		case "$in":
+			if values, ok := v.(*types.Array); ok && values.Len() == 1 {
+				preds = append(preds, literal(must.NotFail(values.Get(0))))
+				continue
+			}
+			preds = append(preds, single(rankIn, must.NotFail(types.NewDocument(op, v))))
+
+		case "$regex":
+			cond := must.NotFail(types.NewDocument(op, v))
+			if options, err := ops.Get("$options"); err == nil {
+				cond.Set("$options", options)
+			}
+			preds = append(preds, single(rankRegex, cond))
+
+		default:
+			if rank, ok := positionOperatorRanks[op]; ok {
+				preds = append(preds, single(rank, must.NotFail(types.NewDocument(op, v))))
+			}
+		}
+	}
+
+	return preds, nil
+}
+
+// elemMatchPositionPredicate returns the predicate of {path: {$elemMatch: expr}}.
+func elemMatchPositionPredicate(path string, expr *types.Document) (positionPredicate, error) {
+	pureOperator, err := elemMatchKind(expr)
+	if err != nil {
+		return positionPredicate{}, err
+	}
+
+	rank := rankElemMatchValue
+	if !pureOperator || expr.Len() == 0 {
+		rank = rankElemMatchObject
+	}
+
+	return positionPredicate{
+		rank:         rank,
+		path:         path,
+		filter:       must.NotFail(types.NewDocument(path, must.NotFail(types.NewDocument("$elemMatch", expr)))),
+		elemMatch:    expr,
+		pureOperator: pureOperator,
+	}, nil
+}
+
+// elemMatchOperand returns expr of an {$elemMatch: expr} value.
+func elemMatchOperand(v any) (*types.Document, bool) {
+	doc, ok := v.(*types.Document)
+	if !ok || doc.Len() != 1 || doc.Keys()[0] != "$elemMatch" {
+		return nil, false
+	}
+	expr, ok := must.NotFail(doc.Get("$elemMatch")).(*types.Document)
+	return expr, ok
 }
 
 // buildNestedDoc creates a *types.Document where value is nested at the given

@@ -2153,8 +2153,15 @@ func elemMatchKind(expr *types.Document) (pureOperator bool, err error) {
 
 // elemMatchElement reports whether one array element satisfies the $elemMatch
 // expression expr, of the kind elemMatchKind reported. Every operator must
-// hold for the same element.
+// hold for the same element; an empty expr matches any document or array.
 func elemMatchElement(elem any, filterKey, filterSuffix string, expr *types.Document, pureOperator bool, cmp *collation.Comparator) (bool, error) {
+	if expr.Len() == 0 {
+		switch elem.(type) {
+		case *types.Document, *types.Array:
+			return true, nil
+		}
+		return false, nil
+	}
 	if pureOperator {
 		if elemArr, isArray := elem.(*types.Array); isArray {
 			return elemMatchArrayElement(elemArr, filterKey, filterSuffix, expr, cmp)

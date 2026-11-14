@@ -54,3 +54,31 @@ func TestFilterElemMatchArrayElementMinMaxKey(t *testing.T) {
 		}
 	}
 }
+
+// An empty $elemMatch matches an array holding a document or an array, so its
+// negations keep exactly the other documents.
+func TestFilterEmptyElemMatch(t *testing.T) {
+	doc := func(pairs ...any) *types.Document { return must.NotFail(types.NewDocument(pairs...)) }
+	arr := func(vs ...any) *types.Array { return must.NotFail(types.NewArray(vs...)) }
+	empty := doc("$elemMatch", doc())
+	targets := []any{arr(int32(1)), arr(doc("b", int32(1))), arr(), arr(arr()), int32(1)}
+
+	for name, tc := range map[string]struct {
+		filter *types.Document
+		want   []bool
+	}{
+		"$elemMatch":      {doc("a", empty), []bool{false, true, false, true, false}},
+		"$not $elemMatch": {doc("a", doc("$not", empty)), []bool{true, false, true, false, true}},
+		"$nor $elemMatch": {doc("$nor", arr(doc("a", empty))), []bool{true, false, true, false, true}},
+	} {
+		for i, a := range targets {
+			got, err := FilterDocument(doc("_id", int32(i+1), "a", a), tc.filter)
+			if err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			if got != tc.want[i] {
+				t.Errorf("%s: _id %d matched %v, want %v", name, i+1, got, tc.want[i])
+			}
+		}
+	}
+}
