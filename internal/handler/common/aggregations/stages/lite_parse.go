@@ -165,6 +165,68 @@ func liteParseStage(stage *types.Document) error {
 		return CheckQuerySettingsSpec(stage)
 	case "$currentOp":
 		return CheckCurrentOpSpec(stage)
+	case "$collStats":
+		return CheckCollStatsSpec(stage)
+	case "$listLocalSessions":
+		return CheckListLocalSessionsSpec(stage)
+	}
+	return nil
+}
+
+// CheckListLocalSessionsSpec returns the error mongod's IDL parser gives for
+// a $listLocalSessions specification.
+func CheckListLocalSessionsSpec(stage *types.Document) error {
+	fail := func(code handlererrors.ErrorCode, msg string) error {
+		return handlererrors.NewCommandErrorMsgWithArgument(code, msg, "$listLocalSessions (stage)")
+	}
+	wrongType := func(field string, v any, want string) error {
+		return fail(handlererrors.ErrTypeMismatch, fmt.Sprintf("BSON field '$listLocalSessions.%s' is the wrong type '%s', expected type '%s'",
+			field, handlerparams.AliasFromType(v), want))
+	}
+	spec, ok := must.NotFail(stage.Get("$listLocalSessions")).(*types.Document)
+	if !ok {
+		return fail(handlererrors.ErrTypeMismatch, "$listLocalSessions options must be specified in an object, but found: "+
+			handlerparams.AliasFromType(must.NotFail(stage.Get("$listLocalSessions"))))
+	}
+	for _, key := range spec.Keys() {
+		v := must.NotFail(spec.Get(key))
+		switch key {
+		case "allUsers":
+			if _, isBool := v.(bool); !isBool {
+				return wrongType(key, v, "bool")
+			}
+		case "users":
+			users, isArray := v.(*types.Array)
+			if !isArray {
+				return wrongType(key, v, "array")
+			}
+			for i := range users.Len() {
+				u := must.NotFail(users.Get(i))
+				user, isDoc := u.(*types.Document)
+				if !isDoc {
+					return wrongType(fmt.Sprintf("users.%d", i), u, "object")
+				}
+				for _, k := range user.Keys() {
+					f := must.NotFail(user.Get(k))
+					switch k {
+					case "user", "db":
+						if _, isStr := f.(string); !isStr {
+							return wrongType("users."+k, f, "string")
+						}
+					default:
+						return fail(handlererrors.ErrIDLUnknownField, "BSON field '$listLocalSessions.users."+k+"' is an unknown field.")
+					}
+				}
+				for _, k := range []string{"user", "db"} {
+					if !user.Has(k) {
+						return fail(handlererrors.ErrMissingField,
+							"BSON field '$listLocalSessions.users."+k+"' is missing but a required field")
+					}
+				}
+			}
+		default:
+			return fail(handlererrors.ErrIDLUnknownField, "BSON field '$listLocalSessions."+key+"' is an unknown field.")
+		}
 	}
 	return nil
 }

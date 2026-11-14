@@ -43,21 +43,46 @@ type storageStats struct {
 	scale int32
 }
 
-func newCollStats(stage *types.Document) (aggregations.Stage, error) {
+// CheckCollStatsSpec returns the error mongod's lite parser gives for a
+// $collStats specification, checking each field as it reads it.
+func CheckCollStatsSpec(stage *types.Document) error {
 	fields, err := common.GetRequiredParam[*types.Document](stage, "$collStats")
 	if err != nil {
 		// Format as "key: value" without surrounding braces, matching MongoDB's error format.
 		stageValue, _ := stage.Get("$collStats")
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+		return handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrStageCollStatsInvalidArg,
 			fmt.Sprintf("$collStats must take a nested object but found: $collStats: %s", types.FormatAnyValue(stageValue)),
 			"$collStats (stage)",
 		)
 	}
+	for _, key := range fields.Keys() {
+		switch key {
+		case "count", "queryExecStats":
+			_, err = collStatsOption(fields, key, true)
+		case "latencyStats", "storageStats":
+			_, err = collStatsOption(fields, key, false)
+		default:
+			err = handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIDLUnknownField,
+				fmt.Sprintf("BSON field '$collStats.%s' is an unknown field.", key), "$collStats (stage)")
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func newCollStats(stage *types.Document) (aggregations.Stage, error) {
+	if err := CheckCollStatsSpec(stage); err != nil {
+		return nil, err
+	}
+	fields := must.NotFail(stage.Get("$collStats")).(*types.Document)
 
 	var cs collStats
 
 	var present bool
+	var err error
 	if present, err = collStatsOption(fields, "count", true); err != nil {
 		return nil, err
 	}
