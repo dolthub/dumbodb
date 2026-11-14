@@ -84,10 +84,9 @@ func TestWire_DuplicateFieldInAnyPositionIsRejected(t *testing.T) {
 	assert.Equal(t, 1.0, after["ok"])
 }
 
-// A duplicate nested inside a subdocument is the same hazard: the filter is
-// read with Get like any other field. Before the fix this killed the
-// connection while the top-level check would have let it through.
-func TestWire_DuplicateFieldNestedInSubdocumentIsRejected(t *testing.T) {
+// A filter that repeats a field is read as an implicit $and, as mongod reads
+// it, rather than killing the connection.
+func TestWire_DuplicateFieldNestedInSubdocumentIsAccepted(t *testing.T) {
 	env := startDumboDB(t)
 	dbName := fmt.Sprintf("dupnested_%d", env.Port)
 	conn := dialWire(t, env)
@@ -98,10 +97,7 @@ func TestWire_DuplicateFieldNestedInSubdocumentIsRejected(t *testing.T) {
 		{Key: "$db", Value: dbName},
 	})
 	require.NoError(t, err, "a nested duplicate must not kill the connection")
-	assert.Equal(t, 0.0, res["ok"])
-	if msg, ok := res["errmsg"].(string); ok {
-		assert.Contains(t, msg, "filter.a", "the error should name the path to the offending field")
-	}
+	assert.Equal(t, 1.0, res["ok"])
 
 	after, err := conn.run(bson.D{
 		{Key: "find", Value: "c"},
@@ -112,10 +108,10 @@ func TestWire_DuplicateFieldNestedInSubdocumentIsRejected(t *testing.T) {
 	assert.Equal(t, 1.0, after["ok"])
 }
 
-// A duplicate inside an array element is the same hazard and was the one a
-// top-level-only check would miss: with the recursive check disabled, this
-// command killed the connection.
-func TestWire_DuplicateFieldNestedInArrayIsRejected(t *testing.T) {
+// A duplicate inside an array element was the one a top-level-only check
+// would miss: with the recursive check disabled, this command killed the
+// connection. A modifier that repeats a field is a write error, as on mongod.
+func TestWire_DuplicateFieldNestedInArrayIsAWriteError(t *testing.T) {
 	env := startDumboDB(t)
 	dbName := fmt.Sprintf("duparray_%d", env.Port)
 	conn := dialWire(t, env)
@@ -123,16 +119,26 @@ func TestWire_DuplicateFieldNestedInArrayIsRejected(t *testing.T) {
 	res, err := conn.run(bson.D{
 		{Key: "update", Value: "c"},
 		{Key: "updates", Value: bson.A{bson.D{
-			{Key: "q", Value: bson.D{{Key: "a", Value: 1}, {Key: "a", Value: 2}}},
-			{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "b", Value: 1}}}}},
+			{Key: "q", Value: bson.D{}},
+			{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "b", Value: 1}, {Key: "b", Value: 2}}}}},
+			{Key: "upsert", Value: true},
 		}}},
 		{Key: "$db", Value: dbName},
 	})
 	require.NoError(t, err, "a duplicate inside an array element must not kill the connection")
-	assert.Equal(t, 0.0, res["ok"])
-	if msg, ok := res["errmsg"].(string); ok {
-		assert.Contains(t, msg, "updates.0.q.a", "the error should name the path to the offending field")
+	assert.Equal(t, 1.0, res["ok"])
+	writeErrors, ok := res["writeErrors"].(bson.A)
+	require.True(t, ok, "the duplicate must be reported as a write error: %v", res)
+	require.Len(t, writeErrors, 1)
+	writeError, ok := writeErrors[0].(bson.D)
+	require.True(t, ok)
+	var code any
+	for _, e := range writeError {
+		if e.Key == "code" {
+			code = e.Value
+		}
 	}
+	assert.EqualValues(t, 40, code)
 
 	after, err := conn.run(bson.D{
 		{Key: "find", Value: "c"},
