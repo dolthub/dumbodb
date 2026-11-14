@@ -982,37 +982,59 @@ type zipOp struct {
 }
 
 func newZip(args ...any) (Operator, error) {
-	if len(args) != 1 {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$zip", "$zip requires a document argument")
+	fail := func(code handlererrors.ErrorCode, msg string) error {
+		return handlererrors.NewCommandErrorMsgWithArgument(code, msg, "$zip")
 	}
-
+	if len(args) != 1 {
+		return nil, fail(handlererrors.ErrZipNotObject, "$zip only supports an object as an argument, found array")
+	}
 	doc, ok := args[0].(*types.Document)
 	if !ok {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$zip", "$zip requires a document argument")
+		return nil, fail(handlererrors.ErrZipNotObject,
+			"$zip only supports an object as an argument, found "+handlerparams.AliasFromType(args[0]))
 	}
 
-	inputsArg, err := doc.Get("inputs")
-	if err != nil {
-		return nil, newOperatorError(ErrArgsInvalidLen, "$zip", "Missing 'inputs' parameter to $zip")
-	}
-	if _, isArray := inputsArg.(*types.Array); !isArray {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrZipInputsNotArray,
-			"inputs must be an array of expressions, found "+handlerparams.AliasFromType(inputsArg), "$zip")
-	}
-
-	useLongest := false
-	if ullV, err := doc.Get("useLongestLength"); err == nil {
-		if b, ok := ullV.(bool); ok {
-			useLongest = b
+	op := &zipOp{}
+	var defaults *types.Array
+	for _, key := range doc.Keys() {
+		v := must.NotFail(doc.Get(key))
+		switch key {
+		case "inputs":
+			if _, isArray := v.(*types.Array); !isArray {
+				return nil, fail(handlererrors.ErrZipInputsNotArray,
+					"inputs must be an array of expressions, found "+handlerparams.AliasFromType(v))
+			}
+			op.inputsArg = v
+		case "defaults":
+			arr, isArray := v.(*types.Array)
+			if !isArray {
+				return nil, fail(handlererrors.ErrZipDefaultsNotArray,
+					"defaults must be an array of expressions, found "+handlerparams.AliasFromType(v))
+			}
+			defaults = arr
+			op.defaultsArg = v
+		case "useLongestLength":
+			b, isBool := v.(bool)
+			if !isBool {
+				return nil, fail(handlererrors.ErrZipUseLongestLengthType,
+					"useLongestLength must be a bool, found "+handlerparams.AliasFromType(v))
+			}
+			op.useLongestLength = b
+		default:
+			return nil, fail(handlererrors.ErrZipUnknownArgument, "$zip found an unknown argument: "+key)
 		}
 	}
 
-	var defaultsArg any
-	if dV, err := doc.Get("defaults"); err == nil {
-		defaultsArg = dV
+	inputs, _ := op.inputsArg.(*types.Array)
+	switch {
+	case inputs == nil || inputs.Len() == 0:
+		return nil, fail(handlererrors.ErrZipNoInputs, "$zip requires at least one input array")
+	case defaults != nil && !op.useLongestLength:
+		return nil, fail(handlererrors.ErrZipDefaultsWithoutLongest, "cannot specify defaults unless useLongestLength is true")
+	case defaults != nil && defaults.Len() != inputs.Len():
+		return nil, fail(handlererrors.ErrZipDefaultsLength, "defaults and inputs must have the same length")
 	}
-
-	return &zipOp{inputsArg: inputsArg, useLongestLength: useLongest, defaultsArg: defaultsArg}, nil
+	return op, nil
 }
 
 func (op *zipOp) Process(doc *types.Document) (any, error) {
