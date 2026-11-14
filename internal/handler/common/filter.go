@@ -1985,39 +1985,26 @@ func isInvalidBitwiseValue(value float64) bool {
 		value < math.MinInt64
 }
 
-// decimal128ToInt64 attempts to convert a types.Decimal128 value to int64 for
-// use in bitwise operations. It truncates toward zero (like MongoDB does).
-// Returns (value, true) on success, or (0, false) if the value cannot be
-// represented as an int64 (NaN, Inf, out of range).
+// decimal128ToInt64 converts d to int64 for the bitwise operators. ok is
+// false unless d is an integer that int64 holds: NaN, Inf, a fraction or a
+// value out of range does not convert.
 func decimal128ToInt64(d types.Decimal128) (int64, bool) {
-	// Use bson.Decimal128 which stores (H=high, L=low).
-	// types.Decimal128 stores H and L fields matching the wire format.
-	p := bson.NewDecimal128(d.H, d.L)
-
-	bi, exp, err := p.BigInt()
+	bi, exp, err := bson.NewDecimal128(d.H, d.L).BigInt()
 	if err != nil {
-		// NaN or Inf
 		return 0, false
 	}
-
-	// Apply the exponent: value = bi * 10^exp
 	if exp > 0 {
-		factor := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(exp)), nil)
-		bi = new(big.Int).Mul(bi, factor)
+		bi.Mul(bi, new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(exp)), nil))
 	} else if exp < 0 {
-		// Truncate toward zero: divide and discard remainder
-		divisor := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(-exp)), nil)
-		// Truncate toward zero: use Quo (truncated division)
-		bi = new(big.Int).Quo(bi, divisor)
+		var rem big.Int
+		bi.QuoRem(bi, new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(-exp)), nil), &rem)
+		if rem.Sign() != 0 {
+			return 0, false
+		}
 	}
-
-	// Check if it fits in int64
-	minInt64 := new(big.Int).SetInt64(math.MinInt64)
-	maxInt64 := new(big.Int).SetInt64(math.MaxInt64)
-	if bi.Cmp(minInt64) < 0 || bi.Cmp(maxInt64) > 0 {
+	if !bi.IsInt64() {
 		return 0, false
 	}
-
 	return bi.Int64(), true
 }
 

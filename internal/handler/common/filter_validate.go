@@ -17,7 +17,6 @@ package common
 import (
 	"fmt"
 	"math"
-	"strconv"
 	"strings"
 
 	"github.com/dolthub/dumbodb/internal/collation"
@@ -25,7 +24,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 // ValidateFilter returns the error MongoDB raises when it parses filter, which
@@ -193,27 +191,41 @@ func ValidateFilterExprs(filter *types.Document) error {
 // checkAlwaysOperand returns mongod's error for an $alwaysTrue or
 // $alwaysFalse operand, which must be the number 1.
 func checkAlwaysOperand(op string, v any) error {
-	var n float64
+	var n int64
 	switch v := v.(type) {
 	case int32:
-		n = float64(v)
+		n = int64(v)
 	case int64:
-		n = float64(v)
-	case float64:
 		n = v
+	case float64:
+		switch {
+		case math.IsNaN(v):
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFailedToParse,
+				fmt.Sprintf("Expected an integer, but found NaN in: %s: %s", op, types.FormatAnyValue(v)), op)
+		case v != math.Trunc(v):
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFailedToParse,
+				fmt.Sprintf("Expected an integer: %s: %s", op, types.FormatAnyValue(v)), op)
+		case v < math.MinInt64 || v >= math.MaxInt64:
+			return errNotInt64(op, v)
+		}
+		n = int64(v)
 	case types.Decimal128:
-		n, _ = strconv.ParseFloat(primitive.NewDecimal128(v.H, v.L).String(), 64)
+		var ok bool
+		if n, ok = decimal128ToInt64(v); !ok {
+			return errNotInt64(op, v)
+		}
 	default:
 		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFailedToParse,
 			fmt.Sprintf("Expected a number in: %s: %s", op, types.FormatAnyValue(v)), op)
-	}
-	if n != math.Trunc(n) {
-		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFailedToParse,
-			fmt.Sprintf("Expected an integer: %s: %s", op, types.FormatAnyValue(v)), op)
 	}
 	if n != 1 {
 		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFailedToParse,
 			op+" must be an integer value of 1", op)
 	}
 	return nil
+}
+
+func errNotInt64(op string, v any) error {
+	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFailedToParse,
+		fmt.Sprintf("Cannot represent as a 64-bit integer: %s: %s", op, types.FormatAnyValue(v)), op)
 }
