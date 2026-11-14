@@ -1772,6 +1772,9 @@ func checkMergeOnIndex(ctx context.Context, b backends.Backend, stage aggregatio
 	if err != nil {
 		return lazyerrors.Error(err)
 	}
+	if target, _ := lookupCollectionInfo(ctx, db, collName); target != nil && target.IsView {
+		return noIndex
+	}
 	coll, err := db.Collection(collName)
 	if err != nil {
 		return lazyerrors.Error(err)
@@ -1824,6 +1827,11 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 
 		if len(params.Docs) == 0 {
 			return nil
+		}
+
+		if target, _ := lookupCollectionInfo(ctx, db, params.CollName); target != nil && target.IsView {
+			return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCommandNotSupportedOnView,
+				fmt.Sprintf("Namespace %s.%s is a view, not a collection", params.DBName, params.CollName), "$merge")
 		}
 
 		qRes, err := coll.Query(ctx, new(backends.QueryParams))
