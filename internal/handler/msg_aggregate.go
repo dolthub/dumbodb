@@ -1815,17 +1815,40 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 			if backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist) ||
 				backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseDoesNotExist) {
 				// Collection doesn't exist yet; all docs are "not matched".
-				if params.WhenNotMatched == "insert" {
-					for _, doc := range params.Docs {
+				docs := params.Docs
+				var pipelineErr error
+				if params.ApplyWhenMatched != nil {
+					var parsed []*types.Document
+					for i, doc := range docs {
+						if _, err := params.ApplyWhenMatched(ctx, nil, i); err != nil {
+							if pipelineErr == nil {
+								pipelineErr = err
+							}
+							continue
+						}
+						parsed = append(parsed, doc)
+					}
+					docs = parsed
+				}
+				if params.WhenNotMatched == "fail" && len(docs) > 0 {
+					return handlererrors.NewCommandErrorMsgWithArgument(
+						handlererrors.ErrMergeStageNoMatchingDocument,
+						"$merge could not find a matching document in the target collection for at least one document in the source collection",
+						"$merge (stage)",
+					)
+				}
+				if params.WhenNotMatched == "insert" && len(docs) > 0 {
+					for _, doc := range docs {
 						if !doc.Has("_id") {
 							doc.Set("_id", types.NewObjectID())
 						}
 					}
-					_, insertErr := coll.InsertAll(ctx, &backends.InsertAllParams{Docs: params.Docs})
-					return mergeWriteError(params, insertErr)
+					if _, insertErr := coll.InsertAll(ctx, &backends.InsertAllParams{Docs: docs}); insertErr != nil {
+						return mergeWriteError(params, insertErr)
+					}
 				}
 
-				return nil
+				return pipelineErr
 			}
 
 			return lazyerrors.Error(err)
@@ -1862,13 +1885,37 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 
 		var toInsert []*types.Document
 		var toUpdate []*types.Document
+		var pipelineErr error
 
-		for _, incoming := range params.Docs {
+		for i, incoming := range params.Docs {
 			key := buildMergeKey(incoming, params.On)
 			entry, matched := existingMap[key]
 
+			if params.ApplyWhenMatched != nil {
+				// mongod writes a batch's updates unordered: each document
+				// whose update fails is skipped, the others are written, and
+				// the first failure is reported.
+				var existing *types.Document
+				if matched {
+					existing = entry.doc
+				}
+				updated, err := params.ApplyWhenMatched(ctx, existing, i)
+				if err != nil {
+					if pipelineErr == nil {
+						pipelineErr = err
+					}
+					continue
+				}
+				if matched {
+					entry.doc = updated
+					toUpdate = append(toUpdate, updated)
+					continue
+				}
+			}
+
 			if matched {
 				switch params.WhenMatched {
+
 				case "merge":
 					if mergeChangesID(entry.doc, incoming, false) {
 						return mergeImmutableIDError("Performing an update on the path '_id' would modify the immutable field '_id'")
@@ -1929,20 +1976,28 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 			}
 		}
 
-		if len(toInsert) > 0 {
-			if _, err = coll.InsertAll(ctx, &backends.InsertAllParams{Docs: toInsert}); err != nil {
-				return mergeWriteError(params, err)
-			}
+		if err = writeMergeDocuments(ctx, coll, params, toInsert, toUpdate); err != nil {
+			return err
 		}
-
-		if len(toUpdate) > 0 {
-			if _, err = coll.UpdateAll(ctx, &backends.UpdateAllParams{Docs: toUpdate}); err != nil {
-				return mergeWriteError(params, err)
-			}
-		}
-
-		return nil
+		return pipelineErr
 	}
+}
+
+// writeMergeDocuments inserts and updates the documents a $merge batch wrote.
+func writeMergeDocuments(ctx context.Context, coll backends.Collection, params *stages.MergeParams, toInsert, toUpdate []*types.Document) error {
+	if len(toInsert) > 0 {
+		if _, err := coll.InsertAll(ctx, &backends.InsertAllParams{Docs: toInsert}); err != nil {
+			return mergeWriteError(params, err)
+		}
+	}
+
+	if len(toUpdate) > 0 {
+		if _, err := coll.UpdateAll(ctx, &backends.UpdateAllParams{Docs: toUpdate}); err != nil {
+			return mergeWriteError(params, err)
+		}
+	}
+
+	return nil
 }
 
 func wrapAggregateExecutorError(err error) error {

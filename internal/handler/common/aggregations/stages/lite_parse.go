@@ -146,6 +146,15 @@ func liteParseStage(stage *types.Document) error {
 				_, s := into.(string)
 				_, d := into.(*types.Document)
 				if !s && !d {
+					// mongod parses the fields in order.
+					for _, key := range doc.Keys() {
+						if key == "into" {
+							break
+						}
+						if !mergeSpecFields[key] {
+							return fail(handlererrors.ErrIDLUnknownField, fmt.Sprintf("BSON field '$merge.%s' is an unknown field.", key))
+						}
+					}
 					return fail(handlererrors.ErrMergeIntoType,
 						"$merge 'into' field  must be either a string or an object, but found "+handlerparams.AliasFromType(into))
 				}
@@ -229,4 +238,9 @@ func CheckListLocalSessionsSpec(stage *types.Document) error {
 		}
 	}
 	return nil
+}
+
+// mergeSpecFields are the fields of a $merge specification document.
+var mergeSpecFields = map[string]bool{
+	"into": true, "on": true, "let": true, "whenMatched": true, "whenNotMatched": true,
 }

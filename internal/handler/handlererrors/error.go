@@ -1196,6 +1196,33 @@ const (
 	// ErrMergeIntoType indicates a $merge into that is neither a string nor an object.
 	ErrMergeIntoType = ErrorCode(51178) // Location51178
 
+	// ErrMergeIntoEmpty indicates a $merge into that is an empty string.
+	ErrMergeIntoEmpty = ErrorCode(5786800) // Location5786800
+
+	// ErrMergeIntoNoColl indicates a $merge into object without a usable coll.
+	ErrMergeIntoNoColl = ErrorCode(5786801) // Location5786801
+
+	// ErrMergeOnType indicates a $merge on that is neither a string nor an array.
+	ErrMergeOnType = ErrorCode(51186) // Location51186
+
+	// ErrMergeOnEmpty indicates a $merge on array with no fields.
+	ErrMergeOnEmpty = ErrorCode(51187) // Location51187
+
+	// ErrMergeOnElementType indicates a $merge on array element that is not a string.
+	ErrMergeOnElementType = ErrorCode(51134) // Location51134
+
+	// ErrMergeOnDuplicateField indicates a $merge on array naming a field twice.
+	ErrMergeOnDuplicateField = ErrorCode(31465) // Location31465
+
+	// ErrMergeWhenMatchedType indicates a $merge whenMatched that is neither a string nor an array.
+	ErrMergeWhenMatchedType = ErrorCode(51191) // Location51191
+
+	// ErrMergeLetWithoutPipeline indicates $merge let variables with a whenMatched mode.
+	ErrMergeLetWithoutPipeline = ErrorCode(51199) // Location51199
+
+	// ErrMergeLetNew indicates a $merge let defining new as other than $$ROOT.
+	ErrMergeLetNew = ErrorCode(51273) // Location51273
+
 	// ErrChangeStreamSpecType indicates a $changeStream specification that is not an object.
 	ErrChangeStreamSpecType = ErrorCode(6188500) // Location6188500
 
