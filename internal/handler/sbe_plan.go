@@ -48,25 +48,33 @@ func (p sbePlan) runsInSBE() bool {
 }
 
 // classifySBE returns how much of specs, the stages of a pipeline reading the
-// existing collection named collection, mongod runs in SBE. lookups says
-// whether its $lookup stages may run there. queryCollation is the pipeline's
-// collation.
-func classifySBE(ctx context.Context, db backends.Database, collection string, specs []*types.Document, queryCollation *types.Document, lookups bool, isView func(string) bool) sbePlan { //nolint:lll // for readability
+// existing collection named collection, mongod runs in SBE. queryCollation
+// is the pipeline's collation. viewInClassic is stages.ViewStagesInClassic of
+// a pipeline run on a view, whose first stage SBE could run is then the
+// first that it does not.
+func classifySBE(ctx context.Context, db backends.Database, collection string, specs []*types.Document, queryCollation *types.Document, viewInClassic bool, isView func(string) bool) sbePlan { //nolint:lll // for readability
 	if stages.IsExpressMatch(specs) {
 		return sbePlan{}
 	}
 	if ds := findDistinctScanGroup(ctx, db, collection, specs, queryCollation); ds != nil {
 		return sbePlan{distinct: ds}
 	}
+	if viewInClassic {
+		pipeline := make([]any, len(specs))
+		for i, spec := range specs {
+			pipeline[i] = spec
+		}
+		if i := stages.SBEStageIndex(pipeline); i >= 0 {
+			specs = specs[:i]
+		}
+	}
 	specs = countsAsGroups(specs[:sbeCandidateLen(ctx, db, specs, queryCollation)])
 	plan := sbePlan{specs: specs}
 	plan.groups, plan.pushable = stages.TopLevelSBEPrefix(specs, isView)
 	plan.end = plan.groups
-	if lookups {
-		for i := plan.groups; i < plan.pushable; i++ {
-			if specs[i].Command() == "$lookup" {
-				plan.end = i + 1
-			}
+	for i := plan.groups; i < plan.pushable; i++ {
+		if specs[i].Command() == "$lookup" {
+			plan.end = i + 1
 		}
 	}
 	return plan

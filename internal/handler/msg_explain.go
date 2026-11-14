@@ -440,9 +440,9 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 	// derive the pushdown from the view's resolved pipeline (the same leading
 	// $match viewSourceIterator pushes), so the plan reflects a base-collection
 	// index used through the view instead of scanning the view namespace.
-	var viaView, targetIsView bool
+	var viaView, viewInClassic bool
 	if info, ierr := lookupCollectionInfo(connCtx, db, params.Collection); ierr == nil && info != nil && info.IsView {
-		viaView, targetIsView = true, true
+		viaView = true
 		baseName, _, rawStages, rerr := resolveViewChain(connCtx, db, info.Name, info.ViewOn, info.ViewPipeline, nil)
 		if rerr != nil {
 			return nil, rerr
@@ -471,6 +471,7 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 			// A view that reshapes documents runs before the command, so the
 			// command is explained as an aggregate of the view's stages and
 			// its own, as mongod does.
+			viewInClassic = stages.ViewStagesInClassic(rawStages, commandStages(params))
 			combined := append(append([]any{}, rawStages...), commandStages(params)...)
 			params.StagesDocs = mergeLeadingMatches(dropShapingBeforeCount(aggregations.MoveMatchesAhead(combined)))
 			params.Aggregate = true
@@ -599,7 +600,7 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 	if params.Aggregate && !viaView {
 		pipelineDocs = explainedStageDocs(params.StagesDocs)
 		if info, ierr := lookupCollectionInfo(connCtx, db, hintCollection); pipelineDocs != nil && ierr == nil && info != nil {
-			sbe = classifySBE(connCtx, db, hintCollection, pipelineDocs, effColl, !targetIsView, viewChecker(connCtx, db))
+			sbe = classifySBE(connCtx, db, hintCollection, pipelineDocs, effColl, viewInClassic, viewChecker(connCtx, db))
 		}
 	}
 
