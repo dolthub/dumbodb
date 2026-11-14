@@ -191,7 +191,7 @@ func equalsOrHasElement(value, target any, cmp *collation.Comparator) bool {
 		return false
 	}
 	for i := 0; i < arr.Len(); i++ {
-		if elem, ok := must.NotFail(arr.Get(i)).(*types.Array); ok && types.Compare(elem, targetArr) == types.Equal {
+		if elem, ok := must.NotFail(arr.Get(i)).(*types.Array); ok && collCompare(elem, targetArr, cmp) == types.Equal {
 			return true
 		}
 	}
@@ -1403,13 +1403,7 @@ func filterFieldExprAll(doc *types.Document, filterKey, filterSuffix string, fie
 			}
 			continue
 		}
-		if arr, ok := fieldValue.(*types.Array); ok {
-			if !arr.Contains(q) {
-				return false, nil
-			}
-			continue
-		}
-		if types.Compare(fieldValue, q) != types.Equal {
+		if !equalsOrHasElement(fieldValue, q, cmp) {
 			return false, nil
 		}
 	}
@@ -2245,11 +2239,18 @@ func renameIDInFilter(filter *types.Document) *types.Document {
 }
 
 func elemMatchArrayElement(elem *types.Array, filterKey, filterSuffix string, expr *types.Document, cmp *collation.Comparator) (bool, error) {
+	compareElem := func(v any) types.CompareResult {
+		a, b := any(elem), v
+		if cmp != nil {
+			a, b = collArrayKeys(a, b, cmp)
+		}
+		return types.CompareOrder(a, b, types.Ascending)
+	}
 	equalsElem := func(v any) bool {
 		if _, isRegex := v.(types.Regex); isRegex {
 			return false
 		}
-		return types.CompareOrder(elem, v, types.Ascending) == types.Equal
+		return compareElem(v) == types.Equal
 	}
 	for _, op := range expr.Keys() {
 		v := must.NotFail(expr.Get(op))
@@ -2262,8 +2263,8 @@ func elemMatchArrayElement(elem *types.Array, filterKey, filterSuffix string, ex
 		case "$ne":
 			ok = !equalsElem(v)
 		case "$gt", "$gte", "$lt", "$lte":
-			if other, isArray := v.(*types.Array); isArray {
-				c := types.CompareOrder(elem, other, types.Ascending)
+			if _, isArray := v.(*types.Array); isArray {
+				c := compareElem(v)
 				switch op {
 				case "$gt":
 					ok = c == types.Greater

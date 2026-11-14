@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"sync/atomic"
 
+	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
@@ -27,25 +28,39 @@ import (
 // IndexInfo.MatchesPartialFilter closures (e.g. after restart from disk)
 // without importing handler/common (which would create a circular dependency).
 //
-// The registered function takes (doc, filter)  -- same order as
-// common.FilterDocument  -- so it can be passed by value without a wrapper.
-var partialFilterMatcher atomic.Pointer[func(doc, filter *types.Document) (bool, error)]
+// The registered function takes (doc, filter, cmp)  -- same order as
+// common.FilterDocumentColl  -- so it can be passed by value without a wrapper.
+var partialFilterMatcher atomic.Pointer[func(doc, filter *types.Document, cmp *collation.Comparator) (bool, error)]
 
 // RegisterPartialFilterMatcher installs fn as the global predicate used to
 // evaluate partial-index filter expressions. The handler layer must call this
 // once at process init before any backend opens existing data.
-func RegisterPartialFilterMatcher(fn func(doc, filter *types.Document) (bool, error)) {
+func RegisterPartialFilterMatcher(fn func(doc, filter *types.Document, cmp *collation.Comparator) (bool, error)) {
 	partialFilterMatcher.Store(&fn)
 }
 
-// MatchPartialFilter reports whether doc satisfies filter, using the
-// registered predicate. It returns an error if no predicate has been
-// registered, which indicates a misconfigured binary (handler/common was not
-// linked in).
+// MatchPartialFilter reports whether doc satisfies filter under the simple
+// collation, using the registered predicate. It returns an error if no
+// predicate has been registered, which indicates a misconfigured binary
+// (handler/common was not linked in).
 func MatchPartialFilter(doc, filter *types.Document) (bool, error) {
+	return matchPartialFilterColl(doc, filter, nil)
+}
+
+func matchPartialFilterColl(doc, filter *types.Document, cmp *collation.Comparator) (bool, error) {
 	fn := partialFilterMatcher.Load()
 	if fn == nil {
 		return false, fmt.Errorf("backends: partial filter matcher not registered")
 	}
-	return (*fn)(doc, filter)
+	return (*fn)(doc, filter, cmp)
+}
+
+// PartialFilterMembership returns IndexInfo.MatchesPartialFilter for a partial
+// index with filter expression pfe and collation indexCollation: as in mongod,
+// the expression is evaluated under the index's collation.
+func PartialFilterMembership(pfe, indexCollation *types.Document) func(doc *types.Document) (bool, error) {
+	cmp := collation.Parse(indexCollation).Comparator()
+	return func(doc *types.Document) (bool, error) {
+		return matchPartialFilterColl(doc, pfe, cmp)
+	}
 }

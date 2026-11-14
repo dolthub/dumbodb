@@ -18,6 +18,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/commonpath"
 	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // signToResult maps a collator sign (-1/0/+1) to a types.CompareResult.
@@ -32,10 +33,9 @@ func signToResult(n int) types.CompareResult {
 	}
 }
 
-// collCompare compares two values like types.Compare, but compares
-// string-vs-string under cmp when cmp is non-nil. All other type combinations
-// (numbers, arrays, documents, cross-type) fall through to types.Compare so the
-// intricate BSON ordering rules are preserved unchanged.
+// collCompare compares two values like types.Compare, but compares strings,
+// alone or inside arrays, under cmp when cmp is non-nil. Strings inside
+// embedded documents compare bytewise, as collated indexes key them.
 func collCompare(a, b any, cmp *collation.Comparator) types.CompareResult {
 	if cmp != nil {
 		if as, ok := a.(string); ok {
@@ -43,8 +43,35 @@ func collCompare(a, b any, cmp *collation.Comparator) types.CompareResult {
 				return signToResult(cmp.CompareStrings(as, bs))
 			}
 		}
+		a, b = collArrayKeys(a, b, cmp)
 	}
 	return types.Compare(a, b)
+}
+
+// collArrayKeys returns a and b with every string, alone or inside arrays,
+// replaced by its sort key under cmp when either is an array, so array
+// element comparisons follow the collation; otherwise a and b unchanged.
+func collArrayKeys(a, b any, cmp *collation.Comparator) (any, any) {
+	_, aIsArray := a.(*types.Array)
+	_, bIsArray := b.(*types.Array)
+	if !aIsArray && !bIsArray {
+		return a, b
+	}
+	return arrayStringKeys(a, cmp), arrayStringKeys(b, cmp)
+}
+
+func arrayStringKeys(v any, cmp *collation.Comparator) any {
+	switch v := v.(type) {
+	case string:
+		return string(cmp.Key(v))
+	case *types.Array:
+		out := types.MakeArray(v.Len())
+		for i := 0; i < v.Len(); i++ {
+			out.Append(arrayStringKeys(must.NotFail(v.Get(i)), cmp))
+		}
+		return out
+	}
+	return v
 }
 
 // collCompareOrderOp is the collation-aware form of
@@ -58,6 +85,7 @@ func collCompareOrderOp(a, b any, order types.SortType, cmp *collation.Comparato
 				return signToResult(cmp.CompareStrings(as, bs))
 			}
 		}
+		a, b = collArrayKeys(a, b, cmp)
 	}
 	return types.CompareOrderForOperator(a, b, order)
 }

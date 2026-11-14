@@ -820,6 +820,9 @@ func compareIndexOrderKeys(a, b any, order types.SortType, cmp *collation.Compar
 	aStr, aIsStr := a.(string)
 	bStr, bIsStr := b.(string)
 	if cmp == nil || !aIsStr || !bIsStr {
+		if cmp != nil {
+			a, b = collArrayKeys(a, b, cmp)
+		}
 		return types.CompareOrderForSort(a, b, order)
 	}
 	sign := cmp.CompareStrings(aStr, bStr)

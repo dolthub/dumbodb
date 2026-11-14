@@ -18,11 +18,12 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends"
 )
 
-// init wires FilterDocument as both the global partial-index filter matcher (so
+// init wires FilterDocumentColl as the global partial-index filter matcher (so
 // the backend can rebuild IndexInfo.MatchesPartialFilter closures after loading
-// indexes from disk) and the global document-validator matcher (so the backend
-// can enforce validators during a merge), without importing handler/common.
+// indexes from disk) and FilterDocument as the global document-validator
+// matcher (so the backend can enforce validators during a merge), without
+// importing handler/common.
 func init() {
-	backends.RegisterPartialFilterMatcher(FilterDocument)
+	backends.RegisterPartialFilterMatcher(FilterDocumentColl)
 	backends.RegisterValidatorMatcher(FilterDocument)
 }
