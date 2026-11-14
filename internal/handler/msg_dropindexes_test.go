@@ -59,7 +59,7 @@ func TestProcessDropIndexOptions_KeyPattern(t *testing.T) {
 		"text by stored pattern": {pattern: doc("k", int32(1), "_fts", "text", "_ftsx", int32(1)), want: "k_1_t_text_u_text"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			toDrop, dropAll, err := processDropIndexOptions("dropIndexes", "db.c", tc.pattern, existing)
+			toDrop, dropAll, err := processDropIndexOptions("dropIndexes", "db.c", tc.pattern, existing, false)
 			require.False(t, dropAll)
 			if tc.want == "" {
 				var cmdErr *handlererrors.CommandError
