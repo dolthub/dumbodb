@@ -1223,6 +1223,9 @@ const (
 	// ErrMergeLetNew indicates a $merge let defining new as other than $$ROOT.
 	ErrMergeLetNew = ErrorCode(51273) // Location51273
 
+	// ErrMergeModesUnsupported indicates a $merge whenMatched and whenNotMatched pair mongod refuses.
+	ErrMergeModesUnsupported = ErrorCode(51181) // Location51181
+
 	// ErrChangeStreamSpecType indicates a $changeStream specification that is not an object.
 	ErrChangeStreamSpecType = ErrorCode(6188500) // Location6188500
 
