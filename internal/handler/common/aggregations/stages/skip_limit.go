@@ -29,12 +29,13 @@ type skipLimitEntry struct {
 	index int
 }
 
-// OptimizeSkipsAndLimits returns pipeline with its $skip and $limit stages
-// moved ahead of the stages they cannot affect, as mongod optimizes it, so the
-// documents they drop are never evaluated. readsCollection says the pipeline
+// OptimizeSkipsAndLimits returns pipeline with its $skip, $limit and $sample
+// stages moved ahead of the stages they cannot affect, as mongod optimizes it,
+// so the documents they drop are never evaluated. readsCollection says the pipeline
 // reads a collection, whose query layer takes the leading $skip and $limit
-// stages from past every stage that keeps the document count. Only valid $skip
-// and $limit stages move, so the other stages are still parsed in order.
+// stages from past every stage that keeps the document count. Only valid $skip,
+// $limit and $sample stages move, so the other stages are still parsed in
+// order.
 func OptimizeSkipsAndLimits(pipeline []any, readsCollection bool) []any {
 	specs := make([]*types.Document, len(pipeline))
 	for i, v := range pipeline {
@@ -160,7 +161,7 @@ func planSkipsAndLimits(specs []*types.Document, readsCollection bool) []skipLim
 			changed = true
 		}
 	}
-	if bubbleSkipsBeforeTransforms(plan) {
+	for bubbleSkipsBeforeTransforms(plan) || bubbleSamples(plan) {
 		changed = true
 	}
 	if !changed {
@@ -247,6 +248,25 @@ func bubbleSkipsBeforeTransforms(plan []skipLimitEntry) bool {
 			continue
 		}
 		for j := i; j > 0 && transformsEachDocument(plan[j-1].spec); j-- {
+			plan[j-1], plan[j] = plan[j], plan[j-1]
+			changed = true
+		}
+	}
+	return changed
+}
+
+// bubbleSamples moves each $sample ahead of the stages just before it that
+// keep the document count, as mongod does.
+func bubbleSamples(plan []skipLimitEntry) bool {
+	changed := false
+	for i := range plan {
+		if command(plan[i].spec) != "$sample" {
+			continue
+		}
+		if _, err := newSample(plan[i].spec); err != nil {
+			continue
+		}
+		for j := i; j > 0 && keepsDocumentCount(plan[j-1].spec); j-- {
 			plan[j-1], plan[j] = plan[j], plan[j-1]
 			changed = true
 		}
