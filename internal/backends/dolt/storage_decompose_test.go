@@ -185,6 +185,8 @@ func chunkLabel(id string) string {
 		return "DCMT (commit)"
 	case serial.RootValueFileID:
 		return "RTVL (rootval)"
+	case serial.DumboRootValueFileID:
+		return "DBRV (rootval)"
 	case serial.WorkingSetFileID:
 		return "WRST (wset)"
 	case serial.TableFileID:
