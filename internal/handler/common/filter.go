@@ -87,6 +87,8 @@ type FilterContext struct {
 	// written order.
 	clauseOrders map[*types.Array][]int
 	exprs        map[*types.Document]operators.Operator
+	// elementDepth counts the array elements being filtered as documents.
+	elementDepth int
 }
 
 // NewFilterContext returns a context for filtering under cmp with a plan of
@@ -1021,7 +1023,7 @@ func filterFieldOperators(doc *types.Document, filterKey, filterSuffix string, e
 
 		// A clustered collection's _id range stays within MinKey's or
 		// MaxKey's own type, as a clustered mongod scans it.
-		if filterKey != "_id" {
+		if filterKey != "_id" || fc.elementDepth > 0 {
 			if matched, ok := minMaxKeyRange(exprKey, fieldValue, exprValue); ok {
 				if !matched {
 					return false, nil
@@ -2497,78 +2499,19 @@ func filterFieldExprElemMatch(doc *types.Document, filterKey, filterSuffix strin
 	return false, nil
 }
 
+// filterElementDocument filters an array element as a document. Its _id is
+// an ordinary field, so the clustered top-level _id rules in filterFieldExpr
+// do not apply.
+func filterElementDocument(elem, filter *types.Document, fc *FilterContext) (bool, error) {
+	fc.elementDepth++
+	defer func() { fc.elementDepth-- }()
+	return fc.Match(elem, filter)
+}
+
 // elemMatchArrayElement applies the operators of an $elemMatch to an element
 // that is itself an array. As in MongoDB they test the element as a whole
 // value and do not look inside it, except $size and a nested $elemMatch,
 // which apply to arrays.
-// nestedIDKey stands for an embedded document's _id while filtering it. BSON
-// field names cannot hold a NUL byte, so it names no real field.
-const nestedIDKey = "\x00_id"
-
-// filterElementDocument filters an array element as a document. Its _id is an
-// ordinary field, so the element and filter are matched with _id renamed and
-// the clustered top-level _id rules in filterFieldExpr do not apply.
-func filterElementDocument(elem, filter *types.Document, fc *FilterContext) (bool, error) {
-	if !mentionsID(filter) {
-		return fc.Match(elem, filter)
-	}
-	return fc.Match(renameID(elem), renameIDInFilter(filter))
-}
-
-func mentionsID(filter *types.Document) bool {
-	for _, k := range filter.Keys() {
-		switch k {
-		case "_id":
-			return true
-		case "$and", "$or", "$nor":
-			arr, _ := must.NotFail(filter.Get(k)).(*types.Array)
-			for i := 0; arr != nil && i < arr.Len(); i++ {
-				if sub, ok := must.NotFail(arr.Get(i)).(*types.Document); ok && mentionsID(sub) {
-					return true
-				}
-			}
-		}
-	}
-	return false
-}
-
-func renameID(doc *types.Document) *types.Document {
-	out := types.MakeDocument(doc.Len())
-	for _, k := range doc.Keys() {
-		v := must.NotFail(doc.Get(k))
-		if k == "_id" {
-			k = nestedIDKey
-		}
-		out.Set(k, v)
-	}
-	return out
-}
-
-func renameIDInFilter(filter *types.Document) *types.Document {
-	out := types.MakeDocument(filter.Len())
-	for _, k := range filter.Keys() {
-		v := must.NotFail(filter.Get(k))
-		switch k {
-		case "_id":
-			k = nestedIDKey
-		case "$and", "$or", "$nor":
-			if arr, ok := v.(*types.Array); ok {
-				renamed := types.MakeArray(arr.Len())
-				for i := 0; i < arr.Len(); i++ {
-					el := must.NotFail(arr.Get(i))
-					if sub, ok := el.(*types.Document); ok {
-						el = renameIDInFilter(sub)
-					}
-					renamed.Append(el)
-				}
-				v = renamed
-			}
-		}
-		out.Set(k, v)
-	}
-	return out
-}
-
 func elemMatchArrayElement(elem *types.Array, filterKey, filterSuffix string, expr *types.Document, fc *FilterContext) (bool, error) {
 	compareElem := func(v any) types.CompareResult {
 		return collCompareOrder(elem, v, fc.cmp)
