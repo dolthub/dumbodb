@@ -32,7 +32,16 @@ func (h *Handler) aggregateListClusterCatalog(connCtx context.Context, document,
 	if err != nil {
 		return nil, err
 	}
+	entries, err := h.listClusterCatalogEntries(connCtx, spec, dbName)
+	if err != nil {
+		return nil, err
+	}
+	return h.aggregateSourceDocuments(connCtx, document, entries, pipeline, dbName)
+}
 
+// listClusterCatalogEntries returns the documents $listClusterCatalog with
+// spec lists on dbName.
+func (h *Handler) listClusterCatalogEntries(connCtx context.Context, spec *stages.ListClusterCatalogSpec, dbName string) ([]*types.Document, error) {
 	dbNames := []string{dbName}
 	if dbName == "admin" {
 		res, err := h.b.ListDatabases(connCtx, nil)
@@ -75,6 +84,5 @@ func (h *Handler) aggregateListClusterCatalog(connCtx context.Context, document,
 			entries = append(entries, entry)
 		}
 	}
-
-	return h.aggregateSourceDocuments(connCtx, document, entries, pipeline, dbName)
+	return entries, nil
 }

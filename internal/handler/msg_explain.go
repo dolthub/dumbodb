@@ -389,6 +389,9 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 		if err = h.checkExplainable(inner.Command()); err != nil {
 			return nil, err
 		}
+		if res, ok, cerr := h.explainListClusterCatalog(connCtx, document, inner); ok {
+			return res, cerr
+		}
 	}
 
 	params, err := common.GetExplainParams(document, h.L)
