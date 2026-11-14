@@ -699,8 +699,9 @@ func (s *setWindowFields) partitionDocuments(docs []*types.Document) ([][]*types
 	}
 
 	type partEntry struct {
-		key  any
-		docs []*types.Document
+		key    any
+		keyKey any
+		docs   []*types.Document
 	}
 
 	var entries []partEntry
@@ -712,9 +713,10 @@ func (s *setWindowFields) partitionDocuments(docs []*types.Document) ([][]*types
 		}
 
 		found := false
+		keyKey := s.cmp.KeyValue(key)
 
 		for i, entry := range entries {
-			if types.CompareForAggregation(s.cmp.KeyValue(key), s.cmp.KeyValue(entry.key)) == types.Equal {
+			if types.CompareForAggregation(keyKey, entry.keyKey) == types.Equal {
 				entries[i].docs = append(entries[i].docs, doc)
 				found = true
 
@@ -723,7 +725,7 @@ func (s *setWindowFields) partitionDocuments(docs []*types.Document) ([][]*types
 		}
 
 		if !found {
-			entries = append(entries, partEntry{key: key, docs: []*types.Document{doc}})
+			entries = append(entries, partEntry{key: key, keyKey: keyKey, docs: []*types.Document{doc}})
 		}
 	}
 
@@ -1450,17 +1452,19 @@ func applyAccumulator(op string, expression any, window []*types.Document, cmp *
 		return arr, nil
 	case "$addToSet":
 		arr := types.MakeArray(0)
+		var keys []any
 		size := 0
 		for _, v := range values {
 			found := false
-			for i := range arr.Len() {
-				existing := must.NotFail(arr.Get(i))
-				if types.CompareForAggregation(cmp.KeyValue(v), cmp.KeyValue(existing)) == types.Equal {
+			key := cmp.KeyValue(v)
+			for _, existing := range keys {
+				if types.CompareForAggregation(key, existing) == types.Equal {
 					found = true
 					break
 				}
 			}
 			if !found {
+				keys = append(keys, key)
 				if size += types.BSONValueSize(v); size > windowAccumulatorMemoryLimit {
 					return nil, windowMemoryError(op)
 				}
@@ -1499,20 +1503,16 @@ func collectWindowValues(expression any, window []*types.Document) ([]any, error
 
 // minWindowValue returns the minimum value; returns null for empty.
 func minWindowValue(values []any, cmp *collation.Comparator) any {
-	var result any
+	var result, resultKey any
 
 	for _, v := range values {
 		if _, isNull := v.(types.NullType); isNull {
 			continue
 		}
 
-		if result == nil {
-			result = v
-			continue
-		}
-
-		if types.CompareOrder(cmp.KeyValue(v), cmp.KeyValue(result), types.Ascending) == types.Less {
-			result = v
+		key := cmp.KeyValue(v)
+		if result == nil || types.CompareOrder(key, resultKey, types.Ascending) == types.Less {
+			result, resultKey = v, key
 		}
 	}
 
@@ -1525,20 +1525,16 @@ func minWindowValue(values []any, cmp *collation.Comparator) any {
 
 // maxWindowValue returns the maximum value; returns null for empty.
 func maxWindowValue(values []any, cmp *collation.Comparator) any {
-	var result any
+	var result, resultKey any
 
 	for _, v := range values {
 		if _, isNull := v.(types.NullType); isNull {
 			continue
 		}
 
-		if result == nil {
-			result = v
-			continue
-		}
-
-		if types.CompareOrder(cmp.KeyValue(v), cmp.KeyValue(result), types.Ascending) == types.Greater {
-			result = v
+		key := cmp.KeyValue(v)
+		if result == nil || types.CompareOrder(key, resultKey, types.Ascending) == types.Greater {
+			result, resultKey = v, key
 		}
 	}
 

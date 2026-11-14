@@ -155,18 +155,16 @@ func (a *topBottomAccumulator) NewCollated(cmp *collation.Comparator) Accumulati
 	return &topBottomState{spec: a, mem: keptMemory{sbe: a.n.sbe}, cmp: cmp}
 }
 
-// compareKeys returns a comparison of two documents' sort keys in sortBy
-// order, with strings compared under cmp when it is set.
-func (a *topBottomAccumulator) compareKeys(cmp *collation.Comparator) func(x, y any) int {
-	return func(x, y any) int {
-		xs, ys := x.([]any), y.([]any)
-		for i, order := range a.sortTypes {
-			if c := common.CompareSortKeys(cmp.KeyValue(xs[i]), cmp.KeyValue(ys[i]), order); c != types.Equal {
-				return int(c)
-			}
+// compareKeys compares two documents' collation-keyed sort keys in sortBy
+// order.
+func (a *topBottomAccumulator) compareKeys(x, y any) int {
+	xs, ys := x.([]any), y.([]any)
+	for i, order := range a.sortTypes {
+		if c := common.CompareSortKeys(xs[i], ys[i], order); c != types.Equal {
+			return int(c)
 		}
-		return 0
 	}
+	return 0
 }
 
 type topBottomState struct {
@@ -190,7 +188,7 @@ func (s *topBottomState) Accumulate(doc *types.Document) error {
 		if err != nil {
 			return err
 		}
-		s.ranked = newRankedSet(n, s.spec.compareKeys(s.cmp), s.spec.bottom, s.spec.n.sbe)
+		s.ranked = newRankedSet(n, s.spec.compareKeys, s.spec.bottom, s.spec.n.sbe)
 		s.ranked.all = s.all
 	}
 	out, missing, err := s.spec.output.evaluate(doc)
@@ -202,7 +200,7 @@ func (s *topBottomState) Accumulate(doc *types.Document) error {
 	}
 	keys := make([]any, len(s.spec.paths))
 	for i, p := range s.spec.paths {
-		keys[i] = commonpath.SortKeyValue(doc, p)
+		keys[i] = s.cmp.KeyValue(commonpath.SortKeyValue(doc, p))
 	}
 	return s.ranked.add(keys, out, &s.mem, s.spec.name)
 }
