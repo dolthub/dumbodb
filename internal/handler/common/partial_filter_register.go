@@ -15,7 +15,12 @@
 package common
 
 import (
+	"strings"
+
 	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/collation"
+	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // init wires FilterDocumentColl as the global partial-index filter matcher (so
@@ -25,5 +30,60 @@ import (
 // importing handler/common.
 func init() {
 	backends.RegisterPartialFilterMatcher(FilterDocumentColl)
+	backends.RegisterFilterCanonicalizer(canonicalFilterCopy)
+	backends.RegisterPartialFilterCompiler(compilePartialFilter)
 	backends.RegisterValidatorMatcher(FilterDocument)
+}
+
+func canonicalFilterCopy(filter *types.Document) *types.Document {
+	canonical := filter.DeepCopy()
+	CanonicalizeFilter(canonical)
+	return canonical
+}
+
+// compilePartialFilter returns the membership predicate of partial filter
+// pfe. A document being written may not have its keys sorted yet, so when pfe
+// compares embedded documents the document is matched in sorted-key form.
+func compilePartialFilter(pfe *types.Document, cmp *collation.Comparator) func(doc *types.Document) (bool, error) {
+	canonical := canonicalFilterCopy(pfe)
+	sortDoc := comparesEmbeddedDocuments(canonical)
+	return func(doc *types.Document) (bool, error) {
+		if sortDoc {
+			doc = sortedKeys(doc).(*types.Document)
+		}
+		return FilterDocumentColl(doc, canonical, cmp)
+	}
+}
+
+// comparesEmbeddedDocuments reports whether a filter compares a field with a
+// document value, at any depth.
+func comparesEmbeddedDocuments(v any) bool {
+	switch v := v.(type) {
+	case *types.Document:
+		for _, key := range v.Keys() {
+			value := must.NotFail(v.Get(key))
+			if d, ok := value.(*types.Document); ok && !strings.HasPrefix(key, "$") && !isOperatorDocument(d) {
+				return true
+			}
+			if key == "$eq" || key == "$ne" {
+				if _, ok := value.(*types.Document); ok {
+					return true
+				}
+			}
+			if comparesEmbeddedDocuments(value) {
+				return true
+			}
+		}
+	case *types.Array:
+		for i := range v.Len() {
+			elem := must.NotFail(v.Get(i))
+			if _, ok := elem.(*types.Document); ok {
+				return true
+			}
+			if comparesEmbeddedDocuments(elem) {
+				return true
+			}
+		}
+	}
+	return false
 }

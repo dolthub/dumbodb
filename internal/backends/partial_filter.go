@@ -55,11 +55,42 @@ func matchPartialFilterColl(doc, filter *types.Document, cmp *collation.Comparat
 	return (*fn)(doc, filter, cmp)
 }
 
+var filterCanonicalizer atomic.Pointer[func(filter *types.Document) *types.Document]
+
+var partialFilterCompiler atomic.Pointer[func(pfe *types.Document, cmp *collation.Comparator) func(doc *types.Document) (bool, error)]
+
+// RegisterFilterCanonicalizer installs fn, which returns a copy of a filter
+// whose document values have the sorted-key form documents are stored in.
+// The handler layer must call this once at process init.
+func RegisterFilterCanonicalizer(fn func(filter *types.Document) *types.Document) {
+	filterCanonicalizer.Store(&fn)
+}
+
+// RegisterPartialFilterCompiler installs fn, which returns the membership
+// predicate of a partial filter, matching documents whether or not their
+// keys are sorted yet. The handler layer must call this once at process init.
+func RegisterPartialFilterCompiler(fn func(pfe *types.Document, cmp *collation.Comparator) func(doc *types.Document) (bool, error)) {
+	partialFilterCompiler.Store(&fn)
+}
+
+// CanonicalPartialFilter returns pfe in the form that matches stored
+// documents, leaving pfe itself as written for listIndexes.
+func CanonicalPartialFilter(pfe *types.Document) *types.Document {
+	fn := filterCanonicalizer.Load()
+	if fn == nil || pfe == nil {
+		return pfe
+	}
+	return (*fn)(pfe)
+}
+
 // PartialFilterMembership returns IndexInfo.MatchesPartialFilter for a partial
 // index with filter expression pfe and collation indexCollation: as in mongod,
 // the expression is evaluated under the index's collation.
 func PartialFilterMembership(pfe, indexCollation *types.Document) func(doc *types.Document) (bool, error) {
 	cmp := collation.Parse(indexCollation).Comparator()
+	if compile := partialFilterCompiler.Load(); compile != nil {
+		return (*compile)(pfe, cmp)
+	}
 	return func(doc *types.Document) (bool, error) {
 		return matchPartialFilterColl(doc, pfe, cmp)
 	}

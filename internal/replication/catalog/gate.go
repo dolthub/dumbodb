@@ -203,10 +203,7 @@ func preflightIndex(database, collection string, document *types.Document) (back
 			if !ok {
 				return backends.IndexInfo{}, invalidOption(database, collection, name, option, "must be a document")
 			}
-			filter := index.PartialFilterExpression
-			index.MatchesPartialFilter = func(document *types.Document) (bool, error) {
-				return backends.MatchPartialFilter(document, filter)
-			}
+			index.MatchesPartialFilter = backends.PartialFilterMembership(index.PartialFilterExpression, nil)
 		case "collation":
 			collation, ok := value.(*types.Document)
 			if !ok || !simpleCollation(collation) {
