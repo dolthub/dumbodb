@@ -559,7 +559,7 @@ func processPullAllArrayUpdateExpression(command string, doc *types.Document, ke
 		for i := array.Len() - 1; i >= 0; i-- {
 			arrayElem := must.NotFail(array.Get(i))
 
-			if types.Compare(arrayElem, pullElem) == types.Equal {
+			if types.CompareForAggregation(arrayElem, pullElem) == types.Equal {
 				array.Remove(i)
 				changed = true
 			}
@@ -618,7 +618,7 @@ func processPullArrayUpdateExpression(command string, doc *types.Document, key s
 				return false, lazyerrors.Error(err)
 			}
 		} else {
-			match = types.Compare(elem, pullVal) == types.Equal
+			match = types.CompareForAggregation(elem, pullVal) == types.Equal
 		}
 
 		if match {

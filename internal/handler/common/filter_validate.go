@@ -138,6 +138,9 @@ func validateFieldPredicate(empty *types.Document, key string, value any, cmp *c
 				return err
 			}
 		case op == "$elemMatch":
+			if err := checkElemMatchTopLevelOnly(inner); err != nil {
+				return err
+			}
 			if err := ValidateFilter(inner, cmp); err != nil {
 				return err
 			}

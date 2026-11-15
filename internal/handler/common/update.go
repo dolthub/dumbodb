@@ -1659,13 +1659,46 @@ func validatePullCondition(condition *types.Document) error {
 			"$pull",
 		)
 	}
-	if isFieldOperatorExpression(condition) {
-		return ValidateFilter(must.NotFail(types.NewDocument("v", condition)), nil)
-	}
 	if err := checkPullQueryFeatures(condition); err != nil {
 		return err
 	}
+	if containsGeoNearOperator(condition) {
+		return handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrGeoNearNotAllowedInContext, GeoNearNotAllowedMsg, "$pull",
+		)
+	}
+	if isFieldOperatorExpression(condition) {
+		return ValidateFilter(must.NotFail(types.NewDocument("v", condition)), nil)
+	}
 	return ValidateFilter(condition, nil)
+}
+
+// containsGeoNearOperator reports whether a query uses $near, $nearSphere or
+// $geoNear at any depth with an operand MongoDB would go on to parse.
+func containsGeoNearOperator(v any) bool {
+	switch v := v.(type) {
+	case *types.Document:
+		for _, key := range v.Keys() {
+			value := must.NotFail(v.Get(key))
+			switch key {
+			case "$near", "$nearSphere", "$geoNear":
+				switch value.(type) {
+				case *types.Document, *types.Array:
+					return true
+				}
+			}
+			if containsGeoNearOperator(value) {
+				return true
+			}
+		}
+	case *types.Array:
+		for i := range v.Len() {
+			if containsGeoNearOperator(must.NotFail(v.Get(i))) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // checkPullQueryFeatures rejects the query features mongod does not allow in
@@ -1673,9 +1706,9 @@ func validatePullCondition(condition *types.Document) error {
 func checkPullQueryFeatures(query *types.Document) error {
 	for _, key := range query.Keys() {
 		switch key {
-		case "$expr":
+		case "$expr", "$jsonSchema":
 			return handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrQueryFeatureNotAllowed, "$expr is not allowed in this context", "$pull",
+				handlererrors.ErrQueryFeatureNotAllowed, key+" is not allowed in this context", "$pull",
 			)
 		case "$text", "$where":
 			return handlererrors.NewCommandErrorMsgWithArgument(
@@ -1694,11 +1727,6 @@ func checkPullQueryFeatures(query *types.Document) error {
 				}
 			}
 		}
-	}
-	if FindGeoSortKey(query) != nil {
-		return handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrGeoNearNotAllowedInContext, GeoNearNotAllowedMsg, "$pull",
-		)
 	}
 	return nil
 }
