@@ -55,12 +55,9 @@ func expandPositionalOps(key string, doc *types.Document, filter *types.Document
 
 			if identifier == "" {
 				// $[]  -- all positional
-				arr, err := getArrayByPath(doc, arrayPath)
+				arr, err := arrayForUpdateByPath(doc, arrayPath)
 				if err != nil {
-					return nil, lazyerrors.Error(err)
-				}
-				if arr == nil {
-					return nil, nil
+					return nil, err
 				}
 				result := make([]string, arr.Len())
 				for j := range arr.Len() {
@@ -73,12 +70,9 @@ func expandPositionalOps(key string, doc *types.Document, filter *types.Document
 			}
 
 			// $[identifier]  -- filtered positional
-			arr, err := getArrayByPath(doc, arrayPath)
+			arr, err := arrayForUpdateByPath(doc, arrayPath)
 			if err != nil {
-				return nil, lazyerrors.Error(err)
-			}
-			if arr == nil {
-				return nil, nil
+				return nil, err
 			}
 			indices, err := findFilteredIndices(arr, identifier, arrayFilters)
 			if err != nil {
@@ -134,6 +128,27 @@ func getArrayByPath(doc *types.Document, path string) (*types.Array, error) {
 	arr, ok := val.(*types.Array)
 	if !ok {
 		return nil, nil
+	}
+
+	return arr, nil
+}
+
+// arrayForUpdateByPath returns the array a $[] or $[identifier] path element
+// updates, with mongod's error when the path is missing or not an array.
+func arrayForUpdateByPath(doc *types.Document, path string) (*types.Array, error) {
+	p, err := types.NewPathFromString(path)
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+
+	val, err := doc.GetByPath(p)
+	if err != nil {
+		return nil, fmt.Errorf("The path '%s' must exist in the document in order to apply array updates.", path)
+	}
+
+	arr, ok := val.(*types.Array)
+	if !ok {
+		return nil, fmt.Errorf("Cannot apply array updates to non-array element %s: %s", p.Suffix(), types.FormatAnyValue(val))
 	}
 
 	return arr, nil
