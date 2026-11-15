@@ -162,9 +162,13 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 			modified, err = processReplacementDoc(cmd, doc, param.Update)
 		} else {
 			mutations = collectSimpleFieldMutations(param.Update)
+			var dollarBefore map[string]any
+			if !upsert {
+				dollarBefore = dollarPrefixedFieldsBefore(doc, param.Update)
+			}
 			modified, err = processUpdateOperator(cmd, doc, param.Update, upsert, param.Filter, param.ArrayFilters, collation.Parse(param.Collation).Comparator())
-			if err == nil && modified && !upsert {
-				err = checkDollarPrefixedUpdatePaths(cmd, param.Update)
+			if err == nil && modified && dollarBefore != nil {
+				err = checkDollarPrefixedUpdatePaths(cmd, param.Update, dollarBefore, doc)
 			}
 		}
 
@@ -247,37 +251,97 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 	}
 }
 
-// checkDollarPrefixedUpdatePaths rejects an update operator that writes a
-// top-level field whose name starts with '$'. mongod checks it only when it
-// modifies a stored document, not when it inserts an upserted one.
-func checkDollarPrefixedUpdatePaths(command string, update *types.Document) error {
-	for _, op := range update.Keys() {
-		if op == "$unset" {
-			continue
+// dollarPrefixWriters are the update operators whose write of a top-level
+// field named with a '$' mongod refuses; $unset, $pop, $pull and $pullAll may
+// change one, and $setOnInsert applies only to an inserted document, which
+// mongod does not check.
+var dollarPrefixWriters = map[string]bool{
+	"$set": true, "$inc": true, "$mul": true, "$min": true, "$max": true, "$currentDate": true,
+	"$bit": true, "$push": true, "$addToSet": true, "$rename": true,
+}
+
+// dollarUpdateTarget returns the path an operator of dollarPrefixWriters writes
+// for the field key of its operand, and whether its top-level element starts
+// with '$'.
+func dollarUpdateTarget(op string, fields *types.Document, key string) (string, bool) {
+	target := key
+	if op == "$rename" {
+		to, isString := must.NotFail(fields.Get(key)).(string)
+		if !isString {
+			return "", false
 		}
+		target = to
+	}
+	return target, strings.HasPrefix(target, "$")
+}
+
+// dollarPrefixedFieldsBefore returns the stored values of the top-level fields
+// named with a '$' that update writes, a missing field mapping to nil, or nil
+// when it writes none.
+func dollarPrefixedFieldsBefore(doc, update *types.Document) map[string]any {
+	var before map[string]any
+	for _, op := range update.Keys() {
 		fields, ok := must.NotFail(update.Get(op)).(*types.Document)
-		if !ok {
+		if !ok || !dollarPrefixWriters[op] {
 			continue
 		}
 		for _, key := range fields.Keys() {
-			target := key
-			if op == "$rename" {
-				if to, isString := must.NotFail(fields.Get(key)).(string); isString {
-					target = to
-				}
+			target, dollar := dollarUpdateTarget(op, fields, key)
+			if !dollar {
+				continue
+			}
+			if before == nil {
+				before = map[string]any{}
 			}
 			top, _, _ := strings.Cut(target, ".")
-			if strings.HasPrefix(top, "$") {
-				return NewUpdateError(
-					handlererrors.ErrDollarPrefixedFieldName,
-					fmt.Sprintf(
-						"The dollar ($) prefixed field '%[1]s' in '%[1]s' is not allowed in the context of an update's "+
-							"replacement document. Consider using an aggregation pipeline with $replaceWith.",
-						top,
-					),
-					command,
-				)
+			v, _ := doc.Get(top)
+			// Operators such as $push change a stored array in place.
+			switch composite := v.(type) {
+			case *types.Document:
+				v = composite.DeepCopy()
+			case *types.Array:
+				v = composite.DeepCopy()
 			}
+			before[top] = v
+		}
+	}
+	return before
+}
+
+// checkDollarPrefixedUpdatePaths rejects an update that creates a top-level
+// field named with a '$', or replaces one with a different value or by a
+// $rename. mongod checks
+// it only when it modifies a stored document, not when it inserts an upserted
+// one; a write below an existing field, such as "$x.y", is allowed.
+func checkDollarPrefixedUpdatePaths(command string, update *types.Document, before map[string]any, after *types.Document) error {
+	for _, op := range update.Keys() {
+		fields, ok := must.NotFail(update.Get(op)).(*types.Document)
+		if !ok || !dollarPrefixWriters[op] {
+			continue
+		}
+		for _, key := range fields.Keys() {
+			target, dollar := dollarUpdateTarget(op, fields, key)
+			if !dollar {
+				continue
+			}
+			top, _, dotted := strings.Cut(target, ".")
+			old := before[top]
+			if dotted && old != nil {
+				continue
+			}
+			// A $rename target is replaced even by an equal value.
+			if newValue, _ := after.Get(top); op != "$rename" && old != nil && newValue != nil && types.Identical(old, newValue) {
+				continue
+			}
+			return NewUpdateError(
+				handlererrors.ErrDollarPrefixedFieldName,
+				fmt.Sprintf(
+					"The dollar ($) prefixed field '%[1]s' in '%[1]s' is not allowed in the context of an update's "+
+						"replacement document. Consider using an aggregation pipeline with $replaceWith.",
+					top,
+				),
+				command,
+			)
 		}
 	}
 	return nil
@@ -1933,6 +1997,10 @@ func validateOperatorKeys(command string, docs ...*types.Document) error {
 				)
 			}
 
+			if err := checkFirstPathElement(command, key); err != nil {
+				return err
+			}
+
 			err = types.IsConflictPath(visitedPaths, nextPath)
 			var pathErr *types.PathError
 
@@ -1957,6 +2025,27 @@ func validateOperatorKeys(command string, docs ...*types.Document) error {
 		}
 	}
 
+	return nil
+}
+
+// checkFirstPathElement refuses an update path whose first element is a
+// positional '$' or an array filter identifier, as mongod does while parsing.
+func checkFirstPathElement(command, path string) error {
+	first, _, _ := strings.Cut(path, ".")
+	switch {
+	case first == "$":
+		return NewUpdateError(
+			handlererrors.ErrBadValue,
+			fmt.Sprintf("Cannot have positional (i.e. '$') element in the first position in path '%s'", path),
+			command,
+		)
+	case strings.HasPrefix(first, "$[") && strings.HasSuffix(first, "]"):
+		return NewUpdateError(
+			handlererrors.ErrBadValue,
+			fmt.Sprintf("Cannot have array filter identifier (i.e. '$[<id>]') element in the first position in path '%s'", path),
+			command,
+		)
+	}
 	return nil
 }
 
