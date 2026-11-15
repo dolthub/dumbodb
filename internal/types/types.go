@@ -69,7 +69,7 @@ var ErrReplyTooLarge = errors.New("reply would exceed the maximum BSON object si
 const MaxSafeDouble = float64(1<<53 - 1) // 52bit mantissa max value = 9007199254740991
 
 type ScalarType interface {
-	float64 | string | Binary | ObjectID | bool | time.Time | NullType | Regex | int32 | Timestamp | int64 | Decimal128 | MinKeyType | MaxKeyType | UndefinedType
+	float64 | string | Binary | ObjectID | bool | time.Time | NullType | Regex | int32 | Timestamp | int64 | Decimal128 | MinKeyType | MaxKeyType | UndefinedType | Symbol | JavaScript
 }
 
 // CompositeType represents composite type - *Document or *Array.
@@ -101,7 +101,7 @@ func assertType(value any) {
 	switch value := value.(type) {
 	case *Document, *Array:
 		return
-	case float64, string, Binary, ObjectID, bool, time.Time, NullType, Regex, int32, Timestamp, int64, Decimal128, MinKeyType, MaxKeyType, UndefinedType:
+	case float64, string, Binary, ObjectID, bool, time.Time, NullType, Regex, int32, Timestamp, int64, Decimal128, MinKeyType, MaxKeyType, UndefinedType, Symbol, JavaScript:
 		return
 	case nil:
 		panic("types: unexpected nil type")
@@ -117,7 +117,7 @@ func isScalar(value any) bool {
 	assertType(value)
 
 	switch value.(type) {
-	case float64, string, Binary, ObjectID, bool, time.Time, NullType, Regex, int32, Timestamp, int64, Decimal128, MinKeyType, MaxKeyType, UndefinedType:
+	case float64, string, Binary, ObjectID, bool, time.Time, NullType, Regex, int32, Timestamp, int64, Decimal128, MinKeyType, MaxKeyType, UndefinedType, Symbol, JavaScript:
 		return true
 	}
 
@@ -195,6 +195,10 @@ func deepCopy(value any) any {
 	case MaxKeyType:
 		return value
 	case UndefinedType:
+		return value
+	case Symbol:
+		return value
+	case JavaScript:
 		return value
 
 	default:

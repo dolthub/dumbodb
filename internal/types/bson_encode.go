@@ -130,9 +130,7 @@ func appendBSONValue(dst []byte, tagAt int, v any) []byte {
 		dst = binary.LittleEndian.AppendUint64(dst, math.Float64bits(v))
 	case string:
 		tag = 0x02
-		dst = binary.LittleEndian.AppendUint32(dst, uint32(len(v)+1))
-		dst = append(dst, v...)
-		dst = append(dst, 0)
+		dst = appendBSONString(dst, v)
 	case Binary:
 		tag = 0x05
 		dst = binary.LittleEndian.AppendUint32(dst, uint32(len(v.B)))
@@ -174,6 +172,12 @@ func appendBSONValue(dst []byte, tagAt int, v any) []byte {
 		tag = 0x13
 		dst = binary.LittleEndian.AppendUint64(dst, v.L)
 		dst = binary.LittleEndian.AppendUint64(dst, v.H)
+	case Symbol:
+		tag = 0x0e
+		dst = appendBSONString(dst, string(v))
+	case JavaScript:
+		tag = 0x0d
+		dst = appendBSONString(dst, string(v))
 	case MinKeyType:
 		tag = 0xff
 	case MaxKeyType:
@@ -183,4 +187,10 @@ func appendBSONValue(dst []byte, tagAt int, v any) []byte {
 	}
 	dst[tagAt] = tag
 	return dst
+}
+
+func appendBSONString(dst []byte, s string) []byte {
+	dst = binary.LittleEndian.AppendUint32(dst, uint32(len(s)+1))
+	dst = append(dst, s...)
+	return append(dst, 0)
 }

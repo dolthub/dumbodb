@@ -42,6 +42,7 @@ const (
 	dateDataType
 	timestampDataType
 	regexDataType
+	javaScriptDataType
 	maxKeyDataType
 )
 
@@ -61,8 +62,10 @@ func detectDataType(value any) compareTypeOrderResult {
 			return nanDataType
 		}
 		return numbersDataType
-	case string:
+	case string, Symbol:
 		return stringDataType
+	case JavaScript:
+		return javaScriptDataType
 	case Binary:
 		return binDataType
 	case ObjectID:

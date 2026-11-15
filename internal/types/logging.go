@@ -112,6 +112,10 @@ func slogValue(v any, depth int) slog.Value {
 
 	case Decimal128:
 		return slog.StringValue(fmt.Sprintf("Decimal128(%d, %d)", v.H, v.L))
+	case Symbol:
+		return slog.StringValue("Symbol(" + string(v) + ")")
+	case JavaScript:
+		return slog.StringValue("Code(" + string(v) + ")")
 	case MinKeyType:
 		return slog.StringValue("MinKey")
 	case MaxKeyType:

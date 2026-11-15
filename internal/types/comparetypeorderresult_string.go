@@ -22,12 +22,13 @@ func _() {
 	_ = x[dateDataType-12]
 	_ = x[timestampDataType-13]
 	_ = x[regexDataType-14]
-	_ = x[maxKeyDataType-15]
+	_ = x[javaScriptDataType-15]
+	_ = x[maxKeyDataType-16]
 }
 
-const _compareTypeOrderResult_name = "minKeyDataTypeundefinedDataTypenullDataTypenanDataTypenumbersDataTypestringDataTypedocumentDataTypearrayDataTypebinDataTypeobjectIDDataTypebooleanDataTypedateDataTypetimestampDataTyperegexDataTypemaxKeyDataType"
+const _compareTypeOrderResult_name = "minKeyDataTypeundefinedDataTypenullDataTypenanDataTypenumbersDataTypestringDataTypedocumentDataTypearrayDataTypebinDataTypeobjectIDDataTypebooleanDataTypedateDataTypetimestampDataTyperegexDataTypejavaScriptDataTypemaxKeyDataType"
 
-var _compareTypeOrderResult_index = [...]uint8{0, 14, 31, 43, 54, 69, 83, 99, 112, 123, 139, 154, 166, 183, 196, 210}
+var _compareTypeOrderResult_index = [...]uint8{0, 14, 31, 43, 54, 69, 83, 99, 112, 123, 139, 154, 166, 183, 196, 214, 228}
 
 func (i compareTypeOrderResult) String() string {
 	idx := int(i) - 1
