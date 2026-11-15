@@ -758,7 +758,7 @@ func (b *Backend) DropDatabase(ctx context.Context, params *backends.DropDatabas
 		return err
 	}
 
-	if err := b.closeDroppedDatabase(ctx, params.Name, db); err != nil {
+	if err := b.closeDroppedDatabase(ctx, params.Name, db, params.CloseIterators); err != nil {
 		b.mu.Lock()
 		defer b.mu.Unlock()
 		b.abortDropLocked(params.Name, db)
@@ -808,10 +808,11 @@ func (b *Backend) abortDropLocked(name string, db *dbState) {
 }
 
 // closeDroppedDatabase closes a database detached by beginDropLocked once no
-// command that could still hold it is running. It fails, leaving the store
-// open, only when ctx ends first. The caller must not hold b.mu: the commands
-// it waits for may need it.
-func (b *Backend) closeDroppedDatabase(ctx context.Context, name string, db *dbState) error {
+// command that could still hold it is running, and after closeIterators, when
+// set, has closed the iterators that outlive commands. It fails, leaving the
+// store open, only when ctx ends first. The caller must not hold b.mu: the
+// commands it waits for may need it.
+func (b *Backend) closeDroppedDatabase(ctx context.Context, name string, db *dbState, closeIterators func(string)) error {
 	// Forget the cached sqle.Database before closing the store it reads.
 	b.provider.forgetDatabase(name)
 	if db == nil {
@@ -819,6 +820,11 @@ func (b *Backend) closeDroppedDatabase(ctx context.Context, name string, db *dbS
 	}
 	if err := b.waitForCommandsInFlight(ctx); err != nil {
 		return err
+	}
+	// No command started since the wait can reach this store, so no new
+	// iterator over it can appear.
+	if closeIterators != nil {
+		closeIterators(name)
 	}
 	db.closeMu.Lock()
 	defer db.closeMu.Unlock()

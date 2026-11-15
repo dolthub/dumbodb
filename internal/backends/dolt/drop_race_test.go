@@ -31,8 +31,10 @@ import (
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
+	"github.com/dolthub/dumbodb/internal/clientconn/cursor"
 	"github.com/dolthub/dumbodb/internal/sqlctx"
 	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/iterator"
 )
 
 // Dropping a database while other connections write to it, commit, read it and
@@ -259,4 +261,77 @@ func TestDropDatabaseCanceledWhileWaitingKeepsTheDatabase(t *testing.T) {
 	require.NoError(t, db.CreateCollection(readerCtx, &backends.CreateCollectionParams{Name: "more"}))
 
 	require.NoError(t, be.DropDatabase(dropperCtx, &backends.DropDatabaseParams{Name: dbName}))
+}
+
+// An iterator that outlives the command that opened it, as a cursor's does,
+// is not covered by the drop's wait for commands in flight. The drop must have
+// it closed while the store can still serve it, so a later getMore ends the
+// cursor instead of reading a closed store.
+func TestDropDatabaseClosesIteratorsBeforeTheStore(t *testing.T) {
+	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, 0, 0)
+	require.NoError(t, err)
+	t.Cleanup(be.Close)
+
+	const dbName = "cursored"
+	readerCtx, readerCI := ctxWithSessionAs(t, be, "drop-iter-reader", "")
+	dropperCtx, dropperCI := ctxWithSessionAs(t, be, "drop-iter-dropper", "")
+	readerShadow, _ := readerCI.CachedShadow()
+	dropperShadow, _ := dropperCI.CachedShadow()
+
+	db, err := be.Database(dbName)
+	require.NoError(t, err)
+	require.NoError(t, db.CreateCollection(readerCtx, &backends.CreateCollectionParams{Name: "items"}))
+	coll, err := db.Collection("items")
+	require.NoError(t, err)
+	sess := sessionFromContext(readerCtx)
+	_, err = sess.StartTransaction(sqlctx.Wrap(readerCtx, sess), sql.ReadWrite)
+	require.NoError(t, err)
+	docs := make([]*types.Document, 3)
+	for i := range docs {
+		docs[i], err = types.NewDocument("_id", int32(i))
+		require.NoError(t, err)
+	}
+	_, err = coll.InsertAll(readerCtx, &backends.InsertAllParams{Docs: docs})
+	require.NoError(t, err)
+	require.NoError(t, be.OnTransactionCommit(readerCtx, conninfo.Get(readerCtx).Owner()))
+
+	registry := cursor.NewRegistry(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	t.Cleanup(registry.Close)
+	var cur *cursor.Cursor
+	require.NoError(t, readerShadow.Use(time.Now(), func(*dsess.DoltSession) error {
+		res, err := coll.Query(readerCtx, &backends.QueryParams{})
+		require.NoError(t, err)
+		cur = registry.NewCursor(context.Background(), res.Iter, &cursor.NewParams{
+			Type: cursor.Normal, DB: dbName + "@main", Collection: "items",
+		})
+		_, doc, err := cur.Next()
+		require.NoError(t, err)
+		require.NotNil(t, doc)
+		return nil
+	}))
+
+	state, err := be.getOrOpenDB(readerCtx, dbName, false)
+	require.NoError(t, err)
+	root, err := state.cs.Root(readerCtx)
+	require.NoError(t, err)
+
+	closedIterators := false
+	require.NoError(t, dropperShadow.Use(time.Now(), func(*dsess.DoltSession) error {
+		return be.DropDatabase(dropperCtx, &backends.DropDatabaseParams{
+			Name: dbName,
+			CloseIterators: func(name string) {
+				require.Equal(t, dbName, name)
+				_, err := state.cs.Get(readerCtx, root)
+				require.NoError(t, err, "iterators must be closed while the store is still open")
+				for _, c := range registry.All() {
+					registry.CloseAndRemove(c)
+				}
+				closedIterators = true
+			},
+		})
+	}))
+	require.True(t, closedIterators, "the drop must close the iterators over the database")
+
+	_, _, err = cur.Next()
+	require.ErrorIs(t, err, iterator.ErrIteratorDone, "a getMore after the drop must end the cursor")
 }

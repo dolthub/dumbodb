@@ -91,7 +91,7 @@ func (b *Backend) backupRestore(ctx context.Context, params *backends.BackupPara
 		return nil, fmt.Errorf("dumboBackup restore: %w", err)
 	}
 
-	if err = b.installRestoredDatabase(ctx, stageDir, target, params.Force); err != nil {
+	if err = b.installRestoredDatabase(ctx, stageDir, target, params.Force, params.CloseIterators); err != nil {
 		return nil, err
 	}
 	renamed = true
@@ -173,7 +173,7 @@ func stageRestore(ctx context.Context, backupDB *doltdb.DoltDB, stageDir, dataDi
 // first dropping an existing database of that name when force is set. No
 // request can create dbName in between: b.mu is held, except while the dropped
 // store closes, when dbName is marked as being dropped.
-func (b *Backend) installRestoredDatabase(ctx context.Context, stageDir, dbName string, force bool) error {
+func (b *Backend) installRestoredDatabase(ctx context.Context, stageDir, dbName string, force bool, closeIterators func(string)) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -196,7 +196,7 @@ func (b *Backend) installRestoredDatabase(ctx context.Context, stageDir, dbName 
 			return fmt.Errorf("dumboBackup restore: replacing %q: %w", dbName, err)
 		}
 		b.mu.Unlock()
-		closeErr := b.closeDroppedDatabase(ctx, dbName, db)
+		closeErr := b.closeDroppedDatabase(ctx, dbName, db, closeIterators)
 		b.mu.Lock()
 		if closeErr != nil {
 			b.abortDropLocked(dbName, db)

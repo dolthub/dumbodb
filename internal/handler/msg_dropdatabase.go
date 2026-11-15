@@ -65,19 +65,9 @@ func (h *Handler) MsgDropDatabase(connCtx context.Context, msg *wire.OpMsg) (*wi
 		)
 	}
 
-	// Most backends would block on `DropDatabase` below otherwise.
-	//
-	// There is a race condition: another client could create a new cursor for that database
-	// after we closed all of them, but before we drop the database itself.
-	// In that case, we expect the client to wait or to retry the operation.
-	for _, c := range h.cursors.All() {
-		if c.DB == dbName {
-			h.cursors.CloseAndRemove(c)
-		}
-	}
-
 	err = h.b.DropDatabase(connCtx, &backends.DropDatabaseParams{
-		Name: dbName,
+		Name:           dbName,
+		CloseIterators: h.closeDatabaseCursors,
 	})
 
 	res := must.NotFail(types.NewDocument())
@@ -98,4 +88,13 @@ func (h *Handler) MsgDropDatabase(connCtx context.Context, msg *wire.OpMsg) (*wi
 	return documentOpMsg(
 		res,
 	)
+}
+
+// closeDatabaseCursors closes every cursor reading dbName, on any branch.
+func (h *Handler) closeDatabaseCursors(dbName string) {
+	for _, c := range h.cursors.All() {
+		if base, _ := backends.SplitEncodedDBName(c.DB); base == dbName {
+			h.cursors.CloseAndRemove(c)
+		}
+	}
 }
