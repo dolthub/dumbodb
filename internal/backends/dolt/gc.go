@@ -201,6 +201,10 @@ func (b *Backend) DumboDBGC(ctx context.Context, params *backends.GCParams) (*ba
 		return nil, backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
 			fmt.Errorf("DumboDBGC: database %q does not exist", baseName))
 	}
+	// While parked at its safepoint this command counts as idle to a drop, so
+	// hold the store open explicitly.
+	state.closeMu.RLock()
+	defer state.closeMu.RUnlock()
 
 	mode := strings.ToLower(strings.TrimSpace(params.Mode))
 	if mode == "" {

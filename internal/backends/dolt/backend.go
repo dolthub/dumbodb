@@ -127,8 +127,11 @@ type dbState struct {
 	backend *Backend // back-pointer; lets helpers read backend-level config
 	name    string   // user-visible db name; needed to build qualified names for dsess
 
-	mu    sync.RWMutex
-	dbDir string
+	mu sync.RWMutex
+	// closeMu is held shared by work on the store that a drop's wait for
+	// commands in flight does not cover; the drop holds it to close the store.
+	closeMu sync.RWMutex
+	dbDir   string
 
 	cs *nbs.GenerationalNBS
 	ns tree.NodeStore
@@ -198,9 +201,8 @@ type Backend struct {
 	// Dolt's session calls back into lookupDbStateForDsess from under both.
 	mu  sync.RWMutex
 	dbs map[string]*dbState // dbName -> dbState
-	// dropping holds the names being dropped. Each channel closes when its
-	// drop finishes; opening the name waits for it.
-	dropping map[string]chan struct{}
+	// dropping holds the names being dropped; opening one is refused.
+	dropping map[string]struct{}
 	branchMu sync.Mutex
 
 	// configURLMu serializes registering a remote or backup URL, so the
@@ -441,7 +443,7 @@ func newBackend(dataDir string, l *slog.Logger, autoCommit bool, sessionTimeout,
 		l:               l,
 		autoCommit:      autoCommit,
 		dbs:             make(map[string]*dbState),
-		dropping:        make(map[string]chan struct{}),
+		dropping:        make(map[string]struct{}),
 		docLocks:        make(map[string]*DocLockManager),
 		sweeperStop:     make(chan struct{}),
 		sweeperDone:     make(chan struct{}),
@@ -744,8 +746,8 @@ func (b *Backend) ListDatabases(ctx context.Context, params *backends.ListDataba
 	return &backends.ListDatabasesResult{Databases: dbs}, nil
 }
 
-// DropDatabase soft-deletes a database. A write in flight on it either
-// finishes before the store closes or fails because the database is gone.
+// DropDatabase soft-deletes a database. Commands already running when the
+// drop starts finish before the store closes; later ones find no database.
 func (b *Backend) DropDatabase(ctx context.Context, params *backends.DropDatabaseParams) error {
 	defer b.planCache.clearPrefix(planCacheDBPrefix(params.Name))
 
@@ -756,18 +758,23 @@ func (b *Backend) DropDatabase(ctx context.Context, params *backends.DropDatabas
 		return err
 	}
 
-	b.closeDroppedDatabase(params.Name, db)
+	if err := b.closeDroppedDatabase(ctx, params.Name, db); err != nil {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		b.abortDropLocked(params.Name, db)
+		return fmt.Errorf("dropping database %q: %w", params.Name, err)
+	}
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	defer b.endDropLocked(params.Name)
+	defer delete(b.dropping, params.Name)
 	return b.preserveDroppedDirLocked(params.Name)
 }
 
 // beginDropLocked removes name from the open databases and marks it as being
-// dropped, so nothing reopens its directory until endDropLocked. It returns the
-// open dbState, or nil when the database exists only on disk. The caller holds
-// b.mu and must release it before closeDroppedDatabase.
+// dropped, so nothing reopens its directory until the drop ends. It returns
+// the open dbState, or nil when the database exists only on disk. The caller
+// holds b.mu and must release it before closeDroppedDatabase.
 func (b *Backend) beginDropLocked(name string) (*dbState, error) {
 	if !backends.ValidDatabaseDirName(name) {
 		return nil, backends.NewError(backends.ErrorCodeDatabaseNameIsInvalid, fmt.Errorf("invalid database name %q", name))
@@ -786,25 +793,52 @@ func (b *Backend) beginDropLocked(name string) (*dbState, error) {
 		return nil, notFound
 	}
 
-	b.dropping[name] = make(chan struct{})
+	b.dropping[name] = struct{}{}
 	db := b.dbs[name]
 	delete(b.dbs, name)
 	return db, nil
 }
 
-// closeDroppedDatabase closes a database detached by beginDropLocked. The
-// caller must not hold b.mu: closing waits for db.mu and dbCacheMu, whose
-// holders may be waiting for b.mu.
-func (b *Backend) closeDroppedDatabase(name string, db *dbState) {
+// abortDropLocked undoes beginDropLocked. The caller holds b.mu.
+func (b *Backend) abortDropLocked(name string, db *dbState) {
+	if db != nil {
+		b.dbs[name] = db
+	}
+	delete(b.dropping, name)
+}
+
+// closeDroppedDatabase closes a database detached by beginDropLocked once no
+// command that could still hold it is running. It fails, leaving the store
+// open, only when ctx ends first. The caller must not hold b.mu: the commands
+// it waits for may need it.
+func (b *Backend) closeDroppedDatabase(ctx context.Context, name string, db *dbState) error {
 	// Forget the cached sqle.Database before closing the store it reads.
 	b.provider.forgetDatabase(name)
 	if db == nil {
-		return
+		return nil
 	}
+	if err := b.waitForCommandsInFlight(ctx); err != nil {
+		return err
+	}
+	db.closeMu.Lock()
+	defer db.closeMu.Unlock()
 	db.mu.Lock()
+	defer db.mu.Unlock()
 	_ = db.doltDB.Close()
-	db.mu.Unlock()
 	forgetEmptySecondaryIndexes(db.ns)
+	return nil
+}
+
+// waitForCommandsInFlight returns once every session other than ctx's own has
+// been outside a command since the call. Commits and most reads use a store
+// without db.mu, so this is what keeps a drop from closing a store under them.
+func (b *Backend) waitForCommandsInFlight(ctx context.Context) error {
+	var self gcctx.GCRootsProvider
+	if sess := sessionFromContext(ctx); sess != nil {
+		self = sess
+	}
+	visitNothing := func(context.Context, gcctx.GCRootsProvider) error { return nil }
+	return b.gcController.Waiter(ctx, self, visitNothing).Wait(ctx)
 }
 
 // preserveDroppedDirLocked moves a dropped database's directory into the
@@ -818,13 +852,6 @@ func (b *Backend) preserveDroppedDirLocked(name string) error {
 		return fmt.Errorf("dropping database %q: %w", name, err)
 	}
 	return nil
-}
-
-// endDropLocked lets requests waiting on a drop of name proceed. The caller
-// holds b.mu.
-func (b *Backend) endDropLocked(name string) {
-	close(b.dropping[name])
-	delete(b.dropping, name)
 }
 
 // getOrOpenDB returns the dbState for the given database name,
@@ -935,29 +962,12 @@ func openDatabaseStore(ctx context.Context, dbDir string) (*nbs.GenerationalNBS,
 }
 
 func (b *Backend) getOrOpenDBLocked(ctx context.Context, dbName string, create bool) (*dbState, bool, error) {
-	for {
-		db, opened, dropDone, err := b.tryGetOrOpenDB(ctx, dbName, create)
-		if dropDone == nil {
-			return db, opened, err
-		}
-		select {
-		case <-dropDone:
-		case <-ctx.Done():
-			return nil, false, ctx.Err()
-		}
-	}
-}
-
-// tryGetOrOpenDB is getOrOpenDBLocked without the wait: when dbName is being
-// dropped it opens nothing and returns the channel that closes when the drop
-// finishes.
-func (b *Backend) tryGetOrOpenDB(ctx context.Context, dbName string, create bool) (*dbState, bool, <-chan struct{}, error) {
 	b.mu.RLock()
 	db, ok := b.dbs[dbName]
 	b.mu.RUnlock()
 
 	if ok {
-		return db, false, nil, nil
+		return db, false, nil
 	}
 
 	b.mu.Lock()
@@ -965,46 +975,52 @@ func (b *Backend) tryGetOrOpenDB(ctx context.Context, dbName string, create bool
 
 	// Double-check after acquiring write lock.
 	if db, ok := b.dbs[dbName]; ok {
-		return db, false, nil, nil
+		return db, false, nil
 	}
-	if dropDone, ok := b.dropping[dbName]; ok {
-		return nil, false, dropDone, nil
+	// Refuse rather than wait: the drop waits for commands in flight, which
+	// may include this one.
+	if _, ok := b.dropping[dbName]; ok {
+		if !create {
+			return nil, false, nil
+		}
+		return nil, false, backends.NewError(backends.ErrorCodeWriteConflict,
+			fmt.Errorf("database %q is being dropped", dbName))
 	}
 
 	// Every route from a database name to the filesystem passes here; names
 	// that could leave the data directory never reach filepath.Join.
 	if !backends.ValidDatabaseDirName(dbName) {
-		return nil, false, nil, backends.NewError(backends.ErrorCodeDatabaseNameIsInvalid, fmt.Errorf("invalid database name %q", dbName))
+		return nil, false, backends.NewError(backends.ErrorCodeDatabaseNameIsInvalid, fmt.Errorf("invalid database name %q", dbName))
 	}
 	dbDir := filepath.Join(b.dataDir, dbName)
 
 	if !create {
 		if _, err := os.Stat(dbDir); os.IsNotExist(err) {
-			return nil, false, nil, nil
+			return nil, false, nil
 		}
 		existing, err := b.differentlyCasedDatabase(dbName)
 		if err != nil {
-			return nil, false, nil, err
+			return nil, false, err
 		}
 		if existing != "" {
-			return nil, false, nil, nil
+			return nil, false, nil
 		}
 	} else if err := b.checkNewDatabaseName(dbName); err != nil {
-		return nil, false, nil, err
+		return nil, false, err
 	}
 
 	if create && isReservedDatabase(dbName) {
-		return nil, false, nil, backends.NewError(backends.ErrorCodeDatabaseNameIsInvalid,
+		return nil, false, backends.NewError(backends.ErrorCodeDatabaseNameIsInvalid,
 			fmt.Errorf("database %q is a reserved system database and cannot be created", dbName))
 	}
 
 	if err := os.MkdirAll(dbDir, 0o700); err != nil {
-		return nil, false, nil, fmt.Errorf("creating db directory for %q: %w", dbName, err)
+		return nil, false, fmt.Errorf("creating db directory for %q: %w", dbName, err)
 	}
 
 	cs, err := openDatabaseStore(ctx, dbDir)
 	if err != nil {
-		return nil, false, nil, fmt.Errorf("opening store for %q: %w", dbName, err)
+		return nil, false, fmt.Errorf("opening store for %q: %w", dbName, err)
 	}
 
 	ns := newInstrumentedNodeStore(tree.NewNodeStore(cs))
@@ -1014,7 +1030,7 @@ func (b *Backend) tryGetOrOpenDB(ctx context.Context, dbName string, create bool
 	rootHash, err := cs.Root(ctx)
 	if err != nil {
 		_ = cs.Close()
-		return nil, false, nil, fmt.Errorf("reading root for %q: %w", dbName, err)
+		return nil, false, fmt.Errorf("reading root for %q: %w", dbName, err)
 	}
 
 	// Create the value store and higher-level DoltDB. datasDB is the low-level
@@ -1023,7 +1039,7 @@ func (b *Backend) tryGetOrOpenDB(ctx context.Context, dbName string, create bool
 	doltDBVal, err := doltdb.DoltDBFromCS(cs, dbName)
 	if err != nil {
 		_ = cs.Close()
-		return nil, false, nil, fmt.Errorf("opening DoltDB for %q: %w", dbName, err)
+		return nil, false, fmt.Errorf("opening DoltDB for %q: %w", dbName, err)
 	}
 	doltDB := doltDBVal
 	datasDB := doltdb.ExposeDatabaseFromDoltDB(doltDB)
@@ -1034,19 +1050,19 @@ func (b *Backend) tryGetOrOpenDB(ctx context.Context, dbName string, create bool
 		am, err = prolly.NewEmptyAddressMap(ns)
 		if err != nil {
 			_ = doltDB.Close()
-			return nil, false, nil, fmt.Errorf("creating empty address map for %q: %w", dbName, err)
+			return nil, false, fmt.Errorf("creating empty address map for %q: %w", dbName, err)
 		}
 
 		_, am, err = commitCollectionsAM(ctx, datasDB, datas.Dataset{}, am, "Initialize database")
 		if err != nil {
 			_ = doltDB.Close()
-			return nil, false, nil, fmt.Errorf("initial commit for %q: %w", dbName, err)
+			return nil, false, fmt.Errorf("initial commit for %q: %w", dbName, err)
 		}
 	} else {
 		rootChunk, err := cs.Get(ctx, rootHash)
 		if err != nil {
 			_ = doltDB.Close()
-			return nil, false, nil, fmt.Errorf("reading root chunk for %q: %w", dbName, err)
+			return nil, false, fmt.Errorf("reading root chunk for %q: %w", dbName, err)
 		}
 
 		fileID := serial.GetFileID(rootChunk.Data())
@@ -1060,27 +1076,27 @@ func (b *Backend) tryGetOrOpenDB(ctx context.Context, dbName string, create bool
 			amNode, _, err := tree.NodeFromChunk(&rootChunk)
 			if err != nil {
 				_ = doltDB.Close()
-				return nil, false, nil, fmt.Errorf("parsing ADRM root node for %q: %w", dbName, err)
+				return nil, false, fmt.Errorf("parsing ADRM root node for %q: %w", dbName, err)
 			}
 
 			am, err = prolly.NewAddressMap(amNode, ns)
 			if err != nil {
 				_ = doltDB.Close()
-				return nil, false, nil, fmt.Errorf("loading collections AM from ADRM root for %q: %w", dbName, err)
+				return nil, false, fmt.Errorf("loading collections AM from ADRM root for %q: %w", dbName, err)
 			}
 
 			// Build the STRT structure manually because datas.Database panics on ADRM roots.
 			// We need to do this atomically: write commit + STRT, then swap the NBS root.
 			if err := migrateADRMtoSTRT(ctx, cs, vs, ns, am, rootHash); err != nil {
 				_ = doltDB.Close()
-				return nil, false, nil, fmt.Errorf("migrating ADRM root for %q: %w", dbName, err)
+				return nil, false, fmt.Errorf("migrating ADRM root for %q: %w", dbName, err)
 			}
 
 			// Now the NBS root is STRT; read the dataset from doltDB normally.
 			mainDS, migErr := datasDB.GetDataset(ctx, mainDataset)
 			if migErr != nil {
 				_ = doltDB.Close()
-				return nil, false, nil, fmt.Errorf("getting dataset after migration for %q: %w", dbName, migErr)
+				return nil, false, fmt.Errorf("getting dataset after migration for %q: %w", dbName, migErr)
 			}
 			_ = mainDS // used only to verify migration succeeded
 
@@ -1089,7 +1105,7 @@ func (b *Backend) tryGetOrOpenDB(ctx context.Context, dbName string, create bool
 			ds, err := datasDB.GetDataset(ctx, mainDataset)
 			if err != nil {
 				_ = doltDB.Close()
-				return nil, false, nil, fmt.Errorf("getting dataset for %q: %w", dbName, err)
+				return nil, false, fmt.Errorf("getting dataset for %q: %w", dbName, err)
 			}
 
 			if !ds.HasHead() {
@@ -1097,19 +1113,19 @@ func (b *Backend) tryGetOrOpenDB(ctx context.Context, dbName string, create bool
 				am, err = prolly.NewEmptyAddressMap(ns)
 				if err != nil {
 					_ = doltDB.Close()
-					return nil, false, nil, fmt.Errorf("creating empty address map for %q: %w", dbName, err)
+					return nil, false, fmt.Errorf("creating empty address map for %q: %w", dbName, err)
 				}
 			} else {
 				headValue, _, err := ds.MaybeHeadValue()
 				if err != nil {
 					_ = doltDB.Close()
-					return nil, false, nil, fmt.Errorf("reading head value for %q: %w", dbName, err)
+					return nil, false, fmt.Errorf("reading head value for %q: %w", dbName, err)
 				}
 
 				headMsg, ok := headValue.(dolttypes.SerialMessage)
 				if !ok {
 					_ = doltDB.Close()
-					return nil, false, nil, fmt.Errorf("unexpected root value type %T for %q", headValue, dbName)
+					return nil, false, fmt.Errorf("unexpected root value type %T for %q", headValue, dbName)
 				}
 
 				headFileID := serial.GetFileID([]byte(headMsg))
@@ -1124,17 +1140,17 @@ func (b *Backend) tryGetOrOpenDB(ctx context.Context, dbName string, create bool
 						rtvl, fallbackErr := serial.TryGetRootAsRootValue([]byte(headMsg), serial.MessagePrefixSz)
 						if fallbackErr != nil {
 							_ = doltDB.Close()
-							return nil, false, nil, fmt.Errorf("parsing RTVL for %q: %w", dbName, fallbackErr)
+							return nil, false, fmt.Errorf("parsing RTVL for %q: %w", dbName, fallbackErr)
 						}
 						amNode, _, fallbackErr := tree.NodeFromBytes(rtvl.TablesBytes())
 						if fallbackErr != nil {
 							_ = doltDB.Close()
-							return nil, false, nil, fmt.Errorf("parsing collections AM from RTVL for %q: %w", dbName, fallbackErr)
+							return nil, false, fmt.Errorf("parsing collections AM from RTVL for %q: %w", dbName, fallbackErr)
 						}
 						wsAM, fallbackErr = prolly.NewAddressMap(amNode, ns)
 						if fallbackErr != nil {
 							_ = doltDB.Close()
-							return nil, false, nil, fmt.Errorf("loading collections AM from RTVL for %q: %w", dbName, fallbackErr)
+							return nil, false, fmt.Errorf("loading collections AM from RTVL for %q: %w", dbName, fallbackErr)
 						}
 					}
 					am = wsAM
@@ -1146,30 +1162,30 @@ func (b *Backend) tryGetOrOpenDB(ctx context.Context, dbName string, create bool
 					amNode, _, err := tree.NodeFromBytes([]byte(headMsg))
 					if err != nil {
 						_ = doltDB.Close()
-						return nil, false, nil, fmt.Errorf("parsing ADRM from commit for %q: %w", dbName, err)
+						return nil, false, fmt.Errorf("parsing ADRM from commit for %q: %w", dbName, err)
 					}
 
 					am, err = prolly.NewAddressMap(amNode, ns)
 					if err != nil {
 						_ = doltDB.Close()
-						return nil, false, nil, fmt.Errorf("loading collections AM from commit for %q: %w", dbName, err)
+						return nil, false, fmt.Errorf("loading collections AM from commit for %q: %w", dbName, err)
 					}
 
 					ds, am, err = commitCollectionsAM(ctx, datasDB, ds, am, "migrate: wrap collections AM in RTVL")
 					if err != nil {
 						_ = doltDB.Close()
-						return nil, false, nil, fmt.Errorf("RTVL migration commit for %q: %w", dbName, err)
+						return nil, false, fmt.Errorf("RTVL migration commit for %q: %w", dbName, err)
 					}
 
 				default:
 					_ = doltDB.Close()
-					return nil, false, nil, fmt.Errorf("unexpected head commit rootValue file ID %q for %q", headFileID, dbName)
+					return nil, false, fmt.Errorf("unexpected head commit rootValue file ID %q for %q", headFileID, dbName)
 				}
 			}
 
 		default:
 			_ = doltDB.Close()
-			return nil, false, nil, fmt.Errorf("unexpected root chunk file ID %q for %q", fileID, dbName)
+			return nil, false, fmt.Errorf("unexpected root chunk file ID %q for %q", fileID, dbName)
 		}
 	}
 
@@ -1180,7 +1196,7 @@ func (b *Backend) tryGetOrOpenDB(ctx context.Context, dbName string, create bool
 		rv, rvErr := doltdb.NewRootValue(ctx, doltDB.ValueReadWriter(), doltDB.NodeStore(), dolttypes.SerialMessage(rtvlMsg))
 		if rvErr != nil {
 			_ = doltDB.Close()
-			return nil, false, nil, fmt.Errorf("building initial root value for %q: %w", dbName, rvErr)
+			return nil, false, fmt.Errorf("building initial root value for %q: %w", dbName, rvErr)
 		}
 		mainWS = doltdb.EmptyWorkingSet(wsRef).WithWorkingRoot(rv).WithStagedRoot(rv)
 	}
@@ -1203,7 +1219,7 @@ func (b *Backend) tryGetOrOpenDB(ctx context.Context, dbName string, create bool
 	schemaRef, err := vs.WriteValue(ctx, dolttypes.SerialMessage(schemaMsg))
 	if err != nil {
 		_ = doltDB.Close()
-		return nil, false, nil, fmt.Errorf("writing collection schema chunk: %w", err)
+		return nil, false, fmt.Errorf("writing collection schema chunk: %w", err)
 	}
 	db.collSchemaHash = schemaRef.TargetHash()
 
@@ -1230,7 +1246,7 @@ func (b *Backend) tryGetOrOpenDB(ctx context.Context, dbName string, create bool
 		db.mergeState = ms
 	}
 
-	return db, true, nil, nil
+	return db, true, nil
 }
 
 // commitCollectionsAM creates a new dolt commit with the given collections

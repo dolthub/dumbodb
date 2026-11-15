@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/dsess"
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/stretchr/testify/require"
 
@@ -34,18 +35,19 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// Dropping a database while other connections write to it and create it must
-// never stop the server. A writer holds db.mu and the provider holds dbCacheMu
-// while each reaches back into b.mu, so a drop that waits for either while
-// holding b.mu freezes every request.
+// Dropping a database while other connections write to it, commit, read it and
+// create it must neither stop the server nor close a store under a command
+// still using it.
 //
-// Churn workers each create, fill, commit and drop their own database, so
-// drops also race session lookups that hold the provider's dbCacheMu.
+// A writer holds db.mu and the provider holds dbCacheMu while each reaches back
+// into b.mu, so a drop that waits for either while holding b.mu freezes every
+// request. A commit and most reads use the store without db.mu, so a drop that
+// closes the store without waiting for them crashes the server.
 //
-// Only a goroutine dropping a database commits to it. A commit reads the store without db.mu,
-// so a drop closing the store under a concurrent commit is a separate hazard
-// this test does not cover.
-func TestDropDatabaseRacingWritesDoesNotDeadlock(t *testing.T) {
+// Each step runs as a command on its session, as the wire protocol runs it:
+// the drop waits for commands in flight, and only a command marks a session
+// as busy.
+func TestDropDatabaseRacingWritesDoesNotDeadlockOrCrash(t *testing.T) {
 	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, 0, 0)
 	require.NoError(t, err)
 
@@ -58,34 +60,37 @@ func TestDropDatabaseRacingWritesDoesNotDeadlock(t *testing.T) {
 	)
 
 	var progress atomic.Int64
-	var lsidSeq atomic.Int64
+	var seq atomic.Int64
 	stop := make(chan struct{})
 
-	insertInTxn := func(ctx context.Context, dbName string, commit bool) {
+	inCommand := func(fn func(ctx context.Context)) {
+		ctx, ci := ctxWithSessionAs(t, be, fmt.Sprintf("drop-race-%d", seq.Add(1)), "")
+		shadow, _ := ci.CachedShadow()
+		_ = shadow.Use(time.Now(), func(*dsess.DoltSession) error {
+			fn(ctx)
+			return nil
+		})
+	}
+
+	insertAndCommit := func(ctx context.Context, name string) {
 		sess := sessionFromContext(ctx)
 		if _, err := sess.StartTransaction(sqlctx.Wrap(ctx, sess), sql.ReadWrite); err != nil {
 			return
 		}
 		owner := conninfo.Get(ctx).Owner()
-		db, err := be.Database(dbName)
-		if err == nil {
+		if db, err := be.Database(name); err == nil {
 			if coll, err := db.Collection("items"); err == nil {
-				doc, _ := types.NewDocument("_id", fmt.Sprintf("doc-%d", lsidSeq.Add(1)))
+				doc, _ := types.NewDocument("_id", fmt.Sprintf("doc-%d", seq.Add(1)))
 				_, _ = coll.InsertAll(ctx, &backends.InsertAllParams{Docs: []*types.Document{doc}})
 			}
 		}
-		if !commit || be.OnTransactionCommit(ctx, owner) != nil {
+		if be.OnTransactionCommit(ctx, owner) != nil {
 			be.OnTransactionAbort(owner)
 		}
 	}
 
-	newSessionCtx := func() context.Context {
-		ctx, _ := ctxWithSessionAs(t, be, fmt.Sprintf("drop-race-%d", lsidSeq.Add(1)), "")
-		return ctx
-	}
-
 	var wg sync.WaitGroup
-	loop := func(step func()) {
+	loop := func(step func(ctx context.Context)) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -95,38 +100,38 @@ func TestDropDatabaseRacingWritesDoesNotDeadlock(t *testing.T) {
 					return
 				default:
 				}
-				step()
+				inCommand(step)
 				progress.Add(1)
 			}
 		}()
 	}
 
-	loop(func() {
-		ctx := newSessionCtx()
-		insertInTxn(ctx, dbName, true)
+	loop(func(ctx context.Context) {
+		insertAndCommit(ctx, dbName)
 		_ = be.DropDatabase(ctx, &backends.DropDatabaseParams{Name: dbName})
 	})
 	for range writers {
-		loop(func() { insertInTxn(newSessionCtx(), dbName, false) })
+		loop(func(ctx context.Context) { insertAndCommit(ctx, dbName) })
 	}
+	loop(func(ctx context.Context) {
+		if db, err := be.Database(dbName); err == nil {
+			_ = db.CreateCollection(ctx, &backends.CreateCollectionParams{Name: "items"})
+		}
+		_, _ = be.ListDatabases(ctx, &backends.ListDatabasesParams{})
+		_, _ = be.Status(ctx, &backends.StatusParams{})
+	})
+	// Churners drop databases nobody else writes to, so their drops race
+	// session lookups that hold dbCacheMu rather than writers holding db.mu.
 	for i := range churners {
 		churnName := fmt.Sprintf("churn%d", i)
-		loop(func() {
-			ctx := newSessionCtx()
+		loop(func(ctx context.Context) {
 			if db, err := be.Database(churnName); err == nil {
 				_ = db.CreateCollection(ctx, &backends.CreateCollectionParams{Name: "items"})
 			}
-			insertInTxn(ctx, churnName, true)
+			insertAndCommit(ctx, churnName)
 			_ = be.DropDatabase(ctx, &backends.DropDatabaseParams{Name: churnName})
 		})
 	}
-	loop(func() {
-		ctx := newSessionCtx()
-		db, err := be.Database(dbName)
-		if err == nil {
-			_ = db.CreateCollection(ctx, &backends.CreateCollectionParams{Name: "items"})
-		}
-	})
 
 	done := make(chan struct{})
 	go func() {
@@ -164,44 +169,94 @@ func TestDropDatabaseRacingWritesDoesNotDeadlock(t *testing.T) {
 	}
 }
 
-// getOrBuildSqleDatabase looks a database up while holding dbCacheMu, and the
-// drop forgets the cached database, which takes dbCacheMu. The drop must not
-// hold b.mu while it waits there.
-func TestDropDatabaseWaitingOnProviderCacheDoesNotBlockLookups(t *testing.T) {
-	ctx := context.Background()
+// A drop must not close a store while a command that already holds it is
+// still running, because commits and reads use the store without db.mu.
+func TestDropDatabaseWaitsForCommandUsingTheStore(t *testing.T) {
 	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, 0, 0)
 	require.NoError(t, err)
 	t.Cleanup(be.Close)
 
-	_, err = be.getOrOpenDB(ctx, "victim", true)
-	require.NoError(t, err)
-	_, err = be.getOrOpenDB(ctx, "bystander", true)
-	require.NoError(t, err)
+	const dbName = "inuse"
+	readerCtx, readerCI := ctxWithSessionAs(t, be, "drop-wait-reader", "")
+	dropperCtx, dropperCI := ctxWithSessionAs(t, be, "drop-wait-dropper", "")
+	readerShadow, _ := readerCI.CachedShadow()
+	dropperShadow, _ := dropperCI.CachedShadow()
 
-	be.provider.dbCacheMu.Lock()
-	dropped := make(chan error, 1)
-	go func() {
-		dropped <- be.DropDatabase(ctx, &backends.DropDatabaseParams{Name: "victim"})
-	}()
-	// Give the drop time to reach dbCacheMu.
-	time.Sleep(200 * time.Millisecond)
+	dropDone := make(chan error, 1)
+	err = readerShadow.Use(time.Now(), func(*dsess.DoltSession) error {
+		state, err := be.getOrOpenDB(readerCtx, dbName, true)
+		require.NoError(t, err)
+		root, err := state.cs.Root(readerCtx)
+		require.NoError(t, err)
 
-	looked := make(chan bool, 1)
-	go func() {
-		_, ok := be.provider.dbLookup("bystander")
-		looked <- ok
-	}()
+		go func() {
+			dropDone <- dropperShadow.Use(time.Now(), func(*dsess.DoltSession) error {
+				return be.DropDatabase(dropperCtx, &backends.DropDatabaseParams{Name: dbName})
+			})
+		}()
+
+		select {
+		case err := <-dropDone:
+			t.Fatalf("drop finished while a command still held the store: %v", err)
+		case <-time.After(200 * time.Millisecond):
+		}
+
+		readRoot := func() (err error) {
+			defer func() {
+				if r := recover(); r != nil {
+					err = fmt.Errorf("reading the store panicked: %v", r)
+				}
+			}()
+			_, err = state.cs.Get(readerCtx, root)
+			return err
+		}
+		return readRoot()
+	})
+	require.NoError(t, err, "the store must stay open until the command using it ends")
+
 	select {
-	case ok := <-looked:
-		require.True(t, ok)
+	case err := <-dropDone:
+		require.NoError(t, err)
 	case <-time.After(10 * time.Second):
-		buf := make([]byte, 1<<22)
-		buf = buf[:runtime.Stack(buf, true)]
-		panic(fmt.Sprintf("lookup under dbCacheMu blocked behind a drop; server is deadlocked\n\n%s", buf))
+		t.Fatal("drop did not finish after the command using the store ended")
 	}
-	be.provider.dbCacheMu.Unlock()
+	state, err := be.getOrOpenDB(context.Background(), dbName, false)
+	require.NoError(t, err)
+	require.Nil(t, state, "the dropped database must be gone")
+}
 
-	require.NoError(t, <-dropped)
-	_, ok := be.provider.dbLookup("victim")
-	require.False(t, ok)
+// A drop whose context ends while it waits for commands in flight must fail
+// and leave the database open, not half-dropped.
+func TestDropDatabaseCanceledWhileWaitingKeepsTheDatabase(t *testing.T) {
+	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, 0, 0)
+	require.NoError(t, err)
+	t.Cleanup(be.Close)
+
+	const dbName = "kept"
+	readerCtx, readerCI := ctxWithSessionAs(t, be, "drop-cancel-reader", "")
+	dropperCtx, dropperCI := ctxWithSessionAs(t, be, "drop-cancel-dropper", "")
+	readerShadow, _ := readerCI.CachedShadow()
+	dropperShadow, _ := dropperCI.CachedShadow()
+
+	db, err := be.Database(dbName)
+	require.NoError(t, err)
+	require.NoError(t, db.CreateCollection(readerCtx, &backends.CreateCollectionParams{Name: "items"}))
+
+	err = readerShadow.Use(time.Now(), func(*dsess.DoltSession) error {
+		ctx, cancel := context.WithTimeout(dropperCtx, 100*time.Millisecond)
+		defer cancel()
+		return dropperShadow.Use(time.Now(), func(*dsess.DoltSession) error {
+			dropErr := be.DropDatabase(ctx, &backends.DropDatabaseParams{Name: dbName})
+			require.ErrorIs(t, dropErr, context.DeadlineExceeded)
+			return nil
+		})
+	})
+	require.NoError(t, err)
+
+	state, err := be.getOrOpenDB(readerCtx, dbName, false)
+	require.NoError(t, err)
+	require.NotNil(t, state, "a failed drop must leave the database in place")
+	require.NoError(t, db.CreateCollection(readerCtx, &backends.CreateCollectionParams{Name: "more"}))
+
+	require.NoError(t, be.DropDatabase(dropperCtx, &backends.DropDatabaseParams{Name: dbName}))
 }
