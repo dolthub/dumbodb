@@ -70,6 +70,11 @@ func (h *Handler) MsgFindAndModify(connCtx context.Context, msg *wire.OpMsg) (*w
 			return nil, err
 		}
 	}
+	if params.HasUpdateOperators || params.Pipeline != nil {
+		if err = common.ValidateArrayFilters(document.Command(), params.Update, params.Pipeline != nil, params.ArrayFilters); err != nil {
+			return nil, err
+		}
+	}
 
 	var resDoc *types.Document
 

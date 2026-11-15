@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
@@ -136,6 +137,131 @@ func getArrayByPath(doc *types.Document, path string) (*types.Array, error) {
 	}
 
 	return arr, nil
+}
+
+// ValidateArrayFilters returns the error mongod raises parsing arrayFilters
+// with update, before any document is read: a malformed filter, an
+// identifier with no filter, or a filter no identifier uses.
+func ValidateArrayFilters(command string, update *types.Document, isPipeline bool, arrayFilters *types.Array) error {
+	if isPipeline {
+		if arrayFilters != nil {
+			return NewUpdateError(handlererrors.ErrFailedToParse, "arrayFilters may not be specified for pipeline-style updates", command)
+		}
+		return nil
+	}
+
+	filterIdentifiers := map[string]bool{}
+	var orderedIdentifiers []string
+	for i := 0; arrayFilters != nil && i < arrayFilters.Len(); i++ {
+		filter, ok := must.NotFail(arrayFilters.Get(i)).(*types.Document)
+		if !ok {
+			continue
+		}
+		identifier, err := arrayFilterIdentifier(command, filter)
+		if err != nil {
+			return err
+		}
+		if _, dup := filterIdentifiers[identifier]; dup {
+			return NewUpdateError(
+				handlererrors.ErrFailedToParse,
+				"Found multiple array filters with the same top-level field name "+identifier,
+				command,
+			)
+		}
+		filterIdentifiers[identifier] = false
+		orderedIdentifiers = append(orderedIdentifiers, identifier)
+	}
+
+	for _, op := range update.Keys() {
+		fields, ok := must.NotFail(update.Get(op)).(*types.Document)
+		if !ok {
+			continue
+		}
+		for _, path := range fields.Keys() {
+			for _, part := range strings.Split(path, ".") {
+				if !strings.HasPrefix(part, "$[") || !strings.HasSuffix(part, "]") || part == "$[]" {
+					continue
+				}
+				identifier := part[2 : len(part)-1]
+				if _, ok := filterIdentifiers[identifier]; !ok {
+					return NewUpdateError(
+						handlererrors.ErrBadValue,
+						fmt.Sprintf("No array filter found for identifier '%s' in path '%s'", identifier, path),
+						command,
+					)
+				}
+				filterIdentifiers[identifier] = true
+			}
+		}
+	}
+
+	for _, identifier := range orderedIdentifiers {
+		if !filterIdentifiers[identifier] {
+			return NewUpdateError(
+				handlererrors.ErrFailedToParse,
+				fmt.Sprintf(
+					"The array filter for identifier '%s' was not used in the update %s",
+					identifier, types.FormatAnyValue(update),
+				),
+				command,
+			)
+		}
+	}
+
+	return nil
+}
+
+// arrayFilterIdentifier returns the one top-level field name every path of
+// an array filter starts with.
+func arrayFilterIdentifier(command string, filter *types.Document) (string, error) {
+	var identifier string
+	for _, key := range filter.Keys() {
+		if strings.HasPrefix(key, "$") {
+			continue
+		}
+		top, _, _ := strings.Cut(key, ".")
+		switch {
+		case identifier == "":
+			identifier = top
+		case identifier != top:
+			return "", NewUpdateError(
+				handlererrors.ErrFailedToParse,
+				fmt.Sprintf(
+					"Error parsing array filter :: caused by :: Expected a single top-level field name, found '%s' and '%s'",
+					identifier, top,
+				),
+				command,
+			)
+		}
+	}
+	if identifier == "" {
+		return "", NewUpdateError(
+			handlererrors.ErrFailedToParse,
+			"Cannot use an expression without a top-level field name in arrayFilters",
+			command,
+		)
+	}
+	if !isArrayFilterIdentifier(identifier) {
+		return "", NewUpdateError(
+			handlererrors.ErrBadValue,
+			"Error parsing array filter :: caused by :: The top-level field name must be an alphanumeric string "+
+				"beginning with a lowercase letter, found '"+identifier+"'",
+			command,
+		)
+	}
+	return identifier, nil
+}
+
+func isArrayFilterIdentifier(s string) bool {
+	if s == "" || s[0] < 'a' || s[0] > 'z' {
+		return false
+	}
+	for _, c := range s[1:] {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9') {
+			return false
+		}
+	}
+	return true
 }
 
 // positionalMatchIndex returns the array index that the positional $ operator

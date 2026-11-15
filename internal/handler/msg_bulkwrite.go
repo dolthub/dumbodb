@@ -484,6 +484,9 @@ func execBulkWriteUpdate(ctx context.Context, db backends.Database, c backends.C
 			if err := common.ValidateUpdateOperators("bulkWrite", u); err != nil {
 				return bulkWriteOpResult{}, err
 			}
+			if err := common.ValidateArrayFilters("bulkWrite", u, false, arrayFilters); err != nil {
+				return bulkWriteOpResult{}, err
+			}
 		} else if multi {
 			return bulkWriteOpResult{}, common.NewUpdateError(
 				handlererrors.ErrFailedToParse,
@@ -492,6 +495,9 @@ func execBulkWriteUpdate(ctx context.Context, db backends.Database, c backends.C
 			)
 		}
 	case *types.Array:
+		if err := common.ValidateArrayFilters("bulkWrite", nil, true, arrayFilters); err != nil {
+			return bulkWriteOpResult{}, err
+		}
 		stages, err := common.ParseUpdatePipeline(u)
 		if err != nil {
 			return bulkWriteOpResult{}, err

@@ -163,6 +163,10 @@ func GetUpdateParams(document *types.Document, l *slog.Logger) (*UpdateParams, e
 					"Update argument must be either an object or an array",
 				)
 			}
+
+			if update.InvalidUpdate == nil && (update.HasUpdateOperators || update.IsPipeline) {
+				update.InvalidUpdate = ValidateArrayFilters(document.Command(), update.Update, update.IsPipeline, update.ArrayFilters)
+			}
 		}
 	}
 
