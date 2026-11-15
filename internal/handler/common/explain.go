@@ -184,34 +184,21 @@ func GetExplainParams(document *types.Document, l *slog.Logger) (*ExplainParams,
 
 	var limit, skip int64
 
-	if limitVal, _ := explain.Get("limit"); limitVal != nil {
-		var limitErr error
-		if limit, limitErr = handlerparams.GetWholeNumberParam(limitVal); limitErr != nil {
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrTypeMismatch,
-				"BSON field 'FindCommandRequest.limit' is the wrong type '"+handlerparams.AliasFromType(limitVal)+"', expected types '[long, int, decimal, double']",
-				"limit",
-			)
+	if commandName == "count" {
+		if limitVal, _ := explain.Get("limit"); limitVal != nil {
+			if limit, err = ParseCountLimit(limitVal); err != nil {
+				return nil, err
+			}
 		}
-	}
-
-	if limit, err = handlerparams.GetValidatedNumberParamWithMinValue("explain", "limit", limit, 0); err != nil {
-		return nil, err
-	}
-
-	if skipVal, _ := explain.Get("skip"); skipVal != nil {
-		var skipErr error
-		if skip, skipErr = handlerparams.GetWholeNumberParam(skipVal); skipErr != nil {
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrTypeMismatch,
-				"BSON field 'FindCommandRequest.skip' is the wrong type '"+handlerparams.AliasFromType(skipVal)+"', expected types '[long, int, decimal, double']",
-				"skip",
-			)
+		if skipVal, _ := explain.Get("skip"); skipVal != nil {
+			if skip, err = ParseCountSkip(skipVal); err != nil {
+				return nil, err
+			}
 		}
-	}
-
-	if skip, err = handlerparams.GetValidatedNumberParamWithMinValue("explain", "skip", skip, 0); err != nil {
-		return nil, err
+	} else {
+		if limit, skip, err = explainFindLimitSkip(explain); err != nil {
+			return nil, err
+		}
 	}
 
 	var stagesDocs []any
@@ -326,4 +313,39 @@ func writeIsMulti(write *types.Document, commandName string) bool {
 	limit, _ := write.Get("limit")
 	n, err := handlerparams.GetWholeNumberParam(limit)
 	return err == nil && n == 0
+}
+
+// explainFindLimitSkip parses limit and skip under find's rules.
+func explainFindLimitSkip(explain *types.Document) (limit, skip int64, err error) {
+	if limitVal, _ := explain.Get("limit"); limitVal != nil {
+		var limitErr error
+		if limit, limitErr = handlerparams.GetWholeNumberParam(limitVal); limitErr != nil {
+			return 0, 0, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrTypeMismatch,
+				"BSON field 'FindCommandRequest.limit' is the wrong type '"+handlerparams.AliasFromType(limitVal)+"', expected types '[long, int, decimal, double']",
+				"limit",
+			)
+		}
+	}
+
+	if limit, err = handlerparams.GetValidatedNumberParamWithMinValue("explain", "limit", limit, 0); err != nil {
+		return 0, 0, err
+	}
+
+	if skipVal, _ := explain.Get("skip"); skipVal != nil {
+		var skipErr error
+		if skip, skipErr = handlerparams.GetWholeNumberParam(skipVal); skipErr != nil {
+			return 0, 0, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrTypeMismatch,
+				"BSON field 'FindCommandRequest.skip' is the wrong type '"+handlerparams.AliasFromType(skipVal)+"', expected types '[long, int, decimal, double']",
+				"skip",
+			)
+		}
+	}
+
+	if skip, err = handlerparams.GetValidatedNumberParamWithMinValue("explain", "skip", skip, 0); err != nil {
+		return 0, 0, err
+	}
+
+	return limit, skip, nil
 }

@@ -177,6 +177,14 @@ func (e *Expression) Evaluate(doc *types.Document) (any, error) {
 		return val, nil
 	}
 
+	if e.opts.FindArrayDocuments && !e.opts.FindArrayIndex {
+		v, ok := evaluateFieldPath(doc, path.Slice())
+		if !ok {
+			return nil, fmt.Errorf("no document found under %s path", path)
+		}
+		return v, nil
+	}
+
 	var isArrayField bool
 	prefix := path.Prefix()
 
@@ -214,6 +222,38 @@ func (e *Expression) Evaluate(doc *types.Document) (any, error) {
 	return arr, nil
 }
 
+// evaluateFieldPath is mongod's field path evaluation: an array along the path
+// yields an array of the results of its document elements, so arrays the
+// rest of the path reaches stay nested. ok is false when the value is missing.
+func evaluateFieldPath(doc *types.Document, parts []string) (any, bool) {
+	v, err := doc.Get(parts[0])
+	if err != nil {
+		return nil, false
+	}
+	if len(parts) == 1 {
+		return v, true
+	}
+	switch v := v.(type) {
+	case *types.Document:
+		return evaluateFieldPath(v, parts[1:])
+	case *types.Array:
+		return evaluateFieldPathInArray(v, parts[1:]), true
+	}
+	return nil, false
+}
+
+func evaluateFieldPathInArray(arr *types.Array, parts []string) *types.Array {
+	out := types.MakeArray(arr.Len())
+	for i := range arr.Len() {
+		if elem, ok := must.NotFail(arr.Get(i)).(*types.Document); ok {
+			if v, ok := evaluateFieldPath(elem, parts); ok {
+				out.Append(v)
+			}
+		}
+	}
+	return out
+}
+
 // GetExpressionSuffix returns field key of Expression, or for dot notation it returns suffix.
 // evaluateVariable resolves a system variable, applying varPath when the
 // expression reached into it. Callers treat an error as missing, which is how
@@ -223,6 +263,13 @@ func (e *Expression) evaluateVariable(doc *types.Document) (any, error) {
 
 	switch e.variable {
 	case varRoot, varCurrent:
+		if e.varPath != "" {
+			v, ok := evaluateFieldPath(doc, strings.Split(e.varPath, "."))
+			if !ok {
+				return nil, ErrMissingValue
+			}
+			return v, nil
+		}
 		base = doc.DeepCopy()
 	case varNow:
 		return time.Now().UTC(), nil

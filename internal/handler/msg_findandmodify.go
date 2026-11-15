@@ -26,6 +26,8 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
+	stageProjection "github.com/dolthub/dumbodb/internal/handler/common/aggregations/stages/projection"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
@@ -76,7 +78,7 @@ func (h *Handler) MsgFindAndModify(connCtx context.Context, msg *wire.OpMsg) (*w
 	var projection *types.Document
 	var inclusion bool
 	if params.Fields != nil {
-		if projection, inclusion, err = common.ValidateProjection(params.Fields); err != nil {
+		if projection, inclusion, err = stageProjection.ValidateFindProjection(params.Fields); err != nil {
 			return nil, err
 		}
 	}
@@ -162,12 +164,14 @@ func (h *Handler) findAndModifyDocument(ctx context.Context, params *common.Find
 	params.Collation = h.effectiveCollation(ctx, db, params.Collection, params.Collation)
 
 	cmp := collation.Parse(params.Collation).Comparator()
+	operators.BindCollation(params.Query, cmp)
+	operators.BindCollation(params.Pipeline, cmp)
 
 	params.Hint = clusteredHint(params.Hint, recordedClusteredName(ctx, db, params.Collection))
 	if err = checkHintType(params.Hint); err != nil {
 		return nil, err
 	}
-	if err = validateHint(ctx, c, params.Hint, "findAndModify", params.Sort, params.Upsert); err != nil {
+	if err = validateHint(ctx, db, params.Collection, c, params.Hint, "findAndModify", params.Sort, params.Upsert); err != nil {
 		return nil, err
 	}
 
@@ -185,7 +189,7 @@ func (h *Handler) findAndModifyDocument(ctx context.Context, params *common.Find
 
 	closer.Add(queryRes.Iter)
 
-	iter := common.FilterIteratorColl(iterator.WithContext(ctx, queryRes.Iter), closer, params.Query, cmp)
+	iter := common.FilterIteratorPlan(iterator.WithContext(ctx, queryRes.Iter), closer, params.Query, cmp, queryPlanMode(ctx, c, params.Query, params.Hint, queryRes))
 
 	if params.Sort.Len() > 0 {
 		iter, err = common.SortIteratorWithCollation(iter, closer, params.Sort, cmp)

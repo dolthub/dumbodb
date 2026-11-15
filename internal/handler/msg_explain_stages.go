@@ -60,55 +60,198 @@ var sourceStages = map[string]struct{}{
 	"$listLocalSessions": {}, "$planCacheStats": {}, "$changeStream": {}, "$listSearchIndexes": {},
 }
 
-// sbeStages are the stages MongoDB 8.0 runs in SBE when they directly follow
-// those the query absorbs, reporting them inside the query plan rather than
-// as stages.
-var sbeStages = map[string]bool{
-	"$group": true, "$bucket": true, "$sortByCount": true, "$count": true, "$lookup": true,
-}
-
-// explainClassicStages moves the explain of a pipeline MongoDB runs in the
-// classic engine into its stages form: the query, with the leading stages it
-// absorbs, under $cursor, then each remaining stage, at executionStats
-// verbosity with the number of documents it returned. A pipeline every stage
-// of which the query absorbs keeps the plain form.
-func explainClassicStages(ctx context.Context, coll backends.Collection, qp *backends.ExplainParams, pipeline []any, response *types.Document, execStats bool) {
-	docs := make([]*types.Document, 0, len(pipeline))
-	for _, s := range pipeline {
-		stage, _ := s.(*types.Document)
-		if stage == nil || stage.Len() != 1 || stage.Command() == "$lookup" {
-			return
-		}
-		if field, ok := must.NotFail(stage.Get(stage.Command())).(string); ok && stage.Command() == "$count" && len(docs) > 0 {
-			docs = append(docs, desugaredCount(field)...)
-			continue
-		}
-		docs = append(docs, stage)
+// explainPipelineStages adds an explained pipeline's stages to response the
+// way MongoDB 8.0 reports them. docs is the pipeline, with each $count as the
+// $group and $project it runs, and sbe how much of it runs in SBE. The stages
+// SBE runs past those the query absorbs run inside the query plan, as GROUP
+// and EQ_LOOKUP stages over it. Any later stage moves the explain into a
+// stages array: the query under $cursor, then each remaining stage, at
+// executionStats verbosity with the number of documents it returned, a
+// $lookup also naming the foreign indexes it reads. A pipeline every stage of
+// which runs in the query keeps the plain form.
+func explainPipelineStages(ctx context.Context, db backends.Database, coll backends.Collection, qp *backends.ExplainParams, dbName string, docs []*types.Document, sbe sbePlan, response *types.Document, execStats bool) { //nolint:lll // for readability
+	if sbe.distinct != nil {
+		explainDistinctScanGroup(ctx, db, coll, qp, docs, sbe.distinct, response, execStats)
+		return
 	}
 	absorbed := queryAbsorbedStages(docs)
-	rest := docs[absorbed:]
-	if len(rest) == 0 || sbeStages[rest[0].Command()] {
+	end := absorbed
+	for i := absorbed; i < sbe.end && sbeQueryPlanStages[docs[i].Command()]; i++ {
+		end = i + 1
+	}
+	rest := docs[end:]
+	if end > absorbed {
+		if sorted := groupingSort(docs[end-1]); sorted != nil {
+			rest = append([]*types.Document{sorted}, rest...)
+		}
+	}
+	queryPlanner, _ := must.NotFail(response.Get("queryPlanner")).(*types.Document)
+	if end == absorbed && len(rest) == 0 || queryPlanner == nil {
 		return
 	}
 
 	var returned []int32
 	if execStats {
-		returned = stageReturns(ctx, coll, qp, docs, absorbed, buildLocalStage)
+		returned = stageReturns(ctx, coll, qp, docs, end, foreignStageBuilder(db))
+		if returned != nil && len(rest) > len(docs)-end {
+			// The $sort of a grouping stage returns what the grouping did.
+			returned = append([]int32{returned[0]}, returned...)
+		}
 	}
 
-	queryPlanner, _ := must.NotFail(response.Get("queryPlanner")).(*types.Document)
+	fetcher := &foreignFetcher{db: db}
+	if plan, _ := queryPlanner.Get("winningPlan"); end > absorbed && plan != nil {
+		plan := plan.(*types.Document)
+		cached, _ := plan.Get("isCached")
+		plan.Remove("isCached")
+		for _, stage := range docs[absorbed:end] {
+			plan = sbePlanStage(ctx, db, dbName, fetcher, stage, plan)
+		}
+		winning := must.NotFail(types.NewDocument("queryPlan", plan))
+		if cached != nil {
+			winning = must.NotFail(types.NewDocument("isCached", cached, "queryPlan", plan))
+		}
+		queryPlanner.Set("winningPlan", winning)
+		response.Set("explainVersion", "2")
+		if es, _ := response.Get("executionStats"); es != nil && returned != nil {
+			es.(*types.Document).Set("nReturned", returned[0])
+		}
+	}
+	if len(rest) == 0 {
+		return
+	}
+
 	out := cursorStage(response, queryPlanner)
 	if returned != nil {
 		setStageReturned(must.NotFail(out.Get(0)).(*types.Document), returned[0])
 	}
-	for i, stage := range rest {
-		entry := reportedStage(stage)
-		if returned != nil {
-			setStageReturned(entry, returned[i+1])
-		}
-		out.Append(entry)
-	}
+	appendReportedStages(ctx, fetcher, out, rest, returned, execStats)
 	response.Set("stages", reportSorts(out))
+}
+
+// appendReportedStages appends to out the explain entries of rest, the
+// stages after the query, with returned[i+1] the documents rest[i] returned
+// when returned is set.
+func appendReportedStages(ctx context.Context, fetcher *foreignFetcher, out *types.Array, rest []*types.Document, returned []int32, execStats bool) {
+	for i := 0; i < len(rest); i++ {
+		stage := rest[i]
+		n := i + 1
+		for j, entry := range reportedStages(stage) {
+			// A classic $lookup absorbs the $unwind of its join array.
+			if spec, _ := must.NotFail(entry.Get(entry.Command())).(*types.Document); entry.Command() == "$lookup" && spec != nil &&
+				i+1 < len(rest) && unwindsJoin(spec, rest[i+1]) {
+				spec.Set("unwinding", unwindingSpec(rest[i+1]))
+				i++
+				n = i + 1
+			}
+			if returned != nil {
+				setStageReturned(entry, returned[n])
+			}
+			if spec, _ := must.NotFail(stage.Get(stage.Command())).(*types.Document); execStats && j == 0 && stage.Command() == "$lookup" && spec != nil {
+				used := types.MakeArray(0)
+				for _, name := range lookupIndexesUsed(ctx, fetcher, spec) {
+					used.Append(name)
+				}
+				entry.Set("indexesUsed", used)
+			}
+			out.Append(entry)
+		}
+	}
+}
+
+// sbeQueryPlanStages are the stages SBE runs inside the query plan.
+var sbeQueryPlanStages = map[string]bool{"$group": true, "$bucket": true, "$sortByCount": true, "$lookup": true}
+
+// sbePlanStage is the query plan stage running stage, one of
+// sbeQueryPlanStages, on the documents input returns.
+func sbePlanStage(ctx context.Context, db backends.Database, dbName string, fetcher *foreignFetcher, stage, input *types.Document) *types.Document {
+	if stage.Command() == "$lookup" {
+		spec, _ := must.NotFail(stage.Get("$lookup")).(*types.Document)
+		return eqLookupStage(ctx, db, dbName, fetcher, spec, input)
+	}
+	return must.NotFail(types.NewDocument("stage", "GROUP", "inputStage", input))
+}
+
+// reportedStages are the stages mongod's explain shows for stage: a $bucket
+// or $sortByCount as the $group and $sort it runs, any other as
+// reportedStage.
+func reportedStages(stage *types.Document) []*types.Document {
+	if sorted := groupingSort(stage); sorted != nil {
+		return []*types.Document{groupingGroup(stage), sorted}
+	}
+	return []*types.Document{reportedStage(stage)}
+}
+
+// groupingSort is the $sort mongod runs after the $group of a $bucket or
+// $sortByCount, or nil for any other stage.
+func groupingSort(stage *types.Document) *types.Document {
+	switch stage.Command() {
+	case "$bucket":
+		return must.NotFail(types.NewDocument("$sort", must.NotFail(types.NewDocument("_id", int32(1)))))
+	case "$sortByCount":
+		return must.NotFail(types.NewDocument("$sort", must.NotFail(types.NewDocument("count", int32(-1)))))
+	}
+	return nil
+}
+
+// groupingGroup is the $group mongod runs for a $bucket or $sortByCount.
+func groupingGroup(stage *types.Document) *types.Document {
+	spec := must.NotFail(stage.Get(stage.Command()))
+	countAll := must.NotFail(types.NewDocument("$sum", int32(1)))
+	if stage.Command() == "$sortByCount" {
+		return must.NotFail(types.NewDocument("$group", must.NotFail(types.NewDocument("_id", spec, "count", countAll))))
+	}
+	bucket, _ := spec.(*types.Document)
+	if bucket == nil {
+		return stage.DeepCopy()
+	}
+	groupBy, _ := bucket.Get("groupBy")
+	branches := types.MakeArray(0)
+	if bounds, _ := bucket.Get("boundaries"); bounds != nil {
+		if arr, ok := bounds.(*types.Array); ok {
+			for i := 0; i+1 < arr.Len(); i++ {
+				lo, hi := must.NotFail(arr.Get(i)), must.NotFail(arr.Get(i+1))
+				inBucket := must.NotFail(types.NewDocument("$and", must.NotFail(types.NewArray(
+					must.NotFail(types.NewDocument("$gte", must.NotFail(types.NewArray(groupBy, lo)))),
+					must.NotFail(types.NewDocument("$lt", must.NotFail(types.NewArray(groupBy, hi)))),
+				))))
+				branches.Append(must.NotFail(types.NewDocument("case", inBucket, "then", lo)))
+			}
+		}
+	}
+	switchSpec := must.NotFail(types.NewDocument("branches", branches))
+	if def, _ := bucket.Get("default"); def != nil {
+		switchSpec.Set("default", def)
+	}
+	group := must.NotFail(types.NewDocument("_id", must.NotFail(types.NewDocument("$switch", switchSpec))))
+	output, _ := bucket.Get("output")
+	if out, ok := output.(*types.Document); ok {
+		for _, k := range out.Keys() {
+			group.Set(k, must.NotFail(out.Get(k)))
+		}
+	} else {
+		group.Set("count", countAll)
+	}
+	return must.NotFail(types.NewDocument("$group", group))
+}
+
+// explainedStageDocs returns the stages of pipeline, each $count as the
+// $group and $project mongod runs for it, or nil when a stage is not a
+// one-field document.
+func explainedStageDocs(pipeline []any) []*types.Document {
+	docs := make([]*types.Document, 0, len(pipeline))
+	for _, s := range pipeline {
+		stage, _ := s.(*types.Document)
+		if stage == nil || stage.Len() != 1 {
+			return nil
+		}
+		if field, ok := must.NotFail(stage.Get(stage.Command())).(string); ok && stage.Command() == "$count" {
+			docs = append(docs, desugaredCount(field)...)
+			continue
+		}
+		docs = append(docs, stage)
+	}
+	return docs
 }
 
 // reportedStage is stage as mongod's explain shows it: a $unset as the
@@ -164,11 +307,67 @@ func queryAbsorbedStages(docs []*types.Document) int {
 		}
 		phase = p
 	}
-	// A $unset is absorbed only as the last stage.
-	if i < len(docs) && (docs[i].Command() == "$project" || (docs[i].Command() == "$unset" && i == len(docs)-1)) {
+	// A $unset is absorbed only as the last stage, and a $project computing
+	// a field only by a query without a sort, skip or limit.
+	if i < len(docs) && (docs[i].Command() == "$project" && (i == 0 || phase == 0 && !hasSort(docs[:i]) || !computesFields(docs[i])) ||
+		docs[i].Command() == "$unset" && i == len(docs)-1) {
 		i++
 	}
 	return i
+}
+
+func hasSort(docs []*types.Document) bool {
+	for _, d := range docs {
+		if d.Command() == "$sort" {
+			return true
+		}
+	}
+	return false
+}
+
+// computesFields reports whether a $project sets a field to an expression
+// rather than only including or excluding fields.
+func computesFields(project *types.Document) bool {
+	spec, _ := must.NotFail(project.Get("$project")).(*types.Document)
+	if spec == nil {
+		return true
+	}
+	for _, v := range spec.Values() {
+		switch v.(type) {
+		case bool, int32, int64, float64, types.Decimal128:
+		default:
+			return true
+		}
+	}
+	return false
+}
+
+// dependencyProjection is the projection mongod's query applies for the
+// stages of docs it does not absorb, when they read only some fields, and
+// whether it shows only under a blocking sort, a skip or a limit, as beneath
+// SBE's stages. It is nil when the query absorbs a projection or the stages
+// read the whole document.
+func dependencyProjection(docs []*types.Document, sbe sbePlan) (*types.Document, bool) {
+	absorbed := queryAbsorbedStages(docs)
+	if absorbed == len(docs) || absorbed > 0 && docs[absorbed-1].Command() == "$project" {
+		return nil, false
+	}
+	rest := make([]any, 0, len(docs)-absorbed)
+	for _, d := range docs[absorbed:] {
+		rest = append(rest, d)
+	}
+	roots, ok := pipelineRootFields(rest)
+	if !ok || len(roots) == 0 {
+		return nil, false
+	}
+	projection := types.MakeDocument(len(roots) + 1)
+	for _, root := range roots {
+		projection.Set(root, true)
+	}
+	if !projection.Has("_id") {
+		projection.Set("_id", false)
+	}
+	return projection, sbe.end > absorbed
 }
 
 // stageReturns runs the pipeline on the documents qp's query reads and
@@ -217,6 +416,12 @@ func stageReturns(ctx context.Context, coll backends.Collection, qp *backends.Ex
 			iter = counter
 		}
 	}
+	if len(counters) == 0 {
+		// Every stage runs in the query plan.
+		counter := &countingIterator{DocumentsIterator: iter}
+		counters = append(counters, counter)
+		iter = counter
+	}
 	for {
 		if _, _, err = iter.Next(); err != nil {
 			break
@@ -229,7 +434,10 @@ func stageReturns(ctx context.Context, coll backends.Collection, qp *backends.Ex
 	for i, c := range counters {
 		returned[i] = c.n
 	}
-	if pulled, ok := pulledBeforeLimit(ctx, coll, query, docs[absorbed:], built[absorbed:]); ok {
+	// A per-document stage the query plan runs, such as an SBE $lookup, pulls
+	// as lazily as one after it.
+	from := min(queryAbsorbedStages(docs), absorbed)
+	if pulled, ok := pulledBeforeLimit(ctx, coll, query, docs[from:], built[from:]); ok {
 		returned[0] = pulled
 	}
 	return returned
@@ -366,7 +574,9 @@ func (h *Handler) statsStageReturns(ctx context.Context, db backends.Database, d
 		var err error
 		switch doc.Command() {
 		case "$indexStats":
-			built[i], err = stages.NewIndexStatsStage(doc, ctx, coll, h.TCPHost)
+			built[i], err = stages.NewIndexStatsStage(doc, ctx, coll, h.TCPHost, func(indexes []backends.IndexInfo) []backends.IndexInfo {
+				return clientVisibleIndexes(ctx, db, cName, indexes)
+			})
 		default:
 			built[i], err = foreignStageBuilder(db)(doc)
 		}
@@ -380,7 +590,7 @@ func (h *Handler) statsStageReturns(ctx context.Context, db backends.Database, d
 	var err error
 	if docs[0].Command() == "$collStats" {
 		iter, err = processStagesStats(ctx, closer, &stagesStatsParams{
-			coll, db, dbName, cName, stages.GetStatistics(built[:1]), built[:1], h.TCPHost,
+			coll, db, dbName, cName, stages.GetStatistics(built[:1]), built[:1], h.TCPHost, false,
 		})
 	} else {
 		iter, err = built[0].Process(ctx, iterator.Values(iterator.ForSlice([]*types.Document{})), closer)

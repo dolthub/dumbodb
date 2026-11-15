@@ -151,7 +151,7 @@ func TestEqualityIndex_MatchesFullScan(t *testing.T) {
 	}
 
 	l := &lookup{localField: "ref", foreignField: "k"}
-	idx := newEqualityIndex(foreign, "k")
+	idx := newEqualityIndex(foreign, "k", nil)
 
 	for _, local := range values {
 		input := doc("_id", int32(-1))
@@ -334,4 +334,25 @@ func TestLookup_IndexedForeignFieldIsUsedAtEveryLevel(t *testing.T) {
 			}
 		})
 	}
+}
+
+// lookupValuesMatch is the test's oracle: it reports whether foreignVal matches localVal the way mongod
+// matches {foreignField: {$in: <candidates>}}, where the candidates are the
+// elements of an array localVal, or localVal itself otherwise. A missing value
+// or an empty array is a null candidate. An inner array is a single candidate.
+func lookupValuesMatch(localVal, foreignVal any) bool {
+	localArr, localIsArr := localVal.(*types.Array)
+	if !localIsArr || localArr.Len() == 0 {
+		if localIsArr {
+			localVal = nil
+		}
+		return foreignMatchesCandidate(foreignVal, localVal)
+	}
+
+	for i := 0; i < localArr.Len(); i++ {
+		if foreignMatchesCandidate(foreignVal, must.NotFail(localArr.Get(i))) {
+			return true
+		}
+	}
+	return false
 }

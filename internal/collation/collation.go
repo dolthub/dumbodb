@@ -487,3 +487,65 @@ func (cmp *Comparator) KeyValue(v any) any {
 	}
 	return v
 }
+
+// Keyed is a value whose collation key is computed only when a comparison
+// needs it, and then once.
+type Keyed struct {
+	V     any
+	key   any
+	keyed bool
+}
+
+// Key returns k's value with strings replaced by their sort keys under cmp.
+func (k *Keyed) Key(cmp *Comparator) any {
+	if !k.keyed {
+		k.key, k.keyed = cmp.KeyValue(k.V), true
+	}
+	return k.key
+}
+
+// CompareKeyed compares a and b with compare, under cmp. Values of different
+// BSON type classes compare by type order and two strings with the collator,
+// so neither needs a key; other values compare by their keys.
+func CompareKeyed(cmp *Comparator, a, b *Keyed, compare func(x, y any) types.CompareResult) types.CompareResult {
+	if cmp == nil || !types.SameTypeClass(a.V, b.V) {
+		return compare(a.V, b.V)
+	}
+	// Arrays compare element by element, so only the elements reached
+	// are keyed.
+	if aa, ok := a.V.(*types.Array); ok {
+		if ba, ok := b.V.(*types.Array); ok {
+			for i := range min(aa.Len(), ba.Len()) {
+				ea, _ := aa.Get(i)
+				eb, _ := ba.Get(i)
+				if c := CompareKeyed(cmp, &Keyed{V: ea}, &Keyed{V: eb}, compareElements); c != types.Equal {
+					return c
+				}
+			}
+			switch {
+			case aa.Len() < ba.Len():
+				return types.Less
+			case aa.Len() > ba.Len():
+				return types.Greater
+			}
+			return types.Equal
+		}
+	}
+	if as, ok := a.V.(string); ok {
+		if bs, ok := b.V.(string); ok {
+			switch c := cmp.CompareStrings(as, bs); {
+			case c < 0:
+				return types.Less
+			case c > 0:
+				return types.Greater
+			}
+			return types.Equal
+		}
+	}
+	return compare(a.Key(cmp), b.Key(cmp))
+}
+
+// compareElements compares two array elements as BSON's array order does.
+func compareElements(a, b any) types.CompareResult {
+	return types.CompareOrder(a, b, types.Ascending)
+}

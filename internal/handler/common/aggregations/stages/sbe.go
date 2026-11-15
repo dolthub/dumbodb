@@ -1,0 +1,769 @@
+// Copyright 2026 Dolthub, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package stages
+
+import (
+	"context"
+	"errors"
+	"strings"
+
+	"github.com/dolthub/dumbodb/internal/handler/common"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
+	"github.com/dolthub/dumbodb/internal/handler/commonpath"
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/iterator"
+	"github.com/dolthub/dumbodb/internal/util/must"
+)
+
+// mongod 8.0 (internalQueryFrameworkControl: trySbeRestricted) runs a
+// pipeline's $group stages in its SBE engine, together with the stages before
+// them that its find layer absorbs. Expression errors raised there carry SBE's
+// codes and messages rather than the classic engine's.
+
+// SBEPrefixLen returns how many leading stages of a top-level pipeline mongod
+// runs in SBE: through its last $group, $bucket or $sortByCount when every
+// stage before it can be pushed down with it, else 0.
+// isView, when not nil, reports whether a collection is a view; an equality
+// $lookup from a view ends the prefix.
+// A $group by _id keeping one value counts as the distinct scan mongod runs
+// it as.
+func SBEPrefixLen(specs []*types.Document, isView func(string) bool) int {
+	end, _ := sbePrefix(specs, isView, true)
+	return end
+}
+
+// TopLevelSBEPrefix returns SBEPrefixLen of a pipeline whose caller has
+// ruled out a distinct scan $group, and how many leading stages mongod could
+// push down into SBE at all, which bounds the $lookup stages it runs there.
+func TopLevelSBEPrefix(specs []*types.Document, isView func(string) bool) (int, int) {
+	return sbePrefix(specs, isView, false)
+}
+
+// sbePrefix returns SBEPrefixLen and the number of leading stages mongod could
+// push down into SBE at all. idGroupsClassic counts a $group by _id keeping
+// one value as classic.
+func sbePrefix(specs []*types.Document, isView func(string) bool, idGroupsClassic bool) (int, int) {
+	var sawSort, sawProject, sawLimit, sawLookup, sawGroup bool
+	var project *types.Document
+	end := 0
+	for i, spec := range specs {
+		if spec == nil {
+			return end, i
+		}
+		pushed := sawLookup || sawGroup
+		if !sbeCompatibleStage(spec) {
+			return end, i
+		}
+		if g, _ := spec.Get("$group"); idGroupsClassic && g != nil {
+			if d, ok := g.(*types.Document); ok && groupsByIDKeepingOne(d) {
+				return end, i
+			}
+		}
+		switch spec.Command() {
+		case "$match":
+			if sawLimit || sawGroup {
+				return end, i
+			}
+		case "$sort":
+			if sawProject || sawLimit || pushed {
+				return end, i
+			}
+			sawSort = true
+		case "$limit", "$skip":
+			if spec.Command() == "$skip" && isZeroSkip(spec) {
+				// mongod drops a $skip of 0.
+				continue
+			}
+			if pushed {
+				return end, i
+			}
+			if sawProject && !sbeProjectPushable(project, true) {
+				// mongod moves the $limit or $skip ahead of the $project,
+				// which then no longer qualifies.
+				return end, i
+			}
+			sawLimit = true
+		case "$project":
+			if sawProject || pushed || !sbeProjectPushable(spec, sawSort || sawLimit) {
+				return end, i
+			}
+			sawProject = true
+			project = spec
+		case "$group":
+			sawGroup = true
+			end = i + 1
+		case "$bucket", "$sortByCount":
+			return i + 1, i + 1
+		case "$lookup":
+			if v, _ := spec.Get("$lookup"); v != nil {
+				d, ok := v.(*types.Document)
+				if !ok || d.Has("pipeline") {
+					return end, i
+				}
+				if from, _ := d.Get("from"); isView != nil {
+					if name, ok := from.(string); ok && isView(name) {
+						return end, i
+					}
+				}
+				if lookupPathHasIndex(d, "localField") || lookupPathHasIndex(d, "foreignField") {
+					return end, i
+				}
+			}
+			sawLookup = true
+		default:
+			return end, i
+		}
+	}
+	return end, len(specs)
+}
+
+// lookupPathHasIndex reports whether a $lookup path field has an array index
+// component, which keeps mongod from running the $lookup in SBE.
+func lookupPathHasIndex(spec *types.Document, field string) bool {
+	path, _ := spec.Get(field)
+	s, _ := path.(string)
+	for _, part := range strings.Split(s, ".") {
+		if commonpath.IsArrayIndexComponent(part) {
+			return true
+		}
+	}
+	return false
+}
+
+func isZeroSkip(spec *types.Document) bool {
+	n, ok := toFloat64(must.NotFail(spec.Get("$skip")))
+	return ok && n == 0
+}
+
+// sbeClassicOperators are the expression operators that make mongod 8.0 run
+// a stage in its classic engine instead of SBE.
+var sbeClassicOperators = map[string]bool{
+	"$allElementsTrue": true, "$arrayElemAt": true, "$avg": true, "$binarySize": true, "$convert": true,
+	"$filter": true, "$first": true, "$firstN": true, "$getField": true, "$in": true, "$indexOfArray": true,
+	"$last": true, "$lastN": true, "$log": true, "$map": true, "$max": true, "$maxN": true, "$median": true,
+	"$mergeObjects": true, "$min": true, "$minN": true, "$percentile": true, "$rand": true, "$reduce": true,
+	"$replaceAll": true, "$setField": true, "$size": true, "$slice": true, "$split": true, "$stdDevPop": true,
+	"$stdDevSamp": true, "$strcasecmp": true, "$strLenCP": true, "$substr": true, "$substrBytes": true,
+	"$substrCP": true, "$sum": true, "$toBool": true, "$toDate": true, "$toDecimal": true, "$toDouble": true,
+	"$toInt": true, "$toLong": true, "$toObjectId": true, "$toString": true, "$toUUID": true,
+	"$unsetField": true, "$type": true, "$zip": true,
+}
+
+// sbeClassicAccumulators are the $group accumulators that make mongod run the
+// $group in its classic engine.
+var sbeClassicAccumulators = map[string]bool{"$median": true, "$percentile": true}
+
+// IsExpressMatch reports whether a pipeline starts with a $match on one
+// non-null _id value, alone, which mongod runs on its express plan rather
+// than in SBE. mongod joins a second leading $match to the first.
+func IsExpressMatch(specs []*types.Document) bool {
+	if len(specs) == 0 || specs[0] == nil || specs[0].Command() != "$match" {
+		return false
+	}
+	if len(specs) > 1 && specs[1] != nil && specs[1].Command() == "$match" {
+		return false
+	}
+	filter, ok := must.NotFail(specs[0].Get("$match")).(*types.Document)
+	if !ok || filter.Len() != 1 || filter.Keys()[0] != "_id" {
+		return false
+	}
+	switch v := must.NotFail(filter.Get("_id")).(type) {
+	case *types.Document:
+		return v.Len() == 0 || !strings.HasPrefix(v.Keys()[0], "$")
+	case *types.Array, types.Regex, types.NullType, types.UndefinedType:
+		return false
+	}
+	return true
+}
+
+// groupsByIDKeepingOne reports whether a $group groups by "$_id" and keeps
+// one value per group ($first, $last, $top, $bottom), which mongod rewrites
+// into a stage of its classic engine.
+func groupsByIDKeepingOne(spec *types.Document) bool {
+	id, _ := spec.Get("_id")
+	switch id := id.(type) {
+	case string:
+		if !isIDPath(id) {
+			return false
+		}
+	case *types.Document:
+		// An object of one _id path, as {i: "$_id"}.
+		if id.Len() != 1 || operators.IsOperator(id) {
+			return false
+		}
+		for _, v := range id.Values() {
+			if path, ok := v.(string); !ok || !isIDPath(path) {
+				return false
+			}
+		}
+	default:
+		return false
+	}
+	for _, field := range spec.Keys() {
+		if field == "_id" {
+			continue
+		}
+		acc, ok := must.NotFail(spec.Get(field)).(*types.Document)
+		if !ok || acc.Len() != 1 {
+			return false
+		}
+		switch acc.Command() {
+		case "$first", "$last", "$top", "$bottom":
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// isIDPath reports whether path is the input document's _id.
+func isIDPath(path string) bool {
+	return path == "$_id" || path == "$$CURRENT._id" || path == "$$ROOT._id"
+}
+
+// sbeCompatibleStage reports whether every expression of a stage, and for a
+// grouping stage every accumulator, can run in mongod's SBE engine.
+func sbeCompatibleStage(spec *types.Document) bool {
+	name := spec.Command()
+	v, _ := spec.Get(name)
+	switch name {
+	case "$group":
+		d, ok := v.(*types.Document)
+		if !ok {
+			return true
+		}
+		for _, field := range d.Keys() {
+			val := must.NotFail(d.Get(field))
+			if acc, ok := val.(*types.Document); ok && field != "_id" && acc.Len() == 1 {
+				if sbeClassicAccumulators[acc.Command()] {
+					return false
+				}
+				if !sbeCompatibleExpression(must.NotFail(acc.Get(acc.Command()))) {
+					return false
+				}
+				continue
+			}
+			if !sbeCompatibleExpression(val) {
+				return false
+			}
+		}
+		return true
+	case "$bucket":
+		d, ok := v.(*types.Document)
+		if !ok {
+			return true
+		}
+		// mongod's $bucket groups by a $switch with a branch per bucket, and
+		// SBE takes a $switch of fewer than 50 branches.
+		if b, _ := d.Get("boundaries"); b != nil {
+			if arr, ok := b.(*types.Array); ok && arr.Len()-1 >= 50 {
+				return false
+			}
+		}
+		if out, _ := d.Get("output"); out != nil {
+			if !sbeCompatibleStage(must.NotFail(types.NewDocument("$group", out))) {
+				return false
+			}
+		}
+		g, _ := d.Get("groupBy")
+		return sbeCompatibleExpression(g)
+	case "$project", "$sortByCount":
+		return sbeCompatibleExpression(v)
+	case "$match":
+		d, ok := v.(*types.Document)
+		return !ok || sbeCompatibleFilter(d)
+	}
+	return true
+}
+
+// sbeCompatibleFilter checks the $expr expressions of a query filter.
+func sbeCompatibleFilter(filter *types.Document) bool {
+	for _, k := range filter.Keys() {
+		val := must.NotFail(filter.Get(k))
+		switch k {
+		case "$expr":
+			if !sbeCompatibleExpression(val) {
+				return false
+			}
+		case "$and", "$or", "$nor":
+			arr, ok := val.(*types.Array)
+			if !ok {
+				continue
+			}
+			for i := range arr.Len() {
+				if d, ok := must.NotFail(arr.Get(i)).(*types.Document); ok && !sbeCompatibleFilter(d) {
+					return false
+				}
+			}
+		case "$jsonSchema":
+			return false
+		default:
+			if d, ok := val.(*types.Document); ok && !sbeCompatiblePredicate(d) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// sbeClassicQueryOperators are the query operators that make mongod 8.0 run
+// a $match in its classic engine.
+var sbeClassicQueryOperators = map[string]bool{
+	"$bitsAllSet": true, "$bitsAnySet": true, "$bitsAllClear": true, "$bitsAnyClear": true,
+}
+
+// sbeCompatiblePredicate checks the operators of a field's predicate.
+func sbeCompatiblePredicate(pred *types.Document) bool {
+	for _, op := range pred.Keys() {
+		if sbeClassicQueryOperators[op] {
+			return false
+		}
+		switch inner := must.NotFail(pred.Get(op)).(type) {
+		case *types.Document:
+			switch op {
+			case "$not":
+				if !sbeCompatiblePredicate(inner) {
+					return false
+				}
+			case "$elemMatch":
+				if !sbeCompatiblePredicate(inner) || !sbeCompatibleFilter(inner) {
+					return false
+				}
+			}
+		case *types.Array:
+			if op != "$all" {
+				continue
+			}
+			for i := range inner.Len() {
+				elem, ok := must.NotFail(inner.Get(i)).(*types.Document)
+				if ok && elem.Command() == "$elemMatch" && !sbeCompatiblePredicate(elem) {
+					return false
+				}
+			}
+		}
+	}
+	return true
+}
+
+func sbeCompatibleExpression(v any) bool {
+	switch v := v.(type) {
+	case *types.Array:
+		for i := range v.Len() {
+			if !sbeCompatibleExpression(must.NotFail(v.Get(i))) {
+				return false
+			}
+		}
+	case *types.Document:
+		if v.Command() == "$literal" {
+			return true
+		}
+		for _, k := range v.Keys() {
+			if sbeClassicOperators[k] || !sbeCompatibleExpression(must.NotFail(v.Get(k))) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// sbeSpecs returns the stage documents of pipeline, nil for a non-document.
+func sbeSpecs(pipeline *types.Array) []*types.Document {
+	if pipeline == nil {
+		return nil
+	}
+	specs := make([]*types.Document, pipeline.Len())
+	for i := range specs {
+		specs[i], _ = must.NotFail(pipeline.Get(i)).(*types.Document)
+	}
+	return specs
+}
+
+// sbeProjectPushable reports whether mongod's find layer absorbs a $project:
+// not an exclusion, and after a $sort only an inclusion.
+func sbeProjectPushable(spec *types.Document, afterSort bool) bool {
+	v, _ := spec.Get("$project")
+	proj, ok := v.(*types.Document)
+	if !ok {
+		return false
+	}
+	keys := proj.Keys()
+	included := false
+	for i, val := range proj.Values() {
+		switch val := val.(type) {
+		case bool, int32, int64, float64, types.Decimal128:
+			if common.IsTruthy(val) {
+				included = true
+			} else if keys[i] != "_id" {
+				return false
+			}
+		default:
+			if afterSort {
+				return false
+			}
+			included = true
+		}
+	}
+	return included
+}
+
+// MarkSBELookups has each equality $lookup that mongod runs in SBE apply
+// SBE's limit on one document's matches.
+func MarkSBELookups(pipeline []aggregations.Stage, specs []*types.Document, isView func(string) bool) {
+	_, pushable := sbePrefix(specs, isView, true)
+	MarkSBELookupsBefore(pipeline, pushable)
+}
+
+// MarkSBELookupsBefore has each equality $lookup among the first n stages of
+// pipeline apply SBE's limit on one document's matches.
+func MarkSBELookupsBefore(pipeline []aggregations.Stage, n int) {
+	for i := 0; i < n && i < len(pipeline); i++ {
+		if l, ok := pipeline[i].(*lookup); ok {
+			l.sbe = true
+		}
+	}
+}
+
+// WrapSBEStages makes the first n stages, built from specs, evaluate and
+// report expression errors as mongod's SBE engine does.
+func WrapSBEStages(pipeline []aggregations.Stage, specs []*types.Document, n int) {
+	for i := 0; i < n && i < len(pipeline); i++ {
+		if i < len(specs) {
+			operators.MarkSBE(specs[i])
+		}
+		pipeline[i] = &sbeStage{inner: pipeline[i]}
+	}
+}
+
+type sbeStage struct {
+	inner aggregations.Stage
+}
+
+// sbeAware is implemented by stages that validate differently when mongod
+// runs them in SBE.
+type sbeAware interface {
+	useSBE() error
+}
+
+func (s *sbeStage) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
+	if a, ok := s.inner.(sbeAware); ok {
+		if err := a.useSBE(); err != nil {
+			iter.Close()
+			return nil, err
+		}
+	}
+	out, err := s.inner.Process(ctx, iter, closer)
+	if err != nil {
+		return nil, sbeError(err)
+	}
+	res := &sbeIterator{iter: out}
+	closer.Add(res)
+	return res, nil
+}
+
+type sbeIterator struct {
+	iter types.DocumentsIterator
+}
+
+func (it *sbeIterator) Next() (struct{}, *types.Document, error) {
+	_, doc, err := it.iter.Next()
+	if err != nil {
+		return struct{}{}, nil, sbeError(err)
+	}
+	return struct{}{}, doc, nil
+}
+
+func (it *sbeIterator) Close() {
+	it.iter.Close()
+}
+
+// sbeError returns err with SBE's code and message when SBE reports the same
+// failure differently, as for math operators.
+func sbeError(err error) error {
+	if errors.Is(err, iterator.ErrIteratorDone) {
+		return err
+	}
+	var cmdErr *handlererrors.CommandError
+	if !errors.As(err, &cmdErr) {
+		return err
+	}
+	var op string
+	if cmdErr.Info() != nil {
+		op = cmdErr.Info().Argument
+	}
+	var ctxErr *operators.OperatorContextError
+	if errors.As(err, &ctxErr) {
+		if _, mapped := sbeOperatorErrors[sbeOperatorError{ctxErr.Op, cmdErr.Code()}]; mapped || sbeDatePartOperators[ctxErr.Op] {
+			op = ctxErr.Op
+		}
+	}
+	code, msg, ok := sbeEquivalent(cmdErr.Code(), op, cmdErr.Err().Error())
+	if !ok {
+		return err
+	}
+	return handlererrors.NewCommandErrorMsgWithArgument(code, msg, op)
+}
+
+// sbeBoundedTrigOps are the trigonometric operators with a restricted domain,
+// whose non-numeric error SBE reports under its own code.
+var sbeBoundedTrigOps = map[string]bool{
+	"$sin": true, "$cos": true, "$tan": true, "$asin": true, "$acos": true, "$acosh": true, "$atanh": true,
+}
+
+var sbeUnboundedTrigOps = map[string]bool{
+	"$atan": true, "$sinh": true, "$cosh": true, "$tanh": true, "$asinh": true,
+	"$degreesToRadians": true, "$radiansToDegrees": true,
+}
+
+var sbeMathNonNumeric = map[string]handlererrors.ErrorCode{
+	"$abs":   handlererrors.ErrSBEAbsNonNumeric,
+	"$ceil":  handlererrors.ErrSBECeilNonNumeric,
+	"$floor": handlererrors.ErrSBEFloorNonNumeric,
+	"$exp":   handlererrors.ErrSBEExpNonNumeric,
+	"$ln":    handlererrors.ErrSBELnNonNumeric,
+	"$log10": handlererrors.ErrSBELog10NonNumeric,
+	"$sqrt":  handlererrors.ErrSBESqrtNonNumeric,
+}
+
+// sbeOperatorErrors maps an operator's input error to the code and message
+// SBE reports for it.
+var sbeOperatorErrors = map[sbeOperatorError]struct {
+	code handlererrors.ErrorCode
+	msg  string
+}{
+	{"$switch", 40066}:                               {handlererrors.ErrSBEBucketNoBranch, "$switch could not find a matching branch for an input, and no default was specified."},
+	{"$dateAdd", 5166405}:                            {handlererrors.ErrSBEInput7157907, "$dateAdd expects integer amount of time units"},
+	{"$dateSubtract", 5166405}:                       {handlererrors.ErrSBEInput7157907, "$dateSubtract expects integer amount of time units"},
+	{"$dateAdd", 5439013}:                            {handlererrors.ErrSBEInput7157905, "$dateAdd expects string defining the time unit"},
+	{"$dateSubtract", 5439013}:                       {handlererrors.ErrSBEInput7157905, "$dateSubtract expects string defining the time unit"},
+	{"$dateAdd", 9}:                                  {handlererrors.ErrSBEInput7157906, "$dateAdd parameter 'unit' must be a valid time unit"},
+	{"$dateSubtract", 9}:                             {handlererrors.ErrSBEInput7157906, "$dateSubtract parameter 'unit' must be a valid time unit"},
+	{"$dateDiff", 9}:                                 {handlererrors.ErrSBEInput7157924, "$dateDiff parameter 'unit' value cannot be recognized as a time unit"},
+	{"$dateTrunc", 9}:                                {handlererrors.ErrSBEInput7157936, "$dateTrunc parameter 'unit' value cannot be recognized as a time unit"},
+	{"$dateToString", 18533}:                         {handlererrors.ErrSBEInput4997903, "$dateToString parameter 'format' must be a string"},
+	{"$dateToString", 40485}:                         {handlererrors.ErrSBEInput4997908, "$dateToString parameter 'timezone' must be a valid timezone"},
+	{"$dateToParts", 40485}:                          {handlererrors.ErrSBEInput7157913, "$dateToParts timezone must be a valid timezone"},
+	{"$dateDiff", 40485}:                             {handlererrors.ErrSBEInput7157920, "$dateDiff parameter 'timezone' must be a valid timezone"},
+	{"$dateDiff", 5439016}:                           {handlererrors.ErrSBEInput7157926, "$dateDiff parameter 'startOfWeek' must be a valid day of the week"},
+	{"$dateTrunc", 5439018}:                          {handlererrors.ErrSBEInput7157940, "$dateTrunc parameter 'binSize' must be coercible to a positive 64-bit integer"},
+	{"$dateTrunc", 5439016}:                          {handlererrors.ErrSBEInput7157944, "$dateTrunc parameter 'startOfWeek' must be a valid day of the week"},
+	{"$replaceOne", 51744}:                           {handlererrors.ErrSBEInput7158302, "$replaceOne requires that 'replacement' be a string"},
+	{"$regexMatch", 51106}:                           {handlererrors.ErrSBEInput5126603, "$regexMatch: regex flags must have either string or null type"},
+	{"$regexFind", 51106}:                            {handlererrors.ErrSBEInput5126603, "$regexFind: regex flags must have either string or null type"},
+	{"$regexFindAll", 51106}:                         {handlererrors.ErrSBEInput5126603, "$regexFindAll: regex flags must have either string or null type"},
+	{"$arrayToObject", 40398}:                        {handlererrors.ErrSBEInput5153201, "Input to $arrayToObject should be either an array or object"},
+	{"$indexOfBytes", 40097}:                         {handlererrors.ErrSBEInput7158004, "$indexOfBytes start index must be positive"},
+	{"$indexOfCP", 40097}:                            {handlererrors.ErrSBEInput7158004, "$indexOfCP start index must be positive"},
+	{"$indexOfBytes", 40092}:                         {handlererrors.ErrSBEInput7158009, "$indexOfBytes substring must resolve to a string"},
+	{"$indexOfCP", 40094}:                            {handlererrors.ErrSBEInput7158009, "$indexOfCP substring must resolve to a string"},
+	{"$indexOfBytes", 40096}:                         {handlererrors.ErrSBEInput7158003, "$indexOfBytes start index must resolve to a number"},
+	{"$indexOfCP", 40096}:                            {handlererrors.ErrSBEInput7158003, "$indexOfCP start index must resolve to a number"},
+	{"$range", 34443}:                                {handlererrors.ErrSBEInput7157711, "$range only supports numeric types for start"},
+	{"$range", 34447}:                                {handlererrors.ErrSBEInput7157713, "$range only supports numeric types for step"},
+	{"$range", 34449}:                                {handlererrors.ErrSBEInput7157717, "$range requires a non-zero step value"},
+	{"$regexMatch", 51105}:                           {handlererrors.ErrSBEInput5126601, "$regexMatch: regex must be of type string or BSON RegEx"},
+	{"$regexFind", 51105}:                            {handlererrors.ErrSBEInput5126601, "$regexFind: regex must be of type string or BSON RegEx"},
+	{"$regexFindAll", 51105}:                         {handlererrors.ErrSBEInput5126601, "$regexFindAll: regex must be of type string or BSON RegEx"},
+	{"$replaceOne", 51745}:                           {handlererrors.ErrSBEInput7158302, "$replaceOne requires that 'find' be a string"},
+	{"$arrayToObject", 40397}:                        {handlererrors.ErrSBEInput5153205, "$arrayToObject requires an array of size 2 arrays"},
+	{"$concat", 16702}:                               {handlererrors.ErrSBEInput7158201, "$concat supports only strings"},
+	{"$strLenBytes", 34473}:                          {handlererrors.ErrSBEInput5155800, "$strLenBytes requires a string argument"},
+	{"$dateToString", 16006}:                         {handlererrors.ErrSBEInput4997901, "$dateToString parameter 'date' must be coercible to date"},
+	{"$range", 34445}:                                {handlererrors.ErrSBEInput7157712, "$range only supports numeric types for end"},
+	{"$range", 34446}:                                {handlererrors.ErrSBEInput7157715, "$range end must be representable as a 32-bit integer"},
+	{"$toUpper", 16007}:                              {handlererrors.ErrSBEInput7158200, "$toUpper input type is not supported"},
+	{"$toLower", 16007}:                              {handlererrors.ErrSBEInput7158200, "$toLower input type is not supported"},
+	{"$trim", 50699}:                                 {handlererrors.ErrSBEInput5156302, "$trim input expression must be a string"},
+	{"$ltrim", 50699}:                                {handlererrors.ErrSBEInput5156302, "$ltrim input expression must be a string"},
+	{"$rtrim", 50699}:                                {handlererrors.ErrSBEInput5156302, "$rtrim input expression must be a string"},
+	{"$trim", 50700}:                                 {handlererrors.ErrSBEInput5156303, "$trim chars expression must be a string if provided"},
+	{"$ltrim", 50700}:                                {handlererrors.ErrSBEInput5156303, "$ltrim chars expression must be a string if provided"},
+	{"$rtrim", 50700}:                                {handlererrors.ErrSBEInput5156303, "$rtrim chars expression must be a string if provided"},
+	{"$indexOfBytes", 40091}:                         {handlererrors.ErrSBEInput7158007, "$indexOfBytes string must resolve to a string or null"},
+	{"$indexOfCP", 40093}:                            {handlererrors.ErrSBEInput7158007, "$indexOfCP string must resolve to a string or null"},
+	{"$regexMatch", 51104}:                           {handlererrors.ErrSBEInput5073401, "$regexMatch: input must be of type string"},
+	{"$regexFind", 51104}:                            {handlererrors.ErrSBEInput5073401, "$regexFind: input must be of type string"},
+	{"$regexFindAll", 51104}:                         {handlererrors.ErrSBEInput5073401, "$regexFindAll: input must be of type string"},
+	{"$replaceOne", 51746}:                           {handlererrors.ErrSBEInput7158302, "$replaceOne requires that 'input' be a string"},
+	{"$dateAdd", 5166403}:                            {handlererrors.ErrSBEInput7157904, "$dateAdd must have startDate argument convertable to date"},
+	{"$dateSubtract", 5166403}:                       {handlererrors.ErrSBEInput7157904, "$dateSubtract must have startDate argument convertable to date"},
+	{"$dateDiff", 5166307}:                           {handlererrors.ErrSBEInput7157921, "$dateDiff parameter 'startDate' must be coercible to date"},
+	{"$dateTrunc", 5439012}:                          {handlererrors.ErrSBEInput7157932, "$dateTrunc parameter 'date' must be coercible to date"},
+	{"$dateToParts", 16006}:                          {handlererrors.ErrSBEInput7157915, "$dateToParts date must have the format of a date"},
+	{"$dateFromParts", 40515}:                        {handlererrors.ErrSBEInput7157917, "'year' must evaluate to an integer"},
+	{"$concatArrays", 28664}:                         {handlererrors.ErrSBEInput7158000, "$concatArrays only supports arrays"},
+	{"$setUnion", handlererrors.ErrSetUnionNotArray}: {handlererrors.ErrSBEInput7158100, "All operands of $setUnion must be arrays."},
+	{"$setDifference", handlererrors.ErrSetDifferenceFirstNotArray}:     {handlererrors.ErrSBEInput7158100, "All operands of $setDifference must be arrays."},
+	{"$setDifference", handlererrors.ErrSetDifferenceSecondNotArray}:    {handlererrors.ErrSBEInput7158100, "All operands of $setDifference must be arrays."},
+	{"$setEquals", handlererrors.ErrSetEqualsNotArray}:                  {handlererrors.ErrSBEInput7158100, "All operands of $setEquals must be arrays."},
+	{"$setIntersection", handlererrors.ErrSetIntersectionNotArray}:      {handlererrors.ErrSBEInput7158100, "All operands of $setIntersection must be arrays."},
+	{"$setIsSubset", handlererrors.ErrSetIsSubsetFirstNotArray}:         {handlererrors.ErrSBEInput7158100, "All operands of $setIsSubset must be arrays."},
+	{"$setIsSubset", handlererrors.ErrSetIsSubsetFirstNotArrayVariable}: {handlererrors.ErrSBEInput7158100, "All operands of $setIsSubset must be arrays."},
+	{"$setIsSubset", handlererrors.ErrSetIsSubsetSecondNotArray}:        {handlererrors.ErrSBEInput7158100, "All operands of $setIsSubset must be arrays."},
+	{"$reverseArray", handlererrors.ErrReverseArrayNotArray}:            {handlererrors.ErrSBEInput7158002, "$reverseArray argument must be an array"},
+	{"$objectToArray", 16020}:                                           {handlererrors.ErrSBEInput5153215, "$objectToArray requires an object input"},
+	{"$arrayToObject", 40386}:                                           {handlererrors.ErrSBEInput5153200, "$arrayToObject requires an array input"},
+	{"$sortArray", 2942504}:                                             {handlererrors.ErrSBEInput7158001, "$sortArray input argument must be an array"},
+	{"$anyElementTrue", handlererrors.ErrAnyElementTrueNotArray}:        {handlererrors.ErrSBEInput7158300, "$anyElementTrue's argument must be an array"},
+	{"$tsSecond", handlererrors.ErrTsSecondNotTimestamp}:                {handlererrors.ErrSBEInput7157900, "$tsSecond expects argument of type timestamp"},
+	{"$tsIncrement", handlererrors.ErrTsIncrementNotTimestamp}:          {handlererrors.ErrSBEInput7157901, "$tsIncrement expects argument of type timestamp"},
+	{"$bsonSize", 31393}:                                                {handlererrors.ErrSBEInput7158301, "$bsonSize requires a document input"},
+}
+
+type sbeOperatorError struct {
+	op   string
+	code handlererrors.ErrorCode
+}
+
+// sbeDatePartOperators report a non-date input under one SBE code.
+var sbeDatePartOperators = map[string]bool{
+	"$year": true, "$month": true, "$dayOfMonth": true, "$dayOfWeek": true, "$dayOfYear": true, "$hour": true,
+	"$minute": true, "$second": true, "$millisecond": true, "$week": true, "$isoWeek": true, "$isoWeekYear": true,
+	"$isoDayOfWeek": true,
+}
+
+func sbeEquivalent(code handlererrors.ErrorCode, op, msg string) (handlererrors.ErrorCode, string, bool) {
+	if e, ok := sbeOperatorErrors[sbeOperatorError{op, code}]; ok {
+		if e.code == handlererrors.ErrSBEInput7157921 && strings.Contains(msg, "'endDate'") {
+			return handlererrors.ErrSBEInput7157922, "$dateDiff parameter 'endDate' must be coercible to date", true
+		}
+		// The index operators report the ending index under its own codes.
+		if (op == "$indexOfBytes" || op == "$indexOfCP") && strings.Contains(msg, "ending index") {
+			switch e.code {
+			case handlererrors.ErrSBEInput7158003:
+				return handlererrors.ErrSBEInput7158005, op + " end index must resolve to a number", true
+			case handlererrors.ErrSBEInput7158004:
+				return handlererrors.ErrSBEInput7158006, op + " end index must be positive", true
+			}
+		}
+		return e.code, e.msg, true
+	}
+	if code == handlererrors.ErrBucketNoBranch {
+		return handlererrors.ErrSBEBucketNoBranch,
+			"$switch could not find a matching branch for an input, and no default was specified.", true
+	}
+	if code == handlererrors.ErrCannotConvertToDate && sbeDatePartOperators[op] {
+		return handlererrors.ErrSBEInput5157904, op[1:] + " parameter 'date' must be coercible to date", true
+	}
+	switch code {
+	case handlererrors.ErrBadValue:
+		if op == "$divide" {
+			return handlererrors.ErrSBEDivideByZero, msg, true
+		}
+	case handlererrors.ErrTypeMismatch:
+		switch op {
+		case "$divide":
+			return handlererrors.ErrSBEDivideNonNumeric, "$divide only supports numeric types", true
+		case "$subtract":
+			return handlererrors.ErrSBESubtractNonNumeric, "Only numbers and dates are allowed in an $subtract expression. " +
+				"To subtract a number from a date, the date must be the first argument.", true
+		case "$add":
+			return handlererrors.ErrSBEAddNonNumeric, "only numbers and dates are allowed in an $add expression", true
+		case "$multiply":
+			return handlererrors.ErrSBEMultiplyNonNumeric, "only numbers are allowed in an $multiply expression", true
+		}
+	case handlererrors.ErrModByZero, handlererrors.ErrModByZeroDecimal:
+		return handlererrors.ErrSBEModByZero, "can't $mod by zero", true
+	case handlererrors.ErrModNonNumeric:
+		return handlererrors.ErrSBEModNonNumeric, "$mod only supports numeric types", true
+	case handlererrors.ErrMathNonNumeric:
+		switch {
+		case sbeMathNonNumeric[op] != 0:
+			return sbeMathNonNumeric[op], op + " only supports numeric types", true
+		case sbeBoundedTrigOps[op]:
+			return handlererrors.ErrSBEBoundedTrigNonNumeric, op + " supports only numeric types", true
+		case sbeUnboundedTrigOps[op]:
+			return handlererrors.ErrSBETrigNonNumeric, op + " supports only numeric types", true
+		}
+	case handlererrors.ErrAddTwoDates:
+		return handlererrors.ErrSBEAddTwoDates, "only one date allowed in an $add expression", true
+	case handlererrors.ErrAbsOfLongMin:
+		return handlererrors.ErrSBEAbsOfLongMin, msg, true
+	case handlererrors.ErrLnNonPositive:
+		return handlererrors.ErrSBELnNonPositive, "$ln's argument must be a positive number", true
+	case handlererrors.ErrLog10NonPositive:
+		return handlererrors.ErrSBELog10NonPositive, "$log10's argument must be a positive number", true
+	case handlererrors.ErrSqrtNegative:
+		return handlererrors.ErrSBESqrtNegative, msg, true
+	case handlererrors.ErrPowZeroNegativeExponent:
+		return handlererrors.ErrSBEPowZeroNegative, "$pow cannot raise 0 to a negative exponent", true
+	case handlererrors.ErrPowNonNumericBase, handlererrors.ErrPowNonNumericExponent:
+		return handlererrors.ErrSBEPowNonNumeric, "$pow only supports numeric types", true
+	case handlererrors.ErrRoundNonNumeric:
+		return handlererrors.ErrSBERoundNonNumeric, op + " only supports numeric types", true
+	case handlererrors.ErrRoundPlaceNotIntegral, handlererrors.ErrRoundPlaceOutOfRange, handlererrors.ErrCannotConvertToLong:
+		if op == "$round" || op == "$trunc" {
+			return handlererrors.ErrSBERoundPlace, op + ` requires "place" argument to be an integer between -20 and 100`, true
+		}
+	case handlererrors.ErrTrigOutOfBounds:
+		const marker = "value must be in "
+		if i := strings.LastIndex(msg, marker); i >= 0 {
+			bounds := strings.ReplaceAll(msg[i+len(marker):], ",", ", ")
+			return handlererrors.ErrSBETrigOutOfBounds, "Cannot apply " + op + ", value must be in " + bounds, true
+		}
+	case handlererrors.ErrNumericFirstArgument, handlererrors.ErrNumericSecondArgument:
+		if op == "$atan2" {
+			return handlererrors.ErrSBEAtan2NonNumeric, "$atan2 supports only numeric types", true
+		}
+	}
+	return 0, "", false
+}
+
+var (
+	_ aggregations.Stage = (*sbeStage)(nil)
+)
+
+// ViewStagesInClassic reports whether mongod runs the $group, $bucket,
+// $sortByCount, $count and $lookup stages of a view's pipeline in its classic
+// engine: it parses them after the pipeline run on the view, and once that
+// holds an expression SBE cannot run, outside a $match, nothing parsed later
+// goes to SBE.
+func ViewStagesInClassic(view, user []any) bool {
+	if SBEStageIndex(view) < 0 {
+		return false
+	}
+	for _, s := range user {
+		spec, _ := s.(*types.Document)
+		if spec == nil || spec.Len() != 1 {
+			continue
+		}
+		switch spec.Command() {
+		case "$set", "$addFields", "$replaceRoot", "$replaceWith":
+			if !sbeCompatibleExpression(must.NotFail(spec.Get(spec.Command()))) {
+				return true
+			}
+		case "$project", "$group", "$bucket", "$sortByCount":
+			if !sbeCompatibleStage(spec) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// SBEStageIndex returns the position of the first stage of pipeline that
+// mongod could run in SBE inside its query plan, or -1.
+func SBEStageIndex(pipeline []any) int {
+	for i, s := range pipeline {
+		if spec, _ := s.(*types.Document); spec != nil && spec.Len() == 1 {
+			switch spec.Command() {
+			case "$group", "$bucket", "$sortByCount", "$count", "$lookup":
+				return i
+			}
+		}
+	}
+	return -1
+}

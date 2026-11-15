@@ -112,6 +112,8 @@ func (h *Handler) MsgCollStats(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		return nil, lazyerrors.Error(err)
 	}
 
+	indexes.Indexes = clientVisibleIndexes(connCtx, db, collection, indexes.Indexes)
+
 	stats, err := c.Stats(connCtx, &backends.CollectionStatsParams{Refresh: true})
 	if backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist) ||
 		backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseDoesNotExist) {
@@ -125,7 +127,9 @@ func (h *Handler) MsgCollStats(connCtx context.Context, msg *wire.OpMsg) (*wire.
 
 	indexSizes := types.MakeDocument(len(stats.IndexSizes))
 	for _, indexSize := range stats.IndexSizes {
-		indexSizes.Set(indexSize.Name, int32(indexSize.Size/scale))
+		if hasIndexNamed(indexes.Indexes, indexSize.Name) {
+			indexSizes.Set(indexSize.Name, int32(indexSize.Size/scale))
+		}
 	}
 
 	// Build indexDetails document (one entry per index, value is an empty document).

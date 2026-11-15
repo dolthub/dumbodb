@@ -29,9 +29,19 @@ var queryExecutorCounters struct {
 	docs atomic.Int64
 }
 
+func init() {
+	backends.RegisterServerExaminedCounter(func(keys, docs int) {
+		queryExecutorCounters.keys.Add(int64(keys))
+		queryExecutorCounters.docs.Add(int64(docs))
+	})
+}
+
 // countKeysExamined counts n index keys read, server-wide and for ctx's
 // operation.
 func countKeysExamined(ctx context.Context, n int) {
+	if backends.IsUncountedReads(ctx) {
+		return
+	}
 	queryExecutorCounters.keys.Add(int64(n))
 	backends.AddKeysExamined(ctx, n)
 }
@@ -39,6 +49,9 @@ func countKeysExamined(ctx context.Context, n int) {
 // countDocsExamined counts n documents read, server-wide and for ctx's
 // operation.
 func countDocsExamined(ctx context.Context, n int) {
+	if backends.IsUncountedReads(ctx) {
+		return
+	}
 	queryExecutorCounters.docs.Add(int64(n))
 	backends.AddDocsExamined(ctx, n)
 }
@@ -47,25 +60,30 @@ func countDocsExamined(ctx context.Context, n int) {
 // that counts every item: it resolves the operation's counts from the context
 // on first use. Its zero value is ready to use.
 type examinedCounter struct {
-	op       *backends.ExaminedCounts
-	resolved bool
+	op        *backends.ExaminedCounts
+	resolved  bool
+	uncounted bool
 }
 
 func (c *examinedCounter) resolve(ctx context.Context) *backends.ExaminedCounts {
 	if !c.resolved {
-		c.op, c.resolved = backends.ExaminedCountsFrom(ctx), true
+		c.op, c.uncounted, c.resolved = backends.ExaminedCountsFrom(ctx), backends.IsUncountedReads(ctx), true
 	}
 	return c.op
 }
 
 func (c *examinedCounter) keys(ctx context.Context, n int) {
-	queryExecutorCounters.keys.Add(int64(n))
-	c.resolve(ctx).AddKeys(n)
+	if op := c.resolve(ctx); !c.uncounted {
+		queryExecutorCounters.keys.Add(int64(n))
+		op.AddKeys(n)
+	}
 }
 
 func (c *examinedCounter) docs(ctx context.Context, n int) {
-	queryExecutorCounters.docs.Add(int64(n))
-	c.resolve(ctx).AddDocs(n)
+	if op := c.resolve(ctx); !c.uncounted {
+		queryExecutorCounters.docs.Add(int64(n))
+		op.AddDocs(n)
+	}
 }
 
 // entries counts n index entries the scan returned.

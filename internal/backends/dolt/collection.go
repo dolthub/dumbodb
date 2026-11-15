@@ -97,7 +97,10 @@ func (c *collection) getMap(ctx context.Context) (prolly.Map, bool, *dbState, er
 }
 
 func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*backends.QueryResult, error) {
-	res, _, err := c.query(ctx, params)
+	res, stage, err := c.query(ctx, params)
+	if res != nil {
+		res.IndexScan = stage.usesIndex()
+	}
 	return res, err
 }
 
@@ -1934,6 +1937,27 @@ type explainStage struct {
 	amount int64
 }
 
+// usesIndex reports whether the plan reads an index rather than scanning
+// the collection.
+func (s *explainStage) usesIndex() bool {
+	if s == nil {
+		return false
+	}
+	switch s.stage {
+	case "IXSCAN", "CLUSTERED_IXSCAN", "COUNT_SCAN", "DISTINCT_SCAN":
+		return true
+	}
+	if s.input.usesIndex() {
+		return true
+	}
+	for _, in := range s.inputs {
+		if in.usesIndex() {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *explainStage) toDoc() *types.Document {
 	d := must.NotFail(types.NewDocument("stage", s.stage))
 	if s.indexName != "" {
@@ -2450,10 +2474,14 @@ func wrapScanPlan(params *backends.ExplainParams, scan *explainStage, sorted boo
 
 	sortPresent := params.Sort.Len() > 0 && !sortIsNatural(params.Sort) && !sorted
 	projStage := ""
-	if params.Projection.Len() > 0 {
+	windowed := sortPresent || params.Skip > 0 || params.Limit != 0 || params.ZeroLimit
+	if params.Projection.Len() > 0 && (windowed || !params.WindowedProjection) {
 		projStage = "PROJECTION_SIMPLE"
-		if covered {
+		switch {
+		case covered:
 			projStage = "PROJECTION_COVERED"
+		case !projectionIsSimple(params.Projection):
+			projStage = "PROJECTION_DEFAULT"
 		}
 	}
 	// The skip drops index keys before their documents are fetched, when the
@@ -2465,9 +2493,9 @@ func wrapScanPlan(params *backends.ExplainParams, scan *explainStage, sorted boo
 		fetch.input = &explainStage{stage: "SKIP", input: scan.input, amount: params.Skip}
 		node, skipped = &fetch, true
 	}
-	// An aggregate's projection runs under its skip and limit, and under a
-	// sort that has no limit to absorb.
-	if projStage != "" && params.Command == "aggregate" && (!sortPresent || params.Limit == 0) {
+	// An aggregate's projection runs under a sort that has no limit to
+	// absorb, else over its skip and under its limit.
+	if projStage != "" && params.Command == "aggregate" && sortPresent && params.Limit == 0 {
 		node = &explainStage{stage: projStage, input: node}
 		projStage = ""
 	}
@@ -2476,6 +2504,10 @@ func wrapScanPlan(params *backends.ExplainParams, scan *explainStage, sorted boo
 	}
 	if params.Skip > 0 && !skipped {
 		node = &explainStage{stage: "SKIP", input: node, amount: params.Skip}
+	}
+	if projStage != "" && params.Command == "aggregate" && !sortPresent {
+		node = &explainStage{stage: projStage, input: node}
+		projStage = ""
 	}
 	// A scan that sorts its index keys also absorbs the limit.
 	keysSorted := scan.input != nil && scan.input.stage == "SORT"
@@ -2560,6 +2592,17 @@ func projectionIsCoveredBy(projection *types.Document, idx backends.IndexInfo) b
 // (true=include, false=exclude). Returns ok=false for anything else
 // (e.g. {$slice: ...}, {$elemMatch: ...}) since those are not
 // covered-eligible.
+// projectionIsSimple reports whether projection only includes or excludes
+// top-level fields, which mongod runs as PROJECTION_SIMPLE.
+func projectionIsSimple(projection *types.Document) bool {
+	for _, k := range projection.Keys() {
+		if _, ok := projectionInclusion(must.NotFail(projection.Get(k))); !ok || strings.Contains(k, ".") {
+			return false
+		}
+	}
+	return true
+}
+
 func projectionInclusion(v any) (bool, bool) {
 	switch x := v.(type) {
 	case int32:

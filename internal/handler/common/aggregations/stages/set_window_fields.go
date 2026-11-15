@@ -19,13 +19,18 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	stdsort "sort"
+	"slices"
+	"strings"
 	"time"
 
+	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators/accumulators"
+	"github.com/dolthub/dumbodb/internal/handler/commonpath"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
@@ -50,6 +55,9 @@ type windowFrame struct {
 	frameType windowFrameType
 	lower     windowBound
 	upper     windowBound
+	// numericRange is set for a range without a unit, whose sortBy values
+	// must be numbers.
+	numericRange bool
 }
 
 // windowOutputField describes one output field in $setWindowFields.
@@ -86,12 +94,6 @@ type covPairSpec struct {
 	expr2 any
 }
 
-// topSpec holds $top/$bottom operator configuration.
-type topSpec struct {
-	sortBy     *types.Document
-	outputExpr any // field path string or projection document
-}
-
 // setWindowFields represents $setWindowFields aggregation stage.
 //
 //	{ $setWindowFields: {
@@ -111,6 +113,7 @@ type setWindowFields struct {
 	partitionBy any // expression or nil (single partition)
 	sortBy      *types.Document
 	outputs     []windowOutputField
+	cmp         *collation.Comparator
 }
 
 func newSetWindowFields(stage *types.Document) (aggregations.Stage, error) {
@@ -123,11 +126,14 @@ func newSetWindowFields(stage *types.Document) (aggregations.Stage, error) {
 		)
 	}
 
-	swf := new(setWindowFields)
+	swf := &setWindowFields{cmp: operators.CollationOf(stage)}
 
 	// Parse partitionBy (optional).
 	if spec.Has("partitionBy") {
 		pb := must.NotFail(spec.Get("partitionBy"))
+		if err := operators.CheckFieldPaths(pb); err != nil {
+			return nil, err
+		}
 		if err := operators.CheckConstantSubexpressions(pb); err != nil {
 			return nil, err
 		}
@@ -157,6 +163,31 @@ func newSetWindowFields(stage *types.Document) (aggregations.Stage, error) {
 		)
 	}
 
+	if err = operators.CheckFieldPaths(outputDoc); err != nil {
+		return nil, err
+	}
+	if _, _, conflict := pathCollision(outputDoc.Keys()); conflict {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrWindowOutputPathCollision,
+			"$setWindowFields 'output' specification contains two conflicting paths", "$setWindowFields (stage)")
+	}
+	for _, field := range outputDoc.Keys() {
+		switch {
+		case field == "":
+			err = handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrEmptyFieldPath,
+				"FieldPath cannot be constructed with empty string", "$setWindowFields (stage)")
+		case strings.HasPrefix(field, "$"):
+			err = handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFieldPathInvalidName,
+				"Consider using $getField or $setField for a field path with '.' or '$'. :: caused by :: "+
+					"FieldPath field names may not start with '$', given '"+strings.SplitN(field, ".", 2)[0]+"'.",
+				"$setWindowFields (stage)")
+		default:
+			err = operators.CheckFieldPaths("$" + field)
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	iter := outputDoc.Iterator()
 	defer iter.Close()
 
@@ -184,6 +215,10 @@ func newSetWindowFields(stage *types.Document) (aggregations.Stage, error) {
 			return nil, parseErr
 		}
 
+		if err = checkWindowSortBy(wof, swf.sortBy); err != nil {
+			return nil, err
+		}
+
 		if wof.frame != nil && wof.frame.frameType == windowFrameRange && swf.sortBy != nil && swf.sortBy.Len() > 0 {
 			if order, _ := toFloat64(must.NotFail(swf.sortBy.Get(swf.sortBy.Keys()[0]))); order < 0 {
 				return nil, handlererrors.NewCommandErrorMsgWithArgument(
@@ -194,15 +229,103 @@ func newSetWindowFields(stage *types.Document) (aggregations.Stage, error) {
 			}
 		}
 
+		if wof.operator == "$linearFill" && (swf.sortBy == nil || swf.sortBy.Len() != 1) {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrLinearFillSortBy,
+				"$linearFill must be specified with a top level sortBy expression with exactly one element",
+				"$setWindowFields (stage)",
+			)
+		}
+
 		swf.outputs = append(swf.outputs, wof)
 	}
 
 	return swf, nil
 }
 
+// checkWindowSortBy returns mongod's error when a window function or its
+// window needs a sortBy, or a single-field one, that the stage lacks.
+func checkWindowSortBy(wof windowOutputField, sortBy *types.Document) error {
+	keys := 0
+	if sortBy != nil {
+		keys = sortBy.Len()
+	}
+	fail := func(code handlererrors.ErrorCode, msg string) error {
+		return handlererrors.NewCommandErrorMsgWithArgument(code, msg, "$setWindowFields (stage)")
+	}
+	switch wof.operator {
+	case "$rank", "$denseRank", "$documentNumber":
+		if keys != 1 {
+			return fail(handlererrors.ErrRankNeedsSortBy,
+				wof.operator+" must be specified with a top level sortBy expression with exactly one element")
+		}
+	case "$shift":
+		if keys == 0 {
+			return fail(handlererrors.ErrFailedToParse, "'$shift' requires a sortBy")
+		}
+	case "$derivative", "$integral":
+		if keys == 0 {
+			return fail(handlererrors.ErrFailedToParse, wof.operator+" requires a sortBy")
+		}
+		if keys > 1 {
+			return fail(handlererrors.ErrFailedToParse, wof.operator+" requires a non-compound sortBy")
+		}
+	case "$expMovingAvg":
+		if keys == 0 {
+			return fail(handlererrors.ErrFailedToParse, "$expMovingAvg requires an explicit 'sortBy'")
+		}
+	}
+	if f := wof.frame; f != nil {
+		switch {
+		case f.frameType == windowFrameDocuments && !(f.lower.unbounded && f.upper.unbounded) && keys == 0:
+			return fail(handlererrors.ErrDocumentWindowNeedsSortBy, "Document-based bounds require a sortBy")
+		case f.frameType == windowFrameRange && keys != 1:
+			return fail(handlererrors.ErrRangeWindowNeedsSortBy, "Range-based bounds require sortBy a single field")
+		}
+	}
+	return nil
+}
+
+// windowFunctions are mongod's window functions.
+var windowFunctions = map[string]bool{
+	"$addToSet": true, "$avg": true, "$bottom": true, "$bottomN": true, "$count": true,
+	"$covariancePop": true, "$covarianceSamp": true, "$denseRank": true, "$derivative": true,
+	"$documentNumber": true, "$expMovingAvg": true, "$first": true, "$firstN": true, "$integral": true,
+	"$last": true, "$lastN": true, "$linearFill": true, "$locf": true, "$max": true, "$maxN": true,
+	"$median": true, "$min": true, "$minN": true, "$percentile": true, "$push": true, "$rank": true,
+	"$shift": true, "$stdDevPop": true, "$stdDevSamp": true, "$sum": true, "$top": true, "$topN": true,
+}
+
 // parseWindowOutputField parses one output field specification.
 func parseWindowOutputField(field string, spec *types.Document) (windowOutputField, error) {
 	wof := windowOutputField{outputField: field}
+
+	// mongod finds the one $-prefixed window function before any other
+	// field, apart from window, is refused.
+	var function, other string
+	for _, k := range spec.Keys() {
+		switch {
+		case strings.HasPrefix(k, "$"):
+			if function != "" {
+				return wof, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFailedToParse,
+					"Cannot specify two functions in window function spec", "$setWindowFields (stage)")
+			}
+			function = k
+		case k != "window" && other == "":
+			other = k
+		}
+	}
+	switch {
+	case function == "" && spec.Len() == 0:
+		return wof, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFailedToParse,
+			"Expected a $-prefixed window function", "$setWindowFields (stage)")
+	case function == "":
+		return wof, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFailedToParse,
+			"Expected a $-prefixed window function, "+spec.Keys()[0], "$setWindowFields (stage)")
+	case other != "":
+		return wof, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFailedToParse,
+			"Window function found an unknown argument: "+other, "$setWindowFields (stage)")
+	}
 
 	// Extract the window operator and expression (all keys except "window").
 	specIter := spec.Iterator()
@@ -224,6 +347,10 @@ func parseWindowOutputField(field string, spec *types.Document) (windowOutputFie
 
 		// This is the window operator.
 		wof.operator = k
+		if !windowFunctions[k] {
+			return wof, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrFailedToParse,
+				"Unrecognized window function, "+k, "$setWindowFields (stage)")
+		}
 		if err = operators.CheckConstantSubexpressions(v); err != nil {
 			return wof, err
 		}
@@ -294,20 +421,12 @@ func parseWindowOutputField(field string, spec *types.Document) (windowOutputFie
 				return wof, parseErr
 			}
 			wof.opSpec = spec
-		case "$top", "$bottom":
-			topDoc, ok := v.(*types.Document)
-			if !ok {
-				return wof, handlererrors.NewCommandErrorMsgWithArgument(
-					handlererrors.ErrTypeMismatch,
-					fmt.Sprintf("%s requires an object argument", k),
-					"$setWindowFields (stage)",
-				)
+		case "$firstN", "$lastN", "$minN", "$maxN", "$top", "$bottom", "$topN", "$bottomN", "$median", "$percentile":
+			acc, accErr := accumulators.NewAccumulator("$setWindowFields", field, must.NotFail(types.NewDocument(k, v)))
+			if accErr != nil {
+				return wof, accErr
 			}
-			spec, parseErr := parseTopSpec(topDoc)
-			if parseErr != nil {
-				return wof, parseErr
-			}
-			wof.opSpec = spec
+			wof.opSpec = acc
 		default:
 			return wof, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrNotImplemented,
@@ -395,6 +514,7 @@ func parseWindowFrame(doc *types.Document) (*windowFrame, error) {
 
 	if doc.Has("range") {
 		frame.frameType = windowFrameRange
+		frame.numericRange = !doc.Has("unit")
 
 		arr, err := common.GetRequiredParam[*types.Array](doc, "range")
 		if err != nil {
@@ -480,29 +600,95 @@ func (s *setWindowFields) Process(ctx context.Context, iter types.DocumentsItera
 		return nil, err
 	}
 
-	var result []*types.Document
-
-	for _, partition := range partitions {
-		// Sort within partition.
-		if s.sortBy != nil && s.sortBy.Len() > 0 {
-			if err = common.SortDocuments(partition, s.sortBy); err != nil {
-				return nil, lazyerrors.Error(err)
-			}
-		}
-
-		// For each document in the partition, compute all output fields.
-		processed, err := s.applyWindowFunctions(partition)
-		if err != nil {
-			return nil, err
-		}
-
-		result = append(result, processed...)
-	}
-
-	res := iterator.Values(iterator.ForSlice(result))
+	res := &windowPartitionsIterator{s: s, partitions: partitions}
 	closer.Add(res)
 
 	return res, nil
+}
+
+// windowPartitionsIterator computes one partition's window outputs at a time,
+// and array-valued outputs only as each document is emitted, as mongod does.
+type windowPartitionsIterator struct {
+	s          *setWindowFields
+	partitions [][]*types.Document
+	partition  []*types.Document
+	processed  []*types.Document
+	next       int
+}
+
+func (it *windowPartitionsIterator) Next() (struct{}, *types.Document, error) {
+	var unused struct{}
+	for it.next >= len(it.processed) {
+		if len(it.partitions) == 0 {
+			return unused, nil, iterator.ErrIteratorDone
+		}
+		partition := it.partitions[0]
+		it.partitions[0] = nil
+		it.partitions = it.partitions[1:]
+
+		if it.s.sortBy != nil && it.s.sortBy.Len() > 0 {
+			if err := common.SortDocumentsWithCollation(partition, it.s.sortBy, it.s.cmp); err != nil {
+				return unused, nil, lazyerrors.Error(err)
+			}
+		}
+		processed, err := it.s.applyWindowFunctions(partition)
+		if err != nil {
+			return unused, nil, err
+		}
+		it.partition, it.processed, it.next = partition, processed, 0
+	}
+
+	i := it.next
+	doc := it.processed[i]
+	it.processed[i] = nil
+	it.next++
+	for _, wof := range it.s.outputs {
+		if !deferredWindowOutput(wof.operator) {
+			continue
+		}
+		val, err := it.s.windowValueAt(it.partition, wof, i)
+		if err != nil {
+			return unused, nil, err
+		}
+		if doc, err = setWindowOutput(doc, wof.outputField, val); err != nil {
+			return unused, nil, err
+		}
+	}
+	return unused, doc, nil
+}
+
+func (it *windowPartitionsIterator) Close() {
+	it.partitions, it.partition, it.processed = nil, nil, nil
+}
+
+// deferredWindowOutput reports whether operator's results are computed as each
+// document is emitted, because they are arrays that may be large.
+func deferredWindowOutput(operator string) bool {
+	switch operator {
+	case "$push", "$addToSet", "$firstN", "$lastN", "$minN", "$maxN", "$topN", "$bottomN", "$percentile":
+		return true
+	}
+	return false
+}
+
+// accumulateWindow applies acc to a window. mongod computes a window whose
+// lower edge is bounded with accumulators that keep every value.
+func accumulateWindow(acc accumulators.Accumulator, frame *windowFrame, window []*types.Document, cmp *collation.Comparator) (any, error) {
+	iter := iterator.Values(iterator.ForSlice(window))
+	if frame != nil && !frame.lower.unbounded {
+		return accumulators.AccumulateWindow(acc, iter, cmp)
+	}
+	return accumulators.Accumulate(acc, iter, cmp)
+}
+
+// windowValueAt computes a deferred window output for the document at index i
+// of the partition.
+func (s *setWindowFields) windowValueAt(partition []*types.Document, wof windowOutputField, i int) (any, error) {
+	window := s.windowDocs(wof.frame, i, partition)
+	if acc, ok := wof.opSpec.(accumulators.Accumulator); ok {
+		return accumulateWindow(acc, wof.frame, window, s.cmp)
+	}
+	return applyAccumulator(wof.operator, wof.expression, window, s.cmp)
 }
 
 // partitionDocuments groups documents by the partitionBy expression.
@@ -513,8 +699,9 @@ func (s *setWindowFields) partitionDocuments(docs []*types.Document) ([][]*types
 	}
 
 	type partEntry struct {
-		key  any
-		docs []*types.Document
+		key    any
+		keyKey any
+		docs   []*types.Document
 	}
 
 	var entries []partEntry
@@ -522,13 +709,14 @@ func (s *setWindowFields) partitionDocuments(docs []*types.Document) ([][]*types
 	for _, doc := range docs {
 		key, err := s.evaluatePartitionKey(doc)
 		if err != nil {
-			key = types.Null
+			return nil, err
 		}
 
 		found := false
+		keyKey := s.cmp.KeyValue(key)
 
 		for i, entry := range entries {
-			if types.CompareForAggregation(key, entry.key) == types.Equal {
+			if types.CompareForAggregation(keyKey, entry.keyKey) == types.Equal {
 				entries[i].docs = append(entries[i].docs, doc)
 				found = true
 
@@ -537,7 +725,7 @@ func (s *setWindowFields) partitionDocuments(docs []*types.Document) ([][]*types
 		}
 
 		if !found {
-			entries = append(entries, partEntry{key: key, docs: []*types.Document{doc}})
+			entries = append(entries, partEntry{key: key, keyKey: keyKey, docs: []*types.Document{doc}})
 		}
 	}
 
@@ -552,24 +740,18 @@ func (s *setWindowFields) partitionDocuments(docs []*types.Document) ([][]*types
 
 // evaluatePartitionKey evaluates the partitionBy expression for a document.
 func (s *setWindowFields) evaluatePartitionKey(doc *types.Document) (any, error) {
-	switch pb := s.partitionBy.(type) {
-	case string:
-		expr, err := aggregations.NewExpression(pb, nil)
-		if err != nil {
-			return types.Null, nil
-		}
-
-		val, err := expr.Evaluate(doc)
-		if err != nil {
-			return types.Null, nil
-		}
-
-		return val, nil
-	case *types.Document, *types.Array, float64, bool, int32, int64, types.NullType:
-		return pb, nil
-	default:
+	val, missing, err := operators.EvalOperand(s.partitionBy, doc)
+	if err != nil {
+		return nil, err
+	}
+	if missing {
 		return types.Null, nil
 	}
+	if _, isArray := val.(*types.Array); isArray {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrTypeMismatch,
+			"An expression used to partition cannot evaluate to value of type array", "$setWindowFields (stage)")
+	}
+	return val, nil
 }
 
 // applyWindowFunctions applies all window output fields to each document in a partition.
@@ -587,18 +769,62 @@ func (s *setWindowFields) applyWindowFunctions(partition []*types.Document) ([]*
 		result[i] = clone
 	}
 
+	// mongod checks each document's $linearFill inputs before it interpolates.
 	for _, wof := range s.outputs {
+		if wof.operator == "$linearFill" {
+			if _, _, err := linearFillValues(wof.expression, partition); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	for _, wof := range s.outputs {
+		if deferredWindowOutput(wof.operator) {
+			for i := range result {
+				var err error
+				if result[i], err = setWindowOutput(result[i], wof.outputField, types.Null); err != nil {
+					return nil, err
+				}
+			}
+			continue
+		}
 		vals, err := s.computeWindowValues(partition, wof)
 		if err != nil {
 			return nil, err
 		}
 
 		for i, val := range vals {
-			result[i].Set(wof.outputField, val)
+			if result[i], err = setWindowOutput(result[i], wof.outputField, val); err != nil {
+				return nil, err
+			}
 		}
 	}
 
 	return result, nil
+}
+
+// windowMissingValue is a window output of mongod's missing value, which
+// leaves the output field out.
+type windowMissingValue struct{}
+
+// setWindowOutput sets the output field of doc to val, a dotted field as
+// $addFields would set it.
+func setWindowOutput(doc *types.Document, field string, val any) (*types.Document, error) {
+	_, missing := val.(windowMissingValue)
+	if !strings.Contains(field, ".") {
+		if missing {
+			doc.Remove(field)
+		} else {
+			doc.Set(field, val)
+		}
+		return doc, nil
+	}
+	var expr any = "$$REMOVE"
+	if !missing {
+		expr = must.NotFail(types.NewDocument("$literal", val))
+	}
+	spec := must.NotFail(types.NewDocument(field, expr))
+	return operators.AddFieldsTree(doc, spec)
 }
 
 // cloneDocument creates a shallow clone of a document.
@@ -628,6 +854,12 @@ func (s *setWindowFields) computeWindowValues(partition []*types.Document, wof w
 	n := len(partition)
 	vals := make([]any, n)
 
+	if wof.frame != nil && wof.frame.numericRange {
+		if err := s.checkNumericRangeSortBy(partition); err != nil {
+			return nil, err
+		}
+	}
+
 	switch wof.operator {
 	case "$documentNumber":
 		for i := range partition {
@@ -635,17 +867,21 @@ func (s *setWindowFields) computeWindowValues(partition []*types.Document, wof w
 		}
 
 	case "$rank":
-		vals = computeRank(partition, s.sortBy, false)
+		vals = computeRank(partition, s.sortBy, false, s.cmp)
 
 	case "$denseRank":
-		vals = computeRank(partition, s.sortBy, true)
+		vals = computeRank(partition, s.sortBy, true, s.cmp)
 
 	case "$sum", "$avg", "$min", "$max", "$first", "$last", "$push", "$addToSet",
 		"$stdDevPop", "$stdDevSamp":
+		if (wof.operator == "$sum" || wof.operator == "$avg") && wof.frame != nil && !wof.frame.lower.unbounded {
+			return s.removableSumValues(partition, wof)
+		}
+
 		for i := range partition {
 			window := s.windowDocs(wof.frame, i, partition)
 
-			val, err := applyAccumulator(wof.operator, wof.expression, window)
+			val, err := applyAccumulator(wof.operator, wof.expression, window, s.cmp)
 			if err != nil {
 				return nil, err
 			}
@@ -659,11 +895,25 @@ func (s *setWindowFields) computeWindowValues(partition []*types.Document, wof w
 			vals[i] = windowCount(len(window))
 		}
 
+	case "$firstN", "$lastN", "$minN", "$maxN", "$top", "$bottom", "$topN", "$bottomN", "$median", "$percentile":
+		acc := wof.opSpec.(accumulators.Accumulator)
+		for i := range partition {
+			window := s.windowDocs(wof.frame, i, partition)
+			val, err := accumulateWindow(acc, wof.frame, window, s.cmp)
+			if err != nil {
+				return nil, err
+			}
+			vals[i] = val
+		}
+
 	case "$covariancePop", "$covarianceSamp":
 		spec := wof.opSpec.(covPairSpec)
 		for i := range partition {
 			window := s.windowDocs(wof.frame, i, partition)
-			val := computeCovariance(wof.operator, spec, window)
+			val, err := computeCovariance(wof.operator, spec, window)
+			if err != nil {
+				return nil, err
+			}
 			vals[i] = val
 		}
 
@@ -674,13 +924,23 @@ func (s *setWindowFields) computeWindowValues(partition []*types.Document, wof w
 			if idx < 0 || idx >= n {
 				vals[i] = spec.defaultVal
 			} else {
-				vals[i] = evaluateExpr(spec.outputExpr, partition[idx])
+				val, missing, err := operators.EvalOperand(spec.outputExpr, partition[idx])
+				if err != nil {
+					return nil, err
+				}
+				if missing {
+					val = spec.defaultVal
+				}
+				vals[i] = val
 			}
 		}
 
 	case "$expMovingAvg":
 		spec := wof.opSpec.(emaSpec)
-		vals = computeEMA(spec, partition)
+		var err error
+		if vals, err = computeEMA(spec, partition); err != nil {
+			return nil, err
+		}
 
 	case "$derivative":
 		spec := wof.opSpec.(derivativeSpec)
@@ -696,7 +956,11 @@ func (s *setWindowFields) computeWindowValues(partition []*types.Document, wof w
 		for i := range partition {
 			lo, hi := s.windowBounds(wof.frame, i, n)
 			window := partition[lo:hi]
-			vals[i] = computeDerivative(spec, window)
+			val, err := computeDerivative(spec, window)
+			if err != nil {
+				return nil, err
+			}
+			vals[i] = val
 		}
 
 	case "$integral":
@@ -713,28 +977,26 @@ func (s *setWindowFields) computeWindowValues(partition []*types.Document, wof w
 		for i := range partition {
 			lo, hi := s.windowBounds(wof.frame, i, n)
 			window := partition[lo:hi]
-			vals[i] = computeIntegral(spec, window)
+			val, err := computeIntegral(spec, window)
+			if err != nil {
+				return nil, err
+			}
+			vals[i] = val
 		}
 
 	case "$linearFill":
 		if err := s.validateSortByFieldIsNumericOrDate(partition); err != nil {
 			return nil, err
 		}
-		vals = computeLinearFill(wof.expression, partition)
+		var err error
+		if vals, err = s.computeLinearFill(wof.expression, partition); err != nil {
+			return nil, err
+		}
 
 	case "$locf":
-		vals = computeLocf(wof.expression, partition)
-
-	case "$top", "$bottom":
-		spec := wof.opSpec.(topSpec)
-		for i := range partition {
-			lo, hi := s.windowBounds(wof.frame, i, n)
-			window := partition[lo:hi]
-			val, err := computeTopBottom(wof.operator, spec, window)
-			if err != nil {
-				return nil, err
-			}
-			vals[i] = val
+		var err error
+		if vals, err = computeLocf(wof.expression, partition); err != nil {
+			return nil, err
 		}
 
 	default:
@@ -812,6 +1074,78 @@ func (s *setWindowFields) windowDocs(frame *windowFrame, i int, partition []*typ
 	lo, hi := s.windowBounds(frame, i, n)
 
 	return partition[lo:hi]
+}
+
+// windowSpan returns the window of the document at position i as partition
+// indexes [lo, hi); lo == hi for an empty window.
+func (s *setWindowFields) windowSpan(frame *windowFrame, i int, partition []*types.Document) (int, int) {
+	if frame.frameType != windowFrameRange {
+		return s.windowBounds(frame, i, len(partition))
+	}
+
+	docs := s.windowDocsRange(frame, i, partition)
+	if len(docs) == 0 {
+		return 0, 0
+	}
+
+	lo := slices.Index(partition, docs[0])
+
+	return lo, lo + len(docs)
+}
+
+// removableSumValues computes $sum or $avg over windows with a lower bound as
+// mongod does: one running state per partition, each document added as it
+// enters the window and removed as it leaves, adds first.
+func (s *setWindowFields) removableSumValues(partition []*types.Document, wof windowOutputField) ([]any, error) {
+	vals := make([]any, len(partition))
+	inputs := make([]any, len(partition))
+	present := make([]bool, len(partition))
+	sum := aggregations.NewRemovableSum()
+
+	var lo, hi int
+	for i := range partition {
+		wlo, whi := s.windowSpan(wof.frame, i, partition)
+		if whi <= wlo {
+			wlo, whi = hi, hi
+		}
+
+		for j := max(hi, wlo); j < whi; j++ {
+			v, missing, err := windowInput(wof.expression, partition[j])
+			if err != nil {
+				return nil, err
+			}
+			if !missing {
+				inputs[j], present[j] = v, true
+				sum.Add(v)
+			}
+		}
+
+		for j := lo; j < min(wlo, hi); j++ {
+			if present[j] {
+				sum.Remove(inputs[j])
+				inputs[j] = nil
+			}
+		}
+
+		lo, hi = wlo, whi
+
+		if wof.operator == "$avg" {
+			vals[i] = sum.Avg()
+		} else {
+			vals[i] = sum.Sum()
+		}
+	}
+
+	return vals, nil
+}
+
+// windowInput evaluates a window function's input for one document; no
+// expression counts the document as 1.
+func windowInput(expression any, doc *types.Document) (any, bool, error) {
+	if expression == nil {
+		return int32(1), false, nil
+	}
+	return operators.EvalOperand(expression, doc)
 }
 
 // windowDocsRange computes the window slice for a range-based frame at position i.
@@ -897,6 +1231,8 @@ func (s *setWindowFields) validateSortByFieldIsDate(partition []*types.Document)
 // bsonTypeName returns the MongoDB type name for a value (used in error messages).
 func bsonTypeName(v any) string {
 	switch v.(type) {
+	case nil:
+		return "missing"
 	case string:
 		return "string"
 	case float64:
@@ -920,6 +1256,29 @@ func bsonTypeName(v any) string {
 	}
 }
 
+// checkNumericRangeSortBy returns mongod's error for a document whose sortBy
+// value is not a number, which a range window without a unit requires.
+func (s *setWindowFields) checkNumericRangeSortBy(partition []*types.Document) error {
+	if s.sortBy == nil || s.sortBy.Len() == 0 {
+		return nil
+	}
+	key := s.sortBy.Keys()[0]
+	for _, doc := range partition {
+		val := sortByValue(doc, key)
+		typeName := "missing"
+		switch val.(type) {
+		case float64, int32, int64, types.Decimal128:
+			continue
+		case nil:
+		default:
+			typeName = handlerparams.AliasFromType(val)
+		}
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrRangeSortByNotNumeric,
+			"Invalid range: Expected the sortBy field to be a number, but it was "+typeName, "$setWindowFields (stage)")
+	}
+	return nil
+}
+
 // validateSortByFieldIsNumericOrDate checks that the sort-by field values are numeric or Date.
 // Returns an error matching MongoDB's TypeMismatch error if they are not.
 func (s *setWindowFields) validateSortByFieldIsNumericOrDate(partition []*types.Document) error {
@@ -933,7 +1292,7 @@ func (s *setWindowFields) validateSortByFieldIsNumericOrDate(partition []*types.
 		val := sortByValue(doc, sortKey)
 
 		switch val.(type) {
-		case float64, int32, int64, time.Time:
+		case float64, int32, int64, types.Decimal128, time.Time:
 			// valid
 		default:
 			typeName := bsonTypeName(val)
@@ -958,7 +1317,7 @@ func windowCount(n int) any {
 }
 
 // computeRank computes $rank or $denseRank values for all documents in a partition.
-func computeRank(partition []*types.Document, sortBy *types.Document, dense bool) []any {
+func computeRank(partition []*types.Document, sortBy *types.Document, dense bool, cmp *collation.Comparator) []any {
 	n := len(partition)
 	vals := make([]any, n)
 
@@ -970,7 +1329,7 @@ func computeRank(partition []*types.Document, sortBy *types.Document, dense bool
 	vals[0] = windowCount(1)
 
 	for i := 1; i < n; i++ {
-		tied := isTied(partition[i-1], partition[i], sortBy)
+		tied := isTied(partition[i-1], partition[i], sortBy, cmp)
 
 		if tied {
 			if dense {
@@ -1004,24 +1363,23 @@ func sortByValue(doc *types.Document, key string) any {
 }
 
 // isTied returns true if two documents have the same sort key values.
-func isTied(a, b *types.Document, sortBy *types.Document) bool {
+func isTied(a, b *types.Document, sortBy *types.Document, cmp *collation.Comparator) bool {
 	if sortBy == nil || sortBy.Len() == 0 {
 		return true
 	}
 
+	// Documents tie when $sort would not order them: an array compares by
+	// its least or greatest element, as sortBy directs.
 	for _, key := range sortBy.Keys() {
-		aVal := sortByValue(a, key)
-		bVal := sortByValue(b, key)
-
-		if aVal == nil {
-			aVal = types.Null
+		path, err := types.NewPathFromString(key)
+		if err != nil {
+			return false
 		}
-
-		if bVal == nil {
-			bVal = types.Null
+		order := types.Ascending
+		if dir, ok := toFloat64(must.NotFail(sortBy.Get(key))); ok && dir < 0 {
+			order = types.Descending
 		}
-
-		if types.CompareForAggregation(aVal, bVal) != types.Equal {
+		if common.CompareSortKeys(cmp.KeyValue(commonpath.SortKeyValue(a, path)), cmp.KeyValue(commonpath.SortKeyValue(b, path)), order) != types.Equal {
 			return false
 		}
 	}
@@ -1029,8 +1387,26 @@ func isTied(a, b *types.Document, sortBy *types.Document) bool {
 	return true
 }
 
-// applyAccumulator applies $sum/$avg/$min/$max over a window slice of documents.
-func applyAccumulator(op string, expression any, window []*types.Document) (any, error) {
+// applyAccumulator applies a window function without its own state, such as
+// $sum, $push or $stdDevPop, over a window slice of documents.
+func applyAccumulator(op string, expression any, window []*types.Document, cmp *collation.Comparator) (any, error) {
+	switch op {
+	case "$first", "$last":
+		// The value of the first or last document, null when it is missing.
+		if len(window) == 0 {
+			return types.Null, nil
+		}
+		doc := window[0]
+		if op == "$last" {
+			doc = window[len(window)-1]
+		}
+		v, missing, err := operators.EvalOperand(expression, doc)
+		if err != nil || missing {
+			return types.Null, err
+		}
+		return v, nil
+	}
+
 	// Collect values from window documents by evaluating the expression.
 	values, err := collectWindowValues(expression, window)
 	if err != nil {
@@ -1039,13 +1415,21 @@ func applyAccumulator(op string, expression any, window []*types.Document) (any,
 
 	switch op {
 	case "$sum":
-		return aggregations.SumNumbers(values...), nil
+		sum := aggregations.NewNumberSum()
+		for _, v := range values {
+			sum.Add(v)
+		}
+		return sum.Result(), nil
 	case "$avg":
-		return avgWindowValues(values), nil
+		avg := aggregations.NewNumberAvg()
+		for _, v := range values {
+			avg.Add(v)
+		}
+		return avg.Result(), nil
 	case "$min":
-		return minWindowValue(values), nil
+		return minWindowValue(values, cmp), nil
 	case "$max":
-		return maxWindowValue(values), nil
+		return maxWindowValue(values, cmp), nil
 	case "$first":
 		if len(values) == 0 {
 			return types.Null, nil
@@ -1058,22 +1442,32 @@ func applyAccumulator(op string, expression any, window []*types.Document) (any,
 		return values[len(values)-1], nil
 	case "$push":
 		arr := types.MakeArray(len(values))
+		size := 0
 		for _, v := range values {
+			if size += types.BSONValueSize(v); size > windowAccumulatorMemoryLimit {
+				return nil, windowMemoryError(op)
+			}
 			arr.Append(v)
 		}
 		return arr, nil
 	case "$addToSet":
 		arr := types.MakeArray(0)
+		var keys []any
+		size := 0
 		for _, v := range values {
 			found := false
-			for i := range arr.Len() {
-				existing := must.NotFail(arr.Get(i))
-				if types.CompareForAggregation(v, existing) == types.Equal {
+			key := cmp.KeyValue(v)
+			for _, existing := range keys {
+				if types.CompareForAggregation(key, existing) == types.Equal {
 					found = true
 					break
 				}
 			}
 			if !found {
+				keys = append(keys, key)
+				if size += types.BSONValueSize(v); size > windowAccumulatorMemoryLimit {
+					return nil, windowMemoryError(op)
+				}
 				arr.Append(v)
 			}
 		}
@@ -1091,88 +1485,34 @@ func applyAccumulator(op string, expression any, window []*types.Document) (any,
 	}
 }
 
-// collectWindowValues evaluates an expression against each document in the window.
+// collectWindowValues evaluates an expression against each document in the
+// window, leaving out missing values.
 func collectWindowValues(expression any, window []*types.Document) ([]any, error) {
-	var values []any
-
-	switch expr := expression.(type) {
-	case string:
-		aggExpr, err := aggregations.NewExpression(expr, nil)
+	values := make([]any, 0, len(window))
+	for _, doc := range window {
+		val, missing, err := windowInput(expression, doc)
 		if err != nil {
-			// Not a field path; treat as a literal.
-			for range window {
-				values = append(values, expression)
-			}
-
-			return values, nil
+			return nil, err
 		}
-
-		for _, doc := range window {
-			val, err := aggExpr.Evaluate(doc)
-			if err == nil {
-				values = append(values, val)
-			}
-		}
-	case float64, int32, int64:
-		for range window {
-			values = append(values, expr)
-		}
-	case nil:
-		// No expression; treat as 1 for $sum compatibility.
-		for range window {
-			values = append(values, int32(1))
-		}
-	default:
-		for range window {
-			values = append(values, expression)
+		if !missing {
+			values = append(values, val)
 		}
 	}
-
 	return values, nil
 }
 
-// avgWindowValues computes the average of numeric values; returns null for empty.
-func avgWindowValues(values []any) any {
-	var sum float64
-	var count int
-
-	for _, v := range values {
-		switch n := v.(type) {
-		case float64:
-			sum += n
-			count++
-		case int32:
-			sum += float64(n)
-			count++
-		case int64:
-			sum += float64(n)
-			count++
-		}
-	}
-
-	if count == 0 {
-		return types.Null
-	}
-
-	return sum / float64(count)
-}
-
 // minWindowValue returns the minimum value; returns null for empty.
-func minWindowValue(values []any) any {
-	var result any
+func minWindowValue(values []any, cmp *collation.Comparator) any {
+	var result *collation.Keyed
 
 	for _, v := range values {
 		if _, isNull := v.(types.NullType); isNull {
 			continue
 		}
 
-		if result == nil {
-			result = v
-			continue
-		}
-
-		if types.CompareOrder(v, result, types.Ascending) == types.Less {
-			result = v
+		k := &collation.Keyed{V: v}
+		if result == nil || collation.CompareKeyed(cmp, k, result, compareAscending) == types.Less {
+			result = k
 		}
 	}
 
@@ -1180,25 +1520,21 @@ func minWindowValue(values []any) any {
 		return types.Null
 	}
 
-	return result
+	return result.V
 }
 
 // maxWindowValue returns the maximum value; returns null for empty.
-func maxWindowValue(values []any) any {
-	var result any
+func maxWindowValue(values []any, cmp *collation.Comparator) any {
+	var result *collation.Keyed
 
 	for _, v := range values {
 		if _, isNull := v.(types.NullType); isNull {
 			continue
 		}
 
-		if result == nil {
-			result = v
-			continue
-		}
-
-		if types.CompareOrder(v, result, types.Ascending) == types.Greater {
-			result = v
+		k := &collation.Keyed{V: v}
+		if result == nil || collation.CompareKeyed(cmp, k, result, compareAscending) == types.Greater {
+			result = k
 		}
 	}
 
@@ -1206,7 +1542,7 @@ func maxWindowValue(values []any) any {
 		return types.Null
 	}
 
-	return result
+	return result.V
 }
 
 // stdDevWindowValues computes population (sample=false) or sample (sample=true) standard deviation.
@@ -1293,11 +1629,24 @@ func parseShiftSpec(doc *types.Document) (shiftSpec, error) {
 		)
 	}
 
+	spec.defaultVal = types.Null
 	if doc.Has("default") {
 		defVal := must.NotFail(doc.Get("default"))
-		spec.defaultVal = defVal
-	} else {
-		spec.defaultVal = types.Null
+		if defVal != "$$REMOVE" && !operators.IsConstantExpression(defVal) {
+			return spec, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrFailedToParse,
+				"'$shift:default' expression must yield a constant value.",
+				"$setWindowFields (stage)",
+			)
+		}
+		v, missing, err := operators.EvalOperand(defVal, types.MakeDocument(0))
+		if err != nil {
+			return spec, err
+		}
+		spec.defaultVal = v
+		if missing {
+			spec.defaultVal = windowMissingValue{}
+		}
 	}
 
 	return spec, nil
@@ -1388,62 +1737,17 @@ func parseDerivativeSpec(doc *types.Document) (derivativeSpec, error) {
 	return spec, nil
 }
 
-// parseTopSpec parses the $top/$bottom operator configuration.
-func parseTopSpec(doc *types.Document) (topSpec, error) {
-	spec := topSpec{}
-
-	sortByVal, err := doc.Get("sortBy")
+// evaluateExpr evaluates an expression against a document; a missing value
+// is null.
+func evaluateExpr(expr any, doc *types.Document) (any, error) {
+	val, missing, err := operators.EvalOperand(expr, doc)
 	if err != nil {
-		return spec, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrBadValue,
-			"$top/$bottom requires 'sortBy' field",
-			"$setWindowFields (stage)",
-		)
+		return nil, err
 	}
-
-	sortByDoc, ok := sortByVal.(*types.Document)
-	if !ok {
-		return spec, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrTypeMismatch,
-			"$top/$bottom 'sortBy' must be an object",
-			"$setWindowFields (stage)",
-		)
+	if missing {
+		return types.Null, nil
 	}
-
-	spec.sortBy = sortByDoc
-
-	outputVal, err := doc.Get("output")
-	if err != nil {
-		return spec, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrBadValue,
-			"$top/$bottom requires 'output' field",
-			"$setWindowFields (stage)",
-		)
-	}
-
-	spec.outputExpr = outputVal
-
-	return spec, nil
-}
-
-// evaluateExpr evaluates an expression against a document.
-func evaluateExpr(expr any, doc *types.Document) any {
-	switch e := expr.(type) {
-	case string:
-		aggExpr, err := aggregations.NewExpression(e, nil)
-		if err != nil {
-			return expr
-		}
-
-		val, err := aggExpr.Evaluate(doc)
-		if err != nil {
-			return types.Null
-		}
-
-		return val
-	default:
-		return expr
-	}
+	return val, nil
 }
 
 // toFloat64 converts a numeric value to float64, returns (val, true) or (0, false).
@@ -1461,12 +1765,18 @@ func toFloat64(v any) (float64, bool) {
 }
 
 // computeCovariance computes population or sample covariance.
-func computeCovariance(op string, spec covPairSpec, window []*types.Document) any {
+func computeCovariance(op string, spec covPairSpec, window []*types.Document) (any, error) {
 	var xs, ys []float64
 
 	for _, doc := range window {
-		xv := evaluateExpr(spec.expr1, doc)
-		yv := evaluateExpr(spec.expr2, doc)
+		xv, err := evaluateExpr(spec.expr1, doc)
+		if err != nil {
+			return nil, err
+		}
+		yv, err := evaluateExpr(spec.expr2, doc)
+		if err != nil {
+			return nil, err
+		}
 
 		xf, xok := toFloat64(xv)
 		yf, yok := toFloat64(yv)
@@ -1479,11 +1789,11 @@ func computeCovariance(op string, spec covPairSpec, window []*types.Document) an
 
 	n := len(xs)
 	if n == 0 {
-		return types.Null
+		return types.Null, nil
 	}
 
 	if op == "$covarianceSamp" && n < 2 {
-		return types.Null
+		return types.Null, nil
 	}
 
 	var sumX, sumY float64
@@ -1508,11 +1818,11 @@ func computeCovariance(op string, spec covPairSpec, window []*types.Document) an
 		cov = cov * float64(n) / float64(n-1)
 	}
 
-	return cov
+	return cov, nil
 }
 
 // computeEMA computes exponential moving average over a partition.
-func computeEMA(spec emaSpec, partition []*types.Document) []any {
+func computeEMA(spec emaSpec, partition []*types.Document) ([]any, error) {
 	n := len(partition)
 	vals := make([]any, n)
 
@@ -1520,7 +1830,10 @@ func computeEMA(spec emaSpec, partition []*types.Document) []any {
 	hasPrev := false
 
 	for i, doc := range partition {
-		v := evaluateExpr(spec.inputExpr, doc)
+		v, err := evaluateExpr(spec.inputExpr, doc)
+		if err != nil {
+			return nil, err
+		}
 		f, ok := toFloat64(v)
 
 		if !ok {
@@ -1545,27 +1858,33 @@ func computeEMA(spec emaSpec, partition []*types.Document) []any {
 		}
 	}
 
-	return vals
+	return vals, nil
 }
 
 // computeDerivative computes $derivative over a window.
 // Returns null when less than 2 docs in window.
-func computeDerivative(spec derivativeSpec, window []*types.Document) any {
+func computeDerivative(spec derivativeSpec, window []*types.Document) (any, error) {
 	if len(window) < 2 {
-		return types.Null
+		return types.Null, nil
 	}
 
 	first := window[0]
 	last := window[len(window)-1]
 
-	y1 := evaluateExpr(spec.inputExpr, first)
-	y2 := evaluateExpr(spec.inputExpr, last)
+	y1, err := evaluateExpr(spec.inputExpr, first)
+	if err != nil {
+		return nil, err
+	}
+	y2, err := evaluateExpr(spec.inputExpr, last)
+	if err != nil {
+		return nil, err
+	}
 
 	yf1, ok1 := toFloat64(y1)
 	yf2, ok2 := toFloat64(y2)
 
 	if !ok1 || !ok2 {
-		return types.Null
+		return types.Null, nil
 	}
 
 	// For numeric sort fields, use x values from the sort field.
@@ -1573,23 +1892,29 @@ func computeDerivative(spec derivativeSpec, window []*types.Document) any {
 	dx := float64(len(window) - 1)
 
 	if dx == 0 {
-		return types.Null
+		return types.Null, nil
 	}
 
-	return (yf2 - yf1) / dx
+	return (yf2 - yf1) / dx, nil
 }
 
 // computeIntegral computes $integral (trapezoidal) over a window.
-func computeIntegral(spec derivativeSpec, window []*types.Document) any {
+func computeIntegral(spec derivativeSpec, window []*types.Document) (any, error) {
 	if len(window) < 2 {
-		return float64(0)
+		return float64(0), nil
 	}
 
 	var total float64
 
 	for i := 1; i < len(window); i++ {
-		y1 := evaluateExpr(spec.inputExpr, window[i-1])
-		y2 := evaluateExpr(spec.inputExpr, window[i])
+		y1, err := evaluateExpr(spec.inputExpr, window[i-1])
+		if err != nil {
+			return nil, err
+		}
+		y2, err := evaluateExpr(spec.inputExpr, window[i])
+		if err != nil {
+			return nil, err
+		}
 
 		yf1, ok1 := toFloat64(y1)
 		yf2, ok2 := toFloat64(y2)
@@ -1602,89 +1927,105 @@ func computeIntegral(spec derivativeSpec, window []*types.Document) any {
 		total += (yf1 + yf2) / 2.0
 	}
 
-	return total
+	return total, nil
 }
 
-// computeLinearFill fills null values using linear interpolation.
-func computeLinearFill(expr any, partition []*types.Document) []any {
-	n := len(partition)
-	vals := make([]any, n)
-
-	// First pass: collect raw values.
+// computeLinearFill fills null and missing values by interpolating linearly,
+// by the sortBy value, between the nearest values on either side; a value
+// with none on one side stays null.
+func (s *setWindowFields) computeLinearFill(expr any, partition []*types.Document) ([]any, error) {
+	if err := s.validateSortByFieldIsNumericOrDate(partition); err != nil {
+		return nil, err
+	}
+	sortKey := s.sortBy.Keys()[0]
+	xs := make([]any, len(partition))
 	for i, doc := range partition {
-		v := evaluateExpr(expr, doc)
-		if _, isNull := v.(types.NullType); isNull {
-			vals[i] = nil // sentinel for "needs fill"
-		} else {
-			vals[i] = v
+		xs[i] = sortByValue(doc, sortKey)
+		if i > 0 && types.CompareForAggregation(xs[i], xs[i-1]) == types.Equal {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrLinearFillRepeatedSortValue,
+				"There can be no repeated values in the sort field in the same partition",
+				"$setWindowFields (stage)",
+			)
 		}
 	}
 
-	// Second pass: interpolate gaps.
-	for i := range n {
-		if vals[i] != nil {
+	vals, known, err := linearFillValues(expr, partition)
+	if err != nil {
+		return nil, err
+	}
+
+	prev := -1
+	for i := range vals {
+		if known[i] {
+			prev = i
 			continue
 		}
-
-		// Find previous non-null.
-		prevIdx := -1
-
-		for j := i - 1; j >= 0; j-- {
-			if vals[j] != nil {
-				prevIdx = j
-				break
-			}
+		next := i + 1
+		for next < len(vals) && !known[next] {
+			next++
 		}
-
-		// Find next non-null.
-		nextIdx := -1
-
-		for j := i + 1; j < n; j++ {
-			if vals[j] != nil {
-				nextIdx = j
-				break
-			}
+		if prev < 0 || next == len(vals) {
+			continue
 		}
-
-		if prevIdx < 0 && nextIdx < 0 {
-			vals[i] = types.Null
-		} else if prevIdx < 0 {
-			vals[i] = vals[nextIdx]
-		} else if nextIdx < 0 {
-			vals[i] = vals[prevIdx]
-		} else {
-			// Linear interpolation.
-			pf, ok1 := toFloat64(vals[prevIdx])
-			nf, ok2 := toFloat64(vals[nextIdx])
-
-			if !ok1 || !ok2 {
-				vals[i] = vals[prevIdx]
-			} else {
-				t := float64(i-prevIdx) / float64(nextIdx-prevIdx)
-				vals[i] = pf + t*(nf-pf)
-			}
+		if vals[i], err = interpolate(xs[prev], vals[prev], xs[next], vals[next], xs[i]); err != nil {
+			return nil, err
 		}
 	}
+	return vals, nil
+}
 
-	// Replace remaining nils with Null.
-	for i := range n {
-		if vals[i] == nil {
+// interpolate returns y1 + (y2-y1)/(x2-x1) * (x-x1), computed with mongod's
+// expression arithmetic so the result has the type mongod gives it.
+func interpolate(x1, y1, x2, y2, x any) (any, error) {
+	lit := func(v any) *types.Document { return must.NotFail(types.NewDocument("$literal", v)) }
+	op := func(name string, args ...any) *types.Document {
+		return must.NotFail(types.NewDocument(name, must.NotFail(types.NewArray(args...))))
+	}
+	slope := op("$divide", op("$subtract", lit(y2), lit(y1)), op("$subtract", lit(x2), lit(x1)))
+	expr := op("$add", lit(y1), op("$multiply", slope, op("$subtract", lit(x), lit(x1))))
+	v, _, err := operators.EvalOperand(expr, types.MakeDocument(0))
+	return v, err
+}
+
+// linearFillValues evaluates a $linearFill input for each document,
+// reporting which values are known numbers.
+func linearFillValues(expr any, partition []*types.Document) ([]any, []bool, error) {
+	vals := make([]any, len(partition))
+	known := make([]bool, len(partition))
+	for i, doc := range partition {
+		v, err := evaluateExpr(expr, doc)
+		if err != nil {
+			return nil, nil, err
+		}
+		switch v.(type) {
+		case types.NullType:
 			vals[i] = types.Null
+		case int32, int64, float64, types.Decimal128:
+			vals[i], known[i] = v, true
+		default:
+			return nil, nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrTypeMismatch,
+				"Value to be filled must be numeric or nullish, but found "+handlerparams.AliasFromType(v),
+				"$setWindowFields (stage)",
+			)
 		}
 	}
-
-	return vals
+	return vals, known, nil
 }
 
 // computeLocf fills null values using last observation carried forward.
-func computeLocf(expr any, partition []*types.Document) []any {
+func computeLocf(expr any, partition []*types.Document) ([]any, error) {
 	n := len(partition)
 	vals := make([]any, n)
 
 	var lastObserved any
 
 	for i, doc := range partition {
-		v := evaluateExpr(expr, doc)
+		v, err := evaluateExpr(expr, doc)
+		if err != nil {
+			return nil, err
+		}
 		if _, isNull := v.(types.NullType); isNull {
 			if lastObserved != nil {
 				vals[i] = lastObserved
@@ -1697,119 +2038,23 @@ func computeLocf(expr any, partition []*types.Document) []any {
 		}
 	}
 
-	return vals
-}
-
-// computeTopBottom computes $top or $bottom  -- returns the output projection of the
-// first document after sorting window by spec.sortBy.
-// For $top: sort descending (highest first); but we respect whatever spec.sortBy says.
-// For $bottom: sort ascending (lowest first); same  -- respect spec.sortBy.
-// Both return the first element of the sorted window's output projection.
-func computeTopBottom(op string, spec topSpec, window []*types.Document) (any, error) {
-	if len(window) == 0 {
-		return types.Null, nil
-	}
-
-	// Copy window so we can sort it.
-	sorted := make([]*types.Document, len(window))
-	copy(sorted, window)
-
-	stdsort.SliceStable(sorted, func(i, j int) bool {
-		a := sorted[i]
-		b := sorted[j]
-
-		if spec.sortBy == nil {
-			return false
-		}
-
-		for _, key := range spec.sortBy.Keys() {
-			order, _ := spec.sortBy.Get(key)
-
-			aVal, _ := a.Get(key)
-			bVal, _ := b.Get(key)
-
-			if aVal == nil {
-				aVal = types.Null
-			}
-
-			if bVal == nil {
-				bVal = types.Null
-			}
-
-			cmp := types.CompareForAggregation(aVal, bVal)
-
-			var ascending bool
-
-			switch ov := order.(type) {
-			case int32:
-				ascending = ov >= 0
-			case int64:
-				ascending = ov >= 0
-			case float64:
-				ascending = ov >= 0
-			default:
-				ascending = true
-			}
-
-			if cmp == types.Equal {
-				continue
-			}
-
-			if ascending {
-				return cmp == types.Less
-			}
-
-			return cmp == types.Greater
-		}
-
-		return false
-	})
-
-	// $top returns the first document after sorting; $bottom returns the last.
-	var selected *types.Document
-	if op == "$bottom" {
-		selected = sorted[len(sorted)-1]
-	} else {
-		selected = sorted[0]
-	}
-
-	if spec.outputExpr == nil {
-		return new(types.Document), nil
-	}
-
-	// If output is a string (field path), evaluate and return the value directly.
-	if _, ok := spec.outputExpr.(string); ok {
-		return evaluateExpr(spec.outputExpr, selected), nil
-	}
-
-	// If output is a document, project each field.
-	outputDoc, ok := spec.outputExpr.(*types.Document)
-	if !ok {
-		return evaluateExpr(spec.outputExpr, selected), nil
-	}
-
-	result := new(types.Document)
-
-	iter := outputDoc.Iterator()
-	defer iter.Close()
-
-	for {
-		k, v, err := iter.Next()
-		if errors.Is(err, iterator.ErrIteratorDone) {
-			break
-		}
-
-		if err != nil {
-			return nil, lazyerrors.Error(err)
-		}
-
-		projected := evaluateExpr(v, selected)
-		result.Set(k, projected)
-	}
-
-	return result, nil
+	return vals, nil
 }
 
 var (
 	_ aggregations.Stage = (*setWindowFields)(nil)
 )
+
+// windowAccumulatorMemoryLimit is mongod's limit on the values a window
+// function keeps.
+const windowAccumulatorMemoryLimit = 100 * 1024 * 1024
+
+func windowMemoryError(op string) error {
+	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrExceededMemoryLimit,
+		fmt.Sprintf("%s used too much memory and cannot spill to disk. Memory limit: %d bytes", op, windowAccumulatorMemoryLimit),
+		"$setWindowFields (stage)")
+}
+
+func compareAscending(a, b any) types.CompareResult {
+	return types.CompareOrder(a, b, types.Ascending)
+}

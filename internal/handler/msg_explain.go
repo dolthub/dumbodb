@@ -28,6 +28,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/stages"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -301,7 +302,12 @@ func cloneExecutionStage(node *types.Document, run explainRun, root, aboveMatch 
 		d.Set("keyPattern", v)
 	}
 	if childDoc != nil {
-		d.Set("inputStage", cloneExecutionStage(childDoc, run, false, aboveMatch))
+		input := cloneExecutionStage(childDoc, run, false, aboveMatch)
+		// A projection under a sort passes up every match.
+		if child, _ := childDoc.Get("stage"); stage == "SORT" && aboveMatch && isProjectionStage(child) {
+			input.Set("nReturned", run.matched)
+		}
+		d.Set("inputStage", input)
 	}
 	if childArr != nil {
 		out := types.MakeArray(childArr.Len())
@@ -319,6 +325,14 @@ func cloneExecutionStage(node *types.Document, run explainRun, root, aboveMatch 
 		d.Set("inputStages", out)
 	}
 	return d
+}
+
+func isProjectionStage(stage any) bool {
+	switch stage {
+	case "PROJECTION_SIMPLE", "PROJECTION_DEFAULT", "PROJECTION_COVERED":
+		return true
+	}
+	return false
 }
 
 // explainableCommands are the commands, by canonical name, that MongoDB 8.0
@@ -388,6 +402,9 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 		if err = h.checkExplainable(inner.Command()); err != nil {
 			return nil, err
 		}
+		if res, ok, cerr := h.explainListClusterCatalog(connCtx, document, inner); ok {
+			return res, cerr
+		}
 	}
 
 	params, err := common.GetExplainParams(document, h.L)
@@ -421,6 +438,7 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 		return nil, lazyerrors.Error(err)
 	}
 
+	hintCollection := params.Collection
 	coll, err := db.Collection(params.Collection)
 	if err != nil {
 		if backends.ErrorCodeIs(err, backends.ErrorCodeCollectionNameIsInvalid) {
@@ -435,7 +453,7 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 	// derive the pushdown from the view's resolved pipeline (the same leading
 	// $match viewSourceIterator pushes), so the plan reflects a base-collection
 	// index used through the view instead of scanning the view namespace.
-	var viaView bool
+	var viaView, viewInClassic bool
 	if info, ierr := lookupCollectionInfo(connCtx, db, params.Collection); ierr == nil && info != nil && info.IsView {
 		viaView = true
 		baseName, _, rawStages, rerr := resolveViewChain(connCtx, db, info.Name, info.ViewOn, info.ViewPipeline, nil)
@@ -443,6 +461,7 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 			return nil, rerr
 		}
 
+		hintCollection = baseName
 		if coll, err = db.Collection(baseName); err != nil {
 			return nil, lazyerrors.Error(err)
 		}
@@ -465,6 +484,7 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 			// A view that reshapes documents runs before the command, so the
 			// command is explained as an aggregate of the view's stages and
 			// its own, as mongod does.
+			viewInClassic = stages.ViewStagesInClassic(rawStages, commandStages(params))
 			combined := append(append([]any{}, rawStages...), commandStages(params)...)
 			params.StagesDocs = mergeLeadingMatches(dropShapingBeforeCount(aggregations.MoveMatchesAhead(combined)))
 			params.Aggregate = true
@@ -482,7 +502,7 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 
 	// A hint naming an index that does not exist is an error, matching MongoDB.
 	params.Hint = clusteredHint(params.Hint, recordedClusteredName(connCtx, db, params.Collection))
-	if err = validateHintExists(connCtx, coll, params.Hint, document.Command()); err != nil {
+	if err = validateHintExists(connCtx, db, hintCollection, coll, params.Hint, document.Command()); err != nil {
 		return nil, err
 	}
 
@@ -490,9 +510,11 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 	var zeroLimit bool
 
 	if params.Aggregate {
-		// A match may need to pass shaping stages to reach a $lookup it can
-		// pass, then more shaping stages before that.
-		moved := moveMatchesBeforeLookups(aggregations.MoveMatchesAhead(moveWindowBeforeLookups(params.StagesDocs)))
+		// $skip and $limit stages move ahead as aggregate moves them. A match
+		// may need to pass shaping stages to reach a $lookup it can pass, then
+		// more shaping stages before that.
+		optimized := stages.OptimizeSkipsAndLimits(aggregations.MoveMatchesAhead(stages.OptimizeSkipsAndLimits(params.StagesDocs, true)), true)
+		moved := moveMatchesBeforeLookups(aggregations.MoveMatchesAhead(moveWindowBeforeLookups(optimized)))
 		params.StagesDocs = mergeLeadingMatches(dropShapingBeforeCount(aggregations.MoveMatchesAhead(moved)))
 		params.Filter, params.Sort = aggregations.GetPushdownQuery(params.StagesDocs)
 		common.CanonicalizeFilter(params.Filter)
@@ -586,6 +608,19 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 		qp.Limit = params.Limit
 	}
 
+	var pipelineDocs []*types.Document
+	var sbe sbePlan
+	if params.Aggregate && !viaView {
+		pipelineDocs = explainedStageDocs(params.StagesDocs)
+		if info, ierr := lookupCollectionInfo(connCtx, db, hintCollection); pipelineDocs != nil && ierr == nil && info != nil {
+			sbe = classifySBE(connCtx, db, hintCollection, pipelineDocs, effColl, viewInClassic, viewChecker(connCtx, db))
+		}
+	}
+
+	if qp.Projection == nil && !qp.CountOnly && pipelineDocs != nil && sbe.distinct == nil && !h.DisablePushdown {
+		qp.Projection, qp.WindowedProjection = dependencyProjection(pipelineDocs, sbe)
+	}
+
 	res, err := coll.Explain(connCtx, qp)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
@@ -616,6 +651,9 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 		if qp.CountOnly {
 			runCtx = backends.WithSeekEachRange(connCtx)
 		}
+		if sbe.runsInSBE() {
+			runCtx = backends.WithSBEScan(runCtx)
+		}
 		run := h.runExplained(runCtx, coll, params, qp, viaView)
 		// A counting GROUP returns one document, the count.
 		if qp.CountOnly || (viaView && params.CommandName == "count") {
@@ -640,9 +678,8 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (reply *w
 
 	if params.Aggregate && !viaView && !h.explainStatsStages(connCtx, db, params.DB, params.Collection, coll, params.StagesDocs, response,
 		params.Verbosity != "queryPlanner") {
-		explainLookups(connCtx, db, coll, qp, params.DB, params.StagesDocs, response, params.Verbosity != "queryPlanner", qp.Collated)
-		if !qp.CountOnly && !response.Has("stages") {
-			explainClassicStages(connCtx, coll, qp, params.StagesDocs, response, params.Verbosity != "queryPlanner")
+		if !qp.CountOnly && pipelineDocs != nil {
+			explainPipelineStages(connCtx, db, coll, qp, params.DB, pipelineDocs, sbe, response, params.Verbosity != "queryPlanner")
 		}
 	}
 
@@ -842,8 +879,7 @@ func pushdownWindow(stages []any) (skip, limit int64, limited bool) {
 }
 
 // absorbedProjection returns the projection of the $project or $unset the
-// query plan absorbs from stages, when it only includes or excludes fields,
-// or nil.
+// query plan absorbs from stages, or nil.
 func absorbedProjection(stages []any) *types.Document {
 	docs := make([]*types.Document, 0, len(stages))
 	for _, s := range stages {
@@ -863,16 +899,6 @@ func absorbedProjection(stages []any) *types.Document {
 		return must.NotFail(reportedStage(last).Get("$project")).(*types.Document)
 	case "$project":
 		spec, _ := must.NotFail(last.Get("$project")).(*types.Document)
-		if spec == nil {
-			return nil
-		}
-		for _, k := range spec.Keys() {
-			switch must.NotFail(spec.Get(k)).(type) {
-			case bool, int32, int64, float64:
-			default:
-				return nil
-			}
-		}
 		return spec
 	}
 	return nil

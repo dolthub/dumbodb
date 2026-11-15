@@ -53,6 +53,35 @@ type CollatedAccumulator interface {
 	NewCollated(cmp *collation.Comparator) Accumulation
 }
 
+// SBEAccumulator is implemented by accumulators that mongod's SBE engine
+// validates differently from its classic engine. UseSBE switches to SBE's
+// validation and reports what SBE reports while building the plan.
+type SBEAccumulator interface {
+	UseSBE() error
+}
+
+// UseBucketAuto prepares acc for $bucketAuto, which evaluates $first on every
+// document and has no group key for an N accumulator's n to read.
+func UseBucketAuto(acc Accumulator) error {
+	switch acc := acc.(type) {
+	case *firstAccumulator:
+		acc.evaluateAll = true
+	case *nAccumulator:
+		return acc.n.checkBucketAuto()
+	case *topBottomAccumulator:
+		return acc.n.checkBucketAuto()
+	}
+	return nil
+}
+
+// UseSBE calls UseSBE on acc when it is an SBEAccumulator.
+func UseSBE(acc Accumulator) error {
+	if s, ok := acc.(SBEAccumulator); ok {
+		return s.UseSBE()
+	}
+	return nil
+}
+
 // Accumulation folds the documents of a single group and produces the
 // accumulated result. It is stateful and not safe for concurrent use; one
 // instance is created per group.
@@ -67,10 +96,38 @@ type Accumulation interface {
 // Accumulation built from acc, then returns the result. It always closes iter.
 // Used by stages that must buffer their input for other reasons ($bucket,
 // $bucketAuto); $group folds incrementally without it.
-func Accumulate(acc Accumulator, iter types.DocumentsIterator) (any, error) {
-	defer iter.Close()
+func Accumulate(acc Accumulator, iter types.DocumentsIterator, cmp *collation.Comparator) (any, error) {
+	return accumulate(NewAccumulation(acc, cmp), iter)
+}
 
-	state := acc.New()
+// NewAccumulation returns a fresh accumulation of acc that compares strings
+// under cmp when it is set.
+func NewAccumulation(acc Accumulator, cmp *collation.Comparator) Accumulation {
+	if collated, ok := acc.(CollatedAccumulator); ok && cmp != nil {
+		return collated.NewCollated(cmp)
+	}
+	return acc.New()
+}
+
+// keepingAll is implemented by the accumulations that keep every value when
+// mongod computes them over a window that can drop documents.
+type keepingAll interface {
+	keepAll()
+}
+
+// AccumulateWindow is Accumulate over a window whose lower edge is bounded.
+// mongod computes such a window with an accumulator that keeps every value,
+// so ties are chosen from the whole window in its order.
+func AccumulateWindow(acc Accumulator, iter types.DocumentsIterator, cmp *collation.Comparator) (any, error) {
+	state := NewAccumulation(acc, cmp)
+	if k, ok := state.(keepingAll); ok {
+		k.keepAll()
+	}
+	return accumulate(state, iter)
+}
+
+func accumulate(state Accumulation, iter types.DocumentsIterator) (any, error) {
+	defer iter.Close()
 
 	for {
 		_, doc, err := iter.Next()
@@ -148,22 +205,25 @@ func NewAccumulator(stage, key string, value any) (Accumulator, error) {
 		return nil, err
 	}
 
-	return newAccumulator(args...)
+	acc, err := newAccumulator(args...)
+	if err != nil {
+		return nil, err
+	}
+	// mongod's $group and $bucket stop evaluating $firstN's input once it
+	// holds n values; other stages evaluate it for every document.
+	if n, ok := acc.(*nAccumulator); ok {
+		n.stopWhenFull = stage == "$group" || stage == "$bucket"
+	}
+	// mongod's classic $bucketAuto charges each value $push keeps twice.
+	if p, ok := acc.(*pushAccumulator); ok && stage == "$bucketAuto" {
+		p.charges = 2
+	}
+	return acc, nil
 }
 
 // unimplementedAccumulators are MongoDB 8.0 $group accumulators DumboDB lacks.
 var unimplementedAccumulators = map[string]bool{
 	"$accumulator": true,
-	"$bottom":      true,
-	"$bottomN":     true,
-	"$firstN":      true,
-	"$lastN":       true,
-	"$maxN":        true,
-	"$median":      true,
-	"$minN":        true,
-	"$percentile":  true,
-	"$top":         true,
-	"$topN":        true,
 }
 
 // unknownAccumulatorError is the error for an operator Accumulators lacks:
@@ -206,15 +266,25 @@ var Accumulators = map[string]newAccumulatorFunc{
 	// sorted alphabetically
 	"$addToSet":     newAddToSet,
 	"$avg":          newAvg,
+	"$bottom":       newTopBottomFunc("$bottom"),
+	"$bottomN":      newTopBottomFunc("$bottomN"),
 	"$count":        newCount,
 	"$first":        newFirst,
+	"$firstN":       newNAccumulatorFunc("$firstN"),
 	"$last":         newLast,
+	"$lastN":        newNAccumulatorFunc("$lastN"),
 	"$max":          newMax,
+	"$maxN":         newNAccumulatorFunc("$maxN"),
+	"$median":       newPercentileFunc("$median", true),
 	"$mergeObjects": newMergeObjectsAccumulator,
 	"$min":          newMin,
+	"$minN":         newNAccumulatorFunc("$minN"),
+	"$percentile":   newPercentileFunc("$percentile", false),
 	"$push":         newPush,
 	"$stdDevPop":    newStdDevPop,
 	"$stdDevSamp":   newStdDevSamp,
 	"$sum":          newSum,
+	"$top":          newTopBottomFunc("$top"),
+	"$topN":         newTopBottomFunc("$topN"),
 	// please keep sorted alphabetically
 }

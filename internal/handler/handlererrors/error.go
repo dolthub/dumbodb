@@ -96,6 +96,10 @@ const (
 
 	ErrDollarPrefixedFieldName = ErrorCode(52) // DollarPrefixedFieldName
 
+	// ErrNotSingleValueField indicates a path an upsert cannot seed from its
+	// query.
+	ErrNotSingleValueField = ErrorCode(54) // NotSingleValueField
+
 	// ErrInvalidID indicates that _id field is invalid.
 	ErrInvalidID = ErrorCode(53) // InvalidIdField
 
@@ -127,6 +131,9 @@ const (
 
 	ErrOperationFailed = ErrorCode(96) // OperationFailed
 
+	// ErrNotExactValueField indicates an upsert query matched a sub-path of _id.
+	ErrNotExactValueField = ErrorCode(111) // NotExactValueField
+
 	ErrWriteConflict = ErrorCode(112) // WriteConflict
 
 	ErrCommandNotSupported = ErrorCode(115) // CommandNotSupported
@@ -153,6 +160,10 @@ const (
 	ErrKeysNotFound = ErrorCode(211) // KeysNotFound
 
 	ErrExceededMemoryLimit = ErrorCode(146) // ExceededMemoryLimit
+
+	// ErrLookupMatchesTooLarge indicates a $lookup's matches for one document
+	// passed internalLookupStageIntermediateDocumentMaxSizeBytes.
+	ErrLookupMatchesTooLarge = ErrorCode(4568) // Location4568
 
 	ErrDurationOverflow = ErrorCode(159) // DurationOverflow
 
@@ -311,6 +322,34 @@ const (
 	ErrNumericFirstArgument    = ErrorCode(51044)   // Location51044
 	ErrNumericSecondArgument   = ErrorCode(51045)   // Location51045
 
+	// Math expression errors as mongod's SBE engine reports them.
+	ErrSBEDivideByZero          = ErrorCode(4848401) // Location4848401
+	ErrSBEModByZero             = ErrorCode(4848403) // Location4848403
+	ErrSBEAbsNonNumeric         = ErrorCode(7157700) // Location7157700
+	ErrSBEAbsOfLongMin          = ErrorCode(7157701) // Location7157701
+	ErrSBECeilNonNumeric        = ErrorCode(7157702) // Location7157702
+	ErrSBEFloorNonNumeric       = ErrorCode(7157703) // Location7157703
+	ErrSBEExpNonNumeric         = ErrorCode(7157704) // Location7157704
+	ErrSBELnNonNumeric          = ErrorCode(7157705) // Location7157705
+	ErrSBELnNonPositive         = ErrorCode(7157706) // Location7157706
+	ErrSBELog10NonNumeric       = ErrorCode(7157707) // Location7157707
+	ErrSBELog10NonPositive      = ErrorCode(7157708) // Location7157708
+	ErrSBESqrtNonNumeric        = ErrorCode(7157709) // Location7157709
+	ErrSBESqrtNegative          = ErrorCode(7157710) // Location7157710
+	ErrSBEModNonNumeric         = ErrorCode(7157718) // Location7157718
+	ErrSBEDivideNonNumeric      = ErrorCode(7157719) // Location7157719
+	ErrSBESubtractNonNumeric    = ErrorCode(7157720) // Location7157720
+	ErrSBEMultiplyNonNumeric    = ErrorCode(7157721) // Location7157721
+	ErrSBEAddNonNumeric         = ErrorCode(7157723) // Location7157723
+	ErrSBEPowNonNumeric         = ErrorCode(5154200) // Location5154200
+	ErrSBEPowZeroNegative       = ErrorCode(5154201) // Location5154201
+	ErrSBERoundNonNumeric       = ErrorCode(5155300) // Location5155300
+	ErrSBERoundPlace            = ErrorCode(5155301) // Location5155301
+	ErrSBETrigNonNumeric        = ErrorCode(7157800) // Location7157800
+	ErrSBEAtan2NonNumeric       = ErrorCode(7157801) // Location7157801
+	ErrSBEBoundedTrigNonNumeric = ErrorCode(7157802) // Location7157802
+	ErrSBETrigOutOfBounds       = ErrorCode(7157803) // Location7157803
+
 	// Date expression errors, named for MongoDB's checks.
 	ErrUnrecognizedTimeZone      = ErrorCode(40485)   // Location40485
 	ErrTimeZoneNotString         = ErrorCode(40517)   // Location40517
@@ -401,6 +440,90 @@ const (
 	ErrConcatArraysNotArray      = ErrorCode(28664)   // Location28664
 	ErrGroupInclusionStyle       = ErrorCode(17390)   // Location17390
 	ErrAddTwoDates               = ErrorCode(16612)   // Location16612
+	ErrSBEAddTwoDates            = ErrorCode(7157722) // Location7157722
+
+	// Classic engine expression errors.
+	ErrAllElementsTrueNotArray          = ErrorCode(17040) // Location17040
+	ErrAnyElementTrueNotArray           = ErrorCode(17041) // Location17041
+	ErrSetIsSubsetSecondNotArray        = ErrorCode(17042) // Location17042
+	ErrSetUnionNotArray                 = ErrorCode(17043) // Location17043
+	ErrSetEqualsNotArray                = ErrorCode(17044) // Location17044
+	ErrSetEqualsTooFewArgs              = ErrorCode(17045) // Location17045
+	ErrSetIntersectionNotArray          = ErrorCode(17047) // Location17047
+	ErrSetDifferenceFirstNotArray       = ErrorCode(17048) // Location17048
+	ErrSetDifferenceSecondNotArray      = ErrorCode(17049) // Location17049
+	ErrSetIsSubsetFirstNotArray         = ErrorCode(17310) // Location17310
+	ErrSetIsSubsetFirstNotArrayVariable = ErrorCode(17046) // Location17046
+	ErrSetIsSubsetConstantNotArray      = ErrorCode(17311) // Location17311
+	ErrSwitchNotObject                  = ErrorCode(40060) // Location40060
+	ErrSwitchBranchesNotArray           = ErrorCode(40061) // Location40061
+	ErrSwitchBranchNotObject            = ErrorCode(40062) // Location40062
+	ErrSwitchBranchUnknownArgument      = ErrorCode(40063) // Location40063
+	ErrSwitchBranchMissingCase          = ErrorCode(40064) // Location40064
+	ErrSwitchBranchMissingThen          = ErrorCode(40065) // Location40065
+	ErrBucketNoBranch                   = ErrorCode(40066) // Location40066
+	ErrSwitchUnknownArgument            = ErrorCode(40067) // Location40067
+	ErrSwitchNoBranches                 = ErrorCode(40068) // Location40068
+	ErrSwitchNoMatch                    = ErrorCode(40069) // Location40069
+	ErrLetNotObject                     = ErrorCode(16874) // Location16874
+	ErrLetUnknownParameter              = ErrorCode(16875) // Location16875
+	ErrLetMissingVars                   = ErrorCode(16876) // Location16876
+	ErrLetMissingIn                     = ErrorCode(16877) // Location16877
+	ErrMergeObjectsExprNotObject        = ErrorCode(40400) // Location40400
+
+	// Input errors that mongod's SBE engine reports under its own codes.
+	ErrSBEBucketNoBranch         = ErrorCode(7158303) // Location7158303
+	ErrSBEInput4997901           = ErrorCode(4997901) // Location4997901
+	ErrSBEInput5073401           = ErrorCode(5073401) // Location5073401
+	ErrSBEInput5153200           = ErrorCode(5153200) // Location5153200
+	ErrSBEInput5153215           = ErrorCode(5153215) // Location5153215
+	ErrSBEInput5155800           = ErrorCode(5155800) // Location5155800
+	ErrSBEInput5156302           = ErrorCode(5156302) // Location5156302
+	ErrSBEInput5157904           = ErrorCode(5157904) // Location5157904
+	ErrSBEInput7157712           = ErrorCode(7157712) // Location7157712
+	ErrSBEInput7157715           = ErrorCode(7157715) // Location7157715
+	ErrSBEInput7157900           = ErrorCode(7157900) // Location7157900
+	ErrSBEInput7157901           = ErrorCode(7157901) // Location7157901
+	ErrSBEInput7157904           = ErrorCode(7157904) // Location7157904
+	ErrSBEInput7157915           = ErrorCode(7157915) // Location7157915
+	ErrSBEInput7157917           = ErrorCode(7157917) // Location7157917
+	ErrSBEInput7157921           = ErrorCode(7157921) // Location7157921
+	ErrSBEInput7157932           = ErrorCode(7157932) // Location7157932
+	ErrSBEInput7158000           = ErrorCode(7158000) // Location7158000
+	ErrSBEInput7158001           = ErrorCode(7158001) // Location7158001
+	ErrSBEInput7158002           = ErrorCode(7158002) // Location7158002
+	ErrSBEInput7158007           = ErrorCode(7158007) // Location7158007
+	ErrSBEInput7158100           = ErrorCode(7158100) // Location7158100
+	ErrSBEInput7158200           = ErrorCode(7158200) // Location7158200
+	ErrSBEInput7158201           = ErrorCode(7158201) // Location7158201
+	ErrSBEInput7158300           = ErrorCode(7158300) // Location7158300
+	ErrSBEInput7158301           = ErrorCode(7158301) // Location7158301
+	ErrSBEInput7158302           = ErrorCode(7158302) // Location7158302
+	ErrSBEInput7157905           = ErrorCode(7157905) // Location7157905
+	ErrSBEInput7157906           = ErrorCode(7157906) // Location7157906
+	ErrSBEInput7157907           = ErrorCode(7157907) // Location7157907
+	ErrSBEInput7157913           = ErrorCode(7157913) // Location7157913
+	ErrSBEInput7157922           = ErrorCode(7157922) // Location7157922
+	ErrSBEInput7157924           = ErrorCode(7157924) // Location7157924
+	ErrSBEInput7157936           = ErrorCode(7157936) // Location7157936
+	ErrSBEInput4997903           = ErrorCode(4997903) // Location4997903
+	ErrSBEInput4997908           = ErrorCode(4997908) // Location4997908
+	ErrSBEInput7158003           = ErrorCode(7158003) // Location7158003
+	ErrSBEInput7158004           = ErrorCode(7158004) // Location7158004
+	ErrSBEInput7158005           = ErrorCode(7158005) // Location7158005
+	ErrSBEInput7158006           = ErrorCode(7158006) // Location7158006
+	ErrSBEInput7157920           = ErrorCode(7157920) // Location7157920
+	ErrSBEInput7157926           = ErrorCode(7157926) // Location7157926
+	ErrSBEInput7157940           = ErrorCode(7157940) // Location7157940
+	ErrSBEInput7157944           = ErrorCode(7157944) // Location7157944
+	ErrSBEInput5126603           = ErrorCode(5126603) // Location5126603
+	ErrSBEInput5153201           = ErrorCode(5153201) // Location5153201
+	ErrSBEInput7158009           = ErrorCode(7158009) // Location7158009
+	ErrSBEInput7157711           = ErrorCode(7157711) // Location7157711
+	ErrSBEInput7157713           = ErrorCode(7157713) // Location7157713
+	ErrSBEInput7157717           = ErrorCode(7157717) // Location7157717
+	ErrSBEInput5126601           = ErrorCode(5126601) // Location5126601
+	ErrSBEInput5153205           = ErrorCode(5153205) // Location5153205
 	ErrReplaceReplacementType    = ErrorCode(51744)   // Location51744
 	ErrReplaceFindType           = ErrorCode(51745)   // Location51745
 	ErrReplaceInputType          = ErrorCode(51746)   // Location51746
@@ -469,6 +592,66 @@ const (
 
 	// ErrStageSampleNegativeSize indicates that $sample size must not be negative.
 	ErrStageSampleNegativeSize = ErrorCode(28747) // Location28747
+
+	// ErrStageSampleSizeNotNumber indicates a $sample size that is not a number.
+	ErrStageSampleSizeNotNumber = ErrorCode(28746) // Location28746
+
+	// ErrStageSampleUnknownOption indicates an unknown $sample option.
+	ErrStageSampleUnknownOption = ErrorCode(28748) // Location28748
+
+	// ErrStageSampleMissingSize indicates a $sample without a size.
+	ErrStageSampleMissingSize = ErrorCode(28749) // Location28749
+
+	// ErrGeoNearMissingNear indicates a $geoNear without near.
+	ErrGeoNearMissingNear = ErrorCode(5860400) // Location5860400
+
+	// ErrGeoNearDistanceFieldNotString indicates a $geoNear distanceField that is not a string.
+	ErrGeoNearDistanceFieldNotString = ErrorCode(16606) // Location16606
+
+	// ErrInRequiresArray indicates an expression $in whose second argument is not an array.
+	ErrInRequiresArray = ErrorCode(40081) // Location40081
+
+	// ErrSetEqualsConstantNotArray indicates a constant $setEquals operand that is not an array.
+	ErrSetEqualsConstantNotArray = ErrorCode(5887502) // Location5887502
+
+	// ErrZipInputsNotArray indicates $zip inputs that are not an array of expressions.
+	ErrZipInputsNotArray = ErrorCode(34461) // Location34461
+
+	// ErrMapNotObject indicates a $map argument that is not an object.
+	ErrMapNotObject = ErrorCode(16878) // Location16878
+
+	// ErrMapUnknownParameter indicates an unknown $map parameter.
+	ErrMapUnknownParameter = ErrorCode(16879) // Location16879
+
+	// ErrMapMissingInput indicates a $map without input.
+	ErrMapMissingInput = ErrorCode(16880) // Location16880
+
+	// ErrMapMissingIn indicates a $map without in.
+	ErrMapMissingIn = ErrorCode(16882) // Location16882
+
+	// ErrZipNotObject indicates a $zip argument that is not an object.
+	ErrZipNotObject = ErrorCode(34460) // Location34460
+
+	// ErrZipDefaultsNotArray indicates $zip defaults that are not an array of expressions.
+	ErrZipDefaultsNotArray = ErrorCode(34462) // Location34462
+
+	// ErrZipUseLongestLengthType indicates a $zip useLongestLength that is not a bool.
+	ErrZipUseLongestLengthType = ErrorCode(34463) // Location34463
+
+	// ErrZipUnknownArgument indicates an unknown $zip argument.
+	ErrZipUnknownArgument = ErrorCode(34464) // Location34464
+
+	// ErrZipNoInputs indicates a $zip without input arrays.
+	ErrZipNoInputs = ErrorCode(34465) // Location34465
+
+	// ErrZipDefaultsWithoutLongest indicates $zip defaults without useLongestLength.
+	ErrZipDefaultsWithoutLongest = ErrorCode(34466) // Location34466
+
+	// ErrZipDefaultsLength indicates $zip defaults and inputs of different lengths.
+	ErrZipDefaultsLength = ErrorCode(34467) // Location34467
+
+	// ErrZipInputNotArray indicates a $zip input that is not an array.
+	ErrZipInputNotArray = ErrorCode(34468) // Location34468
 
 	// ErrStageUnwindNoPath indicates that $unwind aggregation stage is empty.
 	ErrStageUnwindNoPath = ErrorCode(28812) // Location28812
@@ -560,6 +743,10 @@ const (
 	// exclusion projection.
 	ErrProjectionExpressionInExclusion = ErrorCode(31252) // Location31252
 
+	// ErrProjectionIDExpressionInExclusion indicates a computed _id in an
+	// exclusion projection.
+	ErrProjectionIDExpressionInExclusion = ErrorCode(31310) // Location31310
+
 	// ErrProjectionInEx for $elemMatch indicates that inclusion statement found
 	// while projection document already marked as exclusion.
 	ErrProjectionInEx = ErrorCode(31253) // Location31253
@@ -606,6 +793,93 @@ const (
 	// ErrBucketMissingBoundaries indicates that $bucket stage specification is missing the required 'boundaries' field.
 	ErrBucketMissingBoundaries = ErrorCode(40198) // Location40198
 
+	// ErrBucketBoundariesNotArray indicates $bucket boundaries that are not an array.
+	ErrBucketBoundariesNotArray = ErrorCode(40200) // Location40200
+
+	// ErrBucketAutoBucketsNotNumber indicates a $bucketAuto buckets value that is not a number.
+	ErrBucketAutoBucketsNotNumber = ErrorCode(40241) // Location40241
+
+	// ErrBucketAutoBucketsNotInt32 indicates a $bucketAuto buckets value that is not a 32-bit integer.
+	ErrBucketAutoBucketsNotInt32 = ErrorCode(40242) // Location40242
+
+	// ErrBucketAutoBucketsNotPositive indicates a $bucketAuto buckets value that is not positive.
+	ErrBucketAutoBucketsNotPositive = ErrorCode(40243) // Location40243
+
+	// ErrTsSecondNotTimestamp indicates a $tsSecond argument that is not a timestamp.
+	ErrTsSecondNotTimestamp = ErrorCode(5687301) // Location5687301
+
+	// ErrTsIncrementNotTimestamp indicates a $tsIncrement argument that is not a timestamp.
+	ErrTsIncrementNotTimestamp = ErrorCode(5687302) // Location5687302
+
+	// ErrRangeSortByNotNumeric indicates a range window over a sortBy value that is not a number.
+	ErrRangeSortByNotNumeric = ErrorCode(5429414) // Location5429414
+
+	// ErrNAccumulatorRootState indicates SBE reading $$ROOT as the n of an N accumulator.
+	ErrNAccumulatorRootState = ErrorCode(7548600) // Location7548600
+
+	// ErrSplitInputNotString indicates a $split input that is not a string.
+	ErrSplitInputNotString = ErrorCode(40085) // Location40085
+
+	// ErrSplitDelimiterNotString indicates a $split delimiter that is not a string.
+	ErrSplitDelimiterNotString = ErrorCode(40086) // Location40086
+
+	// ErrSplitEmptyDelimiter indicates an empty $split delimiter.
+	ErrSplitEmptyDelimiter = ErrorCode(40087) // Location40087
+
+	// ErrDottedFieldInSubObject indicates a dotted field name inside an object of a $set specification.
+	ErrDottedFieldInSubObject = ErrorCode(40183) // Location40183
+
+	// ErrUnwindIndexEmpty indicates an empty $unwind includeArrayIndex.
+	ErrUnwindIndexEmpty = ErrorCode(28810) // Location28810
+
+	// ErrUnwindIndexDollar indicates a $unwind includeArrayIndex starting with $.
+	ErrUnwindIndexDollar = ErrorCode(28822) // Location28822
+
+	// ErrFieldPathNulByte indicates a field path with a null byte.
+	ErrFieldPathNulByte = ErrorCode(16411) // Location16411
+
+	// ErrUnwindPathNulByte indicates a $unwind path with a null byte.
+	ErrUnwindPathNulByte = ErrorCode(16419) // Location16419
+
+	// ErrStageCountNulByte indicates a $count field name with a null byte.
+	ErrStageCountNulByte = ErrorCode(40159) // Location40159
+
+	// $arrayToObject input errors.
+	ErrArrayToObjectInput           = ErrorCode(40386) // Location40386
+	ErrArrayToObjectObjectsExpected = ErrorCode(40391) // Location40391
+	ErrArrayToObjectObjectSize      = ErrorCode(40392) // Location40392
+	ErrArrayToObjectObjectKeys      = ErrorCode(40393) // Location40393
+	ErrArrayToObjectObjectKeyType   = ErrorCode(40394) // Location40394
+	ErrArrayToObjectPairKeyType     = ErrorCode(40395) // Location40395
+	ErrArrayToObjectArraysExpected  = ErrorCode(40396) // Location40396
+	ErrArrayToObjectPairSize        = ErrorCode(40397) // Location40397
+	ErrArrayToObjectElementType     = ErrorCode(40398) // Location40398
+
+	// $bucket and $sortByCount specification errors.
+	ErrBucketBoundaryTypes       = ErrorCode(40193) // Location40193
+	ErrBucketBoundariesOrder     = ErrorCode(40194) // Location40194
+	ErrBucketDefaultInRange      = ErrorCode(40199) // Location40199
+	ErrBucketBoundaryNotConstant = ErrorCode(40191) // Location40191
+	ErrBucketDefaultNotConstant  = ErrorCode(40195) // Location40195
+	ErrBucketOutputNotObject     = ErrorCode(40196) // Location40196
+	ErrBucketUnknownOption       = ErrorCode(40197) // Location40197
+	ErrBucketGroupBy             = ErrorCode(40202) // Location40202
+	ErrSortByCountObject         = ErrorCode(40147) // Location40147
+	ErrSortByCountString         = ErrorCode(40148) // Location40148
+	ErrSortByCountType           = ErrorCode(40149) // Location40149
+
+	// $graphLookup specification errors.
+	ErrGraphLookupMaxDepthNotNumeric  = ErrorCode(40100) // Location40100
+	ErrGraphLookupMaxDepthNegative    = ErrorCode(40101) // Location40101
+	ErrGraphLookupMaxDepthNotIntegral = ErrorCode(40102) // Location40102
+	ErrGraphLookupNotString           = ErrorCode(40103) // Location40103
+	ErrGraphLookupUnknownArgument     = ErrorCode(40104) // Location40104
+	ErrGraphLookupMissingArgument     = ErrorCode(40105) // Location40105
+	ErrGraphLookupMatchNotObject      = ErrorCode(40185) // Location40185
+
+	// ErrSortDuplicateKey indicates a sort specification that repeats a key.
+	ErrSortDuplicateKey = ErrorCode(7472500) // Location7472500
+
 	// ErrStageGroupUnaryOperator indicates that $sum is a unary operator.
 	ErrStageGroupUnaryOperator = ErrorCode(40237) // Location40237
 
@@ -617,6 +891,8 @@ const (
 
 	// ErrBucketAutoMissingRequiredFields indicates that $bucketAuto is missing required 'groupBy' or 'buckets' fields.
 	ErrBucketAutoMissingRequiredFields = ErrorCode(40246) // Location40246
+	ErrBucketAutoOutputNotObject       = ErrorCode(40244) // Location40244
+	ErrBucketAutoUnknownOption         = ErrorCode(40245) // Location40245
 
 	// ErrStageGroupInvalidAccumulator indicates invalid accumulator field.
 	ErrStageGroupInvalidAccumulator = ErrorCode(40234) // Location40234
@@ -645,6 +921,60 @@ const (
 
 	// ErrCollStatsIsNotFirstStage indicates that $collStats must be the first stage in the pipeline.
 	ErrCollStatsIsNotFirstStage = ErrorCode(40602) // Location40602
+
+	// ErrShardedDataDistributionMongosOnly indicates $shardedDataDistribution
+	// outside mongos.
+	ErrShardedDataDistributionMongosOnly = ErrorCode(6789101) // Location6789101
+
+	// ErrSearchNotAllowedInContext indicates $searchMeta in an update pipeline.
+	ErrSearchNotAllowedInContext = ErrorCode(6600901) // Location6600901
+
+	// $bucketAuto granularity errors.
+	ErrBucketAutoUnknownGranularity    = ErrorCode(40257) // Location40257
+	ErrBucketAutoGranularityNotNumeric = ErrorCode(40258) // Location40258
+	ErrBucketAutoGranularityNaN        = ErrorCode(40259) // Location40259
+	ErrBucketAutoGranularityNegative   = ErrorCode(40260) // Location40260
+	ErrBucketAutoGranularityType       = ErrorCode(40261) // Location40261
+
+	// ErrMergeOnFieldArray indicates a $merge 'on' field holding an array.
+	ErrMergeOnFieldArray = ErrorCode(51185) // Location51185
+
+	// ErrMergeOnFieldMissing indicates a $merge 'on' field that is missing or null.
+	ErrMergeOnFieldMissing = ErrorCode(51132) // Location51132
+
+	// ErrChangeStreamSplitSpec indicates a $changeStreamSplitLargeEvent specification that is not an empty object.
+	ErrChangeStreamSplitSpec = ErrorCode(7182800) // Location7182800
+
+	// ErrQuerySettingsNotObject indicates a $querySettings specification that is not an object.
+	ErrQuerySettingsNotObject = ErrorCode(7746800) // Location7746800
+
+	// ErrBucketAutoGroupByInvalid indicates a $bucketAuto groupBy that is neither a path nor an expression object.
+	ErrBucketAutoGroupByInvalid = ErrorCode(40239) // Location40239
+
+	// ErrBucketAutoGroupKeyRef indicates an N accumulator in $bucketAuto whose n is not constant.
+	ErrBucketAutoGroupKeyRef = ErrorCode(4544714) // Location4544714
+
+	// ErrMergeStageNoMatchingDocument indicates $merge whenNotMatched: fail found no match.
+	ErrMergeStageNoMatchingDocument = ErrorCode(13113) // MergeStageNoMatchingDocument
+
+	// ErrMergeOnNoUniqueIndex indicates $merge 'on' fields without a matching unique index.
+	ErrMergeOnNoUniqueIndex = ErrorCode(51183) // Location51183
+
+	// ErrOutSpecialCollection indicates a $out target in a system collection.
+	ErrOutSpecialCollection = ErrorCode(17385) // Location17385
+
+	// ErrOutInternalDatabase indicates a $out target in admin, local or config.
+	ErrOutInternalDatabase = ErrorCode(31321) // Location31321
+
+	// ErrMergeSpecialCollection indicates a $merge target in a system collection.
+	ErrMergeSpecialCollection = ErrorCode(31319) // Location31319
+
+	// ErrMergeInternalDatabase indicates a $merge target in admin, local or config.
+	ErrMergeInternalDatabase = ErrorCode(31320) // Location31320
+
+	// ErrDropClusteredIndex indicates dropping a clustered collection's _id
+	// index.
+	ErrDropClusteredIndex = ErrorCode(5979800) // Location5979800
 
 	// ErrOpQueryInvalidField indicates that the field is not allowed for op query.
 	ErrOpQueryInvalidField = ErrorCode(40621) // Location40621
@@ -719,6 +1049,123 @@ const (
 	// ErrNOperatorInputNotArray indicates that the input of an N operator is not an array.
 	ErrNOperatorInputNotArray = ErrorCode(5788200) // Location5788200
 
+	// $group accumulator specification errors.
+	ErrNAccumulatorSpecNotObject     = ErrorCode(5787801) // Location5787801
+	ErrNAccumulatorUnknownArgument   = ErrorCode(5787901) // Location5787901
+	ErrNAccumulatorMissingN          = ErrorCode(5787906) // Location5787906
+	ErrNAccumulatorMissingInput      = ErrorCode(5787907) // Location5787907
+	ErrNAccumulatorNInvalid          = ErrorCode(7548606) // Location7548606
+	ErrNAccumulatorNInvalidAtRuntime = ErrorCode(7548607) // Location7548607
+	ErrNAccumulatorStateNotArray     = ErrorCode(7695201) // Location7695201
+	ErrTopSpecNotObject              = ErrorCode(5788001) // Location5788001
+	ErrTopUnknownArgument            = ErrorCode(5788002) // Location5788002
+	ErrTopMissingN                   = ErrorCode(5788003) // Location5788003
+	ErrTopMissingOutput              = ErrorCode(5788004) // Location5788004
+	ErrTopMissingSortBy              = ErrorCode(5788005) // Location5788005
+	ErrPercentileSpecNotObject       = ErrorCode(7429703) // Location7429703
+	ErrMedianSpecNotObject           = ErrorCode(7436100) // Location7436100
+	ErrPercentileExprNotObject       = ErrorCode(7436200) // Location7436200
+	ErrMedianExprNotObject           = ErrorCode(7436201) // Location7436201
+	ErrPercentileNotConstant         = ErrorCode(7750300) // Location7750300
+	ErrPercentileNotArray            = ErrorCode(7750301) // Location7750301
+	ErrPercentileNotNumber           = ErrorCode(7750302) // Location7750302
+	ErrPercentileOutOfRange          = ErrorCode(7750303) // Location7750303
+
+	// $densify errors.
+	ErrDensifyFieldType                    = ErrorCode(5733201) // Location5733201
+	ErrDensifyGeneratorIncludesField       = ErrorCode(5733306) // Location5733306
+	ErrDensifyStepNotPositive              = ErrorCode(5733401) // Location5733401
+	ErrDensifyBoundsOrder                  = ErrorCode(5733402) // Location5733402
+	ErrDensifyBoundsLength                 = ErrorCode(5733403) // Location5733403
+	ErrDensifyBoundsInvalid                = ErrorCode(5733404) // Location5733404
+	ErrDensifyPartitionBoundsWithoutFields = ErrorCode(5733408) // Location5733408
+	ErrDensifyNumericBoundsWithUnit        = ErrorCode(5733409) // Location5733409
+	ErrDensifyDateBoundsWithoutUnit        = ErrorCode(5733410) // Location5733410
+	ErrDensifyBoundsStepType               = ErrorCode(5876900) // Location5876900
+	ErrDensifyTooManyDocs                  = ErrorCode(5897900) // Location5897900
+	ErrDensifyBoundsType                   = ErrorCode(5946800) // Location5946800
+	ErrDensifyBoundsString                 = ErrorCode(5946802) // Location5946802
+	ErrDensifyValueUnitMismatch            = ErrorCode(6053600) // Location6053600
+	ErrDensifyDateStepNotWhole             = ErrorCode(6586400) // Location6586400
+	ErrDensifyPartitionIncludesField       = ErrorCode(8993000) // Location8993000
+
+	// $linearFill errors.
+	ErrLinearFillSortBy            = ErrorCode(605001)  // Location605001
+	ErrLinearFillRepeatedSortValue = ErrorCode(6050106) // Location6050106
+
+	// $fill errors.
+	ErrFillOutputSpec     = ErrorCode(6050200) // Location6050200
+	ErrFillMethodAndValue = ErrorCode(6050201) // Location6050201
+	ErrFillMethod         = ErrorCode(6050202) // Location6050202
+	ErrFillEmptyOutput    = ErrorCode(6050203) // Location6050203
+	ErrFillBothPartitions = ErrorCode(6050204) // Location6050204
+
+	// ErrSearchMetaWithoutSearch indicates $$SEARCH_META outside a $search pipeline.
+	ErrSearchMetaWithoutSearch = ErrorCode(6347902) // Location6347902
+
+	// ErrLookupSubPipelineWrites indicates $out or $merge in a $lookup sub-pipeline.
+	ErrLookupSubPipelineWrites = ErrorCode(51047) // Location51047
+
+	// ErrBuiltinVariableUnavailable indicates a system variable a standalone server does not define.
+	ErrBuiltinVariableUnavailable = ErrorCode(51144) // Location51144
+
+	// ErrGranularityNotFinite indicates a $bucketAuto granularity rounder given an infinity.
+	ErrGranularityNotFinite = ErrorCode(11785400) // Location11785400
+
+	// ErrArrayToObjectPairKeyNul indicates an $arrayToObject pair key with a null byte.
+	ErrArrayToObjectPairKeyNul = ErrorCode(4940400) // Location4940400
+
+	// ErrArrayToObjectObjectKeyNul indicates an $arrayToObject k value with a null byte.
+	ErrArrayToObjectObjectKeyNul = ErrorCode(4940401) // Location4940401
+
+	// ErrArrayToObjectPairKeyNulSBE is ErrArrayToObjectPairKeyNul in mongod's SBE engine.
+	ErrArrayToObjectPairKeyNulSBE = ErrorCode(5153207) // Location5153207
+
+	// ErrArrayToObjectObjectKeyNulSBE is ErrArrayToObjectObjectKeyNul in mongod's SBE engine.
+	ErrArrayToObjectObjectKeyNulSBE = ErrorCode(5153214) // Location5153214
+
+	// ErrSetFieldNulByte indicates a $setField field name with a null byte.
+	ErrSetFieldNulByte = ErrorCode(9534700) // Location9534700
+
+	// ErrConcatNotString indicates a classic $concat argument that is not a string.
+	ErrConcatNotString = ErrorCode(16702) // Location16702
+
+	// ErrStrLenCPNotString indicates a $strLenCP argument that is not a string.
+	ErrStrLenCPNotString = ErrorCode(34471) // Location34471
+
+	// ErrStrLenBytesNotString indicates a classic $strLenBytes argument that is not a string.
+	ErrStrLenBytesNotString = ErrorCode(34473) // Location34473
+
+	// ErrTrimInputNotString indicates a classic $trim input that is not a string.
+	ErrTrimInputNotString = ErrorCode(50699) // Location50699
+
+	// ErrTrimCharsNotString indicates a classic $trim chars value that is not a string.
+	ErrTrimCharsNotString = ErrorCode(50700) // Location50700
+
+	// ErrSBEInput5156303 is SBE's error for $trim chars that are not a string.
+	ErrSBEInput5156303 = ErrorCode(5156303) // Location5156303
+
+	// ErrAddFieldsPathCollision indicates a $set or $addFields specification writing one path within another.
+	ErrAddFieldsPathCollision = ErrorCode(40176) // Location40176
+
+	// ErrWindowOutputPathCollision indicates $setWindowFields outputs writing one path within another.
+	ErrWindowOutputPathCollision = ErrorCode(6307900) // Location6307900
+
+	// ErrListCatalogSpec indicates a $listCatalog specification other than an empty object.
+	ErrListCatalogSpec = ErrorCode(6200600) // Location6200600
+
+	// ErrNotAllowedInUserRequests indicates an internal stage in a client request.
+	ErrNotAllowedInUserRequests = ErrorCode(5491300) // Location5491300
+
+	// ErrListClusterCatalogOnCollection indicates $listClusterCatalog run on a collection.
+	ErrListClusterCatalogOnCollection = ErrorCode(9621301) // Location9621301
+
+	// ErrListClusterCatalogNotObject indicates a $listClusterCatalog specification that is not an object.
+	ErrListClusterCatalogNotObject = ErrorCode(9621302) // Location9621302
+
+	// ErrIDLDuplicateField indicates a field given twice in a document parsed by an IDL parser.
+	ErrIDLDuplicateField = ErrorCode(40413) // IDLDuplicateField
+
 	// ErrStageIndexedStringVectorDuplicate indicates that input to IndexedStringVector contained duplicate values.
 	ErrStageIndexedStringVectorDuplicate = ErrorCode(7582300) // Location7582300
 
@@ -768,6 +1215,109 @@ const (
 	// ErrGeoNearNotAllowedInContext indicates that $geoNear/$near/$nearSphere
 	// were used in a context that does not sort (e.g. a $match stage or count).
 	ErrGeoNearNotAllowedInContext = ErrorCode(5626500) // Location5626500
+
+	// ErrCollStatsExpectedEmptyObject indicates a $collStats option that takes
+	// no settings was given some.
+	ErrCollStatsExpectedEmptyObject = ErrorCode(31170) // Location31170
+
+	// ErrReverseArrayNotArray indicates a $reverseArray argument that is not an array.
+	ErrReverseArrayNotArray = ErrorCode(34435) // Location34435
+
+	// ErrDocumentWindowNeedsSortBy indicates a bounded document window without a sortBy.
+	ErrDocumentWindowNeedsSortBy = ErrorCode(5339901) // Location5339901
+
+	// ErrRangeWindowNeedsSortBy indicates a range window without a single-field sortBy.
+	ErrRangeWindowNeedsSortBy = ErrorCode(5339902) // Location5339902
+
+	// ErrRankNeedsSortBy indicates a rank function without a one-field sortBy.
+	ErrRankNeedsSortBy = ErrorCode(5371602) // Location5371602
+
+	// ErrFacetSpecNotObject indicates a $facet specification that is not a non-empty object.
+	ErrFacetSpecNotObject = ErrorCode(40169) // Location40169
+
+	// ErrFacetArgumentNotArray indicates a $facet field that is not an array.
+	ErrFacetArgumentNotArray = ErrorCode(40170) // Location40170
+
+	// ErrOutSpecType indicates a $out specification that is neither a string nor an object.
+	ErrOutSpecType = ErrorCode(16990) // Location16990
+
+	// ErrMergeIntoType indicates a $merge into that is neither a string nor an object.
+	ErrMergeIntoType = ErrorCode(51178) // Location51178
+
+	// ErrMergeIntoEmpty indicates a $merge into that is an empty string.
+	ErrMergeIntoEmpty = ErrorCode(5786800) // Location5786800
+
+	// ErrMergeIntoNoColl indicates a $merge into object without a usable coll.
+	ErrMergeIntoNoColl = ErrorCode(5786801) // Location5786801
+
+	// ErrMergeOnType indicates a $merge on that is neither a string nor an array.
+	ErrMergeOnType = ErrorCode(51186) // Location51186
+
+	// ErrMergeOnEmpty indicates a $merge on array with no fields.
+	ErrMergeOnEmpty = ErrorCode(51187) // Location51187
+
+	// ErrMergeOnElementType indicates a $merge on array element that is not a string.
+	ErrMergeOnElementType = ErrorCode(51134) // Location51134
+
+	// ErrMergeOnDuplicateField indicates a $merge on array naming a field twice.
+	ErrMergeOnDuplicateField = ErrorCode(31465) // Location31465
+
+	// ErrMergeWhenMatchedType indicates a $merge whenMatched that is neither a string nor an array.
+	ErrMergeWhenMatchedType = ErrorCode(51191) // Location51191
+
+	// ErrMergeLetWithoutPipeline indicates $merge let variables with a whenMatched mode.
+	ErrMergeLetWithoutPipeline = ErrorCode(51199) // Location51199
+
+	// ErrMergeLetNew indicates a $merge let defining new as other than $$ROOT.
+	ErrMergeLetNew = ErrorCode(51273) // Location51273
+
+	// ErrMergeModesUnsupported indicates a $merge whenMatched and whenNotMatched pair mongod refuses.
+	ErrMergeModesUnsupported = ErrorCode(51181) // Location51181
+
+	// ErrStageNotFinal indicates $out or $merge before the last stage.
+	ErrStageNotFinal = ErrorCode(40601) // Location40601
+
+	// ErrChangeStreamSpecType indicates a $changeStream specification that is not an object.
+	ErrChangeStreamSpecType = ErrorCode(6188500) // Location6188500
+
+	// ErrFilterUnknownArgument indicates an unrecognized $filter parameter.
+	ErrFilterUnknownArgument = ErrorCode(28647) // Location28647
+
+	// ErrFilterMissingInput indicates a $filter without input.
+	ErrFilterMissingInput = ErrorCode(28648) // Location28648
+
+	// ErrFilterMissingCond indicates a $filter without cond.
+	ErrFilterMissingCond = ErrorCode(28650) // Location28650
+
+	// ErrFilterInputNotArray indicates a $filter input that is not an array.
+	ErrFilterInputNotArray = ErrorCode(28651) // Location28651
+
+	// ErrMapInputNotArray indicates a $map input that is not an array.
+	ErrMapInputNotArray = ErrorCode(16883) // Location16883
+
+	// ErrReduceInputNotArray indicates a $reduce input that is not an array.
+	ErrReduceInputNotArray = ErrorCode(40080) // Location40080
+
+	// ErrReduceNotObject indicates a $reduce argument that is not an object.
+	ErrReduceNotObject = ErrorCode(40075) // Location40075
+
+	// ErrReduceUnknownField indicates an unknown field in a $reduce argument.
+	ErrReduceUnknownField = ErrorCode(40076) // Location40076
+
+	// ErrReduceNoInput indicates a $reduce argument without input.
+	ErrReduceNoInput = ErrorCode(40077) // Location40077
+
+	// ErrReduceNoInitialValue indicates a $reduce argument without initialValue.
+	ErrReduceNoInitialValue = ErrorCode(40078) // Location40078
+
+	// ErrReduceNoIn indicates a $reduce argument without in.
+	ErrReduceNoIn = ErrorCode(40079) // Location40079
+
+	// ErrFilterLimitNotInt32 indicates a $filter limit that is not a 32-bit integer.
+	ErrFilterLimitNotInt32 = ErrorCode(327391) // Location327391
+
+	// ErrFilterLimitNotPositive indicates a $filter limit below 1.
+	ErrFilterLimitNotPositive = ErrorCode(327392) // Location327392
 
 	ErrInvalidReplicaSetConfig               = ErrorCode(93)    // InvalidReplicaSetConfig
 	ErrNotYetInitialized                     = ErrorCode(94)    // NotYetInitialized

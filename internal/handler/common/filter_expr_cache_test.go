@@ -28,42 +28,49 @@ func TestValidatedExpr_ReusedPerFilterDocument(t *testing.T) {
 		return must.NotFail(types.NewDocument("$eq", must.NotFail(types.NewArray("$a", value))))
 	}
 
+	fc := NewFilterContext(nil, PlanCollectionScan)
 	f1, f2 := exprFilter(1), exprFilter(2)
-	op1, err := validatedExpr(f1)
+	op1, err := fc.validatedExpr(f1)
 	require.NoError(t, err)
-	again, err := validatedExpr(f1)
+	again, err := fc.validatedExpr(f1)
 	require.NoError(t, err)
 	require.Same(t, op1, again)
 
-	op2, err := validatedExpr(f2)
+	op2, err := fc.validatedExpr(f2)
 	require.NoError(t, err)
 	require.NotSame(t, op1, op2)
 
-	match, err := filterExprOperator(must.NotFail(types.NewDocument("a", int32(2))), f2)
+	other, err := NewFilterContext(nil, PlanCollectionScan).validatedExpr(f1)
+	require.NoError(t, err)
+	require.NotSame(t, op1, other, "another command's context builds its own operator")
+
+	match, err := fc.exprOperator(must.NotFail(types.NewDocument("a", int32(2))), f2)
 	require.NoError(t, err)
 	require.True(t, match)
-	match, err = filterExprOperator(must.NotFail(types.NewDocument("a", int32(2))), f1)
+	match, err = fc.exprOperator(must.NotFail(types.NewDocument("a", int32(2))), f1)
 	require.NoError(t, err)
 	require.False(t, match)
 
-	_, err = validatedExpr(must.NotFail(types.NewDocument("$noSuchOperator", int32(1))))
+	_, err = fc.validatedExpr(must.NotFail(types.NewDocument("$noSuchOperator", int32(1))))
 	require.Error(t, err)
 
-	match, err = filterExprOperator(must.NotFail(types.NewDocument("a", int32(2))), true)
+	match, err = fc.exprOperator(must.NotFail(types.NewDocument("a", int32(2))), true)
 	require.NoError(t, err)
 	require.True(t, match, "a non-document $expr value is evaluated without caching")
 }
 
-// The $expr case of filterOperator must hit the cache across documents.
+// The $expr case of filterOperator must reuse its operator across documents
+// of one context.
 func TestFilterOperatorExpr_ValidatesOncePerFilter(t *testing.T) {
 	exprValue := must.NotFail(types.NewDocument("$eq", must.NotFail(types.NewArray("$a", int32(1)))))
+	fc := NewFilterContext(nil, PlanCollectionScan)
 	for i := int32(0); i < 3; i++ {
-		_, err := filterOperator(must.NotFail(types.NewDocument("a", i)), "$expr", exprValue, nil)
+		_, err := filterOperator(must.NotFail(types.NewDocument("a", i)), "$expr", exprValue, fc)
 		require.NoError(t, err)
 	}
-	op, ok := validatedExprs.Get(exprValue)
+	op, ok := fc.exprs[exprValue]
 	require.True(t, ok, "the expression was not cached")
-	again, err := validatedExpr(exprValue)
+	again, err := fc.validatedExpr(exprValue)
 	require.NoError(t, err)
 	require.Same(t, op, again)
 }

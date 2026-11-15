@@ -60,6 +60,10 @@ func newSetStage(stage *types.Document, fold bool) (aggregations.Stage, error) {
 		return nil, err
 	}
 
+	if err := checkAddFieldsCollisions("$set", fieldsDoc); err != nil {
+		return nil, err
+	}
+
 	if err := validateExpression("$set", fieldsDoc); err != nil {
 		return nil, err
 	}

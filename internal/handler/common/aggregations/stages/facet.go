@@ -59,10 +59,136 @@ var notAllowedInFacet = map[string]bool{
 	"$merge":             true,
 	"$out":               true,
 	"$planCacheStats":    true,
+	"$queryStats":        true,
 	"$changeStream":      true,
 	"$listSessions":      true,
 	"$currentOp":         true,
 	"$listLocalSessions": true,
+	"$listCatalog":       true,
+	"$querySettings":     true,
+
+	"$changeStreamSplitLargeEvent": true,
+}
+
+// CheckFacetQueryStats returns mongod's error for a $queryStats in a $facet of
+// {aggregate: 1} on admin, where its namespace is right but its place is not.
+// The branches are parsed in order, so an earlier branch's error comes first.
+func CheckFacetQueryStats(stage *types.Document) error {
+	return checkFacetDatabaseStage(stage, "$queryStats", "$queryStats", CheckQueryStatsSpec)
+}
+
+// CheckFacetListClusterCatalog returns mongod's error for a
+// $listClusterCatalog in a $facet of {aggregate: 1}.
+func CheckFacetListClusterCatalog(stage *types.Document) error {
+	return checkFacetDatabaseStage(stage, "$listClusterCatalog", "$_internalListCollections", func(d *types.Document) error {
+		_, err := ParseListClusterCatalogSpec(d)
+		return err
+	})
+}
+
+// checkFacetDatabaseStage returns the error for the stage name, which runs
+// only on {aggregate: 1}, in a $facet there: its specification's error from
+// checkSpec, or that reportedName is not allowed in a $facet.
+func checkFacetDatabaseStage(stage *types.Document, name, reportedName string, checkSpec func(*types.Document) error) error {
+	spec, ok := must.NotFail(stage.Get("$facet")).(*types.Document)
+	if !ok {
+		return nil
+	}
+	for _, k := range spec.Keys() {
+		pipeline, ok := must.NotFail(spec.Get(k)).(*types.Array)
+		if !ok {
+			return nil
+		}
+		q := -1
+		for i := range pipeline.Len() {
+			if sub, ok := must.NotFail(pipeline.Get(i)).(*types.Document); ok && sub.Command() == name {
+				q = i
+				break
+			}
+		}
+		before := pipeline
+		if q >= 0 {
+			before = types.MakeArray(q)
+			for i := range q {
+				before.Append(must.NotFail(pipeline.Get(i)))
+			}
+		}
+		for i := range before.Len() {
+			sub := must.NotFail(before.Get(i))
+			branch := must.NotFail(types.NewDocument(k, must.NotFail(types.NewArray(sub))))
+			if _, err := newFacet(must.NotFail(types.NewDocument("$facet", branch))); err != nil {
+				return err
+			}
+			if d, ok := sub.(*types.Document); ok {
+				if err := parseStageOffline(d); err != nil {
+					return err
+				}
+			}
+		}
+		if q < 0 {
+			continue
+		}
+		if err := checkSpec(must.NotFail(pipeline.Get(q)).(*types.Document)); err != nil {
+			return err
+		}
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrStageNotAllowedInFacet,
+			reportedName+" is not allowed to be used within a $facet stage", "$facet (stage)")
+	}
+	return nil
+}
+
+// parseStageOfflineFunc is parseStageOffline, set in init to break the
+// initialization cycle through Stages and newFacet.
+var parseStageOfflineFunc func(*types.Document) error
+
+func init() {
+	parseStageOfflineFunc = parseStageOffline
+}
+
+// parseFacetStagesBefore parses the stages of the $facet branches ahead of
+// stage i of branch field, returning the first parse error.
+func parseFacetStagesBefore(spec *types.Document, field string, i int) error {
+	for _, k := range spec.Keys() {
+		pipeline, ok := must.NotFail(spec.Get(k)).(*types.Array)
+		if !ok {
+			return nil
+		}
+		n := pipeline.Len()
+		if k == field {
+			n = i
+		}
+		for j := range n {
+			if sub, ok := must.NotFail(pipeline.Get(j)).(*types.Document); ok {
+				if err := parseStageOfflineFunc(sub); err != nil {
+					return err
+				}
+			}
+		}
+		if k == field {
+			return nil
+		}
+	}
+	return nil
+}
+
+// parseStageOffline parses a stage without reading any collection, for its
+// parse errors only.
+func parseStageOffline(stage *types.Document) error {
+	noFetch := FetcherFunc(func(context.Context, string, *types.Document) ([]*types.Document, error) { return nil, nil })
+	var err error
+	switch stage.Command() {
+	case "$lookup":
+		_, err = NewLookupStage(stage.DeepCopy(), noFetch)
+	case "$graphLookup":
+		_, err = NewGraphLookupStage(stage.DeepCopy(), noFetch)
+	case "$unionWith":
+		_, err = NewUnionWithStage(stage.DeepCopy(), noFetch)
+	default:
+		if FailsParsing(stage) {
+			_, err = NewStage(stage.DeepCopy())
+		}
+	}
+	return err
 }
 
 // newFacet creates a new $facet stage.
@@ -130,6 +256,29 @@ func newFacet(stage *types.Document) (aggregations.Stage, error) {
 					"$facet (stage)",
 				)
 			}
+			switch stage.Command() {
+			case "$queryStats":
+				// Its specification and namespace are checked before its
+				// place; {aggregate: 1} on admin checks its place itself.
+				// mongod parses the stages ahead of it first.
+				if err := parseFacetStagesBefore(spec, field, i); err != nil {
+					return nil, err
+				}
+				_, err := newQueryStats(stage)
+				return nil, err
+			case "$changeStreamSplitLargeEvent":
+				if err := CheckChangeStreamSplitLargeEventSpec(stage); err != nil {
+					return nil, err
+				}
+			case "$querySettings":
+				if err := CheckQuerySettingsSpec(stage); err != nil {
+					return nil, err
+				}
+			default:
+				if err := CheckParseFailingStages(must.NotFail(types.NewArray(stage))); err != nil {
+					return nil, err
+				}
+			}
 			if cmd := stage.Command(); notAllowedInFacet[cmd] {
 				return nil, handlererrors.NewCommandErrorMsgWithArgument(
 					handlererrors.ErrStageNotAllowedInFacet,
@@ -145,11 +294,31 @@ func newFacet(stage *types.Document) (aggregations.Stage, error) {
 	return &facet{pipelines: pipelines}, nil
 }
 
+// readOnlyStages never change the documents they read.
+var readOnlyStages = map[string]bool{
+	"$match": true, "$count": true, "$group": true, "$sortByCount": true, "$bucket": true,
+	"$bucketAuto": true, "$sort": true, "$limit": true, "$skip": true,
+}
+
+// readsOnly reports whether every stage of a $facet branch only reads its
+// input documents, so the branch can share them.
+func readsOnly(pipeline *types.Array) bool {
+	for i := range pipeline.Len() {
+		stage, ok := must.NotFail(pipeline.Get(i)).(*types.Document)
+		if !ok || stage.Len() != 1 || !readOnlyStages[stage.Command()] {
+			return false
+		}
+	}
+	return true
+}
+
 // parsePipelineArray parses an array of stage documents into a list of Stage instances.
 // This is a standalone function that calls NewStage; it must only be called from
 // Process() methods (not from newXxx constructors) to avoid initialization cycles.
 func parsePipelineArray(arr *types.Array, fetcher CollectionFetcher) ([]aggregations.Stage, error) {
 	var stageList []aggregations.Stage
+	var specs []*types.Document
+	arr = OptimizeSkipsAndLimitsArray(arr, false)
 	subStages := must.NotFail(iterator.ConsumeValues(arr.Iterator()))
 
 	for i := 0; i < arr.Len(); i++ {
@@ -170,7 +339,9 @@ func parsePipelineArray(arr *types.Array, fetcher CollectionFetcher) ([]aggregat
 		}
 
 		stageList = append(stageList, s)
+		specs = append(specs, stageDoc)
 	}
+	MarkLookupsUnwound(stageList, specs)
 
 	return stageList, nil
 }
@@ -236,14 +407,29 @@ func (f *facet) Process(ctx context.Context, iter types.DocumentsIterator, close
 	// Build the output document.
 	outputDoc := new(types.Document)
 
-	for _, p := range f.pipelines {
+	// shared says an earlier branch's output may hold the input documents.
+	var shared bool
+	for i, p := range f.pipelines {
 		// Parse stages at process time to avoid initialization cycle.
 		stageList, parseErr := parsePipelineArray(p.pipelineArr, f.fetcher)
 		if parseErr != nil {
 			return nil, parseErr
 		}
 
-		results, err := runSubPipeline(ctx, inputDocs, stageList)
+		// Stages may change documents in place, so a branch that can works
+		// on its own copy, unless it is the last and no earlier branch's
+		// output holds the input documents.
+		branchDocs := inputDocs
+		readOnly := readsOnly(p.pipelineArr)
+		shared = shared || readOnly
+		if !readOnly && (i < len(f.pipelines)-1 || shared) {
+			branchDocs = make([]*types.Document, len(inputDocs))
+			for j, doc := range inputDocs {
+				branchDocs[j] = doc.DeepCopy()
+			}
+		}
+
+		results, err := runSubPipeline(ctx, branchDocs, stageList)
 		if err != nil {
 			return nil, lazyerrors.Error(err)
 		}
@@ -275,5 +461,10 @@ func NewFacetStage(stage *types.Document, fetcher CollectionFetcher) (aggregatio
 	}
 	f := s.(*facet)
 	f.fetcher = fetcher
+	for _, p := range f.pipelines {
+		if err := checkSubPipelineParses(p.pipelineArr, fetcher); err != nil {
+			return nil, err
+		}
+	}
 	return f, nil
 }

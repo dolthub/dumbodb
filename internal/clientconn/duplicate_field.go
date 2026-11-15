@@ -18,11 +18,27 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/FerretDB/wire"
+
+	"github.com/dolthub/dumbodb/internal/bson"
+	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// commandDuplicateField returns the dotted path of the first field a command
-// repeats, at any depth, and whether there was one.
+// duplicateFieldError returns the error for a command repeating the field at
+// path, given as its keys.
+func duplicateFieldError(path []string) error {
+	return common.DuplicateFieldError(path)
+}
+
+func isIndex(key string) bool {
+	_, err := strconv.Atoi(key)
+	return err == nil
+}
+
+// commandDuplicateField returns the keys of the path to the first field a
+// command repeats, at any depth, and whether there was one.
 //
 // BSON lets a document repeat a key, so this is reachable from any client at
 // any position: a driver attaching its own lsid to a command that already
@@ -33,9 +49,9 @@ import (
 //
 // The walk is over an already-materialized document, so it adds no decoding
 // and cannot recurse deeper than the decoder already did.
-func commandDuplicateField(doc *types.Document) (string, bool) {
+func commandDuplicateField(doc *types.Document) ([]string, bool) {
 	if doc == nil {
-		return "", false
+		return nil, false
 	}
 
 	// One exception, and only at the top level. An insert reports a duplicate
@@ -48,16 +64,69 @@ func commandDuplicateField(doc *types.Document) (string, bool) {
 		skip = "documents"
 	}
 
-	return findDuplicateField(doc, "", skip)
+	return findDuplicateField(doc, nil, skip, modifierLevel(doc.Command()))
 }
 
-func findDuplicateField(doc *types.Document, prefix, skip string) (string, bool) {
+// sequenceDuplicateField is commandDuplicateField for the document sequences
+// of msg, whose documents handlers read as the arrays of the command doc,
+// such as an update's or delete's statements sent by a driver. Their
+// filters are normalized first, as handlers read them. An insert's
+// documents are left out, as for commandDuplicateField.
+func sequenceDuplicateField(doc *types.Document, msg *wire.OpMsg) ([]string, bool) {
+	command := doc.Command()
+	for _, section := range msg.Sections() {
+		if section.Kind == 0 || section.Identifier == command ||
+			strings.EqualFold(command, "insert") && section.Identifier == "documents" {
+			continue
+		}
+		raws := section.Documents()
+		statements := types.MakeArray(len(raws))
+		for _, raw := range raws {
+			statement, err := bson.DecodeRawDocument(raw)
+			if err != nil {
+				// The handler reports the invalid document.
+				return nil, false
+			}
+			statements.Append(statement)
+		}
+		sequence := must.NotFail(types.NewDocument(command, "", section.Identifier, statements))
+		common.NormalizeDuplicateFilterKeys(sequence)
+		if path, ok := findDuplicateField(sequence, nil, "", modifierLevel(command)); ok {
+			return path, true
+		}
+	}
+	return nil, false
+}
+
+// modifierLevel returns, for a command whose update modifiers its handler
+// checks for repeated paths itself (write error 40, as on mongod), whether a
+// path is that of a modifier's document or lies in an update pipeline.
+func modifierLevel(command string) func(path []string) bool {
+	switch command {
+	case "update":
+		// An update pipeline is checked by the handler too, which reports
+		// its repeated fields as the statement's write error.
+		return func(path []string) bool {
+			return len(path) >= 4 && path[0] == "updates" && path[2] == "u" &&
+				(strings.HasPrefix(path[3], "$") && len(path) == 4 || isIndex(path[3]))
+		}
+	case "findAndModify", "findandmodify":
+		return func(path []string) bool {
+			return len(path) == 2 && path[0] == "update" && strings.HasPrefix(path[1], "$")
+		}
+	}
+	return func([]string) bool { return false }
+}
+
+func findDuplicateField(doc *types.Document, prefix []string, skip string, modifier func([]string) bool) ([]string, bool) {
 	if doc == nil {
-		return "", false
+		return nil, false
 	}
 
-	if key, ok := doc.FindDuplicateKey(); ok {
-		return join(prefix, key), true
+	if !modifier(prefix) {
+		if key, ok := doc.FindDuplicateKey(); ok {
+			return join(prefix, key), true
+		}
 	}
 
 	// Keys and Values are read together rather than calling Get per key:
@@ -71,32 +140,31 @@ func findDuplicateField(doc *types.Document, prefix, skip string) (string, bool)
 		if !isComposite(values[i]) {
 			continue
 		}
-		if path, ok := findDuplicateInValue(values[i], join(prefix, key)); ok {
+		if path, ok := findDuplicateInValue(values[i], join(prefix, key), modifier); ok {
 			return path, true
 		}
 	}
 
-	return "", false
+	return nil, false
 }
 
-func findDuplicateInValue(value any, path string) (string, bool) {
+func findDuplicateInValue(value any, path []string, modifier func([]string) bool) ([]string, bool) {
 	switch v := value.(type) {
 	case *types.Document:
-		return findDuplicateField(v, path, "")
+		return findDuplicateField(v, path, "", modifier)
 	case *types.Array:
 		for i := 0; i < v.Len(); i++ {
 			element, err := v.Get(i)
 			if err != nil || !isComposite(element) {
 				continue
 			}
-			indexed := path + "." + strconv.Itoa(i)
-			if found, ok := findDuplicateInValue(element, indexed); ok {
+			if found, ok := findDuplicateInValue(element, join(path, strconv.Itoa(i)), modifier); ok {
 				return found, true
 			}
 		}
 	}
 
-	return "", false
+	return nil, false
 }
 
 func isComposite(value any) bool {
@@ -108,9 +176,7 @@ func isComposite(value any) bool {
 	}
 }
 
-func join(prefix, key string) string {
-	if prefix == "" {
-		return key
-	}
-	return prefix + "." + key
+// join returns prefix with key appended, sharing no storage with prefix.
+func join(prefix []string, key string) []string {
+	return append(prefix[:len(prefix):len(prefix)], key)
 }

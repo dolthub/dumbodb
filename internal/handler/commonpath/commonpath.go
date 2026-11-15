@@ -101,10 +101,14 @@ func FindValues(doc *types.Document, path types.Path, opts *FindValuesOpts) ([]a
 	return nextValues, nil
 }
 
-// findArrayIndex returns the value by valid array index.
+// findArrayIndex returns the value at the array index a path component names.
+// Like MongoDB, only digits without a leading zero name an index.
 //
-// Error is returned if index is not a number or index does not exist in array.
+// Error is returned if index is not such a number or does not exist in array.
 func findArrayIndex(array *types.Array, index string) (any, error) {
+	if !IsArrayIndexComponent(index) {
+		return nil, lazyerrors.Errorf("not an array index: %q", index)
+	}
 	i, err := strconv.Atoi(index)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
@@ -116,6 +120,20 @@ func findArrayIndex(array *types.Array, index string) (any, error) {
 	}
 
 	return v, nil
+}
+
+// IsArrayIndexComponent reports whether a path component names an array
+// position: digits without a leading zero.
+func IsArrayIndexComponent(s string) bool {
+	if s == "" || (len(s) > 1 && s[0] == '0') {
+		return false
+	}
+	for i := range len(s) {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // lookupArrayDocuments returns values for the given key in array's document.
@@ -174,7 +192,7 @@ func hasMissingBranch(v any, keys []string) bool {
 		return hasMissingBranch(next, keys[1:])
 
 	case *types.Array:
-		if el, err := findArrayIndex(v, keys[0]); err == nil && hasMissingBranch(el, keys[1:]) {
+		if el, err := findArrayIndex(v, keys[0]); err == nil && isComposite(el) && hasMissingBranch(el, keys[1:]) {
 			return true
 		}
 		for i := 0; i < v.Len(); i++ {
@@ -188,6 +206,14 @@ func hasMissingBranch(v any, keys []string) bool {
 	default:
 		return true
 	}
+}
+
+func isComposite(v any) bool {
+	switch v.(type) {
+	case *types.Document, *types.Array:
+		return true
+	}
+	return false
 }
 
 // SortKeyValue returns the value d sorts by on path. When a dotted path reaches

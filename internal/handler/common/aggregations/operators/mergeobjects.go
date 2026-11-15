@@ -15,6 +15,10 @@
 package operators
 
 import (
+	"fmt"
+
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
@@ -41,16 +45,19 @@ func (m *mergeObjects) Process(doc *types.Document) (any, error) {
 	}
 
 	for _, arg := range m.args {
-		val, err := evalArgValue(arg, doc)
+		val, missing, err := EvalOperand(arg, doc)
 		if err != nil {
-			// null/missing arguments are ignored
+			return nil, err
+		}
+		if missing || val == types.Null {
 			continue
 		}
 
 		src, ok := val.(*types.Document)
 		if !ok {
-			// null or non-document values are ignored
-			continue
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrMergeObjectsExprNotObject,
+				fmt.Sprintf("$mergeObjects requires object inputs, but input %s is of type %s",
+					types.FormatAnyValue(val), handlerparams.AliasFromType(val)), "$mergeObjects")
 		}
 
 		for _, k := range src.Keys() {

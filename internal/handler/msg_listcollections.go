@@ -96,114 +96,9 @@ func (h *Handler) MsgListCollections(connCtx context.Context, msg *wire.OpMsg) (
 	collections := types.MakeArray(len(res.Collections))
 
 	for _, collection := range res.Collections {
-		options := must.NotFail(types.NewDocument())
-		info := must.NotFail(types.NewDocument("readOnly", false))
-
-		collType := "collection"
-		var d *types.Document
-
-		if collection.IsView {
-			collType = "view"
-			options.Set("viewOn", collection.ViewOn)
-			if collection.ViewPipeline != nil {
-				options.Set("pipeline", collection.ViewPipeline)
-			} else {
-				options.Set("pipeline", types.MakeArray(0))
-			}
-			if resolved := collation.Parse(collection.Collation).Resolve(); resolved != nil {
-				options.Set("collation", resolved)
-			}
-			info.Set("readOnly", true)
-		} else if collection.IsTimeSeries {
-			collType = "timeseries"
-			tsOpts := must.NotFail(types.NewDocument("timeField", collection.TimeField))
-			if collection.MetaField != "" {
-				tsOpts.Set("metaField", collection.MetaField)
-			}
-			if collection.Granularity != "" {
-				tsOpts.Set("granularity", collection.Granularity)
-			}
-			options.Set("timeseries", tsOpts)
-		} else {
-			options.Set("clusteredIndex", clusteredIndexSpec(collection.ClusteredIndexName))
-
-			if collection.Capped() {
-				options.Set("capped", true)
-			}
-
-			if collection.CappedSize > 0 {
-				options.Set("size", collection.CappedSize)
-			}
-
-			if collection.CappedDocuments > 0 {
-				options.Set("max", collection.CappedDocuments)
-			}
-
-			if collection.Validator != nil {
-				options.Set("validator", collection.Validator)
-			}
-
-			// The default collation is reported resolved (server defaults plus the
-			// ICU version), matching MongoDB.
-			if collection.Collation != nil {
-				if resolved := collation.Parse(collection.Collation).Resolve(); resolved != nil {
-					options.Set("collation", resolved)
-				}
-			}
-
-			if collection.ValidationLevel != "" {
-				options.Set("validationLevel", collection.ValidationLevel)
-			}
-
-			if collection.ValidationAction != "" {
-				options.Set("validationAction", collection.ValidationAction)
-			}
-
-			// mergeMode is a dumbodb option with no MongoDB counterpart. It is
-			// reported here with the rest of a collection's configuration
-			// rather than hidden, so a client can read back what it set.
-			// Reported only when declared, matching how the validation
-			// defaults are left unmaterialized.
-			if collection.MergeMode != "" {
-				options.Set("mergeMode", collection.MergeMode)
-			}
-		}
-
-		if collection.UUID != "" {
-			collUUID, err := uuid.Parse(collection.UUID)
-			if err != nil {
-				return nil, lazyerrors.Error(err)
-			}
-
-			uuidBinary := types.Binary{
-				Subtype: types.BinaryUUID,
-				B:       must.NotFail(collUUID.MarshalBinary()),
-			}
-
-			info.Set("uuid", uuidBinary)
-		}
-
-		if collection.IsView || !collection.IsTimeSeries {
-			// Views have no _id index, and a clustered collection reports its
-			// _id index as options.clusteredIndex instead of idIndex.
-			d = must.NotFail(types.NewDocument(
-				"name", collection.Name,
-				"type", collType,
-				"options", options,
-				"info", info,
-			))
-		} else {
-			d = must.NotFail(types.NewDocument(
-				"name", collection.Name,
-				"type", collType,
-				"options", options,
-				"info", info,
-				"idIndex", must.NotFail(types.NewDocument(
-					"v", int32(2),
-					"key", must.NotFail(types.NewDocument("_id", int32(1))),
-					"name", "_id_",
-				)),
-			))
+		d, err := collectionCatalogEntry(&collection)
+		if err != nil {
+			return nil, err
 		}
 
 		matches, err := common.FilterDocument(d, filter)
@@ -234,4 +129,130 @@ func (h *Handler) MsgListCollections(connCtx context.Context, msg *wire.OpMsg) (
 			"ok", float64(1),
 		)),
 	)
+}
+
+// collectionCatalogEntry returns the listCollections document of a collection
+// or view, with its name, type, options, and info.
+func collectionCatalogEntry(collection *backends.CollectionInfo) (*types.Document, error) {
+	options := must.NotFail(types.NewDocument())
+	info := must.NotFail(types.NewDocument("readOnly", false))
+
+	collType := "collection"
+
+	if collection.IsView {
+		collType = "view"
+		options.Set("viewOn", collection.ViewOn)
+		if collection.ViewPipeline != nil {
+			options.Set("pipeline", collection.ViewPipeline)
+		} else {
+			options.Set("pipeline", types.MakeArray(0))
+		}
+		if resolved := collation.Parse(collection.Collation).Resolve(); resolved != nil {
+			options.Set("collation", resolved)
+		}
+		info.Set("readOnly", true)
+	} else if collection.IsTimeSeries {
+		collType = "timeseries"
+		if resolved := collation.Parse(collection.Collation).Resolve(); resolved != nil {
+			options.Set("collation", resolved)
+		}
+		options.Set("timeseries", timeSeriesOptions(collection))
+	} else {
+		options.Set("clusteredIndex", clusteredIndexSpec(collection.ClusteredIndexName))
+
+		if collection.Capped() {
+			options.Set("capped", true)
+		}
+
+		if collection.CappedSize > 0 {
+			options.Set("size", collection.CappedSize)
+		}
+
+		if collection.CappedDocuments > 0 {
+			options.Set("max", collection.CappedDocuments)
+		}
+
+		if collection.Validator != nil {
+			options.Set("validator", collection.Validator)
+		}
+
+		// The default collation is reported resolved (server defaults plus the
+		// ICU version), matching MongoDB.
+		if collection.Collation != nil {
+			if resolved := collation.Parse(collection.Collation).Resolve(); resolved != nil {
+				options.Set("collation", resolved)
+			}
+		}
+
+		if collection.ValidationLevel != "" {
+			options.Set("validationLevel", collection.ValidationLevel)
+		}
+
+		if collection.ValidationAction != "" {
+			options.Set("validationAction", collection.ValidationAction)
+		}
+
+		// mergeMode is a dumbodb option with no MongoDB counterpart. It is
+		// reported here with the rest of a collection's configuration
+		// rather than hidden, so a client can read back what it set.
+		// Reported only when declared, matching how the validation
+		// defaults are left unmaterialized.
+		if collection.MergeMode != "" {
+			options.Set("mergeMode", collection.MergeMode)
+		}
+	}
+
+	// mongod reports no uuid or idIndex for a time-series view of its buckets.
+	if collection.UUID != "" && !collection.IsTimeSeries {
+		collUUID, err := uuid.Parse(collection.UUID)
+		if err != nil {
+			return nil, lazyerrors.Error(err)
+		}
+
+		uuidBinary := types.Binary{
+			Subtype: types.BinaryUUID,
+			B:       must.NotFail(collUUID.MarshalBinary()),
+		}
+
+		info.Set("uuid", uuidBinary)
+	}
+
+	// Views and time-series collections have no _id index, and a clustered
+	// collection reports its _id index as options.clusteredIndex instead.
+	d := must.NotFail(types.NewDocument(
+		"name", collection.Name,
+		"type", collType,
+		"options", options,
+		"info", info,
+	))
+
+	return d, nil
+}
+
+// timeSeriesBucketMaxSpanSeconds is mongod's bucket span for each granularity.
+var timeSeriesBucketMaxSpanSeconds = map[string]int32{
+	"seconds": 3600,
+	"minutes": 86400,
+	"hours":   2592000,
+}
+
+// timeSeriesOptions returns a time-series collection's options as mongod
+// reports them, with the default granularity and its bucket span filled in.
+func timeSeriesOptions(collection *backends.CollectionInfo) *types.Document {
+	opts := must.NotFail(types.NewDocument("timeField", collection.TimeField))
+	if collection.MetaField != "" {
+		opts.Set("metaField", collection.MetaField)
+	}
+	if collection.BucketSpanSeconds != 0 {
+		opts.Set("bucketRoundingSeconds", collection.BucketSpanSeconds)
+		opts.Set("bucketMaxSpanSeconds", collection.BucketSpanSeconds)
+		return opts
+	}
+	granularity := collection.Granularity
+	if granularity == "" {
+		granularity = "seconds"
+	}
+	opts.Set("granularity", granularity)
+	opts.Set("bucketMaxSpanSeconds", timeSeriesBucketMaxSpanSeconds[granularity])
+	return opts
 }

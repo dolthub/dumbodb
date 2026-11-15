@@ -26,6 +26,13 @@ import (
 
 type addToSetAccumulator struct {
 	arg operand
+	sbe bool
+}
+
+// UseSBE implements SBEAccumulator.
+func (a *addToSetAccumulator) UseSBE() error {
+	a.sbe = true
+	return nil
 }
 
 func newAddToSet(args ...any) (Accumulator, error) {
@@ -48,12 +55,12 @@ func newAddToSet(args ...any) (Accumulator, error) {
 func (a *addToSetAccumulator) New() Accumulation {
 	// $addToSet retains the distinct set of projected values, so its result
 	// grows with the number of distinct values. It retains values, never documents.
-	return &addToSetState{spec: a, result: types.MakeArray(0)}
+	return &addToSetState{spec: a, result: types.MakeArray(0), mem: keptMemory{sbe: a.sbe, stored: a.arg.readsStoredValue()}}
 }
 
 // NewCollated returns an accumulation whose set compares strings under cmp.
 func (a *addToSetAccumulator) NewCollated(cmp *collation.Comparator) Accumulation {
-	return &addToSetState{spec: a, result: types.MakeArray(0), cmp: cmp, keys: types.MakeArray(0)}
+	return &addToSetState{spec: a, result: types.MakeArray(0), cmp: cmp, keys: types.MakeArray(0), mem: keptMemory{sbe: a.sbe, stored: a.arg.readsStoredValue()}}
 }
 
 type addToSetState struct {
@@ -62,6 +69,7 @@ type addToSetState struct {
 	// cmp, when set, dedups by collation; keys holds result's collation keys.
 	cmp  *collation.Comparator
 	keys *types.Array
+	mem  keptMemory
 }
 
 func (s *addToSetState) Accumulate(doc *types.Document) error {
@@ -73,12 +81,14 @@ func (s *addToSetState) Accumulate(doc *types.Document) error {
 	if s.cmp == nil {
 		if !containsValue(s.result, val) {
 			s.result.Append(val)
+			return s.mem.keep(val, "$addToSet")
 		}
 		return nil
 	}
 	if key := s.cmp.KeyValue(val); !containsValue(s.keys, key) {
 		s.keys.Append(key)
 		s.result.Append(val)
+		return s.mem.keep(val, "$addToSet")
 	}
 
 	return nil

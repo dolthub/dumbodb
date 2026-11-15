@@ -105,8 +105,8 @@ func newGeoNear(stage *types.Document) (aggregations.Stage, error) {
 	nearAny, err := spec.Get("near")
 	if err != nil {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrBadValue,
-			"$geoNear requires 'near' field",
+			handlererrors.ErrGeoNearMissingNear,
+			"$geoNear requires a 'near' argument",
 			"$geoNear (stage)",
 		)
 	}
@@ -156,8 +156,8 @@ func newGeoNear(stage *types.Document) (aggregations.Stage, error) {
 		df, ok := dfAny.(string)
 		if !ok {
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrBadValue,
-				"$geoNear 'distanceField' must be a string",
+				handlererrors.ErrGeoNearDistanceFieldNotString,
+				"$geoNear requires a 'distanceField' option as a String",
 				"$geoNear (stage)",
 			)
 		}

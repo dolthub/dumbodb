@@ -15,9 +15,12 @@
 package operators
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
+	"github.com/dolthub/dumbodb/internal/collation"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
@@ -47,6 +50,7 @@ type cmpOperator struct {
 	right any
 	op    compOp
 	name  string
+	collated
 }
 
 func newCmpOperator(name string, op compOp) newOperatorFunc {
@@ -65,7 +69,7 @@ func newCmpOperator(name string, op compOp) newOperatorFunc {
 
 // Process implements Operator. Evaluates both args and performs the comparison.
 func (c *cmpOperator) Process(doc *types.Document) (any, error) {
-	cmp, err := compareArgs(c.left, c.right, doc)
+	cmp, err := compareArgs(c.cmp, c.left, c.right, doc)
 	if err != nil {
 		return nil, err
 	}
@@ -95,6 +99,7 @@ var _ Operator = (*cmpOperator)(nil)
 type cmpOp struct {
 	left  any
 	right any
+	collated
 }
 
 func newCmp(args ...any) (Operator, error) {
@@ -110,7 +115,7 @@ func newCmp(args ...any) (Operator, error) {
 }
 
 func (c *cmpOp) Process(doc *types.Document) (any, error) {
-	cmp, err := compareArgs(c.left, c.right, doc)
+	cmp, err := compareArgs(c.cmp, c.left, c.right, doc)
 	if err != nil {
 		return nil, err
 	}
@@ -130,7 +135,7 @@ var _ Operator = (*cmpOp)(nil)
 // compareArgs evaluates and compares two operator arguments. As in MongoDB,
 // a missing field equals another missing value or undefined and sorts below
 // every other value except MinKey.
-func compareArgs(left, right any, doc *types.Document) (types.CompareResult, error) {
+func compareArgs(cmp *collation.Comparator, left, right any, doc *types.Document) (types.CompareResult, error) {
 	lv, lMissing, err := evalArgValueOrMissing(left, doc)
 	if err != nil {
 		return 0, err
@@ -151,7 +156,9 @@ func compareArgs(left, right any, doc *types.Document) (types.CompareResult, err
 			return types.Less, nil
 		}
 	}
-	return types.Compare(lv, rv), nil
+	// Aggregation compares whole values in BSON order; an array is not
+	// matched element by element as in a query.
+	return compareCollated(cmp, lv, rv), nil
 }
 
 // evalArgValueOrMissing is evalArgValue, also reporting whether arg is a
@@ -171,6 +178,17 @@ func evalArgValueOrMissing(arg any, doc *types.Document) (any, bool, error) {
 			return v, false, nil
 		}
 	}
+	if expr, ok := arg.(*types.Document); ok && IsOperator(expr) {
+		op, err := cachedOperator(expr)
+		if err != nil {
+			return nil, false, err
+		}
+		v, err := op.Process(doc)
+		if errors.Is(err, aggregations.ErrMissingValue) {
+			return types.Null, true, nil
+		}
+		return v, false, err
+	}
 	v, err := evalArgValue(arg, doc)
 	return v, false, err
 }
@@ -180,6 +198,9 @@ func evalArgValueOrMissing(arg any, doc *types.Document) (any, bool, error) {
 // otherwise. The path follows field path rules from the variable's value.
 func variablePathOrMissing(path string, doc *types.Document) (value any, missing, ok bool) {
 	name, sub, hasSub := strings.Cut(strings.TrimPrefix(path, "$$"), ".")
+	if name == "REMOVE" || isMissingVariable(doc, name) {
+		return types.Null, true, true
+	}
 	if !hasSub || doc == nil {
 		return nil, false, false
 	}

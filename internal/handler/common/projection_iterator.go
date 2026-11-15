@@ -15,6 +15,9 @@
 package common
 
 import (
+	"github.com/dolthub/dumbodb/internal/collation"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
+	stageProjection "github.com/dolthub/dumbodb/internal/handler/common/aggregations/stages/projection"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
@@ -27,10 +30,17 @@ import (
 //
 // Close method closes the underlying iterator.
 func ProjectionIterator(iter types.DocumentsIterator, closer *iterator.MultiCloser, projection, filter *types.Document) (types.DocumentsIterator, error) { //nolint:lll // for readability
-	projectionValidated, inclusion, err := ValidateProjection(projection)
+	return ProjectionIteratorColl(iter, closer, projection, filter, nil)
+}
+
+// ProjectionIteratorColl is ProjectionIterator whose expressions compare
+// strings under cmp when it is set.
+func ProjectionIteratorColl(iter types.DocumentsIterator, closer *iterator.MultiCloser, projection, filter *types.Document, cmp *collation.Comparator) (types.DocumentsIterator, error) { //nolint:lll // for readability
+	projectionValidated, inclusion, err := stageProjection.ValidateFindProjection(projection)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
 	}
+	operators.BindCollation(projectionValidated, cmp)
 
 	res := &projectionIterator{
 		iter:       iter,

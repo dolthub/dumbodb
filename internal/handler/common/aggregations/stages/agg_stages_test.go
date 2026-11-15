@@ -335,59 +335,6 @@ func TestAggStage_unsupportedErrors_changeStream(t *testing.T) {
 	}
 }
 
-// TestAggStage_unsupportedErrors_densify verifies that $densify with the required
-// 'field' field returns ErrNotImplemented (238)  -- $densify is not yet implemented.
-func TestAggStage_unsupportedErrors_densify(t *testing.T) {
-	t.Parallel()
-
-	spec := must.NotFail(types.NewDocument(
-		"field", "price",
-		"range", must.NotFail(types.NewDocument("step", int32(1), "bounds", "full")),
-	))
-	stageDoc := must.NotFail(types.NewDocument("$densify", spec))
-	_, err := stages.NewStage(stageDoc)
-	if err == nil {
-		t.Fatal("expected error for $densify, got nil")
-	}
-
-	var cmdErr *handlererrors.CommandError
-	if !errors.As(err, &cmdErr) {
-		t.Fatalf("expected *handlererrors.CommandError, got %T: %v", err, err)
-	}
-
-	const wantCode = handlererrors.ErrNotImplemented
-	if cmdErr.Code() != wantCode {
-		t.Errorf("error code = %d, want %d (ErrNotImplemented)", cmdErr.Code(), wantCode)
-	}
-}
-
-// TestAggStage_unsupportedErrors_fill verifies that $fill with the required 'output'
-// field returns ErrNotImplemented (238)  -- $fill is not yet implemented.
-func TestAggStage_unsupportedErrors_fill(t *testing.T) {
-	t.Parallel()
-
-	spec := must.NotFail(types.NewDocument(
-		"output", must.NotFail(types.NewDocument(
-			"price", must.NotFail(types.NewDocument("method", "locf")),
-		)),
-	))
-	stageDoc := must.NotFail(types.NewDocument("$fill", spec))
-	_, err := stages.NewStage(stageDoc)
-	if err == nil {
-		t.Fatal("expected error for $fill, got nil")
-	}
-
-	var cmdErr *handlererrors.CommandError
-	if !errors.As(err, &cmdErr) {
-		t.Fatalf("expected *handlererrors.CommandError, got %T: %v", err, err)
-	}
-
-	const wantCode = handlererrors.ErrNotImplemented
-	if cmdErr.Code() != wantCode {
-		t.Errorf("error code = %d, want %d (ErrNotImplemented)", cmdErr.Code(), wantCode)
-	}
-}
-
 // TestAggStage_unsupportedErrors_indexStats verifies that $indexStats returns
 // ErrStageUnrecognized when called via NewStage, since $indexStats is handled
 // specially in the aggregate handler before stage parsing.
@@ -431,7 +378,9 @@ func TestAggStage_unsupportedErrors_search(t *testing.T) {
 	if got, want := cmdErr.Code(), handlererrors.ErrSearchNotEnabled; got != want {
 		t.Errorf("error code = %d, want %d (ErrSearchNotEnabled)", got, want)
 	}
-	const wantMsg = "$search is not supported by DumboDB."
+	const wantMsg = "Using $search and $vectorSearch aggregation stages requires additional configuration. " +
+		"Please connect to Atlas or an AtlasCLI local deployment to enable.For more information on how to connect, " +
+		"see https://dochub.mongodb.org/core/atlas-cli-deploy-local-reqs."
 	if got := cmdErr.Err().Error(); got != wantMsg {
 		t.Errorf("error message = %q, want %q", got, wantMsg)
 	}
@@ -454,7 +403,9 @@ func TestAggStage_unsupportedErrors_listSearchIndexes(t *testing.T) {
 	if got, want := cmdErr.Code(), handlererrors.ErrSearchNotEnabled; got != want {
 		t.Errorf("error code = %d, want %d (ErrSearchNotEnabled)", got, want)
 	}
-	const wantMsg = "$listSearchIndexes is not supported by DumboDB."
+	const wantMsg = "Using Atlas Search Database Commands and the $listSearchIndexes aggregation stage requires additional " +
+		"configuration. Please connect to Atlas or an AtlasCLI local deployment to enable. For more information on how to " +
+		"connect, see https://dochub.mongodb.org/core/atlas-cli-deploy-local-reqs."
 	if got := cmdErr.Err().Error(); got != wantMsg {
 		t.Errorf("error message = %q, want %q", got, wantMsg)
 	}

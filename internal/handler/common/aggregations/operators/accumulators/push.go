@@ -21,6 +21,15 @@ import (
 
 type pushAccumulator struct {
 	arg operand
+	sbe bool
+	// charges is how many times each kept value is charged; 0 means once.
+	charges int
+}
+
+// UseSBE implements SBEAccumulator.
+func (p *pushAccumulator) UseSBE() error {
+	p.sbe = true
+	return nil
 }
 
 func newPush(args ...any) (Accumulator, error) {
@@ -43,12 +52,13 @@ func newPush(args ...any) (Accumulator, error) {
 func (p *pushAccumulator) New() Accumulation {
 	// $push must retain every projected value, so its result array grows with
 	// the group size. It retains values, never documents.
-	return &pushState{spec: p, result: types.MakeArray(0)}
+	return &pushState{spec: p, result: types.MakeArray(0), mem: keptMemory{sbe: p.sbe, stored: p.arg.readsStoredValue(), charges: p.charges}}
 }
 
 type pushState struct {
 	spec   *pushAccumulator
 	result *types.Array
+	mem    keptMemory
 }
 
 // Accumulate appends the operand's value; MongoDB's $push skips a missing one.
@@ -60,7 +70,7 @@ func (s *pushState) Accumulate(doc *types.Document) error {
 
 	s.result.Append(val)
 
-	return nil
+	return s.mem.keep(val, "$push")
 }
 
 func (s *pushState) Result() (any, error) {

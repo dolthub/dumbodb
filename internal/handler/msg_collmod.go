@@ -194,6 +194,9 @@ func (h *Handler) MsgCollMod(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 			}
 			if params.SetViewPipeline {
 				pipeline = params.ViewPipeline
+				if verr := validateViewPipeline(dbName, collectionName, pipeline); verr != nil {
+					return nil, verr
+				}
 			}
 			if verr := validateViewDependenciesAcyclic(connCtx, db, collectionName, viewOn, pipeline, "collMod"); verr != nil {
 				return nil, verr

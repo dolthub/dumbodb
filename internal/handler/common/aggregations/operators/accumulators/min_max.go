@@ -15,12 +15,14 @@
 package accumulators
 
 import (
+	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
 type minAccumulator struct {
 	arg operand
+	sbe bool
 }
 
 func newMin(args ...any) (Accumulator, error) {
@@ -40,12 +42,34 @@ func newMin(args ...any) (Accumulator, error) {
 	return &minAccumulator{arg: arg}, nil
 }
 
+// UseSBE implements SBEAccumulator: SBE keeps the last of tied values.
+func (m *minAccumulator) UseSBE() error {
+	m.sbe = true
+	return nil
+}
+
+// UseSBE implements SBEAccumulator: SBE keeps the last of tied values.
+func (m *maxAccumulator) UseSBE() error {
+	m.sbe = true
+	return nil
+}
+
 func (m *minAccumulator) New() Accumulation {
-	return &extremeState{arg: m.arg, want: types.Less}
+	return &extremeState{arg: m.arg, want: types.Less, lastTie: m.sbe}
 }
 
 func (m *maxAccumulator) New() Accumulation {
-	return &extremeState{arg: m.arg, want: types.Greater}
+	return &extremeState{arg: m.arg, want: types.Greater, lastTie: m.sbe}
+}
+
+// NewCollated returns an accumulation that orders strings under cmp.
+func (m *minAccumulator) NewCollated(cmp *collation.Comparator) Accumulation {
+	return &extremeState{arg: m.arg, want: types.Less, lastTie: m.sbe, cmp: cmp}
+}
+
+// NewCollated returns an accumulation that orders strings under cmp.
+func (m *maxAccumulator) NewCollated(cmp *collation.Comparator) Accumulation {
+	return &extremeState{arg: m.arg, want: types.Greater, lastTie: m.sbe, cmp: cmp}
 }
 
 // extremeState folds the running $min or $max. want is the comparison result
@@ -53,7 +77,10 @@ func (m *maxAccumulator) New() Accumulation {
 type extremeState struct {
 	arg    operand
 	want   types.CompareResult
-	result any
+	result *collation.Keyed
+	cmp    *collation.Comparator
+	// lastTie replaces the running value with an equal one, as SBE does.
+	lastTie bool
 }
 
 func (s *extremeState) Accumulate(doc *types.Document) error {
@@ -67,13 +94,14 @@ func (s *extremeState) Accumulate(doc *types.Document) error {
 		return nil
 	}
 
+	v := &collation.Keyed{V: val}
 	if s.result == nil {
-		s.result = val
+		s.result = v
 		return nil
 	}
 
-	if types.CompareOrder(val, s.result, types.Ascending) == s.want {
-		s.result = val
+	if c := collation.CompareKeyed(s.cmp, v, s.result, compareAscending); c == s.want || (s.lastTie && c == types.Equal) {
+		s.result = v
 	}
 
 	return nil
@@ -84,11 +112,16 @@ func (s *extremeState) Result() (any, error) {
 		return types.Null, nil
 	}
 
-	return s.result, nil
+	return s.result.V, nil
+}
+
+func compareAscending(a, b any) types.CompareResult {
+	return types.CompareOrder(a, b, types.Ascending)
 }
 
 type maxAccumulator struct {
 	arg operand
+	sbe bool
 }
 
 func newMax(args ...any) (Accumulator, error) {
@@ -109,7 +142,12 @@ func newMax(args ...any) (Accumulator, error) {
 }
 
 var (
-	_ Accumulator  = (*minAccumulator)(nil)
-	_ Accumulator  = (*maxAccumulator)(nil)
-	_ Accumulation = (*extremeState)(nil)
+	_ Accumulator = (*minAccumulator)(nil)
+	_ Accumulator = (*maxAccumulator)(nil)
+
+	_ CollatedAccumulator = (*minAccumulator)(nil)
+	_ CollatedAccumulator = (*maxAccumulator)(nil)
+	_ SBEAccumulator      = (*minAccumulator)(nil)
+	_ SBEAccumulator      = (*maxAccumulator)(nil)
+	_ Accumulation        = (*extremeState)(nil)
 )
