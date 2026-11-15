@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
@@ -161,7 +162,7 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 			modified, err = processReplacementDoc(cmd, doc, param.Update)
 		} else {
 			mutations = collectSimpleFieldMutations(param.Update)
-			modified, err = processUpdateOperator(cmd, doc, param.Update, upsert, param.Filter, param.ArrayFilters)
+			modified, err = processUpdateOperator(cmd, doc, param.Update, upsert, param.Filter, param.ArrayFilters, collation.Parse(param.Collation).Comparator())
 			if err == nil && modified && !upsert {
 				err = checkDollarPrefixedUpdatePaths(cmd, param.Update)
 			}
@@ -733,7 +734,7 @@ func processReplacementDoc(command string, doc, update *types.Document) (bool, e
 // Returns CommandError if the command is findAndModify, otherwise returns WriteError.
 // filter is the query filter used to match the document (needed for $ positional operator).
 // arrayFilters is used for $[identifier] positional operator.
-func processUpdateOperator(command string, doc, update *types.Document, upsert bool, filter *types.Document, arrayFilters *types.Array) (bool, error) {
+func processUpdateOperator(command string, doc, update *types.Document, upsert bool, filter *types.Document, arrayFilters *types.Array, cmp *collation.Comparator) (bool, error) {
 	var docUpdated bool
 	var err error
 
@@ -838,13 +839,13 @@ func processUpdateOperator(command string, doc, update *types.Document, upsert b
 				}
 
 			case "$pull":
-				updated, err = processPullArrayUpdateExpression(command, doc, key, value)
+				updated, err = processPullArrayUpdateExpression(command, doc, key, value, cmp)
 				if err != nil {
 					return false, err
 				}
 
 			case "$pullAll":
-				updated, err = processPullAllArrayUpdateExpression(command, doc, key, value)
+				updated, err = processPullAllArrayUpdateExpression(command, doc, key, value, cmp)
 				if err != nil {
 					return false, err
 				}
@@ -1731,76 +1732,113 @@ func validatePullCondition(condition *types.Document) error {
 			"$pull",
 		)
 	}
-	if err := checkPullQueryFeatures(condition); err != nil {
-		return err
-	}
-	if containsGeoNearOperator(condition) {
-		return handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrGeoNearNotAllowedInContext, GeoNearNotAllowedMsg, "$pull",
-		)
-	}
-	if isFieldOperatorExpression(condition) {
+	if isPullFieldOperators(condition) {
+		if err := checkPullFieldOperators(condition); err != nil {
+			return err
+		}
 		return ValidateFilter(must.NotFail(types.NewDocument("v", condition)), nil)
+	}
+	if err := checkPullQuery(condition, false); err != nil {
+		return err
 	}
 	return ValidateFilter(condition, nil)
 }
 
-// containsGeoNearOperator reports whether a query uses $near, $nearSphere or
-// $geoNear at any depth with an operand MongoDB would go on to parse.
-func containsGeoNearOperator(v any) bool {
-	switch v := v.(type) {
-	case *types.Document:
-		for _, key := range v.Keys() {
-			value := must.NotFail(v.Get(key))
-			switch key {
-			case "$near", "$nearSphere", "$geoNear":
-				switch value.(type) {
-				case *types.Document, *types.Array:
-					return true
-				}
-			}
-			if containsGeoNearOperator(value) {
-				return true
-			}
-		}
-	case *types.Array:
-		for i := range v.Len() {
-			if containsGeoNearOperator(must.NotFail(v.Get(i))) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// checkPullQueryFeatures rejects the query features mongod does not allow in
-// a $pull condition, at the top level or inside $and, $or and $nor.
-func checkPullQueryFeatures(query *types.Document) error {
+// checkPullQuery rejects the query features mongod does not allow in a $pull
+// condition, in the order it parses them. inElemMatch says whether query is
+// the query of an $elemMatch, where $expr and $text get the generic
+// top-level-only error.
+func checkPullQuery(query *types.Document, inElemMatch bool) error {
 	for _, key := range query.Keys() {
+		value := must.NotFail(query.Get(key))
 		switch key {
-		case "$expr", "$jsonSchema":
-			return handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrQueryFeatureNotAllowed, key+" is not allowed in this context", "$pull",
-			)
-		case "$text", "$where":
-			return handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrBadValue, key+" is not allowed in this context", "$pull",
-			)
+		case "$jsonSchema":
+			return pullFeatureError(handlererrors.ErrQueryFeatureNotAllowed, key)
+		case "$expr":
+			if !inElemMatch {
+				return pullFeatureError(handlererrors.ErrQueryFeatureNotAllowed, key)
+			}
+		case "$text":
+			if !inElemMatch {
+				return pullFeatureError(handlererrors.ErrBadValue, key)
+			}
+		case "$where":
+			return pullFeatureError(handlererrors.ErrBadValue, key)
 		case "$and", "$or", "$nor":
-			branches, ok := must.NotFail(query.Get(key)).(*types.Array)
+			branches, ok := value.(*types.Array)
 			if !ok {
 				continue
 			}
 			for i := range branches.Len() {
 				if branch, ok := must.NotFail(branches.Get(i)).(*types.Document); ok {
-					if err := checkPullQueryFeatures(branch); err != nil {
+					if err := checkPullQuery(branch, inElemMatch); err != nil {
 						return err
 					}
+				}
+			}
+		default:
+			if ops, ok := value.(*types.Document); ok && !strings.HasPrefix(key, "$") && isOperatorDocument(ops) {
+				if err := checkPullFieldOperators(ops); err != nil {
+					return err
 				}
 			}
 		}
 	}
 	return nil
+}
+
+// checkPullFieldOperators checks the operators applied to one field of a
+// $pull condition. Operands that are values, as of $eq or $in, are not
+// looked into.
+func checkPullFieldOperators(ops *types.Document) error {
+	for _, op := range ops.Keys() {
+		operand := must.NotFail(ops.Get(op))
+		switch op {
+		case "$near", "$nearSphere", "$geoNear":
+			switch operand.(type) {
+			case *types.Document, *types.Array:
+				return handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrGeoNearNotAllowedInContext, GeoNearNotAllowedMsg, "$pull",
+				)
+			}
+			return handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrBadValue,
+				fmt.Sprintf("near must be first in: { %s: %s }", op, types.FormatAnyValue(operand)),
+				"$pull",
+			)
+		case "$not":
+			if inner, ok := operand.(*types.Document); ok && isOperatorDocument(inner) {
+				if err := checkPullFieldOperators(inner); err != nil {
+					return err
+				}
+			}
+		case "$elemMatch":
+			inner, ok := operand.(*types.Document)
+			if !ok {
+				continue
+			}
+			var err error
+			if isPullFieldOperators(inner) {
+				err = checkPullFieldOperators(inner)
+			} else {
+				err = checkPullQuery(inner, true)
+			}
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// isPullFieldOperators is isFieldOperatorExpression for a $pull condition,
+// where $jsonSchema, a query operator, starts a query.
+func isPullFieldOperators(doc *types.Document) bool {
+	return isFieldOperatorExpression(doc) && doc.Keys()[0] != "$jsonSchema"
+}
+
+func pullFeatureError(code handlererrors.ErrorCode, feature string) error {
+	return handlererrors.NewCommandErrorMsgWithArgument(code, feature+" is not allowed in this context", "$pull")
 }
 
 // HasSupportedUpdateModifiers checks if the update document contains supported update operators.

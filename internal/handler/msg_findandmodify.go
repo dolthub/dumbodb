@@ -260,6 +260,7 @@ func (h *Handler) findAndModifyDocument(ctx context.Context, params *common.Find
 		Pipeline:           params.Pipeline,
 		PipelineStages:     params.PipelineStages,
 		ArrayFilters:       params.ArrayFilters,
+		Collation:          params.Collation,
 		Validator:          validator,
 		ValidationLevel:    valLevel,
 		ValidationAction:   valAction,
