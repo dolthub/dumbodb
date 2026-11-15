@@ -335,3 +335,45 @@ func TestDropDatabaseClosesIteratorsBeforeTheStore(t *testing.T) {
 	_, _, err = cur.Next()
 	require.ErrorIs(t, err, iterator.ErrIteratorDone, "a getMore after the drop must end the cursor")
 }
+
+// getOrBuildSqleDatabase looks a database up while holding dbCacheMu, and the
+// drop forgets the cached database, which takes dbCacheMu. The drop must not
+// hold b.mu while it waits there.
+func TestDropDatabaseWaitingOnProviderCacheDoesNotBlockLookups(t *testing.T) {
+	ctx := context.Background()
+	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, 0, 0)
+	require.NoError(t, err)
+	t.Cleanup(be.Close)
+
+	_, err = be.getOrOpenDB(ctx, "victim", true)
+	require.NoError(t, err)
+	_, err = be.getOrOpenDB(ctx, "bystander", true)
+	require.NoError(t, err)
+
+	be.provider.dbCacheMu.Lock()
+	dropped := make(chan error, 1)
+	go func() {
+		dropped <- be.DropDatabase(ctx, &backends.DropDatabaseParams{Name: "victim"})
+	}()
+	// Give the drop time to reach dbCacheMu.
+	time.Sleep(200 * time.Millisecond)
+
+	looked := make(chan bool, 1)
+	go func() {
+		_, ok := be.provider.dbLookup("bystander")
+		looked <- ok
+	}()
+	select {
+	case ok := <-looked:
+		require.True(t, ok)
+	case <-time.After(10 * time.Second):
+		buf := make([]byte, 1<<22)
+		buf = buf[:runtime.Stack(buf, true)]
+		panic(fmt.Sprintf("lookup under dbCacheMu blocked behind a drop; server is deadlocked\n\n%s", buf))
+	}
+	be.provider.dbCacheMu.Unlock()
+
+	require.NoError(t, <-dropped)
+	_, ok := be.provider.dbLookup("victim")
+	require.False(t, ok)
+}
