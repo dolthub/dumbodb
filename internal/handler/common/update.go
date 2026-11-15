@@ -1984,6 +1984,14 @@ func validateRenameExpression(command string, update *types.Document) error {
 			)
 		}
 
+		if strings.HasPrefix(vStr, k+".") || strings.HasPrefix(k, vStr+".") {
+			return NewUpdateError(
+				handlererrors.ErrBadValue,
+				fmt.Sprintf(`The source and target field for $rename must not be on the same path: %s: "%s"`, k, vStr),
+				command,
+			)
+		}
+
 		if _, ok = keys[k]; ok {
 			return NewUpdateError(
 				handlererrors.ErrConflictingUpdateOperators,
