@@ -53,14 +53,23 @@ type FindValuesOpts struct {
 //
 // It returns next values after iterating path elements.
 func FindValues(doc *types.Document, path types.Path, opts *FindValuesOpts) ([]any, error) {
-	values, _, err := FindValuesPositional(doc, path, opts)
+	values, _, err := findValues(doc, path, opts, false)
 	return values, err
 }
 
-// FindValuesPositional is FindValues that also reports, for each value, whether
-// the last path element reached it as an array index. MongoDB compares such a
-// value as a whole and does not expand it when it is itself an array.
+// FindValuesPositional is FindValues for a query: it also reports, for each
+// value, whether the last path element reached it as an array index, and, as
+// MongoDB does, a numeric element reaches both the array's element at that
+// index and the field of that name in the array's documents. MongoDB compares
+// a value reached as an index as a whole and does not expand it when it is
+// itself an array.
 func FindValuesPositional(doc *types.Document, path types.Path, opts *FindValuesOpts) (values []any, byIndex []bool, err error) {
+	return findValues(doc, path, opts, true)
+}
+
+// findValues is FindValues; indexAndDocuments says whether a numeric element
+// that indexes an array also looks the field up in its documents.
+func findValues(doc *types.Document, path types.Path, opts *FindValuesOpts, indexAndDocuments bool) (values []any, byIndex []bool, err error) {
 	if opts == nil {
 		opts = new(FindValuesOpts)
 	}
@@ -89,7 +98,9 @@ func FindValuesPositional(doc *types.Document, path types.Path, opts *FindValues
 					if err == nil {
 						values = append(values, res)
 						byIndex = append(byIndex, true)
-						continue
+						if !indexAndDocuments {
+							continue
+						}
 					}
 				}
 

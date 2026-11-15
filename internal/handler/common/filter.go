@@ -2821,6 +2821,15 @@ func elemMatchArrayElement(elem *types.Array, filterKey, filterSuffix string, ex
 			if !isArray {
 				return filterFieldExpr(must.NotFail(types.NewDocument(filterSuffix, elem)), filterKey, filterSuffix, expr, fc)
 			}
+			if op == "$all" && values.Len() > 0 && isElemMatchDocument(must.NotFail(values.Get(0))) {
+				// Each $elemMatch of the $all applies to the array.
+				matched, err := filterFieldExprAll(must.NotFail(types.NewDocument(filterSuffix, elem)), filterKey, filterSuffix, elem, v, fc)
+				if err != nil {
+					return false, err
+				}
+				ok = matched
+				break
+			}
 			someEqual, allEqual := false, values.Len() > 0
 			for i := 0; i < values.Len(); i++ {
 				if equalsElem(must.NotFail(values.Get(i))) {
