@@ -341,6 +341,10 @@ func statementWriteError(db, coll string, err error) *handlererrors.CommandError
 		ce, _ := handlererrors.NewCommandErrorMsg(handlererrors.ErrDuplicateKeyInsert, msg).(*handlererrors.CommandError)
 		return ce
 	}
+	if code, msg, ok := handlererrors.IndexKeyError(err); ok {
+		ce, _ := handlererrors.NewCommandErrorMsg(code, msg).(*handlererrors.CommandError)
+		return ce
+	}
 	var ve *types.ValidationError
 	if errors.As(err, &ve) {
 		err = validationErrToUpdateErr("update", ve)

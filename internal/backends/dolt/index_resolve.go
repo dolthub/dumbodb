@@ -25,7 +25,9 @@ package dolt
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -41,6 +43,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/bson"
 	idxpkg "github.com/dolthub/dumbodb/internal/index"
 	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 type resolvedIndexEntry struct {
@@ -270,6 +273,11 @@ func indexEntriesForDoc(ctx context.Context, doc *types.Document, idx backends.I
 	for i, v := range fieldVals {
 		if _, isArr := v.(*types.Array); isArr && i < 64 {
 			multikey |= 1 << i
+		}
+	}
+	if len(idx.Key) > 1 {
+		if err = checkParallelArrays(doc, idx); err != nil {
+			return nil, 0, false, err
 		}
 	}
 	rows = expandMultiKeyValues(fieldVals)
@@ -655,4 +663,81 @@ func openIndexMap(ctx context.Context, ns tree.NodeStore, mapRoot hash.Hash) (pr
 		return prolly.Map{}, fmt.Errorf("openIndexMap: %w", err)
 	}
 	return prolly.NewMap(node, ns, idxpkg.KeyDescriptor(), idxpkg.ValDescriptor()), nil
+}
+
+// checkParallelArrays returns ErrCannotIndexParallelArrays when two fields of
+// idx each pass through an array the other does not, as mongod refuses to
+// index the cross product of unrelated arrays. Fields under one array, like
+// a.x and a.y, share it and are allowed.
+func checkParallelArrays(doc *types.Document, idx backends.IndexInfo) error {
+	arrayPaths := make([][]string, len(idx.Key))
+	for i, kp := range idx.Key {
+		if kp.Text || isGeoKey(kp) {
+			continue
+		}
+		arrayPaths[i] = arraysAlongPath(doc, strings.Split(kp.Field, "."))
+	}
+	for i := range arrayPaths {
+		for j := 0; j < i; j++ {
+			own, other := firstUnshared(arrayPaths[i], arrayPaths[j]), firstUnshared(arrayPaths[j], arrayPaths[i])
+			if own != "" && other != "" {
+				return fmt.Errorf("%w [%s] [%s]", idxpkg.ErrCannotIndexParallelArrays, lastPathElement(own), lastPathElement(other))
+			}
+		}
+	}
+	return nil
+}
+
+// arraysAlongPath returns the paths, without array positions, of the arrays
+// path expands in doc. An array a numeric element indexes into is not
+// expanded.
+func arraysAlongPath(doc *types.Document, path []string) []string {
+	seen := map[string]struct{}{}
+	var res []string
+	var walk func(v any, depth int)
+	walk = func(v any, depth int) {
+		switch v := v.(type) {
+		case *types.Document:
+			if depth == len(path) {
+				return
+			}
+			if next, err := v.Get(path[depth]); err == nil {
+				walk(next, depth+1)
+			}
+		case *types.Array:
+			if depth < len(path) {
+				if i, err := strconv.Atoi(path[depth]); err == nil {
+					if elem, err := v.Get(i); err == nil {
+						walk(elem, depth+1)
+					}
+					return
+				}
+			}
+			arrayPath := strings.Join(path[:depth], ".")
+			if _, ok := seen[arrayPath]; !ok {
+				seen[arrayPath] = struct{}{}
+				res = append(res, arrayPath)
+			}
+			for i := range v.Len() {
+				if elem, ok := must.NotFail(v.Get(i)).(*types.Document); ok {
+					walk(elem, depth)
+				}
+			}
+		}
+	}
+	walk(doc, 0)
+	return res
+}
+
+func firstUnshared(paths, others []string) string {
+	for _, p := range paths {
+		if !slices.Contains(others, p) {
+			return p
+		}
+	}
+	return ""
+}
+
+func lastPathElement(path string) string {
+	return path[strings.LastIndexByte(path, '.')+1:]
 }

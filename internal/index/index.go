@@ -225,6 +225,10 @@ func checkCollatable(field string, v any, sentinel error) error {
 	return nil
 }
 
+// ErrCannotIndexParallelArrays reports a document in which two fields of a
+// compound index reach different arrays.
+var ErrCannotIndexParallelArrays = errors.New("cannot index parallel arrays")
+
 // CheckKeyLength returns ErrKeyTooLong for a key longer than MaxKeyLength.
 func CheckKeyLength(key []byte) error {
 	if len(key) > MaxKeyLength {

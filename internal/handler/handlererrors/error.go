@@ -194,6 +194,8 @@ const (
 	// ErrInvalidPipelineOperator indicates that provided aggregation operator is invalid.
 	ErrInvalidPipelineOperator = ErrorCode(168) // InvalidPipelineOperator
 
+	ErrCannotIndexParallelArrays = ErrorCode(171) // CannotIndexParallelArrays
+
 	ErrClientMetadataCannotBeMutated = ErrorCode(186) // ClientMetadataCannotBeMutated
 
 	// ErrNotImplemented indicates that a flag or command is not implemented.
@@ -1412,6 +1414,7 @@ func IndexKeyError(err error) (ErrorCode, string, bool) {
 		{index.ErrCannotExtractGeoKeys, ErrCannotExtractGeoKeys},
 		{index.ErrSymbolWithCollation, ErrCannotBuildIndexKeys},
 		{index.ErrSymbolQueryWithCollation, ErrCannotBuildIndexKeys},
+		{index.ErrCannotIndexParallelArrays, ErrCannotIndexParallelArrays},
 	} {
 		if errors.Is(err, e.sentinel) {
 			msg := err.Error()
