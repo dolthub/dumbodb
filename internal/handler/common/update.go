@@ -162,6 +162,9 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 		} else {
 			mutations = collectSimpleFieldMutations(param.Update)
 			modified, err = processUpdateOperator(cmd, doc, param.Update, upsert, param.Filter, param.ArrayFilters)
+			if err == nil && modified && !upsert {
+				err = checkDollarPrefixedUpdatePaths(cmd, param.Update)
+			}
 		}
 
 		if err != nil {
@@ -241,6 +244,42 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 			}
 		}
 	}
+}
+
+// checkDollarPrefixedUpdatePaths rejects an update operator that writes a
+// top-level field whose name starts with '$'. mongod checks it only when it
+// modifies a stored document, not when it inserts an upserted one.
+func checkDollarPrefixedUpdatePaths(command string, update *types.Document) error {
+	for _, op := range update.Keys() {
+		if op == "$unset" {
+			continue
+		}
+		fields, ok := must.NotFail(update.Get(op)).(*types.Document)
+		if !ok {
+			continue
+		}
+		for _, key := range fields.Keys() {
+			target := key
+			if op == "$rename" {
+				if to, isString := must.NotFail(fields.Get(key)).(string); isString {
+					target = to
+				}
+			}
+			top, _, _ := strings.Cut(target, ".")
+			if strings.HasPrefix(top, "$") {
+				return NewUpdateError(
+					handlererrors.ErrDollarPrefixedFieldName,
+					fmt.Sprintf(
+						"The dollar ($) prefixed field '%[1]s' in '%[1]s' is not allowed in the context of an update's "+
+							"replacement document. Consider using an aggregation pipeline with $replaceWith.",
+						top,
+					),
+					command,
+				)
+			}
+		}
+	}
+	return nil
 }
 
 // processFilterEqualityCondition copies the fields with equality condition from
