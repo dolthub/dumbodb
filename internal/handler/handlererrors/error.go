@@ -715,6 +715,12 @@ const (
 	// ErrCannotExtractGeoKeys indicates a value a 2dsphere index cannot hold.
 	ErrCannotExtractGeoKeys = ErrorCode(16755) // Location16755
 
+	ErrGeoLocationFormat = ErrorCode(16804) // Location16804
+
+	ErrGeoPointOutOfInterval = ErrorCode(13027) // Location13027
+
+	ErrGeoFieldSingleElement = ErrorCode(13068) // Location13068
+
 	// ErrKeyTooLong indicates a key longer than DumboDB stores.
 	ErrKeyTooLong = ErrorCode(17280) // KeyTooLong
 
@@ -1415,6 +1421,9 @@ func IndexKeyError(err error) (ErrorCode, string, bool) {
 		{index.ErrSymbolWithCollation, ErrCannotBuildIndexKeys},
 		{index.ErrSymbolQueryWithCollation, ErrCannotBuildIndexKeys},
 		{index.ErrCannotIndexParallelArrays, ErrCannotIndexParallelArrays},
+		{index.ErrGeoLocationFormat, ErrGeoLocationFormat},
+		{index.ErrGeoPointOutOfInterval, ErrGeoPointOutOfInterval},
+		{index.ErrGeoFieldSingleElement, ErrGeoFieldSingleElement},
 	} {
 		if errors.Is(err, e.sentinel) {
 			msg := err.Error()

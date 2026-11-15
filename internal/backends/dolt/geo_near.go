@@ -29,7 +29,6 @@ import (
 	idxpkg "github.com/dolthub/dumbodb/internal/index"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
-	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // A geo index keys each point by its cell in a grid of geoCellBits bits per
@@ -402,20 +401,25 @@ var _ backends.GeoNearScanner = (*collection)(nil)
 
 func finiteFloat(f float64) bool { return !math.IsNaN(f) && !math.IsInf(f, 0) }
 
-// checkGeoKeys refuses doc when idx is a 2dsphere index and doc's field holds
-// an array of legacy pairs, which MongoDB reads as a malformed point.
+// checkGeoKeys refuses doc when a geo field of idx holds a value mongod
+// cannot index: for 2dsphere, anything but valid GeoJSON or an in-range legacy
+// point; for 2d, a malformed or out-of-range legacy point.
 func checkGeoKeys(doc *types.Document, idx backends.IndexInfo) error {
 	for _, kp := range idx.Key {
-		if !kp.Geo2DSphere {
-			continue
-		}
-		arr, ok := indexFieldValue(doc, kp.Field).(*types.Array)
-		if !ok || arr.Len() == 0 {
-			continue
-		}
-		if _, nested := must.NotFail(arr.Get(0)).(*types.Array); nested {
-			return fmt.Errorf("%w: field %s  Point must only contain numeric elements, instead got type array",
-				idxpkg.ErrCannotExtractGeoKeys, kp.Field)
+		switch {
+		case kp.Geo2DSphere:
+			if problem := geo.SphereIndexProblem(kp.Field, indexFieldValue(doc, kp.Field)); problem != "" {
+				return fmt.Errorf("%w: %s  %s", idxpkg.ErrCannotExtractGeoKeys, types.FormatAnyValue(doc), problem)
+			}
+		case kp.Geo2D:
+			switch geo.PlanarIndexProblem(indexFieldValue(doc, kp.Field)) {
+			case geo.PlanarMalformed:
+				return idxpkg.ErrGeoLocationFormat
+			case geo.PlanarSingleElement:
+				return fmt.Errorf("%w :: caused by :: %s", idxpkg.ErrGeoFieldSingleElement, types.FormatAnyValue(doc))
+			case geo.PlanarOutOfBounds:
+				return fmt.Errorf("%w :: caused by :: %s", idxpkg.ErrGeoPointOutOfInterval, types.FormatAnyValue(doc))
+			}
 		}
 	}
 	return nil
