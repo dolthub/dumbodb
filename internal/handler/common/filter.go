@@ -1850,35 +1850,27 @@ func filterFieldExprAll(doc *types.Document, filterKey, filterSuffix string, fie
 		return false, nil
 	}
 
-	// Check if any query element is an {$elemMatch: ...} expression.
-	// In that case, $all with $elemMatch has special semantics: for each
-	// {$elemMatch: expr} in the query list, the field array must have at least
-	// one element matching the expression.
-	hasElemMatch := false
+	// As in MongoDB, an $all whose first element is {$elemMatch: ...} takes
+	// only $elemMatch elements; otherwise it takes no operator documents.
+	hasElemMatch := isElemMatchDocument(must.NotFail(query.Get(0)))
 	for i := 0; i < query.Len(); i++ {
 		elem := must.NotFail(query.Get(i))
-		if d, ok := elem.(*types.Document); ok {
-			if _, err := d.Get("$elemMatch"); err == nil {
-				hasElemMatch = true
-				break
+		if hasElemMatch {
+			if !isElemMatchDocument(elem) {
+				return false, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue, "$all/$elemMatch has to be consistent", "$all")
 			}
+			continue
+		}
+		if d, isDoc := elem.(*types.Document); isDoc && d.Len() > 0 && strings.HasPrefix(d.Keys()[0], "$") {
+			return false, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue, "no $ expressions in $all", "$all")
 		}
 	}
 
 	if hasElemMatch {
-		// For $all with $elemMatch elements, process each query element:
-		// - {$elemMatch: expr} -> field array must contain an element matching expr
-		// - other values -> not supported in mixed mode; treat as no-match
+		// Each {$elemMatch: expr} needs an element of the field array matching expr.
 		for i := 0; i < query.Len(); i++ {
-			elem := must.NotFail(query.Get(i))
-			elemDoc, ok := elem.(*types.Document)
-			if !ok {
-				return false, nil
-			}
-			elemMatchValue, err := elemDoc.Get("$elemMatch")
-			if err != nil {
-				return false, nil
-			}
+			elemDoc := must.NotFail(query.Get(i)).(*types.Document)
+			elemMatchValue := must.NotFail(elemDoc.Get("$elemMatch"))
 			matched, err := filterFieldExprElemMatch(doc, filterKey, filterSuffix, elemMatchValue, fc)
 			if err != nil {
 				return false, err
@@ -1915,6 +1907,11 @@ func filterFieldExprAll(doc *types.Document, filterKey, filterSuffix string, fie
 		}
 	}
 	return true, nil
+}
+
+func isElemMatchDocument(v any) bool {
+	d, isDoc := v.(*types.Document)
+	return isDoc && d.Len() > 0 && d.Keys()[0] == "$elemMatch"
 }
 
 // filterFieldExprBitsAllClear handles {field: {$bitsAllClear: value}} filter.
