@@ -434,6 +434,7 @@ func filterUsesExpr(filter *types.Document) bool {
 // filterDocumentPair handles a single filter element key/value pair {filterKey: filterValue}.
 func filterDocumentPair(doc *types.Document, filterKey string, filterValue any, fc *FilterContext) (bool, error) {
 	var vals []any
+	var wholeArrays []*types.Array
 	var missing bool
 	filterSuffix := filterKey
 
@@ -447,12 +448,14 @@ func filterDocumentPair(doc *types.Document, filterKey string, filterValue any, 
 
 		// filter using dot notation returns the value by valid array index
 		// or values for the given key in array's document
-		if vals, err = commonpath.FindValues(doc, path, &commonpath.FindValuesOpts{
+		var byIndex []bool
+		if vals, byIndex, err = commonpath.FindValuesPositional(doc, path, &commonpath.FindValuesOpts{
 			FindArrayIndex:     true,
 			FindArrayDocuments: true,
 		}); err != nil {
 			return false, lazyerrors.Error(err)
 		}
+		vals, wholeArrays = splitPositionalArrays(vals, byIndex)
 		missing = commonpath.HasMissingBranch(doc, path)
 	} else {
 		if val, _ := doc.Get(filterKey); val != nil {
@@ -494,12 +497,12 @@ func filterDocumentPair(doc *types.Document, filterKey string, filterValue any, 
 			branches = append(branches, types.MakeDocument(0))
 		}
 
-		if len(branches) == 1 {
+		if len(branches) == 1 && len(wholeArrays) == 0 {
 			// {field: {expr}} or {field: {document}}
 			return filterFieldExpr(branches[0], filterKey, filterSuffix, filterValue, fc)
 		}
 
-		return filterFieldExprBranches(branches, filterKey, filterSuffix, filterValue, fc)
+		return filterFieldExprBranches(branches, wholeArrays, filterKey, filterSuffix, filterValue, fc)
 	case types.NullType:
 		if missing {
 			// comparing non-existent field with null returns true
@@ -530,10 +533,30 @@ func filterDocumentPair(doc *types.Document, filterKey string, filterValue any, 
 				return true, nil
 			}
 		}
+		for _, arr := range wholeArrays {
+			if collCompareOrder(arr, filterValue, fc.cmp) == types.Equal {
+				return true, nil
+			}
+		}
 	}
 
 	// If we got here, it means that none of the documents matched the filter.
 	return false, nil
+}
+
+// splitPositionalArrays separates the arrays a path reached as an array index,
+// which MongoDB matches as whole values, from the values it expands.
+func splitPositionalArrays(vals []any, byIndex []bool) ([]any, []*types.Array) {
+	var whole []*types.Array
+	expanded := vals[:0:0]
+	for i, v := range vals {
+		if arr, isArray := v.(*types.Array); isArray && byIndex[i] {
+			whole = append(whole, arr)
+			continue
+		}
+		expanded = append(expanded, v)
+	}
+	return expanded, whole
 }
 
 // equalsOrHasElement is MongoDB's equality match: value equals target, or is
@@ -686,7 +709,9 @@ func indexedArrays(doc *types.Document, filterKey string) []*types.Array {
 // zero or several branches through arrays. Like MongoDB, each operator is
 // evaluated on its own: a positive operator needs one matching branch, a
 // negated one ($ne, $nin, $not, $exists: false) needs every branch to match.
-func filterFieldExprBranches(branches []*types.Document, filterKey, filterSuffix string, expr *types.Document, fc *FilterContext) (bool, error) {
+// wholeArrays are branches the path reached as an array index; they are
+// matched as whole values.
+func filterFieldExprBranches(branches []*types.Document, wholeArrays []*types.Array, filterKey, filterSuffix string, expr *types.Document, fc *FilterContext) (bool, error) {
 	// Zero branches still evaluate once so invalid operator arguments surface.
 	errProbe := types.MakeDocument(0)
 
@@ -727,6 +752,18 @@ func filterFieldExprBranches(branches []*types.Document, filterKey, filterSuffix
 			if ok != negated {
 				matched = ok
 				break
+			}
+		}
+		for _, arr := range wholeArrays {
+			if matched != negated {
+				break
+			}
+			ok, err := elemMatchArrayElement(arr, filterKey, filterSuffix, opExpr, fc)
+			if err != nil {
+				return false, err
+			}
+			if ok != negated {
+				matched = ok
 			}
 		}
 
@@ -2742,10 +2779,10 @@ func filterElementDocument(elem, filter *types.Document, fc *FilterContext) (boo
 	return fc.Match(elem, filter)
 }
 
-// elemMatchArrayElement applies the operators of an $elemMatch to an element
-// that is itself an array. As in MongoDB they test the element as a whole
-// value and do not look inside it, except $size and a nested $elemMatch,
-// which apply to arrays.
+// elemMatchArrayElement applies operators to an array that is matched as a
+// whole value: an $elemMatch element that is itself an array, or an array a
+// path reached as an array index. As in MongoDB they do not look inside it,
+// except $size and a nested $elemMatch, which apply to arrays.
 func elemMatchArrayElement(elem *types.Array, filterKey, filterSuffix string, expr *types.Document, fc *FilterContext) (bool, error) {
 	compareElem := func(v any) types.CompareResult {
 		return collCompareOrder(elem, v, fc.cmp)
@@ -2805,6 +2842,10 @@ func elemMatchArrayElement(elem *types.Array, filterKey, filterSuffix string, ex
 			}
 		case "$regex":
 			ok = false
+		case "$mod":
+			if _, err := filterFieldMod(nil, v); err != nil {
+				return false, err
+			}
 		case "$bitsAllSet", "$bitsAnySet", "$bitsAllClear", "$bitsAnyClear":
 			if _, err := getBinaryMaskParam(op, v); err != nil {
 				return false, err

@@ -53,14 +53,24 @@ type FindValuesOpts struct {
 //
 // It returns next values after iterating path elements.
 func FindValues(doc *types.Document, path types.Path, opts *FindValuesOpts) ([]any, error) {
+	values, _, err := FindValuesPositional(doc, path, opts)
+	return values, err
+}
+
+// FindValuesPositional is FindValues that also reports, for each value, whether
+// the last path element reached it as an array index. MongoDB compares such a
+// value as a whole and does not expand it when it is itself an array.
+func FindValuesPositional(doc *types.Document, path types.Path, opts *FindValuesOpts) (values []any, byIndex []bool, err error) {
 	if opts == nil {
 		opts = new(FindValuesOpts)
 	}
 
 	nextValues := []any{doc}
+	var nextByIndex []bool
 
 	for _, e := range path.Slice() {
 		values := []any{}
+		byIndex := []bool{}
 
 		for _, next := range nextValues {
 			switch next := next.(type) {
@@ -71,12 +81,14 @@ func FindValues(doc *types.Document, path types.Path, opts *FindValuesOpts) ([]a
 				}
 
 				values = append(values, v)
+				byIndex = append(byIndex, false)
 
 			case *types.Array:
 				if opts.FindArrayIndex {
 					res, err := findArrayIndex(next, e)
 					if err == nil {
 						values = append(values, res)
+						byIndex = append(byIndex, true)
 						continue
 					}
 				}
@@ -84,10 +96,13 @@ func FindValues(doc *types.Document, path types.Path, opts *FindValuesOpts) ([]a
 				if opts.FindArrayDocuments {
 					res, err := lookupArrayDocuments(next, e)
 					if err != nil {
-						return nil, lazyerrors.Error(err)
+						return nil, nil, lazyerrors.Error(err)
 					}
 
 					values = append(values, res...)
+					for range res {
+						byIndex = append(byIndex, false)
+					}
 				}
 
 			default:
@@ -95,10 +110,10 @@ func FindValues(doc *types.Document, path types.Path, opts *FindValuesOpts) ([]a
 			}
 		}
 
-		nextValues = values
+		nextValues, nextByIndex = values, byIndex
 	}
 
-	return nextValues, nil
+	return nextValues, nextByIndex, nil
 }
 
 // findArrayIndex returns the value at the array index a path component names.

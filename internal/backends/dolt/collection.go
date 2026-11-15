@@ -3702,7 +3702,7 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 	}
 
 	field := filter.Keys()[0]
-	if strings.HasPrefix(field, "$") {
+	if strings.HasPrefix(field, "$") || hasArrayIndexComponent(field) {
 		return 0, false, nil
 	}
 
@@ -3824,6 +3824,9 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 // tryExactIndexedCount counts a filter of several fields from an index whose
 // bounds hold exactly its matches, without fetching a document.
 func (c *collection) tryExactIndexedCount(ctx context.Context, state *dbState, filter *types.Document, queryCollation *types.Document, stop int64, hint any) (int64, bool, error) {
+	if slices.ContainsFunc(filter.Keys(), hasArrayIndexComponent) {
+		return 0, false, nil
+	}
 	queryColl := collation.Parse(queryCollation)
 	idxInfos, idxMaps, err := resolveIndexesLocked(ctx, c, state)
 	if err != nil {
@@ -3853,6 +3856,18 @@ func (c *collection) tryExactIndexedCount(ctx context.Context, state *dbState, f
 		return 0, false, nil
 	}
 	return countIndexRange(ctx, idxMaps[found], start, end, idxInfos[found].Multikey, stop)
+}
+
+// hasArrayIndexComponent reports whether a dotted path has a numeric
+// component. Index keys expand the array such a component reaches, which a
+// filter compares as a whole value, so the keys do not count its matches.
+func hasArrayIndexComponent(path string) bool {
+	for _, part := range strings.Split(path, ".") {
+		if part != "" && strings.Trim(part, "0123456789") == "" {
+			return true
+		}
+	}
+	return false
 }
 
 // allCollationFree reports whether every field condition of filter compares
