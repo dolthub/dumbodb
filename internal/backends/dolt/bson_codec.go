@@ -212,9 +212,9 @@ func encodeBSONValue(value any) (byte, []byte, error) {
 		return 0x7F, nil, nil
 	}
 
-	// wirebson does not encode MinKey/MaxKey; route those (even when
-	// nested) through bson.FromDocumentRaw.
-	if bson.AnyContainsMinMaxKey(value) {
+	// wirebson does not encode MinKey, MaxKey, Symbol or JavaScript; route
+	// those (even when nested) through bson.FromDocumentRaw.
+	if bson.AnyNeedsRawEncoding(value) {
 		tmp, err := types.NewDocument(probeName, value)
 		if err != nil {
 			return 0, nil, fmt.Errorf("encoding value with MinKey/MaxKey: %w", err)

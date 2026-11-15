@@ -40,7 +40,7 @@ var ErrNestingTooDeep = errors.New("BSON nesting depth exceeds the maximum allow
 func convertFromTypes(v any) (any, error) {
 	switch v := v.(type) {
 	case *types.Document:
-		if AnyContainsMinMaxKey(v) {
+		if AnyNeedsRawEncoding(v) {
 			raw, err := FromDocumentRaw(v)
 			if err != nil {
 				return nil, lazyerrors.Error(err)
@@ -55,7 +55,7 @@ func convertFromTypes(v any) (any, error) {
 		return doc, nil
 
 	case *types.Array:
-		if AnyContainsMinMaxKey(v) {
+		if AnyNeedsRawEncoding(v) {
 			raw, err := FromArrayRaw(v)
 			if err != nil {
 				return nil, lazyerrors.Error(err)
@@ -114,6 +114,9 @@ func convertFromTypes(v any) (any, error) {
 		// wirebson doesn't support Undefined; command replies encode it via
 		// types.Document.AppendBSON. This fallback encodes it as null.
 		return wirebson.Null, nil
+
+	case types.Symbol, types.JavaScript:
+		return nil, lazyerrors.Errorf("wirebson cannot encode %T; use FromDocumentRaw", v)
 
 	default:
 		panic(fmt.Sprintf("invalid type %T", v))

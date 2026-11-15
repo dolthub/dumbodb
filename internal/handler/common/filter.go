@@ -1002,7 +1002,8 @@ func (fc *FilterContext) exprOperator(doc *types.Document, exprValue any) (bool,
 	}
 
 	switch v := v.(type) {
-	case *types.Document, *types.Array, string, types.Binary, types.ObjectID, time.Time, types.Regex, types.Timestamp:
+	case *types.Document, *types.Array, string, types.Binary, types.ObjectID, time.Time, types.Regex, types.Timestamp,
+		types.Symbol, types.JavaScript:
 		return true, nil
 	case float64, int32, int64:
 		return types.Compare(v, int32(0)) != types.Equal, nil
@@ -2547,6 +2548,14 @@ func filterFieldValueByTypeCode(fieldValue any, code handlerparams.TypeCode) (bo
 		}
 	case handlerparams.TypeCodeDecimal:
 		if _, ok := fieldValue.(types.Decimal128); !ok {
+			return false, nil
+		}
+	case handlerparams.TypeCodeJavaScript:
+		if _, ok := fieldValue.(types.JavaScript); !ok {
+			return false, nil
+		}
+	case handlerparams.TypeCodeSymbol:
+		if _, ok := fieldValue.(types.Symbol); !ok {
 			return false, nil
 		}
 	case handlerparams.TypeCodeUndefined:

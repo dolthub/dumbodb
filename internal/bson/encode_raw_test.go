@@ -35,7 +35,7 @@ func TestAppendBSONMatchesExistingEncoders(t *testing.T) {
 			require.Equal(t, want, got)
 			require.Len(t, got, doc.BSONSize())
 
-			if !AnyContainsMinMaxKey(doc) {
+			if !AnyNeedsRawEncoding(doc) {
 				viaWirebson, err := must.NotFail(FromDocument(doc)).Encode()
 				require.NoError(t, err)
 				require.Equal(t, []byte(viaWirebson), got)

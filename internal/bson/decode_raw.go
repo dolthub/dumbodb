@@ -183,20 +183,21 @@ func decodeRawValue(b []byte, t byte, depth int) (any, int, error) {
 		return math.Float64frombits(binary.LittleEndian.Uint64(b)), 8, nil
 
 	case 0x02:
-		if err := fixed(5); err != nil {
+		return decodeRawString(b)
+
+	case bsonTagJavaScript:
+		s, n, err := decodeRawString(b)
+		if err != nil {
 			return nil, 0, err
 		}
-		l := int64(int32(binary.LittleEndian.Uint32(b)))
-		if l < 1 {
-			return nil, 0, fmt.Errorf("string length prefix %d is less than 1", l)
+		return types.JavaScript(s), n, nil
+
+	case bsonTagSymbol:
+		s, n, err := decodeRawString(b)
+		if err != nil {
+			return nil, 0, err
 		}
-		if 4+l > int64(len(b)) {
-			return nil, 0, fmt.Errorf("string of %d bytes exceeds %d remaining", l, len(b)-4)
-		}
-		if b[4+l-1] != 0 {
-			return nil, 0, fmt.Errorf("string does not end with 0")
-		}
-		return string(b[4 : 4+l-1]), int(4 + l), nil
+		return types.Symbol(s), n, nil
 
 	case 0x03:
 		l, err := embeddedLength(b)
@@ -304,4 +305,21 @@ func decodeRawValue(b []byte, t byte, depth int) (any, int, error) {
 	default:
 		return nil, 0, fmt.Errorf("unsupported BSON tag 0x%02x", t)
 	}
+}
+
+func decodeRawString(b []byte) (string, int, error) {
+	if len(b) < 5 {
+		return "", 0, fmt.Errorf("string value needs 5 bytes, got %d", len(b))
+	}
+	l := int64(int32(binary.LittleEndian.Uint32(b)))
+	if l < 1 {
+		return "", 0, fmt.Errorf("string length prefix %d is less than 1", l)
+	}
+	if 4+l > int64(len(b)) {
+		return "", 0, fmt.Errorf("string of %d bytes exceeds %d remaining", l, len(b)-4)
+	}
+	if b[4+l-1] != 0 {
+		return "", 0, fmt.Errorf("string does not end with 0")
+	}
+	return string(b[4 : 4+l-1]), int(4 + l), nil
 }

@@ -287,7 +287,7 @@ func (g *group) evalGroupKey(doc *types.Document) (any, error) {
 		}
 		return v, nil
 	case float64, types.Binary, types.ObjectID, bool, time.Time, types.NullType,
-		types.Regex, int32, types.Timestamp, int64:
+		types.Regex, int32, types.Timestamp, int64, types.Symbol, types.JavaScript:
 		return groupKey, nil
 	case string:
 		// g.groupExprCompiled is set iff groupKey is a valid "$path"
