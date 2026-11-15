@@ -75,6 +75,11 @@ func (h *Handler) MsgFindAndModify(connCtx context.Context, msg *wire.OpMsg) (*w
 			return nil, err
 		}
 	}
+	if params.Upsert {
+		if err = common.ValidateUpsertFilter(document.Command(), params.Query); err != nil {
+			return nil, err
+		}
+	}
 
 	var resDoc *types.Document
 

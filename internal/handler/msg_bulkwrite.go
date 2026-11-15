@@ -206,15 +206,12 @@ func (h *Handler) MsgBulkWrite(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		}
 
 		entry.Set("ok", float64(1))
-		entry.Set("n", res.matched+res.inserted+res.deleted)
+		entry.Set("n", res.matched+res.upserted+res.inserted+res.deleted)
 		if res.modified > 0 || res.kind == "update" {
 			entry.Set("nModified", res.modified)
 		}
 		if res.upserted > 0 && res.upsertedID != nil {
-			entry.Set("upserted", must.NotFail(types.NewDocument(
-				"index", int32(i),
-				"_id", res.upsertedID,
-			)))
+			entry.Set("upserted", must.NotFail(types.NewDocument("_id", res.upsertedID)))
 		}
 		firstBatch.Append(entry)
 	}
@@ -461,6 +458,11 @@ func execBulkWriteUpdate(ctx context.Context, db backends.Database, c backends.C
 	if !bypass {
 		validator, valLevel, valAction = collectionValidator(ctx, db, ns.coll)
 	}
+	if upsert {
+		if err := common.ValidateUpsertFilter("bulkWrite", filter); err != nil {
+			return bulkWriteOpResult{}, err
+		}
+	}
 	update := &common.Update{
 		Filter:           filter,
 		UpdateRaw:        modsVal,
@@ -555,10 +557,6 @@ func execBulkWriteUpdate(ctx context.Context, db backends.Database, c backends.C
 
 	if updRes.Upserted.Doc != nil {
 		out.upserted = 1
-		// Per MongoDB semantics, upsert causes matched=1 but it's reported as
-		// upserted rather than modified; the cumulative counters at the top
-		// level add matched separately, so mirror that here.
-		out.matched = 1
 		out.upsertedID, _ = updRes.Upserted.Doc.Get("_id")
 	}
 

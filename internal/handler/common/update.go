@@ -496,6 +496,39 @@ func seedFromFilter(doc, filter *types.Document, seeded *seededPaths, replacemen
 	}
 }
 
+// ValidateUpsertFilter returns the error mongod raises for a filter it cannot
+// upsert with, before any document is read.
+func ValidateUpsertFilter(command string, filter *types.Document) error {
+	if filter == nil || !filterHasExpr(filter) {
+		return nil
+	}
+	return NewUpdateError(
+		handlererrors.ErrQueryFeatureNotAllowed,
+		"$expr is not allowed in the query predicate for an upsert",
+		command,
+	)
+}
+
+func filterHasExpr(filter *types.Document) bool {
+	for _, key := range filter.Keys() {
+		switch key {
+		case "$expr":
+			return true
+		case "$and", "$or", "$nor":
+			clauses, ok := must.NotFail(filter.Get(key)).(*types.Array)
+			if !ok {
+				continue
+			}
+			for i := range clauses.Len() {
+				if clause, ok := must.NotFail(clauses.Get(i)).(*types.Document); ok && filterHasExpr(clause) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 // parseUpdatePipeline builds the aggregation stages of a pipeline-style
 // update. The stages package registers it, as it imports this one.
 var parseUpdatePipeline func(pipeline *types.Array) ([]aggregations.Stage, error)

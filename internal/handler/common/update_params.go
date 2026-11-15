@@ -167,6 +167,9 @@ func GetUpdateParams(document *types.Document, l *slog.Logger) (*UpdateParams, e
 			if update.InvalidUpdate == nil && (update.HasUpdateOperators || update.IsPipeline) {
 				update.InvalidUpdate = ValidateArrayFilters(document.Command(), update.Update, update.IsPipeline, update.ArrayFilters)
 			}
+			if update.InvalidUpdate == nil && update.Upsert {
+				update.InvalidUpdate = ValidateUpsertFilter(document.Command(), update.Filter)
+			}
 		}
 	}
 
