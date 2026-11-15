@@ -2113,6 +2113,7 @@ func validateRenameExpression(command string, update *types.Document) error {
 	defer iter.Close()
 
 	keys := map[string]struct{}{}
+	earlier, later := pathsAroundOperator(update, "$rename")
 
 	for {
 		k, v, err := iter.Next()
@@ -2133,6 +2134,23 @@ func validateRenameExpression(command string, update *types.Document) error {
 				fmt.Sprintf("The 'to' field for $rename must be a string: %s: %v", k, v),
 				command,
 			)
+		}
+
+		for _, path := range []string{k, vStr} {
+			if path != "" && slices.Contains(strings.Split(path, "."), "") {
+				return NewUpdateError(
+					handlererrors.ErrEmptyName,
+					fmt.Sprintf("The update path '%s' contains an empty field name, which is not allowed.", path),
+					command,
+				)
+			}
+		}
+
+		// mongod adds each operator's paths in the order the update lists
+		// them, so a conflict with an earlier operator wins over the checks
+		// of $rename itself, and one with a later operator loses to them.
+		if err = renameConflict(command, earlier, k, vStr); err != nil {
+			return err
 		}
 
 		// disallow fields where key is equal to the target
@@ -2173,6 +2191,61 @@ func validateRenameExpression(command string, update *types.Document) error {
 		keys[vStr] = struct{}{}
 	}
 
+	for _, k := range doc.Keys() {
+		if vStr, ok := must.NotFail(doc.Get(k)).(string); ok {
+			if err := renameConflict(command, later, k, vStr); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+// pathsAroundOperator returns the paths of the operators update lists before
+// op, and those it lists after it.
+func pathsAroundOperator(update *types.Document, op string) (earlier, later []types.Path) {
+	seen := false
+	for _, other := range update.Keys() {
+		if other == op {
+			seen = true
+			continue
+		}
+		fields, ok := must.NotFail(update.Get(other)).(*types.Document)
+		if !ok {
+			continue
+		}
+		for _, key := range fields.Keys() {
+			path, err := types.NewPathFromString(key)
+			if err != nil {
+				continue
+			}
+			if seen {
+				later = append(later, path)
+			} else {
+				earlier = append(earlier, path)
+			}
+		}
+	}
+	return earlier, later
+}
+
+// renameConflict returns mongod's conflict error when the source or target of
+// a $rename overlaps one of paths.
+func renameConflict(command string, paths []types.Path, from, to string) error {
+	for _, key := range []string{from, to} {
+		path, err := types.NewPathFromString(key)
+		if err != nil {
+			continue
+		}
+		if types.IsConflictPath(paths, path) != nil {
+			return NewUpdateError(
+				handlererrors.ErrConflictingUpdateOperators,
+				fmt.Sprintf("Updating the path '%[1]s' would create a conflict at '%[1]s'", key),
+				command,
+			)
+		}
+	}
 	return nil
 }
 
