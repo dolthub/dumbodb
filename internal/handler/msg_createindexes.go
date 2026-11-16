@@ -586,7 +586,7 @@ func validateGeo2DOptions(command string, indexDoc *types.Document, index *backe
 		)
 	}
 	lo, hi := index.Geo2DRange()
-	if lo >= hi {
+	if math.IsNaN(lo) || math.IsNaN(hi) || math.IsInf(lo, 0) || math.IsInf(hi, 0) || lo >= hi {
 		return handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrInvalidOptions,
 			fmt.Sprintf("region for hash must be valid and have positive area, but [%s, %s] was specified",
