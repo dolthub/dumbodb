@@ -346,6 +346,10 @@ func (h *Handler) execBulkWriteOp(ctx context.Context, op *types.Document, names
 		)
 	}
 
+	if code, msg, ok := handlererrors.IndexKeyError(err); ok {
+		err = handlererrors.NewCommandErrorMsgWithArgument(code, msg, "bulkWrite")
+	}
+
 	if err == nil && res.warnAllowed > 0 {
 		h.L.Warn("documents allowed despite failing validation (validationAction:warn)",
 			"collection", ns.coll, "count", res.warnAllowed)
