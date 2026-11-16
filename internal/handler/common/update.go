@@ -796,6 +796,43 @@ func processReplacementDoc(command string, doc, update *types.Document) (bool, e
 	return changed, nil
 }
 
+// resolveUpdatePaths expands the positional elements ($, $[] and $[id]) of
+// each operator's path against doc as stored, as mongod does before applying
+// any of them, and refuses two resolved paths that reach the same element.
+func resolveUpdatePaths(command string, kvOps []*kvOp, doc, filter *types.Document, arrayFilters *types.Array) ([][]string, error) {
+	resolved := make([][]string, len(kvOps))
+	positional := false
+	for i, kvOp := range kvOps {
+		resolved[i] = []string{kvOp.Key}
+		if !hasPositionalOp(kvOp.Key) {
+			continue
+		}
+		positional = true
+		keys, err := expandPositionalOps(kvOp.Key, doc, filter, arrayFilters)
+		if err != nil {
+			return nil, NewUpdateError(handlererrors.ErrBadValue, err.Error(), command)
+		}
+		resolved[i] = keys
+	}
+	if !positional {
+		return resolved, nil
+	}
+	seen := newUpdatePaths()
+	for _, keys := range resolved {
+		for _, key := range keys {
+			if at, ok := seen.conflict(key); ok {
+				return nil, NewUpdateError(
+					handlererrors.ErrConflictingUpdateOperators,
+					fmt.Sprintf("Update created a conflict at '%s'", at),
+					command,
+				)
+			}
+			seen.add(key)
+		}
+	}
+	return resolved, nil
+}
+
 // processUpdateOperator updates the given document with a series of update operators.
 // Returns true if the document is changed.
 // Returns CommandError if the command is findAndModify, otherwise returns WriteError.
@@ -807,17 +844,14 @@ func processUpdateOperator(command string, doc, update *types.Document, upsert b
 
 	docId, _ := doc.Get("_id")
 
-	for _, kvOp := range getSortedKVOps(update) {
-		// Expand positional operators ($ $[] $[identifier]) to concrete array indices.
-		keys := []string{kvOp.Key}
-		if hasPositionalOp(kvOp.Key) {
-			keys, err = expandPositionalOps(kvOp.Key, doc, filter, arrayFilters)
-			if err != nil {
-				return false, NewUpdateError(handlererrors.ErrBadValue, err.Error(), command)
-			}
-		}
+	kvOps := getSortedKVOps(update)
+	resolved, err := resolveUpdatePaths(command, kvOps, doc, filter, arrayFilters)
+	if err != nil {
+		return false, err
+	}
 
-		for _, key := range keys {
+	for i, kvOp := range kvOps {
+		for _, key := range resolved[i] {
 			var updated bool
 			value := kvOp.Value
 
