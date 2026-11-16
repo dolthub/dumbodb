@@ -66,7 +66,8 @@ func comparesEmbeddedDocuments(v any) bool {
 			if d, ok := value.(*types.Document); ok && !strings.HasPrefix(key, "$") && !isOperatorDocument(d) {
 				return true
 			}
-			if key == "$eq" || key == "$ne" {
+			switch key {
+			case "$eq", "$ne", "$gt", "$gte", "$lt", "$lte":
 				if _, ok := value.(*types.Document); ok {
 					return true
 				}
