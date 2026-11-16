@@ -92,15 +92,18 @@ func (p *backgroundGCRootsProvider) VisitGCRoots(_ context.Context, db string, v
 // pre-finalize safepoint until SessionCommandEnd fires for the
 // keeper's rootsProvider; new GC sweeps started while the bracket is
 // active will likewise wait. Implements backends.GCSafepointBackend.
-func (b *Backend) RunUnderGCSafepointKeeper(_ context.Context, fn func() error) error {
+func (b *Backend) RunUnderGCSafepointKeeper(ctx context.Context, fn func(context.Context) error) error {
 	if b.gcController == nil || b.backgroundRP == nil {
-		return fn()
+		return fn(ctx)
 	}
 	if err := b.gcController.SessionCommandBegin(b.backgroundRP); err != nil {
 		return fmt.Errorf("RunUnderGCSafepointKeeper: SessionCommandBegin: %w", err)
 	}
 	defer b.gcController.SessionCommandEnd(b.backgroundRP)
-	return fn()
+
+	scoped, end := b.withCommandScope(ctx)
+	defer end()
+	return fn(scoped)
 }
 
 // sessionAwareSafepoint mirrors dprocedures.sessionAwareSafepointController.
@@ -196,7 +199,7 @@ func (b *Backend) DumboDBGC(ctx context.Context, params *backends.GCParams) (*ba
 	if baseName == "" {
 		return nil, fmt.Errorf("DumboDBGC: empty database name")
 	}
-	state, ok := b.lookupDbStateForDsess(baseName)
+	state, ok := b.lookupDbStateForDsess(nil, baseName)
 	if !ok {
 		return nil, backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
 			fmt.Errorf("DumboDBGC: database %q does not exist", baseName))

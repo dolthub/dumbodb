@@ -39,11 +39,23 @@ type sessionEntry struct {
 // through Shadow.Use), so any path that waits on cmdMu releases r.mu
 // first. See beginTeardown / teardown.
 type SessionRegistry struct {
-	mu       sync.Mutex
-	sessions map[string]*sessionEntry
-	timeout  time.Duration
-	factory  SessionFactory
-	nowFn    func() time.Time
+	mu          sync.Mutex
+	sessions    map[string]*sessionEntry
+	timeout     time.Duration
+	factory     SessionFactory
+	nowFn       func() time.Time
+	commandHook CommandHook
+}
+
+// CommandHook runs as each command on a registry session begins; the function
+// it returns runs as that command ends.
+type CommandHook func(sess *dsess.DoltSession) (end func())
+
+// SetCommandHook installs hook for sessions created after the call.
+func (r *SessionRegistry) SetCommandHook(hook CommandHook) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.commandHook = hook
 }
 
 func NewSessionRegistry(timeout time.Duration, factory SessionFactory) *SessionRegistry {
@@ -87,7 +99,7 @@ func (r *SessionRegistry) Connect(lsid string) (*Shadow, error) {
 				return nil, err
 			}
 
-			state := &sessionState{sess: sess}
+			state := &sessionState{sess: sess, commandHook: r.commandHook}
 			state.lastUsed.Store(r.nowFn().UnixNano())
 			entry = &sessionEntry{state: state, done: make(chan struct{})}
 			entry.shadow.Store(newShadow(state))

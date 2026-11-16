@@ -128,10 +128,15 @@ type dbState struct {
 	name    string   // user-visible db name; needed to build qualified names for dsess
 
 	mu sync.RWMutex
-	// closeMu is held shared by work on the store that a drop's wait for
-	// commands in flight does not cover; the drop holds it to close the store.
+	// closeMu is held shared by GC, which a drop's wait for the store's users
+	// does not cover; the drop holds it to close the store.
 	closeMu sync.RWMutex
 	dbDir   string
+
+	// users are the commands using the store; see store_users.go.
+	usersMu      sync.Mutex
+	users        map[any]struct{}
+	usersChanged chan struct{} // closed and cleared when a user leaves
 
 	cs *nbs.GenerationalNBS
 	ns tree.NodeStore
@@ -203,6 +208,11 @@ type Backend struct {
 	dbs map[string]*dbState // dbName -> dbState
 	// dropping holds the names being dropped; opening one is refused.
 	dropping map[string]struct{}
+
+	// commands maps each running command to the stores it uses; see
+	// store_users.go. Taken after b.mu, before a dbState's usersMu.
+	commandsMu sync.Mutex
+	commands   map[any]map[*dbState]struct{}
 	branchMu sync.Mutex
 
 	// configURLMu serializes registering a remote or backup URL, so the
@@ -292,10 +302,19 @@ func (b *Backend) OnTransactionCommit(ctx context.Context, owner string) error {
 	}
 	sqlCtx := sqlctx.Wrap(ctx, sess)
 
+	// Only databases with branches this session dirtied have anything to
+	// commit, and only those become stores this command uses.
+	dirty := map[string]struct{}{}
+	for _, branch := range sess.DirtyBranches() {
+		dirty[strings.ToLower(branch.DbName)] = struct{}{}
+	}
 	b.mu.RLock()
-	dbs := make([]*dbState, 0, len(b.dbs))
-	for _, db := range b.dbs {
-		dbs = append(dbs, db)
+	dbs := make([]*dbState, 0, len(dirty))
+	for name, db := range b.dbs {
+		if _, ok := dirty[strings.ToLower(name)]; ok {
+			b.noteUserLocked(sess, db)
+			dbs = append(dbs, db)
+		}
 	}
 	b.mu.RUnlock()
 
@@ -354,10 +373,24 @@ func (b *Backend) releaseLocksForOwner(owner string) {
 	}
 }
 
-func (b *Backend) lookupDbStateForDsess(name string) (*dbState, bool) {
+// lookupDbStateForDsess finds an open database and records it as used by the
+// command key, which may be nil. dsess folds names to lower case, and no two
+// databases differ only in case, so a name that misses matches case-blind.
+func (b *Backend) lookupDbStateForDsess(key any, name string) (*dbState, bool) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	state, ok := b.dbs[name]
+	if !ok {
+		for openName, open := range b.dbs {
+			if strings.EqualFold(openName, name) {
+				state, ok = open, true
+				break
+			}
+		}
+	}
+	if ok {
+		b.noteUserLocked(key, state)
+	}
 	return state, ok
 }
 
@@ -444,6 +477,7 @@ func newBackend(dataDir string, l *slog.Logger, autoCommit bool, sessionTimeout,
 		autoCommit:      autoCommit,
 		dbs:             make(map[string]*dbState),
 		dropping:        make(map[string]struct{}),
+		commands:        make(map[any]map[*dbState]struct{}),
 		docLocks:        make(map[string]*DocLockManager),
 		sweeperStop:     make(chan struct{}),
 		sweeperDone:     make(chan struct{}),
@@ -470,11 +504,16 @@ func newBackend(dataDir string, l *slog.Logger, autoCommit bool, sessionTimeout,
 		return nil, fmt.Errorf("constructing dsess provider: %w", err)
 	}
 	b.provider = provider
+	provider.withCommandScope = b.withCommandScope
 	if sessionTimeout <= 0 {
 		sessionTimeout = defaultSessionTimeout
 	}
 	b.sessions = sqlctx.NewSessionRegistry(sessionTimeout, func(lsid string) (*dsess.DoltSession, error) {
 		return sqlctx.NewSessionWithGC(b.provider, writer.NewWriteSession, b.gcController)
+	})
+	b.sessions.SetCommandHook(func(sess *dsess.DoltSession) func() {
+		b.beginCommand(sess)
+		return func() { b.endCommand(sess) }
 	})
 
 	// Initialize the admin database so it always exists on disk, matching
@@ -617,6 +656,9 @@ func (b *Backend) Status(ctx context.Context, params *backends.StatusParams) (*b
 
 	b.mu.RLock()
 	open := maps.Clone(b.dbs)
+	for _, db := range open {
+		b.noteUserLocked(commandKey(ctx), db)
+	}
 	b.mu.RUnlock()
 
 	var totalCollections int64
@@ -808,25 +850,36 @@ func (b *Backend) abortDropLocked(name string, db *dbState) {
 }
 
 // closeDroppedDatabase closes a database detached by beginDropLocked once no
-// command that could still hold it is running, and after closeIterators, when
-// set, has closed the iterators that outlive commands. It fails, leaving the
-// store open, only when ctx ends first. The caller must not hold b.mu: the
-// commands it waits for may need it.
+// other command uses it, and after closeIterators, when set, has closed the
+// iterators that outlive commands. Writes parked on the database's document
+// locks are interrupted rather than waited for. It fails, leaving the store
+// open, only when ctx ends first. The caller must not hold b.mu: the commands
+// it waits for may need it.
 func (b *Backend) closeDroppedDatabase(ctx context.Context, name string, db *dbState, closeIterators func(string)) error {
 	// Forget the cached sqle.Database before closing the store it reads.
 	b.provider.forgetDatabase(name)
 	if db == nil {
 		return nil
 	}
-	if err := b.waitForCommandsInFlight(ctx); err != nil {
+	b.interruptDocLockWaiters(name)
+
+	// A GC waits for every session to leave its command, this one included,
+	// while holding closeMu that this drop needs.
+	defer b.idleForGC(ctx)()
+
+	self := commandKey(ctx)
+	b.releaseUses(self)
+	if err := db.waitForOtherUsers(ctx, self); err != nil {
 		return err
 	}
-	// No command started since the wait can reach this store, so no new
-	// iterator over it can appear.
+	// No command that started after the detach can reach this store, so no
+	// new iterator over it can appear.
 	if closeIterators != nil {
 		closeIterators(name)
 	}
-	db.closeMu.Lock()
+	if err := lockWithContext(ctx, &db.closeMu); err != nil {
+		return err
+	}
 	defer db.closeMu.Unlock()
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -835,16 +888,50 @@ func (b *Backend) closeDroppedDatabase(ctx context.Context, name string, db *dbS
 	return nil
 }
 
-// waitForCommandsInFlight returns once every session other than ctx's own has
-// been outside a command since the call. Commits and most reads use a store
-// without db.mu, so this is what keeps a drop from closing a store under them.
-func (b *Backend) waitForCommandsInFlight(ctx context.Context) error {
-	var self gcctx.GCRootsProvider
-	if sess := sessionFromContext(ctx); sess != nil {
-		self = sess
+// idleForGC lets a GC safepoint treat ctx's session as idle, though its command
+// is still open, until the returned function runs. The caller must not change
+// the session's roots in between.
+func (b *Backend) idleForGC(ctx context.Context) func() {
+	sess := sessionFromContext(ctx)
+	if sess == nil || b.gcController == nil {
+		return func() {}
 	}
+	// A waiter makes its own session visitable while it is outstanding. This
+	// one waits for nothing: it is cancelled as soon as the caller is done.
 	visitNothing := func(context.Context, gcctx.GCRootsProvider) error { return nil }
-	return b.gcController.Waiter(ctx, self, visitNothing).Wait(ctx)
+	waiter := b.gcController.Waiter(context.Background(), sess, visitNothing)
+	return func() {
+		canceled, cancel := context.WithCancel(context.Background())
+		cancel()
+		_ = waiter.Wait(canceled)
+	}
+}
+
+// lockWithContext locks mu, or returns ctx's error when ctx ends first.
+func lockWithContext(ctx context.Context, mu *sync.RWMutex) error {
+	for !mu.TryLock() {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Millisecond):
+		}
+	}
+	return nil
+}
+
+// interruptDocLockWaiters fails every write parked on a document lock of any
+// branch of dbName and retires those lock managers, so a dropped database's
+// writers cannot hold its drop open.
+func (b *Backend) interruptDocLockWaiters(dbName string) {
+	b.docLocksMu.Lock()
+	defer b.docLocksMu.Unlock()
+	prefix := docLocksKey(dbName, "")
+	for key, m := range b.docLocks {
+		if strings.HasPrefix(key, prefix) {
+			m.interruptWaiters()
+			delete(b.docLocks, key)
+		}
+	}
 }
 
 // preserveDroppedDirLocked moves a dropped database's directory into the
@@ -970,6 +1057,9 @@ func openDatabaseStore(ctx context.Context, dbDir string) (*nbs.GenerationalNBS,
 func (b *Backend) getOrOpenDBLocked(ctx context.Context, dbName string, create bool) (*dbState, bool, error) {
 	b.mu.RLock()
 	db, ok := b.dbs[dbName]
+	if ok {
+		b.noteUserLocked(commandKey(ctx), db)
+	}
 	b.mu.RUnlock()
 
 	if ok {
@@ -981,6 +1071,7 @@ func (b *Backend) getOrOpenDBLocked(ctx context.Context, dbName string, create b
 
 	// Double-check after acquiring write lock.
 	if db, ok := b.dbs[dbName]; ok {
+		b.noteUserLocked(commandKey(ctx), db)
 		return db, false, nil
 	}
 	// Refuse rather than wait: the drop waits for commands in flight, which
@@ -1230,6 +1321,7 @@ func (b *Backend) getOrOpenDBLocked(ctx context.Context, dbName string, create b
 	db.collSchemaHash = schemaRef.TargetHash()
 
 	b.dbs[dbName] = db
+	b.noteUserLocked(commandKey(ctx), db)
 
 	// If the working set was not on disk (new database or first open after migration),
 	// persist it now so that dolt CLI tools can read it.

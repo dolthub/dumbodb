@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/dsess"
+	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/stretchr/testify/require"
 
@@ -76,7 +77,7 @@ func TestDropDatabaseRacingWritesDoesNotDeadlockOrCrash(t *testing.T) {
 
 	insertAndCommit := func(ctx context.Context, name string) {
 		sess := sessionFromContext(ctx)
-		if _, err := sess.StartTransaction(sqlctx.Wrap(ctx, sess), sql.ReadWrite); err != nil {
+		if _, err := sqlctx.EnsureTxn(sqlctx.Wrap(ctx, sess), sess); err != nil {
 			return
 		}
 		owner := conninfo.Get(ctx).Owner()
@@ -256,6 +257,10 @@ func TestDropDatabaseCanceledWhileWaitingKeepsTheDatabase(t *testing.T) {
 	require.NoError(t, db.CreateCollection(readerCtx, &backends.CreateCollectionParams{Name: "items"}))
 
 	err = readerShadow.Use(time.Now(), func(*dsess.DoltSession) error {
+		state, err := be.getOrOpenDB(readerCtx, dbName, false)
+		require.NoError(t, err)
+		require.NotNil(t, state)
+
 		ctx, cancel := context.WithTimeout(dropperCtx, 100*time.Millisecond)
 		defer cancel()
 		return dropperShadow.Use(time.Now(), func(*dsess.DoltSession) error {
@@ -371,7 +376,7 @@ func TestDropDatabaseWaitingOnProviderCacheDoesNotBlockLookups(t *testing.T) {
 
 	looked := make(chan bool, 1)
 	go func() {
-		_, ok := be.provider.dbLookup("bystander")
+		_, ok := be.provider.dbLookup(nil, "bystander")
 		looked <- ok
 	}()
 	select {
@@ -385,6 +390,109 @@ func TestDropDatabaseWaitingOnProviderCacheDoesNotBlockLookups(t *testing.T) {
 	be.provider.dbCacheMu.Unlock()
 
 	require.NoError(t, <-dropped)
-	_, ok := be.provider.dbLookup("victim")
+	_, ok := be.provider.dbLookup(nil, "victim")
 	require.False(t, ok)
+}
+
+// A drop waits only for commands using the database it drops. A command held
+// open on another database, here a write parked on a document lock, must not
+// delay it.
+func TestDropDatabaseDoesNotWaitForCommandsOnOtherDatabases(t *testing.T) {
+	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, 0, 0)
+	require.NoError(t, err)
+	t.Cleanup(be.Close)
+
+	busyCtx, busyCI := ctxWithSessionAs(t, be, "drop-other-busy", "")
+	dropperCtx, dropperCI := ctxWithSessionAs(t, be, "drop-other-dropper", "")
+	busyShadow, _ := busyCI.CachedShadow()
+	dropperShadow, _ := dropperCI.CachedShadow()
+
+	for _, name := range []string{"busy", "dropped"} {
+		db, err := be.Database(name)
+		require.NoError(t, err)
+		require.NoError(t, db.CreateCollection(dropperCtx, &backends.CreateCollectionParams{Name: "items"}))
+	}
+
+	release := make(chan struct{})
+	busyDone := make(chan error, 1)
+	inCommand := make(chan struct{})
+	go func() {
+		busyDone <- busyShadow.Use(time.Now(), func(*dsess.DoltSession) error {
+			if _, err := be.getOrOpenDB(busyCtx, "busy", false); err != nil {
+				return err
+			}
+			close(inCommand)
+			<-release
+			return nil
+		})
+	}()
+	<-inCommand
+
+	dropDone := make(chan error, 1)
+	go func() {
+		dropDone <- dropperShadow.Use(time.Now(), func(*dsess.DoltSession) error {
+			return be.DropDatabase(dropperCtx, &backends.DropDatabaseParams{Name: "dropped"})
+		})
+	}()
+	select {
+	case err := <-dropDone:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		close(release)
+		t.Fatal("the drop waited for a command on another database")
+	}
+
+	close(release)
+	require.NoError(t, <-busyDone)
+}
+
+// A write parked on a document lock of the database being dropped is
+// interrupted rather than waited for, as mongod interrupts operations on a
+// database it drops.
+func TestDropDatabaseInterruptsParkedWrites(t *testing.T) {
+	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, 0, 0)
+	require.NoError(t, err)
+	t.Cleanup(be.Close)
+
+	const dbName = "parked"
+	parkedCtx, parkedCI := ctxWithSessionAs(t, be, "drop-parked-writer", "")
+	dropperCtx, dropperCI := ctxWithSessionAs(t, be, "drop-parked-dropper", "")
+	parkedShadow, _ := parkedCI.CachedShadow()
+	dropperShadow, _ := dropperCI.CachedShadow()
+
+	db, err := be.Database(dbName)
+	require.NoError(t, err)
+	require.NoError(t, db.CreateCollection(dropperCtx, &backends.CreateCollectionParams{Name: "items"}))
+
+	locks := be.docLockManager(dbName, defaultBranch)
+	id := hash.Of([]byte("doc"))
+	require.NoError(t, locks.Acquire("holder", "items", []hash.Hash{id}, true))
+
+	parked := make(chan struct{})
+	parkedErr := make(chan error, 1)
+	go func() {
+		parkedErr <- parkedShadow.Use(time.Now(), func(*dsess.DoltSession) error {
+			if _, err := be.getOrOpenDB(parkedCtx, dbName, false); err != nil {
+				return err
+			}
+			close(parked)
+			return locks.WaitUntilFree(parkedCtx, "items", []hash.Hash{id})
+		})
+	}()
+	<-parked
+
+	dropDone := make(chan error, 1)
+	go func() {
+		dropDone <- dropperShadow.Use(time.Now(), func(*dsess.DoltSession) error {
+			return be.DropDatabase(dropperCtx, &backends.DropDatabaseParams{Name: dbName})
+		})
+	}()
+	select {
+	case err := <-dropDone:
+		require.NoError(t, err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the drop waited for a write parked on a document lock")
+	}
+	err = <-parkedErr
+	require.True(t, backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseDropPending), "got %v", err)
 }

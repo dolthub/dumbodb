@@ -61,5 +61,18 @@ func EnsureTxn(sqlCtx *sql.Context, sess *dsess.DoltSession) (sql.Transaction, e
 	if tx := sess.GetTransaction(); tx != nil {
 		return tx, nil
 	}
+	if scoper, ok := sess.Provider().(TxnStartScoper); ok {
+		scoped, end := scoper.ScopeTxnStart(sqlCtx)
+		defer end()
+		sqlCtx = scoped
+	}
 	return sess.StartTransaction(sqlCtx, sql.ReadWrite)
+}
+
+// TxnStartScoper is implemented by a provider that tracks which databases a
+// command uses. StartTransaction reads every open database; ScopeTxnStart
+// returns the context to start it with, so those reads belong to the start
+// alone, and the function that ends that scope.
+type TxnStartScoper interface {
+	ScopeTxnStart(ctx *sql.Context) (*sql.Context, func())
 }

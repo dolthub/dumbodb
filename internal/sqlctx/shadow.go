@@ -37,9 +37,10 @@ var ErrShadowInvalidated = errors.New("session shadow invalidated by reconnect o
 // handed across a supersede could be stale by the time it lands -- the
 // activity would be recorded only on the shadow Sweep no longer consults.
 type sessionState struct {
-	sess     *dsess.DoltSession
-	lastUsed atomic.Int64
-	cmdMu    sync.Mutex
+	sess        *dsess.DoltSession
+	lastUsed    atomic.Int64
+	cmdMu       sync.Mutex
+	commandHook CommandHook
 }
 
 // Shadow is a connection's handle on a registry session. purged
@@ -121,6 +122,9 @@ func (s *Shadow) run(now time.Time, fn func(*dsess.DoltSession) error) error {
 		return fmt.Errorf("Shadow.run: CommandBegin: %w", err)
 	}
 	defer s.state.sess.CommandEnd()
+	if s.state.commandHook != nil {
+		defer s.state.commandHook(s.state.sess)()
+	}
 
 	return fn(s.state.sess)
 }

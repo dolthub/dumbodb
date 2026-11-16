@@ -291,9 +291,7 @@ func (h *Handler) runCappedCleanup() {
 // race the tick's writes.
 func (h *Handler) runCappedCleanupTick(ctx context.Context) error {
 	if gsb, ok := h.b.(backends.GCSafepointBackend); ok {
-		return gsb.RunUnderGCSafepointKeeper(ctx, func() error {
-			return h.cleanupAllCappedCollections(ctx)
-		})
+		return gsb.RunUnderGCSafepointKeeper(ctx, h.cleanupAllCappedCollections)
 	}
 	return h.cleanupAllCappedCollections(ctx)
 }

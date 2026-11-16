@@ -148,7 +148,7 @@ func TestSession_CrossSessionConcurrentWritesIsolated(t *testing.T) {
 	}
 
 	// Read from the setup session to verify cross-session visibility.
-	state, ok := be.lookupDbStateForDsess(dbName)
+	state, ok := be.lookupDbStateForDsess(nil, dbName)
 	require.True(t, ok)
 	fallbackWS, err := state.loadBranchWS(setupCtx, defaultBranch)
 	require.NoError(t, err)

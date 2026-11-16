@@ -49,6 +49,8 @@ type DocLockManager struct {
 	// notify is closed and replaced on every Release, waking any ordinary write
 	// parked in WaitUntilFree so it can re-check whether its document is free.
 	notify chan struct{}
+	// interrupted fails every current and later WaitUntilFree.
+	interrupted bool
 }
 
 func NewDocLockManager() *DocLockManager {
@@ -120,6 +122,11 @@ func (m *DocLockManager) WaitUntilFree(ctx context.Context, collection string, i
 	}
 	for {
 		m.mu.Lock()
+		if m.interrupted {
+			m.mu.Unlock()
+			return backends.NewError(backends.ErrorCodeDatabaseDropPending,
+				errors.New("the database is in the process of being dropped"))
+		}
 		if !m.anyHeld(collection, ids) {
 			m.mu.Unlock()
 			return nil
@@ -265,4 +272,14 @@ func (m *DocLockManager) Holds(owner string, collection string, id hash.Hash) bo
 	}
 	e, has := collLocks[id]
 	return has && e.owner == owner
+}
+
+// interruptWaiters fails every write parked in WaitUntilFree, and every later
+// one, as the manager's database is dropped.
+func (m *DocLockManager) interruptWaiters() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.interrupted = true
+	close(m.notify)
+	m.notify = make(chan struct{})
 }

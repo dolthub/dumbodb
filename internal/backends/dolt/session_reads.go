@@ -50,7 +50,7 @@ func ensureDsessTxn(sqlCtx *sql.Context, sess *dsess.DoltSession) (sql.Transacti
 	if tx := sess.GetTransaction(); tx != nil {
 		return tx, nil
 	}
-	tx, err := sess.StartTransaction(sqlCtx, sql.ReadWrite)
+	tx, err := sqlctx.EnsureTxn(sqlCtx, sess)
 	if err != nil {
 		return nil, fmt.Errorf("ensureDsessTxn: StartTransaction: %w", err)
 	}
