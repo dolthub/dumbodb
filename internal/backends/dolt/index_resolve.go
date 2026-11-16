@@ -254,7 +254,7 @@ func resolveBranchIndexState(ctx context.Context, c *collection, state *dbState)
 func indexEntriesForDoc(ctx context.Context, doc *types.Document, idx backends.IndexInfo) (rows [][]any, multikey uint64, lossy bool, err error) {
 	if idx.MatchesPartialFilter != nil {
 		match, err := idx.MatchesPartialFilter(doc)
-		if errors.Is(err, backends.ErrStalePartialIndex) {
+		if errors.Is(err, idxpkg.ErrStalePartialIndex) {
 			return nil, 0, false, err
 		}
 		if err != nil || !match {
@@ -676,7 +676,7 @@ func openIndexMap(ctx context.Context, ns tree.NodeStore, mapRoot hash.Hash) (pr
 func checkIndexKeys(doc *types.Document, idx backends.IndexInfo) error {
 	if idx.MatchesPartialFilter != nil {
 		match, err := idx.MatchesPartialFilter(doc)
-		if errors.Is(err, backends.ErrStalePartialIndex) {
+		if errors.Is(err, idxpkg.ErrStalePartialIndex) {
 			return err
 		}
 		if err != nil || !match {

@@ -254,6 +254,13 @@ func UnindexableReason(err error) string {
 	return ""
 }
 
+// ErrStalePartialIndex reports a write to a collection with a partial index
+// an older version built with a filter on embedded documents, which matched
+// documents differently; the error text names the index.
+var ErrStalePartialIndex = errors.New(
+	"partial index was built by an older version of DumboDB that matched its filter differently; drop and recreate it",
+)
+
 // IsUnindexable reports whether err refuses a document because an index
 // cannot hold its keys: too long, parallel arrays, or an unindexable geo
 // value. Applying the same document again fails the same way.

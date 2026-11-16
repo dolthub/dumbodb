@@ -15,12 +15,13 @@
 package backends
 
 import (
-	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync/atomic"
 
 	"github.com/dolthub/dumbodb/internal/collation"
+	"github.com/dolthub/dumbodb/internal/index"
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
@@ -103,18 +104,19 @@ func PartialFilterMembership(pfe, indexCollation *types.Document) func(doc *type
 	return partialFilterCompiler(pfe, collation.Parse(indexCollation).Comparator())
 }
 
-// ErrStalePartialIndex reports a write to a collection with a stale partial
-// index (IndexInfo.PartialFilterStale).
-var ErrStalePartialIndex = errors.New(
-	"was built by an older version of DumboDB that matched its partial filter differently; drop and recreate it",
-)
-
 // StalePartialFilterMembership is IndexInfo.MatchesPartialFilter for the stale
-// partial index name.
-func StalePartialFilterMembership(name string) func(doc *types.Document) (bool, error) {
+// partial index name; it logs the index once.
+func StalePartialFilterMembership(name string, pfe *types.Document) func(doc *types.Document) (bool, error) {
+	slog.Warn("partial index built by an older version; writes to its collection fail until it is dropped and recreated",
+		"index", name, "partialFilterExpression", types.FormatAnyValue(pfe))
 	return func(*types.Document) (bool, error) {
-		return false, fmt.Errorf("index %q %w", name, ErrStalePartialIndex)
+		return false, StalePartialIndexError(name)
 	}
+}
+
+// StalePartialIndexError returns index.ErrStalePartialIndex for the index name.
+func StalePartialIndexError(name string) error {
+	return fmt.Errorf("%w: %q", index.ErrStalePartialIndex, name)
 }
 
 // FilterComparesDocuments reports whether a filter compares a field with a

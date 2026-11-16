@@ -1428,6 +1428,7 @@ func IndexKeyError(err error) (ErrorCode, string, bool) {
 		{index.ErrGeoLocationFormat, ErrGeoLocationFormat},
 		{index.ErrGeoPointOutOfInterval, ErrGeoPointOutOfInterval},
 		{index.ErrGeoFieldSingleElement, ErrGeoFieldSingleElement},
+		{index.ErrStalePartialIndex, ErrOperationFailed},
 	} {
 		if errors.Is(err, e.sentinel) {
 			msg := err.Error()

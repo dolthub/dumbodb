@@ -25,6 +25,7 @@ import (
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/bson"
+	idxpkg "github.com/dolthub/dumbodb/internal/index"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 
@@ -197,11 +198,11 @@ func TestPartialIndexFromOlderVersionIsStale(t *testing.T) {
 				t.Fatalf("stale = %t, want %t", info.PartialFilterStale, c.stale)
 			}
 			_, err = info.MatchesPartialFilter(doc)
-			if got := errors.Is(err, backends.ErrStalePartialIndex); got != c.stale {
+			if got := errors.Is(err, idxpkg.ErrStalePartialIndex); got != c.stale {
 				t.Fatalf("membership error %v, want stale error %t", err, c.stale)
 			}
 			_, _, _, err = indexEntriesForDoc(context.Background(), doc, info)
-			if got := errors.Is(err, backends.ErrStalePartialIndex); got != c.stale {
+			if got := errors.Is(err, idxpkg.ErrStalePartialIndex); got != c.stale {
 				t.Fatalf("indexEntriesForDoc error %v, want stale error %t", err, c.stale)
 			}
 

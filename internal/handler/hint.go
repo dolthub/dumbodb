@@ -16,7 +16,6 @@ package handler
 
 import (
 	"context"
-	"fmt"
 	"slices"
 	"strings"
 
@@ -203,7 +202,7 @@ func hintedIndexOrder(ctx context.Context, coll backends.Collection, hint any, f
 			continue
 		}
 		if idx.PartialFilterStale {
-			return nil, nil, nil, fmt.Errorf("index %q %w", idx.Name, backends.ErrStalePartialIndex)
+			return nil, nil, nil, backends.StalePartialIndexError(idx.Name)
 		}
 		descending, unbounded := false, false
 		order := types.MakeDocument(len(idx.Key))
