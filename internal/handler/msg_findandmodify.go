@@ -70,6 +70,11 @@ func (h *Handler) MsgFindAndModify(connCtx context.Context, msg *wire.OpMsg) (*w
 			return nil, err
 		}
 	}
+	if params.Remove && params.ArrayFilters != nil {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrFailedToParse, "Cannot specify arrayFilters and remove=true", document.Command(),
+		)
+	}
 	if params.Pipeline != nil && params.ArrayFilters != nil {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrFailedToParse, "Cannot specify arrayFilters and a pipeline update", document.Command(),
