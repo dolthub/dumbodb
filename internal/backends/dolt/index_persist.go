@@ -219,6 +219,11 @@ func encodeIndexDefinition(idx backends.IndexInfo) ([]byte, error) {
 	}
 	if idx.PartialFilterExpression != nil {
 		doc.Set("partial", idx.PartialFilterExpression)
+		// Older versions matched such a filter differently, and wrote no
+		// marker; decodeIndexDefinition marks those indexes stale.
+		if !idx.PartialFilterStale && backends.FilterComparesDocuments(idx.PartialFilterExpression) {
+			doc.Set("partialStoredForm", true)
+		}
 	}
 	if idx.Collation != nil {
 		doc.Set("collation", idx.Collation)
@@ -302,6 +307,10 @@ func decodeIndexDefinition(doc *types.Document) (backends.IndexInfo, error) {
 	info.Collation = getDoc("collation")
 	if pf := info.PartialFilterExpression; pf != nil {
 		info.MatchesPartialFilter = backends.PartialFilterMembership(pf, info.Collation)
+		if backends.FilterComparesDocuments(pf) && !getBool(doc, "partialStoredForm") {
+			info.PartialFilterStale = true
+			info.MatchesPartialFilter = backends.StalePartialFilterMembership(name)
+		}
 	}
 	return info, nil
 }

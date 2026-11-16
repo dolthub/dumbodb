@@ -640,6 +640,12 @@ type IndexInfo struct {
 	// by RegisterPartialFilterMatcher to avoid a circular import on handler/common.
 	MatchesPartialFilter func(doc *types.Document) (bool, error)
 
+	// PartialFilterStale marks a partial index an older DumboDB built with a
+	// filter on embedded documents, which matched documents differently. Its
+	// entries cannot be trusted: queries never use it, and writes to its
+	// collection fail with ErrStalePartialIndex until it is dropped.
+	PartialFilterStale bool
+
 	// Geo2DBounds holds a 2d index's min and max options; nil means the
 	// default [-180, 180].
 	Geo2DBounds *[2]float64

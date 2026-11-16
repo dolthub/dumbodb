@@ -15,7 +15,9 @@
 package backends
 
 import (
+	"errors"
 	"fmt"
+	"strings"
 	"sync/atomic"
 
 	"github.com/dolthub/dumbodb/internal/collation"
@@ -99,4 +101,56 @@ func PartialFilterMembership(pfe, indexCollation *types.Document) func(doc *type
 		}
 	}
 	return partialFilterCompiler(pfe, collation.Parse(indexCollation).Comparator())
+}
+
+// ErrStalePartialIndex reports a write to a collection with a stale partial
+// index (IndexInfo.PartialFilterStale).
+var ErrStalePartialIndex = errors.New(
+	"was built by an older version of DumboDB that matched its partial filter differently; drop and recreate it",
+)
+
+// StalePartialFilterMembership is IndexInfo.MatchesPartialFilter for the stale
+// partial index name.
+func StalePartialFilterMembership(name string) func(doc *types.Document) (bool, error) {
+	return func(*types.Document) (bool, error) {
+		return false, fmt.Errorf("index %q %w", name, ErrStalePartialIndex)
+	}
+}
+
+// FilterComparesDocuments reports whether a filter compares a field with a
+// document value, at any depth.
+func FilterComparesDocuments(v any) bool {
+	switch v := v.(type) {
+	case *types.Document:
+		for _, key := range v.Keys() {
+			value, _ := v.Get(key)
+			if d, ok := value.(*types.Document); ok && !strings.HasPrefix(key, "$") && !isOperatorDocument(d) {
+				return true
+			}
+			switch key {
+			case "$eq", "$ne", "$gt", "$gte", "$lt", "$lte":
+				if _, ok := value.(*types.Document); ok {
+					return true
+				}
+			}
+			if FilterComparesDocuments(value) {
+				return true
+			}
+		}
+	case *types.Array:
+		for i := range v.Len() {
+			elem, _ := v.Get(i)
+			if _, ok := elem.(*types.Document); ok {
+				return true
+			}
+			if FilterComparesDocuments(elem) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isOperatorDocument(doc *types.Document) bool {
+	return doc.Len() > 0 && strings.HasPrefix(doc.Keys()[0], "$")
 }

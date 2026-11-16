@@ -21,7 +21,10 @@ import (
 	"os"
 	"testing"
 
+	"github.com/FerretDB/wire/wirebson"
+
 	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/bson"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 
@@ -154,5 +157,65 @@ func TestPartialIndexUniquenessSurvivesRestart(t *testing.T) {
 	nonMatching := must.NotFail(types.NewDocument("_id", int32(4), "email", "a@x.com", "status", "inactive"))
 	if _, err := coll2.InsertAll(ctx, &backends.InsertAllParams{Docs: []*types.Document{nonMatching}}); err != nil {
 		t.Fatalf("InsertAll non-matching: unexpected error %v", err)
+	}
+}
+
+// An older version matched a partial filter on embedded documents
+// differently and wrote no marker: such an index decodes as stale, stays
+// stale when re-encoded, and refuses writes.
+func TestPartialIndexFromOlderVersionIsStale(t *testing.T) {
+	keys := must.NotFail(types.NewArray(
+		must.NotFail(types.NewDocument("field", "k", "desc", false, "text", false, "geo2d", false, "geo2dsphere", false, "hashed", false)),
+	))
+	definition := func(partial *types.Document, marked bool) *types.Document {
+		doc := must.NotFail(types.NewDocument("name", "k_1", "keys", keys, "partial", partial))
+		if marked {
+			doc.Set("partialStoredForm", true)
+		}
+		return doc
+	}
+	embedded := must.NotFail(types.NewDocument("a", must.NotFail(types.NewDocument("y", int32(1), "x", int32(1)))))
+	scalar := must.NotFail(types.NewDocument("k", int32(1)))
+	doc := must.NotFail(types.NewDocument("_id", int32(1), "k", int32(1), "a", must.NotFail(types.NewDocument("x", int32(1), "y", int32(1)))))
+
+	for _, c := range []struct {
+		name    string
+		partial *types.Document
+		marked  bool
+		stale   bool
+	}{
+		{"embedded_unmarked", embedded, false, true},
+		{"embedded_marked", embedded, true, false},
+		{"scalar_unmarked", scalar, false, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			info, err := decodeIndexDefinition(definition(c.partial, c.marked))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.PartialFilterStale != c.stale {
+				t.Fatalf("stale = %t, want %t", info.PartialFilterStale, c.stale)
+			}
+			_, err = info.MatchesPartialFilter(doc)
+			if got := errors.Is(err, backends.ErrStalePartialIndex); got != c.stale {
+				t.Fatalf("membership error %v, want stale error %t", err, c.stale)
+			}
+			_, _, _, err = indexEntriesForDoc(context.Background(), doc, info)
+			if got := errors.Is(err, backends.ErrStalePartialIndex); got != c.stale {
+				t.Fatalf("indexEntriesForDoc error %v, want stale error %t", err, c.stale)
+			}
+
+			encoded, err := encodeIndexDefinition(info)
+			if err != nil {
+				t.Fatal(err)
+			}
+			again, err := decodeIndexDefinition(must.NotFail(bson.ToDocument(wirebson.RawDocument(encoded))))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if again.PartialFilterStale != c.stale {
+				t.Fatalf("re-encoded stale = %t, want %t", again.PartialFilterStale, c.stale)
+			}
+		})
 	}
 }

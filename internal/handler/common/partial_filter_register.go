@@ -15,12 +15,10 @@
 package common
 
 import (
-	"strings"
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/types"
-	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // init wires FilterDocumentColl as the global partial-index filter matcher (so
@@ -47,47 +45,13 @@ func canonicalFilterCopy(filter *types.Document) *types.Document {
 // as it is stored: all but an _id, which keeps its field order.
 func compilePartialFilter(pfe *types.Document, cmp *collation.Comparator) func(doc *types.Document) (bool, error) {
 	canonical := canonicalFilterCopy(pfe)
-	sortDoc := comparesEmbeddedDocuments(canonical)
+	sortDoc := backends.FilterComparesDocuments(canonical)
 	return func(doc *types.Document) (bool, error) {
 		if sortDoc {
 			doc = sortedKeysExceptID(doc)
 		}
 		return FilterDocumentColl(doc, canonical, cmp)
 	}
-}
-
-// comparesEmbeddedDocuments reports whether a filter compares a field with a
-// document value, at any depth.
-func comparesEmbeddedDocuments(v any) bool {
-	switch v := v.(type) {
-	case *types.Document:
-		for _, key := range v.Keys() {
-			value := must.NotFail(v.Get(key))
-			if d, ok := value.(*types.Document); ok && !strings.HasPrefix(key, "$") && !isOperatorDocument(d) {
-				return true
-			}
-			switch key {
-			case "$eq", "$ne", "$gt", "$gte", "$lt", "$lte":
-				if _, ok := value.(*types.Document); ok {
-					return true
-				}
-			}
-			if comparesEmbeddedDocuments(value) {
-				return true
-			}
-		}
-	case *types.Array:
-		for i := range v.Len() {
-			elem := must.NotFail(v.Get(i))
-			if _, ok := elem.(*types.Document); ok {
-				return true
-			}
-			if comparesEmbeddedDocuments(elem) {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func sortedKeysExceptID(doc *types.Document) *types.Document {

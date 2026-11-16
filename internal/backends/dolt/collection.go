@@ -2011,6 +2011,9 @@ func explainAmount(n int64) any {
 // (backends.QueryImpliesPartialFilter). A filter expression it does not model,
 // or a done ctx, counts as not, leaving the index unused.
 func partialIndexServes(ctx context.Context, filter *types.Document, idx backends.IndexInfo, queryCollation *types.Document) bool {
+	if idx.PartialFilterStale {
+		return false
+	}
 	implied, known, err := backends.QueryImpliesPartialFilter(ctx, filter, idx.PartialFilterExpression, queryCollation, idx.Collation)
 	return err == nil && known && implied
 }
