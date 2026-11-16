@@ -51,3 +51,18 @@ func TestUpdatePathsConflict(t *testing.T) {
 		require.Equal(t, want, at, path)
 	}
 }
+
+func TestUpdatePathsArrayFilterConflict(t *testing.T) {
+	paths := newUpdatePaths()
+	paths.add("a.$[]")
+	paths.add("b.$[e].x")
+	paths.add("c.0.x")
+	for path, want := range map[string]string{
+		"a.0": "a", "a.foo": "a", "a.$": "a", "a.$[f]": "", "b.0.y": "b", "b.$[].y": "", "b.$[e].y": "",
+		"c.$[].y": "c", "c.1": "", "c.0.$[]": "c.0",
+	} {
+		at, ok := paths.conflict(path)
+		require.Equal(t, want != "", ok, path)
+		require.Equal(t, want, at, path)
+	}
+}

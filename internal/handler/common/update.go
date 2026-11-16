@@ -1960,29 +1960,37 @@ func checkUpdatePath(command, key string) error {
 
 // updatePaths holds the paths an update has added so far, and their
 // prefixes, so a conflict is found in time linear in the path's length.
+// arrayChildren records, for each prefix, whether the elements added under it
+// are array filters ($[] or $[id]); mongod refuses to mix them with any other
+// element under the same prefix.
 type updatePaths struct {
-	full     map[string]struct{}
-	prefixes map[string]struct{}
+	full          map[string]struct{}
+	arrayChildren map[string]bool
 }
 
 func newUpdatePaths() *updatePaths {
-	return &updatePaths{full: map[string]struct{}{}, prefixes: map[string]struct{}{}}
+	return &updatePaths{full: map[string]struct{}{}, arrayChildren: map[string]bool{}}
 }
 
 // conflict returns where path overlaps an added path, the shorter of the
 // two, as mongod reports it.
 func (u *updatePaths) conflict(path string) (at string, ok bool) {
 	for i := 0; i < len(path); i++ {
-		if path[i] == '.' {
-			if _, ok := u.full[path[:i]]; ok {
-				return path[:i], true
-			}
+		if path[i] != '.' {
+			continue
+		}
+		prefix := path[:i]
+		if _, ok := u.full[prefix]; ok {
+			return prefix, true
+		}
+		if arrayChildren, ok := u.arrayChildren[prefix]; ok && arrayChildren != isArrayFilterElement(path[i+1:]) {
+			return prefix, true
 		}
 	}
 	if _, ok := u.full[path]; ok {
 		return path, true
 	}
-	if _, ok := u.prefixes[path]; ok {
+	if _, ok := u.arrayChildren[path]; ok {
 		return path, true
 	}
 	return "", false
@@ -1992,9 +2000,16 @@ func (u *updatePaths) add(path string) {
 	u.full[path] = struct{}{}
 	for i := 0; i < len(path); i++ {
 		if path[i] == '.' {
-			u.prefixes[path[:i]] = struct{}{}
+			u.arrayChildren[path[:i]] = isArrayFilterElement(path[i+1:])
 		}
 	}
+}
+
+// isArrayFilterElement reports whether the first element of rest is $[] or
+// $[id].
+func isArrayFilterElement(rest string) bool {
+	first, _, _ := strings.Cut(rest, ".")
+	return strings.HasPrefix(first, "$[") && strings.HasSuffix(first, "]")
 }
 
 func conflictError(command, path, at string) error {
