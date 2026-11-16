@@ -691,104 +691,132 @@ func checkIndexKeys(doc *types.Document, idx backends.IndexInfo) error {
 
 // checkParallelArrays returns ErrCannotIndexParallelArrays when two fields of
 // idx reach different arrays in doc, as mongod refuses to index the cross
-// product of unrelated arrays. As in mongod, an array several fields reach
-// together is checked one element at a time, so arrays in different elements
-// of it are not parallel, and an array a numeric path element indexes into
-// counts like any other.
+// product of unrelated arrays. It follows mongod's key generation: the fields
+// that reach one array are expanded one element at a time, only into elements
+// that are documents, and a numeric path element picks its array element once,
+// so that element counts against the arrays in every other element.
 func checkParallelArrays(doc *types.Document, idx backends.IndexInfo) error {
-	var fields []parallelField
-	for i, kp := range idx.Key {
+	var paths []string
+	for _, kp := range idx.Key {
 		if !kp.Text && !isGeoKey(kp) {
-			fields = append(fields, parallelField{index: i, path: strings.Split(kp.Field, ".")})
+			paths = append(paths, kp.Field)
 		}
 	}
-	_, err := parallelArrays(doc, fields)
-	return err
+	return parallelArrays(doc, paths, make([]positionalElement, len(paths)))
 }
 
-// parallelField is an index field's path and how much of it is consumed.
-type parallelField struct {
-	index int
-	path  []string
-	pos   int
+// positionalElement is the array element a numeric path element picked, with
+// the value the rest of the path reaches from it and the path left after that.
+type positionalElement struct {
+	picked    bool
+	value     any
+	name      string
+	remaining string
 }
 
-// arrayHit is an index field that reached an array, and the array's name.
-type arrayHit struct {
-	index int
-	name  string
-}
-
-// parallelArrays walks v with fields, which all reached v by the same path,
-// and returns the fields that reach an array within it, or the error for two
-// fields that reach different arrays.
-func parallelArrays(v any, fields []parallelField) ([]arrayHit, error) {
-	switch v := v.(type) {
-	case *types.Array:
-		hits := make([]arrayHit, len(fields))
-		for k, f := range fields {
-			hits[k] = arrayHit{index: f.index, name: f.path[f.pos-1]}
+// parallelArrays checks obj, a document or nil, for the remaining paths of an
+// index's fields; an empty path is a field already resolved.
+func parallelArrays(obj *types.Document, paths []string, positional []positionalElement) error {
+	paths = slices.Clone(paths)
+	var arr *types.Array
+	var arrName string
+	var arrFields []int
+	for i, path := range paths {
+		if path == "" {
+			continue
 		}
-		for i := range v.Len() {
-			var sub []parallelField
-			for _, f := range fields {
-				if f.pos == len(f.path) {
-					continue
-				}
-				if n, err := strconv.Atoi(f.path[f.pos]); err == nil {
-					if n == i {
-						f.pos++
-						sub = append(sub, f)
-					}
-					continue
-				}
-				sub = append(sub, f)
-			}
-			if _, err := parallelArrays(must.NotFail(v.Get(i)), sub); err != nil {
-				return nil, err
-			}
+		v, name, rest := nextIndexValue(obj, positional[i], path)
+		paths[i] = rest
+		a, isArray := v.(*types.Array)
+		if !isArray {
+			paths[i] = ""
+			continue
 		}
-		return hits, nil
-
-	case *types.Document:
-		var groups [][]parallelField
-		for _, f := range fields {
-			if f.pos == len(f.path) {
-				continue
-			}
-			f.pos++
-			placed := false
-			for g := range groups {
-				if groups[g][0].path[groups[g][0].pos-1] == f.path[f.pos-1] {
-					groups[g] = append(groups[g], f)
-					placed = true
-					break
-				}
-			}
-			if !placed {
-				groups = append(groups, []parallelField{f})
-			}
+		arrFields = append(arrFields, i)
+		switch {
+		case arr == nil:
+			arr, arrName = a, name
+		case a != arr:
+			return fmt.Errorf("%w [%s] [%s]", idxpkg.ErrCannotIndexParallelArrays, name, arrName)
 		}
-		var hits []arrayHit
-		for _, group := range groups {
-			child, err := v.Get(group[0].path[group[0].pos-1])
-			if err != nil {
-				continue
-			}
-			groupHits, err := parallelArrays(child, group)
-			if err != nil {
-				return nil, err
-			}
-			if len(groupHits) > 0 && len(hits) > 0 {
-				first, second := hits[0], groupHits[0]
-				if second.index < first.index {
-					first, second = second, first
-				}
-				return nil, fmt.Errorf("%w [%s] [%s]", idxpkg.ErrCannotIndexParallelArrays, second.name, first.name)
-			}
-			hits = append(hits, groupHits...)
-		}
-		return hits, nil
 	}
-	return nil, nil
+	if arr == nil || arr.Len() == 0 {
+		return nil
+	}
+
+	sub := make([]positionalElement, len(paths))
+	for _, i := range arrFields {
+		if paths[i] == "" {
+			continue
+		}
+		first, _, _ := strings.Cut(paths[i], ".")
+		if !isArrayFieldName(arr, first) {
+			continue
+		}
+		rest := paths[i]
+		value, name := valueOrArrayAlongPath(arr, &rest)
+		sub[i] = positionalElement{picked: true, value: value, name: name, remaining: rest}
+	}
+	for j := range arr.Len() {
+		elem, _ := must.NotFail(arr.Get(j)).(*types.Document)
+		if err := parallelArrays(elem, paths, sub); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// nextIndexValue returns the value path reaches in obj, or, when obj has no
+// field for its first element, the element a numeric path element picked; its
+// name; and the rest of the path past an array it stopped at.
+func nextIndexValue(obj *types.Document, positional positionalElement, path string) (any, string, string) {
+	first, _, _ := strings.Cut(path, ".")
+	if obj != nil && obj.Has(first) {
+		v, name := valueOrArrayAlongPath(obj, &path)
+		return v, name, path
+	}
+	if positional.picked {
+		return positional.value, positional.name, positional.remaining
+	}
+	return nil, "", ""
+}
+
+// valueOrArrayAlongPath follows *path from container, a document or an array
+// read by element name, and returns the value at its end or the first array on
+// the way, with its name; *path is left as the part after that value.
+func valueOrArrayAlongPath(container any, path *string) (any, string) {
+	for {
+		first, rest, _ := strings.Cut(*path, ".")
+		*path = rest
+		var v any
+		switch c := container.(type) {
+		case *types.Document:
+			var err error
+			if v, err = c.Get(first); err != nil {
+				return nil, ""
+			}
+		case *types.Array:
+			if !isArrayFieldName(c, first) {
+				return nil, ""
+			}
+			v = must.NotFail(c.Get(must.NotFail(strconv.Atoi(first))))
+		default:
+			return nil, ""
+		}
+		_, isArray := v.(*types.Array)
+		if isArray || rest == "" {
+			return v, first
+		}
+		if _, isDoc := v.(*types.Document); !isDoc {
+			return nil, ""
+		}
+		container = v
+	}
+}
+
+// isArrayFieldName reports whether name is the field name BSON gives an
+// element of arr.
+func isArrayFieldName(arr *types.Array, name string) bool {
+	n, err := strconv.Atoi(name)
+	return err == nil && n >= 0 && n < arr.Len() && strconv.Itoa(n) == name
 }
