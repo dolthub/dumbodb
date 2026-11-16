@@ -370,6 +370,7 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 			array.Append(WriteErrorDocument(we))
 		}
 
+		capErrorMessages(array)
 		res.Set("writeErrors", array)
 	}
 

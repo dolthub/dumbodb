@@ -82,6 +82,7 @@ func (h *Handler) MsgUpdate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 
 	// mongod's reply order.
 	if writeErrors.Len() > 0 {
+		capErrorMessages(writeErrors)
 		res.Set("writeErrors", writeErrors)
 	}
 	if upserted.Len() != 0 {

@@ -142,6 +142,7 @@ func (h *Handler) MsgDelete(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 	))
 
 	if writeErrors.Len() > 0 {
+		capErrorMessages(writeErrors)
 		res.Set("writeErrors", writeErrors)
 	}
 

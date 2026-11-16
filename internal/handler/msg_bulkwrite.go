@@ -219,6 +219,7 @@ func (h *Handler) MsgBulkWrite(connCtx context.Context, msg *wire.OpMsg) (*wire.
 	conninfo.Get(connCtx).SetAutoCommitMessage(fmt.Sprintf(
 		"auto: bulkWrite (%d inserted, %d updated, %d deleted)", nInserted, nModified+nUpserted, nDeleted))
 
+	capErrorMessages(firstBatch)
 	resDoc := must.NotFail(types.NewDocument(
 		"cursor", must.NotFail(types.NewDocument(
 			"id", int64(0),
