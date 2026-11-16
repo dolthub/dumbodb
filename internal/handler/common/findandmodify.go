@@ -132,6 +132,17 @@ func GetFindAndModifyParams(doc *types.Document, l *slog.Logger) (*FindAndModify
 		)
 	}
 
+	// mongod parses the array filters of a document update before the
+	// update itself; a pipeline update refuses them outright first.
+	if params.Update != nil {
+		if err := CheckArrayFilterTypes("findAndModify", params.ArrayFilters); err != nil {
+			return nil, err
+		}
+		if err := ParseArrayFilters("findAndModify", params.ArrayFilters); err != nil {
+			return nil, err
+		}
+	}
+
 	hasUpdateOperators, err := HasSupportedUpdateModifiers("findAndModify", params.Update)
 	if err != nil {
 		return nil, err

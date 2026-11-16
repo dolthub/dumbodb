@@ -117,6 +117,12 @@ func GetUpdateParams(document *types.Document, l *slog.Logger) (*UpdateParams, e
 	}
 
 	if len(params.Updates) > 0 {
+		for _, update := range params.Updates {
+			if err := CheckArrayFilterTypes(document.Command(), update.ArrayFilters); err != nil {
+				return nil, err
+			}
+		}
+
 		now := operators.CommandNow()
 		for i := range params.Updates {
 			update := &params.Updates[i]
@@ -125,6 +131,8 @@ func GetUpdateParams(document *types.Document, l *slog.Logger) (*UpdateParams, e
 			if update.UpdateRaw == nil {
 				continue
 			}
+			// mongod parses a statement's array filters before its update.
+			arrayFiltersErr := ParseArrayFilters(document.Command(), update.ArrayFilters)
 
 			switch u := update.UpdateRaw.(type) {
 			case *types.Document:
@@ -164,6 +172,9 @@ func GetUpdateParams(document *types.Document, l *slog.Logger) (*UpdateParams, e
 				)
 			}
 
+			if arrayFiltersErr != nil {
+				update.InvalidUpdate = arrayFiltersErr
+			}
 			if update.InvalidUpdate == nil && (update.HasUpdateOperators || update.IsPipeline) {
 				update.InvalidUpdate = ValidateArrayFilters(document.Command(), update.Update, update.IsPipeline, update.ArrayFilters)
 			}

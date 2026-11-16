@@ -144,6 +144,13 @@ func (h *Handler) MsgBulkWrite(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		if opDoc == nil || !opDoc.Has("updateMods") {
 			continue
 		}
+		if v, err := opDoc.Get("arrayFilters"); err == nil {
+			if arrayFilters, ok := v.(*types.Array); ok {
+				if err := common.CheckArrayFilterTypes("bulkWrite", arrayFilters); err != nil {
+					return nil, err
+				}
+			}
+		}
 		pipeline, _ := must.NotFail(opDoc.Get("updateMods")).(*types.Array)
 		for j := 0; pipeline != nil && j < pipeline.Len(); j++ {
 			if _, ok := must.NotFail(pipeline.Get(j)).(*types.Document); !ok {
@@ -477,6 +484,10 @@ func execBulkWriteUpdate(ctx context.Context, db backends.Database, c backends.C
 		Validator:        validator,
 		ValidationLevel:  valLevel,
 		ValidationAction: valAction,
+	}
+
+	if err := common.ParseArrayFilters("bulkWrite", arrayFilters); err != nil {
+		return bulkWriteOpResult{}, err
 	}
 
 	switch u := modsVal.(type) {

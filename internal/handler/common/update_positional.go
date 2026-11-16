@@ -159,45 +159,22 @@ func arrayForUpdateByPath(doc *types.Document, path string) (*types.Array, error
 // with update, before any document is read: a malformed filter, an
 // identifier with no filter, or a filter no identifier uses.
 func ValidateArrayFilters(command string, update *types.Document, isPipeline bool, arrayFilters *types.Array) error {
+	orderedIdentifiers, err := parseArrayFilters(command, arrayFilters)
+	if err != nil {
+		return err
+	}
 	if isPipeline {
 		if arrayFilters != nil && arrayFilters.Len() > 0 {
 			return NewUpdateError(handlererrors.ErrFailedToParse, "arrayFilters may not be specified for pipeline-style updates", command)
 		}
 		return nil
 	}
-
-	for i := 0; arrayFilters != nil && i < arrayFilters.Len(); i++ {
-		elem := must.NotFail(arrayFilters.Get(i))
-		if _, ok := elem.(*types.Document); !ok {
-			return NewUpdateError(
-				handlererrors.ErrTypeMismatch,
-				fmt.Sprintf("BSON field '%s.%d' is the wrong type '%s', expected type 'object'",
-					arrayFiltersField(command), i, handlerparams.AliasFromType(elem)),
-				command,
-			)
-		}
+	if update == nil {
+		return nil
 	}
-
-	filterIdentifiers := map[string]bool{}
-	var orderedIdentifiers []string
-	for i := 0; arrayFilters != nil && i < arrayFilters.Len(); i++ {
-		filter := must.NotFail(arrayFilters.Get(i)).(*types.Document)
-		if err := parseArrayFilter(command, filter); err != nil {
-			return err
-		}
-		identifier, err := arrayFilterIdentifier(command, filter)
-		if err != nil {
-			return err
-		}
-		if _, dup := filterIdentifiers[identifier]; dup {
-			return NewUpdateError(
-				handlererrors.ErrFailedToParse,
-				"Found multiple array filters with the same top-level field name "+identifier,
-				command,
-			)
-		}
+	filterIdentifiers := make(map[string]bool, len(orderedIdentifiers))
+	for _, identifier := range orderedIdentifiers {
 		filterIdentifiers[identifier] = false
-		orderedIdentifiers = append(orderedIdentifiers, identifier)
 	}
 
 	for _, op := range update.Keys() {
@@ -241,6 +218,62 @@ func ValidateArrayFilters(command string, update *types.Document, isPipeline boo
 
 // arrayFiltersField names the arrayFilters field of command in mongod's
 // type errors.
+// CheckArrayFilterTypes returns mongod's command error for an arrayFilters
+// element that is not a document, which fails the whole command before any
+// statement runs.
+func CheckArrayFilterTypes(command string, arrayFilters *types.Array) error {
+	for i := 0; arrayFilters != nil && i < arrayFilters.Len(); i++ {
+		elem := must.NotFail(arrayFilters.Get(i))
+		if _, ok := elem.(*types.Document); !ok {
+			return handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrTypeMismatch,
+				fmt.Sprintf("BSON field '%s.%d' is the wrong type '%s', expected type 'object'",
+					arrayFiltersField(command), i, handlerparams.AliasFromType(elem)),
+				command,
+			)
+		}
+	}
+	return nil
+}
+
+// ParseArrayFilters returns the error mongod raises parsing a statement's
+// array filters, which it does before parsing the update itself, whatever
+// the kind of update.
+func ParseArrayFilters(command string, arrayFilters *types.Array) error {
+	_, err := parseArrayFilters(command, arrayFilters)
+	return err
+}
+
+// parseArrayFilters parses the body of each array filter and returns their
+// identifiers in order, refusing a repeated one.
+func parseArrayFilters(command string, arrayFilters *types.Array) ([]string, error) {
+	if err := CheckArrayFilterTypes(command, arrayFilters); err != nil {
+		return nil, err
+	}
+	seen := map[string]struct{}{}
+	var identifiers []string
+	for i := 0; arrayFilters != nil && i < arrayFilters.Len(); i++ {
+		filter := must.NotFail(arrayFilters.Get(i)).(*types.Document)
+		if err := parseArrayFilter(command, filter); err != nil {
+			return nil, err
+		}
+		identifier, err := arrayFilterIdentifier(command, filter)
+		if err != nil {
+			return nil, err
+		}
+		if _, dup := seen[identifier]; dup {
+			return nil, NewUpdateError(
+				handlererrors.ErrFailedToParse,
+				"Found multiple array filters with the same top-level field name "+identifier,
+				command,
+			)
+		}
+		seen[identifier] = struct{}{}
+		identifiers = append(identifiers, identifier)
+	}
+	return identifiers, nil
+}
+
 func arrayFiltersField(command string) string {
 	switch strings.ToLower(command) {
 	case "findandmodify":
