@@ -1862,7 +1862,7 @@ func compoundIndexBounds(idx backends.IndexInfo, filter *types.Document, queryCm
 			return s, e, true
 		}
 		raw, err := filter.Get(kp.Field)
-		if err != nil {
+		if err != nil || sharesMultikeyPrefix(idx, i) {
 			if i == 0 {
 				return nil, nil, false
 			}
@@ -1898,6 +1898,24 @@ func compoundIndexBounds(idx backends.IndexInfo, filter *types.Document, queryCm
 		return start, stop, true
 	}
 	return nil, nil, false
+}
+
+// sharesMultikeyPrefix reports whether key field i of idx and an earlier key
+// field may both hold arrays reached through the same leading field. As in
+// mongod, their keys come from one array element at a time, so a document can
+// match the two conditions through different elements and have no key
+// holding both values; field i must not narrow the bounds.
+func sharesMultikeyPrefix(idx backends.IndexInfo, i int) bool {
+	if !idx.KeyMultikey(i) {
+		return false
+	}
+	first, _, _ := strings.Cut(idx.Key[i].Field, ".")
+	for j := range i {
+		if other, _, _ := strings.Cut(idx.Key[j].Field, "."); other == first && idx.KeyMultikey(j) {
+			return true
+		}
+	}
+	return false
 }
 
 // compareScalars returns -1 / 0 / 1 using types.Compare. Used to merge
