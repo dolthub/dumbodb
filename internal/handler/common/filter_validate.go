@@ -118,6 +118,11 @@ func validateFieldPredicate(empty *types.Document, key string, value any, cmp *c
 		if op == "$options" {
 			continue
 		}
+		if !strings.HasPrefix(op, "$") {
+			return handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrBadValue, fmt.Sprintf("unknown operator: %s", op), op,
+			)
+		}
 		operand := must.NotFail(expr.Get(op))
 		single := must.NotFail(types.NewDocument(op, operand))
 		if options, err := expr.Get("$options"); err == nil && op == "$regex" {

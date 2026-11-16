@@ -501,6 +501,9 @@ func processIndex(command string, indexDoc *types.Document, ignoreUnknownIndexOp
 			// Store the partial filter expression so that unique enforcement can
 			// exclude documents that don't satisfy the filter.
 			if pfe, ok := must.NotFail(indexDoc.Get("partialFilterExpression")).(*types.Document); ok {
+				if err := common.ValidateFilter(pfe, nil); err != nil {
+					return nil, partialFilterSpecError(command, indexDoc, err)
+				}
 				index.PartialFilterExpression = pfe
 			}
 
@@ -1049,4 +1052,16 @@ func isTextIndex(idx backends.IndexInfo) bool {
 	}
 
 	return false
+}
+
+// partialFilterSpecError is mongod's error for a partial filter expression
+// that does not parse: the parse error, after the index specification.
+func partialFilterSpecError(command string, indexDoc *types.Document, err error) error {
+	var cmdErr *handlererrors.CommandError
+	if !errors.As(err, &cmdErr) {
+		return err
+	}
+	return cmdErr.WithMessage(
+		fmt.Sprintf("Error in specification %s :: caused by :: %s", types.FormatAnyValue(indexDoc), cmdErr.Err()),
+	)
 }
