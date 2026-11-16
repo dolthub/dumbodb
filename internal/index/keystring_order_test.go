@@ -47,6 +47,7 @@ func TestKeyStringTypeBracketOrder(t *testing.T) {
 		{"positive int", int64(7)},
 		{"+Inf", math.Inf(1)},
 		{"string", "alpha"},
+		{"symbol after an equal-prefix string", types.Symbol("alphb")},
 		{"object", types.MakeDocument(0)},
 		{"array", types.MakeArray(0)},
 		{"binary", types.Binary{Subtype: 0, B: []byte{1}}},
@@ -56,6 +57,8 @@ func TestKeyStringTypeBracketOrder(t *testing.T) {
 		{"date", time.Unix(1000, 0)},
 		{"timestamp", types.Timestamp(1 << 40)},
 		{"regex", types.Regex{Pattern: "^a", Options: "i"}},
+		{"javascript", types.JavaScript("")},
+		{"longer javascript", types.JavaScript("a")},
 		{"MaxKey", types.MaxKey},
 	}
 

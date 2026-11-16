@@ -153,6 +153,9 @@ const (
 
 	ErrInvalidIndexSpecificationOption = ErrorCode(197) // InvalidIndexSpecificationOption
 
+	// ErrCannotBuildIndexKeys indicates a value an index cannot build a key for.
+	ErrCannotBuildIndexKeys = ErrorCode(201) // CannotBuildIndexKeys
+
 	// ErrTimeProofMismatch indicates a $clusterTime signature does not match its key.
 	ErrTimeProofMismatch = ErrorCode(204) // TimeProofMismatch
 
@@ -1398,8 +1401,8 @@ func ProtocolError(err error) ProtoErr {
 }
 
 // IndexKeyError returns the code and message MongoDB reports when err is a
-// value an index cannot hold: index.ErrKeyTooLong or
-// index.ErrCannotExtractGeoKeys. The message drops the internal call chain.
+// value an index cannot hold: index.ErrKeyTooLong,
+// index.ErrCannotExtractGeoKeys or index.ErrSymbolWithCollation. The message drops the internal call chain.
 func IndexKeyError(err error) (ErrorCode, string, bool) {
 	for _, e := range []struct {
 		sentinel error
@@ -1407,6 +1410,7 @@ func IndexKeyError(err error) (ErrorCode, string, bool) {
 	}{
 		{index.ErrKeyTooLong, ErrKeyTooLong},
 		{index.ErrCannotExtractGeoKeys, ErrCannotExtractGeoKeys},
+		{index.ErrSymbolWithCollation, ErrCannotBuildIndexKeys},
 	} {
 		if errors.Is(err, e.sentinel) {
 			msg := err.Error()

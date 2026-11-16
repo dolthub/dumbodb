@@ -33,6 +33,8 @@ const (
 	TagDouble  = byte(3)
 	// TagNegZero is the double -0.0, which encodes as zero.
 	TagNegZero = byte(4)
+	// TagSymbol is a Symbol, which encodes as a string.
+	TagSymbol = byte(5)
 	// TagFetch marks a value its encoding cannot restore: a subdocument or
 	// array marker, a collation sort key, or a lossy value.
 	TagFetch = byte(0xFF)
@@ -58,7 +60,9 @@ func typeTag(v any) byte {
 			return TagNegZero
 		}
 		return TagDouble
-	case nil, types.NullType, bool, string, types.ObjectID, time.Time, types.Binary,
+	case types.Symbol:
+		return TagSymbol
+	case nil, types.NullType, bool, string, types.JavaScript, types.ObjectID, time.Time, types.Binary,
 		types.Timestamp, types.Regex, types.MaxKeyType, types.MinKeyType, types.UndefinedType:
 		return TagFromKey
 	}
@@ -76,6 +80,12 @@ func DecodeValue(enc []byte, tag byte) (any, bool) {
 	switch tag {
 	case TagInt32, TagInt64, TagDouble, TagNegZero:
 		return decodeNumber(enc, tag)
+	case TagSymbol:
+		if enc[0] != ctypeString {
+			return nil, false
+		}
+		s, _, ok := unescape(enc[1:])
+		return types.Symbol(s), ok
 	case TagFromKey:
 	default:
 		return nil, false
@@ -96,6 +106,9 @@ func DecodeValue(enc []byte, tag byte) (any, bool) {
 	case ctypeString:
 		s, _, ok := unescape(enc[1:])
 		return string(s), ok
+	case ctypeCode:
+		s, _, ok := unescape(enc[1:])
+		return types.JavaScript(s), ok
 	case ctypeOID:
 		var id types.ObjectID
 		copy(id[:], enc[1:])

@@ -217,11 +217,11 @@ func encodeBSONValue(value any) (byte, []byte, error) {
 	if bson.AnyNeedsRawEncoding(value) {
 		tmp, err := types.NewDocument(probeName, value)
 		if err != nil {
-			return 0, nil, fmt.Errorf("encoding value with MinKey/MaxKey: %w", err)
+			return 0, nil, fmt.Errorf("encoding value as raw BSON: %w", err)
 		}
 		raw, err := bson.FromDocumentRaw(tmp)
 		if err != nil {
-			return 0, nil, fmt.Errorf("encoding value with MinKey/MaxKey: %w", err)
+			return 0, nil, fmt.Errorf("encoding value as raw BSON: %w", err)
 		}
 		return extractValueBytes(raw, probeName)
 	}
