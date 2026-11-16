@@ -43,13 +43,14 @@ func canonicalFilterCopy(filter *types.Document) *types.Document {
 
 // compilePartialFilter returns the membership predicate of partial filter
 // pfe. A document being written may not have its keys sorted yet, so when pfe
-// compares embedded documents the document is matched in sorted-key form.
+// compares embedded documents the document is matched in sorted-key form,
+// as it is stored: all but an _id, which keeps its field order.
 func compilePartialFilter(pfe *types.Document, cmp *collation.Comparator) func(doc *types.Document) (bool, error) {
 	canonical := canonicalFilterCopy(pfe)
 	sortDoc := comparesEmbeddedDocuments(canonical)
 	return func(doc *types.Document) (bool, error) {
 		if sortDoc {
-			doc = sortedKeys(doc).(*types.Document)
+			doc = sortedKeysExceptID(doc)
 		}
 		return FilterDocumentColl(doc, canonical, cmp)
 	}
@@ -86,4 +87,12 @@ func comparesEmbeddedDocuments(v any) bool {
 		}
 	}
 	return false
+}
+
+func sortedKeysExceptID(doc *types.Document) *types.Document {
+	sorted := sortedKeys(doc).(*types.Document)
+	if id, err := doc.Get("_id"); err == nil {
+		sorted.Set("_id", id)
+	}
+	return sorted
 }
