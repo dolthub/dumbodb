@@ -20,16 +20,18 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strconv"
+	"strings"
 
 	"github.com/dolthub/dolt/go/store/prolly"
 	"github.com/dolthub/dolt/go/store/prolly/tree"
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/geo"
+	"github.com/dolthub/dumbodb/internal/handler/commonpath"
 	idxpkg "github.com/dolthub/dumbodb/internal/index"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
-	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // A geo index keys each point by its cell in a grid of geoCellBits bits per
@@ -402,21 +404,66 @@ var _ backends.GeoNearScanner = (*collection)(nil)
 
 func finiteFloat(f float64) bool { return !math.IsNaN(f) && !math.IsInf(f, 0) }
 
-// checkGeoKeys refuses doc when idx is a 2dsphere index and doc's field holds
-// an array of legacy pairs, which MongoDB reads as a malformed point.
-func checkGeoKeys(doc *types.Document, idx backends.IndexInfo) error {
+// checkGeoKeys refuses doc when a geo field of idx holds a value mongod
+// cannot index: for 2dsphere, anything but valid GeoJSON or an in-range legacy
+// point; for 2d, a malformed point or one outside the index's bounds. A path
+// through an array checks each value it reaches.
+func checkGeoKeys(ctx context.Context, doc *types.Document, idx backends.IndexInfo) error {
 	for _, kp := range idx.Key {
-		if !kp.Geo2DSphere {
+		if !isGeoKey(kp) {
 			continue
 		}
-		arr, ok := indexFieldValue(doc, kp.Field).(*types.Array)
-		if !ok || arr.Len() == 0 {
-			continue
-		}
-		if _, nested := must.NotFail(arr.Get(0)).(*types.Array); nested {
-			return fmt.Errorf("%w: field %s  Point must only contain numeric elements, instead got type array",
-				idxpkg.ErrCannotExtractGeoKeys, kp.Field)
+		for _, v := range geoFieldValues(doc, kp.Field) {
+			if kp.Geo2DSphere {
+				if problem := geo.SphereIndexProblem(kp.Field, v); problem != "" {
+					if echoElided(ctx, doc) {
+						return fmt.Errorf("%w: %w", idxpkg.ErrCannotExtractGeoKeys, idxpkg.ErrMessageElided)
+					}
+					return fmt.Errorf("%w: %s  %s", idxpkg.ErrCannotExtractGeoKeys, geo.Echo(doc), problem)
+				}
+				continue
+			}
+			min, max := idx.Geo2DRange()
+			switch geo.PlanarIndexProblem(v, min, max) {
+			case geo.PlanarMalformed:
+				return idxpkg.ErrGeoLocationFormat
+			case geo.PlanarSingleElement:
+				if echoElided(ctx, doc) {
+					return fmt.Errorf("%w: %w", idxpkg.ErrGeoFieldSingleElement, idxpkg.ErrMessageElided)
+				}
+				return fmt.Errorf("%w :: caused by :: %s", idxpkg.ErrGeoFieldSingleElement, geo.Echo(doc))
+			case geo.PlanarOutOfBounds:
+				if echoElided(ctx, doc) {
+					return fmt.Errorf("%w: %w", idxpkg.ErrGeoPointOutOfInterval, idxpkg.ErrMessageElided)
+				}
+				return fmt.Errorf("%w [ %s, %s ] :: caused by :: %s", idxpkg.ErrGeoPointOutOfInterval,
+					strconv.FormatFloat(min, 'g', -1, 64), strconv.FormatFloat(max, 'g', -1, 64), geo.Echo(doc))
+			}
 		}
 	}
 	return nil
+}
+
+// echoElided reports whether an error echoing doc would be emptied by the
+// reply ctx serves: its echo is cut, so the message is over a megabyte.
+func echoElided(ctx context.Context, doc *types.Document) bool {
+	return idxpkg.LargeMessagesEmptied(ctx) && geo.EchoIsCut(doc)
+}
+
+// geoFieldValues returns each value a geo index field reaches in doc, a path
+// through an array reaching one per element document.
+func geoFieldValues(doc *types.Document, field string) []any {
+	if !strings.Contains(field, ".") {
+		v, err := doc.Get(field)
+		if err != nil {
+			return nil
+		}
+		return []any{v}
+	}
+	path, err := types.NewPathFromString(field)
+	if err != nil {
+		return nil
+	}
+	vals, _ := commonpath.FindValues(doc, path, &commonpath.FindValuesOpts{FindArrayDocuments: true, FindArrayIndex: true})
+	return vals
 }

@@ -225,6 +225,76 @@ func checkCollatable(field string, v any, sentinel error) error {
 	return nil
 }
 
+// ErrMessageElided marks an index key error whose message was not built
+// because the reply would empty it.
+var ErrMessageElided = errors.New("message elided")
+
+type largeMessagesEmptiedKey struct{}
+
+// WithLargeMessagesEmptied marks ctx as serving a reply that empties any
+// error message past a megabyte, so a document echo cut at that size need
+// not be formatted.
+func WithLargeMessagesEmptied(ctx context.Context) context.Context {
+	return context.WithValue(ctx, largeMessagesEmptiedKey{}, true)
+}
+
+// LargeMessagesEmptied reports whether ctx came from WithLargeMessagesEmptied.
+func LargeMessagesEmptied(ctx context.Context) bool {
+	emptied, _ := ctx.Value(largeMessagesEmptiedKey{}).(bool)
+	return emptied
+}
+
+// ErrGeoLocationFormat reports a value a 2d index cannot read as a point.
+var ErrGeoLocationFormat = errors.New("location object expected, location array not in correct format")
+
+// ErrGeoPointOutOfInterval reports a point outside a 2d index's bounds, which
+// the error text follows.
+var ErrGeoPointOutOfInterval = errors.New("point not in interval of")
+
+// ErrGeoFieldSingleElement reports a 2d point of one coordinate.
+var ErrGeoFieldSingleElement = errors.New("geo field only has 1 element")
+
+// ErrCannotIndexParallelArrays reports a document in which two fields of a
+// compound index reach different arrays.
+var ErrCannotIndexParallelArrays = errors.New("cannot index parallel arrays")
+
+// UnindexableReason classifies err, an error IsUnindexable accepts, as
+// key_too_long, parallel_arrays or unindexable_geo_value; it returns "" for
+// any other error.
+func UnindexableReason(err error) string {
+	switch {
+	case errors.Is(err, ErrKeyTooLong):
+		return "key_too_long"
+	case errors.Is(err, ErrCannotIndexParallelArrays):
+		return "parallel_arrays"
+	case IsUnindexable(err):
+		return "unindexable_geo_value"
+	}
+	return ""
+}
+
+// ErrStalePartialIndex reports a write to a collection with a partial index
+// an older version built with a filter on embedded documents, which matched
+// documents differently; the error text names the index.
+var ErrStalePartialIndex = errors.New(
+	"partial index was built by an older version of DumboDB that matched its filter differently; drop and recreate it",
+)
+
+// IsUnindexable reports whether err refuses a document because an index
+// cannot hold its keys: too long, parallel arrays, or an unindexable geo
+// value. Applying the same document again fails the same way.
+func IsUnindexable(err error) bool {
+	for _, sentinel := range []error{
+		ErrKeyTooLong, ErrCannotIndexParallelArrays, ErrCannotExtractGeoKeys,
+		ErrGeoLocationFormat, ErrGeoPointOutOfInterval, ErrGeoFieldSingleElement,
+	} {
+		if errors.Is(err, sentinel) {
+			return true
+		}
+	}
+	return false
+}
+
 // CheckKeyLength returns ErrKeyTooLong for a key longer than MaxKeyLength.
 func CheckKeyLength(key []byte) error {
 	if len(key) > MaxKeyLength {

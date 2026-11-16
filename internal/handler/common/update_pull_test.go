@@ -53,7 +53,7 @@ func TestPullRemovesMatchingElements(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			target := doc("_id", int32(1), "arr", stored())
-			_, err := processPullArrayUpdateExpression("update", target, "arr", tc.condition)
+			_, err := processPullArrayUpdateExpression("update", target, "arr", tc.condition, nil)
 			require.NoError(t, err)
 			require.Equal(t, remaining(stored(), tc.removed), must.NotFail(target.Get("arr")))
 		})
@@ -61,7 +61,7 @@ func TestPullRemovesMatchingElements(t *testing.T) {
 
 	t.Run("$pullAll in any key order", func(t *testing.T) {
 		target := doc("_id", int32(1), "arr", stored())
-		_, err := processPullAllArrayUpdateExpression("update", target, "arr", arr(unsortedDoc, dbRef))
+		_, err := processPullAllArrayUpdateExpression("update", target, "arr", arr(unsortedDoc, dbRef), nil)
 		require.NoError(t, err)
 		require.Equal(t, remaining(stored(), []int{2, 3}), must.NotFail(target.Get("arr")))
 	})

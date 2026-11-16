@@ -29,6 +29,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/index"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
@@ -117,6 +118,7 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 
 	var inserted int32
 	var writeErrors []*mongo.WriteError
+	var budget errorBudget
 
 	batchCap := min(h.BatchSize, params.Docs.Len())
 
@@ -163,7 +165,7 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 					panic(fmt.Sprintf("Unknown error code: %v", ve.Code()))
 				}
 
-				writeErrors = append(writeErrors, &mongo.WriteError{
+				writeErrors = budget.appendError(writeErrors, &mongo.WriteError{
 					Index:   i,
 					Code:    int(code),
 					Message: ve.Error(),
@@ -181,7 +183,7 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 				tsFieldVal, tsErr := doc.Get(tsTimeField)
 				if tsErr != nil {
 					// Missing time field.
-					writeErrors = append(writeErrors, &mongo.WriteError{
+					writeErrors = budget.appendError(writeErrors, &mongo.WriteError{
 						Index:   i,
 						Code:    int(handlererrors.ErrBadValue),
 						Message: fmt.Sprintf("time series document is missing the '%s' field", tsTimeField),
@@ -193,7 +195,7 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 				}
 				if _, ok := tsFieldVal.(time.Time); !ok {
 					// Time field is not a Date type.
-					writeErrors = append(writeErrors, &mongo.WriteError{
+					writeErrors = budget.appendError(writeErrors, &mongo.WriteError{
 						Index:   i,
 						Code:    int(handlererrors.ErrBadValue),
 						Message: fmt.Sprintf("time series document '%s' field must be of type Date", tsTimeField),
@@ -217,7 +219,7 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 					if validationAction == "warn" {
 						h.L.Warn("document failed schema validation", "collection", params.Collection)
 					} else {
-						writeErrors = append(writeErrors, &mongo.WriteError{
+						writeErrors = budget.appendError(writeErrors, &mongo.WriteError{
 							Index:   i,
 							Code:    int(handlererrors.ErrDocumentValidationFailure),
 							Message: errMsg,
@@ -236,7 +238,8 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 			docsIndexes = append(docsIndexes, i)
 		}
 
-		if _, err = c.InsertAll(connCtx, &backends.InsertAllParams{Docs: docs}); err == nil {
+		// The batch's error is never reported: the documents are retried one by one.
+		if _, err = c.InsertAll(index.WithLargeMessagesEmptied(connCtx), &backends.InsertAllParams{Docs: docs}); err == nil {
 			inserted += int32(len(docs))
 
 			if params.Ordered && len(writeErrors) > 0 {
@@ -248,7 +251,7 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 
 		// insert doc one by one upon failing on batch insertion
 		for j, doc := range docs {
-			if _, err = c.InsertAll(connCtx, &backends.InsertAllParams{
+			if _, err = c.InsertAll(budget.context(connCtx), &backends.InsertAllParams{
 				Docs: []*types.Document{doc},
 			}); err == nil {
 				inserted++
@@ -263,7 +266,7 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 			// mongod reports a database being dropped as each document's
 			// write error.
 			if backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseDropPending) {
-				writeErrors = append(writeErrors, &mongo.WriteError{
+				writeErrors = budget.appendError(writeErrors, &mongo.WriteError{
 					Index:   docsIndexes[j],
 					Code:    int(handlererrors.ErrDatabaseDropPending),
 					Message: dropPendingMessage(params.DB, params.Collection),
@@ -288,7 +291,7 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 			var differCase *backends.Error
 			if errors.As(err, &differCase) && differCase.Code() == backends.ErrorCodeDatabaseDifferCase {
 				existing, requested := differCase.DifferCaseNames()
-				writeErrors = append(writeErrors, &mongo.WriteError{
+				writeErrors = budget.appendError(writeErrors, &mongo.WriteError{
 					Index: docsIndexes[j],
 					Code:  int(handlererrors.ErrDatabaseDifferCase),
 					Message: fmt.Sprintf(
@@ -302,7 +305,7 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 			}
 
 			if code, msg, ok := handlererrors.IndexKeyError(err); ok {
-				writeErrors = append(writeErrors, &mongo.WriteError{
+				writeErrors = budget.appendError(writeErrors, &mongo.WriteError{
 					Index:   docsIndexes[j],
 					Code:    int(code),
 					Message: msg,
@@ -334,7 +337,7 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 					keyDoc = k
 				}
 			}
-			writeErrors = append(writeErrors, &mongo.WriteError{
+			writeErrors = budget.appendError(writeErrors, &mongo.WriteError{
 				Index: docsIndexes[j],
 				Code:  int(handlererrors.ErrDuplicateKeyInsert),
 				Message: fmt.Sprintf(

@@ -160,10 +160,11 @@ func (h *Handler) updateDocument(ctx context.Context, params *common.UpdateParam
 	}
 
 	writeErrors := types.MakeArray(0)
+	var budget errorBudget
 	// statementFailed records statement i's write error and reports whether
 	// the update stops there.
 	statementFailed := func(i int, ce *handlererrors.CommandError) bool {
-		writeErrors.Append(WriteErrorDocument(&mongo.WriteError{Index: i, Code: int(ce.Code()), Message: ce.Err().Error()}))
+		writeErrors.Append(WriteErrorDocument(&mongo.WriteError{Index: i, Code: int(ce.Code()), Message: budget.shorten(ce.Err().Error())}))
 		return params.Ordered
 	}
 
@@ -270,7 +271,7 @@ statements:
 			iter = common.LimitIterator(iter, closer, 1)
 		}
 
-		result, err := common.UpdateDocument(ctx, c, "update", iter, &u)
+		result, err := common.UpdateDocument(budget.context(ctx), c, "update", iter, &u)
 		if err != nil {
 			if backends.ErrorCodeIs(err, backends.ErrorCodeReadOnlyDatabase, backends.ErrorCodeReadOnlyCollection,
 				backends.ErrorCodeBranchInConflict, backends.ErrorCodeWriteConflict) {
@@ -339,6 +340,10 @@ func statementWriteError(db, coll string, err error) *handlererrors.CommandError
 		}
 		msg := fmt.Sprintf(`E11000 duplicate key error collection: %s.%s index: %s dup key: %s`, db, coll, idxName, formatDupKey(keyDoc))
 		ce, _ := handlererrors.NewCommandErrorMsg(handlererrors.ErrDuplicateKeyInsert, msg).(*handlererrors.CommandError)
+		return ce
+	}
+	if code, msg, ok := handlererrors.IndexKeyError(err); ok {
+		ce, _ := handlererrors.NewCommandErrorMsg(code, msg).(*handlererrors.CommandError)
 		return ce
 	}
 	var ve *types.ValidationError

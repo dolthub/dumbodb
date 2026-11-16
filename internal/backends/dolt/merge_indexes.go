@@ -215,7 +215,7 @@ func (s *indexMergeSurvivor) deleteDoc(ctx context.Context, doc *types.Document,
 	if doc == nil {
 		return nil
 	}
-	rows, _, _, err := indexEntriesForDoc(ctx, doc, s.info)
+	rows, _, _, err := indexEntriesForDoc(ctx, doc, entriesToRemove(s.info))
 	if err != nil {
 		return err
 	}
@@ -241,6 +241,9 @@ func (s *indexMergeSurvivor) insertDoc(ctx context.Context, doc *types.Document,
 	}
 	rows, multikey, lossy, err := indexEntriesForDoc(ctx, doc, s.info)
 	if err != nil {
+		return err
+	}
+	if err := refuseStaleEntries(s.info, rows); err != nil {
 		return err
 	}
 	s.info.MarkMultikey(multikey)

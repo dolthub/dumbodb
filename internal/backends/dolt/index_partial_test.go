@@ -21,7 +21,11 @@ import (
 	"os"
 	"testing"
 
+	"github.com/FerretDB/wire/wirebson"
+
 	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/bson"
+	idxpkg "github.com/dolthub/dumbodb/internal/index"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 
@@ -154,5 +158,107 @@ func TestPartialIndexUniquenessSurvivesRestart(t *testing.T) {
 	nonMatching := must.NotFail(types.NewDocument("_id", int32(4), "email", "a@x.com", "status", "inactive"))
 	if _, err := coll2.InsertAll(ctx, &backends.InsertAllParams{Docs: []*types.Document{nonMatching}}); err != nil {
 		t.Fatalf("InsertAll non-matching: unexpected error %v", err)
+	}
+}
+
+// An older version matched a partial filter on embedded documents
+// differently and wrote no marker: such an index decodes as stale, stays
+// stale when re-encoded, refuses only writes that add entries, and has all of
+// a document's entries removed.
+func TestPartialIndexFromOlderVersionIsStale(t *testing.T) {
+	keys := must.NotFail(types.NewArray(
+		must.NotFail(types.NewDocument("field", "k", "desc", false, "text", false, "geo2d", false, "geo2dsphere", false, "hashed", false)),
+	))
+	definition := func(partial *types.Document, marked bool) *types.Document {
+		doc := must.NotFail(types.NewDocument("name", "k_1", "keys", keys, "partial", partial))
+		if marked {
+			doc.Set("partialStoredForm", true)
+		}
+		return doc
+	}
+	embedded := must.NotFail(types.NewDocument("a", must.NotFail(types.NewDocument("y", int32(1), "x", int32(1)))))
+	scalar := must.NotFail(types.NewDocument("k", int32(1)))
+	doc := must.NotFail(types.NewDocument("_id", int32(1), "k", int32(1), "a", must.NotFail(types.NewDocument("x", int32(1), "y", int32(1)))))
+
+	for _, c := range []struct {
+		name    string
+		partial *types.Document
+		marked  bool
+		stale   bool
+	}{
+		{"embedded_unmarked", embedded, false, true},
+		{"embedded_marked", embedded, true, false},
+		{"scalar_unmarked", scalar, false, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			info, err := decodeIndexDefinition(definition(c.partial, c.marked))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.PartialFilterStale != c.stale {
+				t.Fatalf("stale = %t, want %t", info.PartialFilterStale, c.stale)
+			}
+			rows, _, _, err := indexEntriesForDoc(context.Background(), doc, info)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := errors.Is(refuseStaleEntries(info, rows), idxpkg.ErrStalePartialIndex); got != c.stale {
+				t.Fatalf("adding entries refused = %t, want %t", got, c.stale)
+			}
+			outside := must.NotFail(types.NewDocument("_id", int32(2), "k", int32(2), "a", int32(5)))
+			rows, _, _, err = indexEntriesForDoc(context.Background(), outside, info)
+			if err != nil || refuseStaleEntries(info, rows) != nil {
+				t.Fatalf("a document outside the filter: rows %v, err %v", rows, err)
+			}
+			removed, _, _, err := indexEntriesForDoc(context.Background(), outside, entriesToRemove(info))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := len(removed) > 0; got != c.stale {
+				t.Fatalf("entries removed for a document outside the filter = %d, want removal %t", len(removed), c.stale)
+			}
+
+			encoded, err := encodeIndexDefinition(info)
+			if err != nil {
+				t.Fatal(err)
+			}
+			again, err := decodeIndexDefinition(must.NotFail(bson.ToDocument(wirebson.RawDocument(encoded))))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if again.PartialFilterStale != c.stale {
+				t.Fatalf("re-encoded stale = %t, want %t", again.PartialFilterStale, c.stale)
+			}
+		})
+	}
+}
+
+// The stale marker is decided on the filter's stored form, so a filter whose
+// keys sort differently is not stale once written and read back.
+func TestPartialIndexMarkerUsesStoredForm(t *testing.T) {
+	keys := must.NotFail(types.NewArray(
+		must.NotFail(types.NewDocument("field", "k", "desc", false, "text", false, "geo2d", false, "geo2dsphere", false, "hashed", false)),
+	))
+	for _, pfe := range []*types.Document{
+		must.NotFail(types.NewDocument("a", must.NotFail(types.NewDocument("$eq", int32(1), "#y", int32(1))))),
+		must.NotFail(types.NewDocument("a", must.NotFail(types.NewDocument("y", int32(1), "x", int32(1))))),
+		must.NotFail(types.NewDocument("k", int32(1))),
+	} {
+		info, err := decodeIndexDefinition(must.NotFail(types.NewDocument("name", "k_1", "keys", keys)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		info.PartialFilterExpression = pfe
+		encoded, err := encodeIndexDefinition(info)
+		if err != nil {
+			t.Fatal(err)
+		}
+		again, err := decodeIndexDefinition(must.NotFail(bson.ToDocument(wirebson.RawDocument(encoded))))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if again.PartialFilterStale {
+			t.Fatalf("a filter written by this version reads back stale: %v", pfe)
+		}
 	}
 }

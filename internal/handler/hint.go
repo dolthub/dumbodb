@@ -201,6 +201,9 @@ func hintedIndexOrder(ctx context.Context, coll backends.Collection, hint any, f
 		if idx.Name != name {
 			continue
 		}
+		if idx.PartialFilterStale {
+			return nil, nil, nil, backends.StalePartialIndexError(idx.Name)
+		}
 		descending, unbounded := false, false
 		order := types.MakeDocument(len(idx.Key))
 		for _, k := range idx.Key {

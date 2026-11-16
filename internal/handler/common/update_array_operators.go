@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -507,7 +508,7 @@ func processAddToSetArrayUpdateExpression(command string, doc *types.Document, k
 
 // processPullAllArrayUpdateExpression changes document according to $pullAll array update operator.
 // If the document was changed it returns true.
-func processPullAllArrayUpdateExpression(command string, doc *types.Document, key string, pullVal any) (bool, error) {
+func processPullAllArrayUpdateExpression(command string, doc *types.Document, key string, pullVal any, cmp *collation.Comparator) (bool, error) {
 	pullArray, ok := pullVal.(*types.Array)
 	if !ok {
 		return false, NewUpdateError(
@@ -559,7 +560,7 @@ func processPullAllArrayUpdateExpression(command string, doc *types.Document, ke
 		for i := array.Len() - 1; i >= 0; i-- {
 			arrayElem := must.NotFail(array.Get(i))
 
-			if types.Compare(arrayElem, pullElem) == types.Equal {
+			if pullValueEqual(arrayElem, pullElem, cmp) {
 				array.Remove(i)
 				changed = true
 			}
@@ -575,7 +576,7 @@ func processPullAllArrayUpdateExpression(command string, doc *types.Document, ke
 
 // processPullArrayUpdateExpression changes document according to $pull array update operator.
 // If the document was changed it returns true.
-func processPullArrayUpdateExpression(command string, doc *types.Document, key string, pullVal any) (bool, error) {
+func processPullArrayUpdateExpression(command string, doc *types.Document, key string, pullVal any, cmp *collation.Comparator) (bool, error) {
 	path, err := types.NewPathFromString(key)
 	if err != nil {
 		return false, lazyerrors.Error(err)
@@ -612,13 +613,19 @@ func processPullArrayUpdateExpression(command string, doc *types.Document, key s
 
 		var match bool
 
-		if pullDoc, ok := pullVal.(*types.Document); ok {
-			match, err = pullConditionMatches(elem, pullDoc)
+		switch pullVal := pullVal.(type) {
+		case *types.Document:
+			match, err = pullConditionMatches(elem, pullVal, cmp)
 			if err != nil {
 				return false, lazyerrors.Error(err)
 			}
-		} else {
-			match = types.Compare(elem, pullVal) == types.Equal
+		case types.Regex:
+			match, err = pullRegexMatches(elem, pullVal)
+			if err != nil {
+				return false, err
+			}
+		default:
+			match = pullValueEqual(elem, pullVal, cmp)
 		}
 
 		if match {
@@ -653,13 +660,33 @@ func canonicalPullCondition(condition any) any {
 // elem. As in mongod, a condition whose first key is a field operator, like
 // {$gt: 1}, applies to the element itself; any other document is a query
 // that matches embedded documents only.
-func pullConditionMatches(elem any, condition *types.Document) (bool, error) {
+func pullConditionMatches(elem any, condition *types.Document, cmp *collation.Comparator) (bool, error) {
 	if isFieldOperatorExpression(condition) {
-		return filterDocumentPair(must.NotFail(types.NewDocument("v", elem)), "v", condition, NewFilterContext(nil, PlanCollectionScan))
+		return filterDocumentPair(must.NotFail(types.NewDocument("v", elem)), "v", condition, NewFilterContext(cmp, PlanCollectionScan))
 	}
 	elemDoc, ok := elem.(*types.Document)
 	if !ok {
 		return false, nil
 	}
-	return FilterDocument(elemDoc, condition)
+	return FilterDocumentColl(elemDoc, condition, cmp)
+}
+
+// pullValueEqual reports whether an array element equals a $pull or $pullAll
+// value exactly, comparing strings under cmp: unlike a query, an array
+// element does not equal a value it holds.
+func pullValueEqual(elem, value any, cmp *collation.Comparator) bool {
+	if cmp == nil {
+		return types.CompareForAggregation(elem, value) == types.Equal
+	}
+	return collCompareOrder(elem, value, cmp) == types.Equal
+}
+
+// pullRegexMatches reports whether $pull with regex re removes elem: an equal
+// regex, or a string the regex matches, alone or in an array element, as a
+// query on the element would match it.
+func pullRegexMatches(elem any, re types.Regex) (bool, error) {
+	if elemRe, ok := elem.(types.Regex); ok {
+		return types.Identical(elemRe, re), nil
+	}
+	return filterFieldRegex(elem, re)
 }

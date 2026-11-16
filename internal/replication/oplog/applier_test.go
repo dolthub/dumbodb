@@ -1017,3 +1017,40 @@ func TestApplierSymbolAndJavaScript(t *testing.T) {
 	}
 	assertCollectionCount(t, ctx, backend, "orders", "items", 0)
 }
+
+func TestApplyReportsDocumentsAnIndexCannotHold(t *testing.T) {
+	ctx := context.Background()
+	backend, applier, sourceUUID := newTestApplier(t)
+	createTestCollection(t, ctx, backend, applier, sourceUUID, "orders", "items")
+	createIndex := must.NotFail(types.NewDocument(
+		"createIndexes", "items", "v", int32(2), "key", must.NotFail(types.NewDocument("a", int32(1), "b", int32(1))), "name", "a_1_b_1",
+	))
+	if err := applier.Apply(ctx, makeOplogEntry(t, 2, "c", "orders.$cmd", sourceUUID, createIndex, nil)); err != nil {
+		t.Fatal(err)
+	}
+	collection := must.NotFail(must.NotFail(backend.Database("orders")).Collection("items"))
+	if _, err := collection.CreateIndexes(ctx, &backends.CreateIndexesParams{Indexes: []backends.IndexInfo{{
+		Name: "loc_2d", Key: []backends.IndexKeyPair{{Field: "loc", Geo2D: true}},
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	for i, c := range []struct {
+		doc  *types.Document
+		want error
+	}{
+		{must.NotFail(types.NewDocument("_id", int32(1), "a", must.NotFail(types.NewArray(int32(1))), "b", must.NotFail(types.NewArray(int32(2))))), index.ErrCannotIndexParallelArrays},
+		{must.NotFail(types.NewDocument("_id", int32(2), "loc", must.NotFail(types.NewArray(500.0, 0.0)))), index.ErrGeoPointOutOfInterval},
+		{must.NotFail(types.NewDocument("_id", int32(3), "loc", must.NotFail(types.NewArray(1.0)))), index.ErrGeoFieldSingleElement},
+	} {
+		entry := makeOplogEntry(t, uint32(3+i), "i", "orders.items", sourceUUID, c.doc, nil)
+		err := applier.Apply(ctx, entry)
+		var unstorable *UnstorableKeyError
+		if !errors.As(err, &unstorable) || unstorable.Namespace != "orders.items" || unstorable.OpTime != entry.OpTime {
+			t.Fatalf("Apply(%v) error = %v, want *UnstorableKeyError for orders.items at %v", c.doc, err, entry.OpTime)
+		}
+		if !errors.Is(err, c.want) {
+			t.Fatalf("Apply(%v) error = %v, want it to wrap %v", c.doc, err, c.want)
+		}
+	}
+}

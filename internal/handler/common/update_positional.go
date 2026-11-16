@@ -21,6 +21,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
@@ -54,12 +56,9 @@ func expandPositionalOps(key string, doc *types.Document, filter *types.Document
 
 			if identifier == "" {
 				// $[]  -- all positional
-				arr, err := getArrayByPath(doc, arrayPath)
+				arr, err := arrayForUpdateByPath(doc, arrayPath)
 				if err != nil {
-					return nil, lazyerrors.Error(err)
-				}
-				if arr == nil {
-					return nil, nil
+					return nil, err
 				}
 				result := make([]string, arr.Len())
 				for j := range arr.Len() {
@@ -72,12 +71,9 @@ func expandPositionalOps(key string, doc *types.Document, filter *types.Document
 			}
 
 			// $[identifier]  -- filtered positional
-			arr, err := getArrayByPath(doc, arrayPath)
+			arr, err := arrayForUpdateByPath(doc, arrayPath)
 			if err != nil {
-				return nil, lazyerrors.Error(err)
-			}
-			if arr == nil {
-				return nil, nil
+				return nil, err
 			}
 			indices, err := findFilteredIndices(arr, identifier, arrayFilters)
 			if err != nil {
@@ -136,6 +132,222 @@ func getArrayByPath(doc *types.Document, path string) (*types.Array, error) {
 	}
 
 	return arr, nil
+}
+
+// arrayForUpdateByPath returns the array a $[] or $[identifier] path element
+// updates, with mongod's error when the path is missing or not an array.
+func arrayForUpdateByPath(doc *types.Document, path string) (*types.Array, error) {
+	p, err := types.NewPathFromString(path)
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+
+	val, err := doc.GetByPath(p)
+	if err != nil {
+		return nil, fmt.Errorf("The path '%s' must exist in the document in order to apply array updates.", path)
+	}
+
+	arr, ok := val.(*types.Array)
+	if !ok {
+		return nil, fmt.Errorf("Cannot apply array updates to non-array element %s: %s", p.Suffix(), types.FormatAnyValue(val))
+	}
+
+	return arr, nil
+}
+
+// ValidateArrayFilters returns the error mongod raises parsing arrayFilters
+// with update, before any document is read: a malformed filter, an
+// identifier with no filter, or a filter no identifier uses.
+func ValidateArrayFilters(command string, update *types.Document, isPipeline bool, arrayFilters *types.Array) error {
+	orderedIdentifiers, err := parseArrayFilters(command, arrayFilters)
+	if err != nil {
+		return err
+	}
+	if isPipeline {
+		if arrayFilters != nil && arrayFilters.Len() > 0 {
+			return NewUpdateError(handlererrors.ErrFailedToParse, "arrayFilters may not be specified for pipeline-style updates", command)
+		}
+		return nil
+	}
+	if update == nil {
+		return nil
+	}
+	filterIdentifiers := make(map[string]bool, len(orderedIdentifiers))
+	for _, identifier := range orderedIdentifiers {
+		filterIdentifiers[identifier] = false
+	}
+
+	for _, op := range update.Keys() {
+		fields, ok := must.NotFail(update.Get(op)).(*types.Document)
+		if !ok {
+			continue
+		}
+		for _, path := range fields.Keys() {
+			for _, part := range strings.Split(path, ".") {
+				if !strings.HasPrefix(part, "$[") || !strings.HasSuffix(part, "]") || part == "$[]" {
+					continue
+				}
+				identifier := part[2 : len(part)-1]
+				if _, ok := filterIdentifiers[identifier]; !ok {
+					return NewUpdateError(
+						handlererrors.ErrBadValue,
+						fmt.Sprintf("No array filter found for identifier '%s' in path '%s'", identifier, path),
+						command,
+					)
+				}
+				filterIdentifiers[identifier] = true
+			}
+		}
+	}
+
+	for _, identifier := range orderedIdentifiers {
+		if !filterIdentifiers[identifier] {
+			return NewUpdateError(
+				handlererrors.ErrFailedToParse,
+				fmt.Sprintf(
+					"The array filter for identifier '%s' was not used in the update %s",
+					identifier, types.FormatAnyValue(update),
+				),
+				command,
+			)
+		}
+	}
+
+	return nil
+}
+
+// CheckArrayFilterTypes returns mongod's command error for an arrayFilters
+// element that is not a document, which fails the whole command before any
+// statement runs.
+func CheckArrayFilterTypes(command string, arrayFilters *types.Array) error {
+	for i := 0; arrayFilters != nil && i < arrayFilters.Len(); i++ {
+		elem := must.NotFail(arrayFilters.Get(i))
+		if _, ok := elem.(*types.Document); !ok {
+			return handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrTypeMismatch,
+				fmt.Sprintf("BSON field '%s.%d' is the wrong type '%s', expected type 'object'",
+					arrayFiltersField(command), i, handlerparams.AliasFromType(elem)),
+				command,
+			)
+		}
+	}
+	return nil
+}
+
+// ParseArrayFilters returns the error mongod raises parsing a statement's
+// array filters, which it does before parsing the update itself, whatever
+// the kind of update.
+func ParseArrayFilters(command string, arrayFilters *types.Array) error {
+	_, err := parseArrayFilters(command, arrayFilters)
+	return err
+}
+
+// parseArrayFilters parses the body of each array filter and returns their
+// identifiers in order, refusing a repeated one.
+func parseArrayFilters(command string, arrayFilters *types.Array) ([]string, error) {
+	if err := CheckArrayFilterTypes(command, arrayFilters); err != nil {
+		return nil, err
+	}
+	seen := map[string]struct{}{}
+	var identifiers []string
+	for i := 0; arrayFilters != nil && i < arrayFilters.Len(); i++ {
+		filter := must.NotFail(arrayFilters.Get(i)).(*types.Document)
+		if err := parseArrayFilter(command, filter); err != nil {
+			return nil, err
+		}
+		identifier, err := arrayFilterIdentifier(command, filter)
+		if err != nil {
+			return nil, err
+		}
+		if _, dup := seen[identifier]; dup {
+			return nil, NewUpdateError(
+				handlererrors.ErrFailedToParse,
+				"Found multiple array filters with the same top-level field name "+identifier,
+				command,
+			)
+		}
+		seen[identifier] = struct{}{}
+		identifiers = append(identifiers, identifier)
+	}
+	return identifiers, nil
+}
+
+func arrayFiltersField(command string) string {
+	switch strings.ToLower(command) {
+	case "findandmodify":
+		return "findAndModify.arrayFilters"
+	case "bulkwrite":
+		return "bulkWrite.ops.arrayFilters"
+	default:
+		return "update.updates.arrayFilters"
+	}
+}
+
+// parseArrayFilter returns the error mongod raises parsing the body of an
+// array filter, as for a $pull condition, prefixed as mongod prefixes it.
+func parseArrayFilter(command string, filter *types.Document) error {
+	err := checkPullQuery(filter, false)
+	if err == nil {
+		err = ValidateFilter(filter, nil)
+	}
+	var cmdErr *handlererrors.CommandError
+	if err == nil || !errors.As(err, &cmdErr) {
+		return err
+	}
+	return NewUpdateError(cmdErr.Code(), "Error parsing array filter :: caused by :: "+cmdErr.Err().Error(), command)
+}
+
+// arrayFilterIdentifier returns the one top-level field name every path of
+// an array filter starts with.
+func arrayFilterIdentifier(command string, filter *types.Document) (string, error) {
+	var identifier string
+	for _, key := range filter.Keys() {
+		if strings.HasPrefix(key, "$") {
+			continue
+		}
+		top, _, _ := strings.Cut(key, ".")
+		switch {
+		case identifier == "":
+			identifier = top
+		case identifier != top:
+			return "", NewUpdateError(
+				handlererrors.ErrFailedToParse,
+				fmt.Sprintf(
+					"Error parsing array filter :: caused by :: Expected a single top-level field name, found '%s' and '%s'",
+					identifier, top,
+				),
+				command,
+			)
+		}
+	}
+	if identifier == "" {
+		return "", NewUpdateError(
+			handlererrors.ErrFailedToParse,
+			"Cannot use an expression without a top-level field name in arrayFilters",
+			command,
+		)
+	}
+	if !isArrayFilterIdentifier(identifier) {
+		return "", NewUpdateError(
+			handlererrors.ErrBadValue,
+			"Error parsing array filter :: caused by :: The top-level field name must be an alphanumeric string "+
+				"beginning with a lowercase letter, found '"+identifier+"'",
+			command,
+		)
+	}
+	return identifier, nil
+}
+
+func isArrayFilterIdentifier(s string) bool {
+	if s == "" || s[0] < 'a' || s[0] > 'z' {
+		return false
+	}
+	for _, c := range s[1:] {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9') {
+			return false
+		}
+	}
+	return true
 }
 
 // positionalMatchIndex returns the array index that the positional $ operator

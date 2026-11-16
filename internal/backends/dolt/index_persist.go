@@ -219,9 +219,29 @@ func encodeIndexDefinition(idx backends.IndexInfo) ([]byte, error) {
 	}
 	if idx.PartialFilterExpression != nil {
 		doc.Set("partial", idx.PartialFilterExpression)
+		// Older versions matched such a filter differently, and wrote no
+		// marker; decodeIndexDefinition marks those indexes stale.
+		if !idx.PartialFilterStale && backends.FilterComparesDocuments(backends.SortedKeys(idx.PartialFilterExpression)) {
+			doc.Set("partialStoredForm", true)
+		}
+		// The definition is stored with sorted keys, which would turn a value
+		// such as {y: 1, $eq: 1} into operators; its canonical form, taken
+		// in written order, keeps it a value.
+		canonical := idx.PartialFilterCanonical
+		if canonical == nil {
+			var err error
+			if canonical, err = backends.CanonicalPartialFilter(idx.PartialFilterExpression); err != nil {
+				return nil, err
+			}
+		}
+		doc.Set("partialCanonical", canonical)
 	}
 	if idx.Collation != nil {
 		doc.Set("collation", idx.Collation)
+	}
+	if idx.Geo2DBounds != nil {
+		doc.Set("geo2dMin", idx.Geo2DBounds[0])
+		doc.Set("geo2dMax", idx.Geo2DBounds[1])
 	}
 	return doc.AppendBSONSortedKeys(nil), nil
 }
@@ -289,10 +309,24 @@ func decodeIndexDefinition(doc *types.Document) (backends.IndexInfo, error) {
 			Hashed:      getBool(kd, "hashed"),
 		})
 	}
+	if lo, err := doc.Get("geo2dMin"); err == nil {
+		hi, _ := doc.Get("geo2dMax")
+		info.SetGeo2DBound("min", lo)
+		info.SetGeo2DBound("max", hi)
+	}
 	info.PartialFilterExpression = getDoc("partial")
 	info.Collation = getDoc("collation")
 	if pf := info.PartialFilterExpression; pf != nil {
-		info.MatchesPartialFilter = backends.PartialFilterMembership(pf, info.Collation)
+		membership := pf
+		if canonical := getDoc("partialCanonical"); canonical != nil {
+			info.PartialFilterCanonical = canonical
+			membership = canonical
+		}
+		info.MatchesPartialFilter = backends.PartialFilterMembership(membership, info.Collation)
+		if backends.FilterComparesDocuments(pf) && !getBool(doc, "partialStoredForm") {
+			info.PartialFilterStale = true
+			backends.LogStalePartialIndex(name, pf)
+		}
 	}
 	return info, nil
 }

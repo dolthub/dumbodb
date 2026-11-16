@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
@@ -131,6 +132,114 @@ func writeArray(b *strings.Builder, array *Array) {
 	b.WriteString(" ]")
 }
 
+// FormatAnyValueLimit formats value as mongod echoes it in an error message:
+// like FormatAnyValue, but with each string longer than echoedStringLimit
+// bytes cut to that length followed by "...". The result is also cut to about
+// limit bytes, with "..." marking the cut, and formatting stops there, so a
+// large value costs no more than the limit to format. Cuts never split a
+// UTF-8 character.
+func FormatAnyValueLimit(value any, limit int) string {
+	w := &limitedWriter{limit: limit}
+	writeLimited(w, value)
+	if w.cut {
+		w.b.WriteString("...")
+	}
+	return w.b.String()
+}
+
+// FormatAnyValueFits reports whether FormatAnyValueLimit(value, limit) would
+// not cut value, without building the text.
+func FormatAnyValueFits(value any, limit int) bool {
+	w := &limitedWriter{limit: limit, countOnly: true}
+	writeLimited(w, value)
+	return !w.cut
+}
+
+type limitedWriter struct {
+	b         strings.Builder
+	n         int
+	limit     int
+	cut       bool
+	countOnly bool
+}
+
+func (w *limitedWriter) write(s string) {
+	if w.cut {
+		return
+	}
+	if room := w.limit - w.n; len(s) > room {
+		if !w.countOnly {
+			w.b.WriteString(s[:runeBoundary(s, max(room, 0))])
+		}
+		w.cut = true
+		return
+	}
+	w.n += len(s)
+	if !w.countOnly {
+		w.b.WriteString(s)
+	}
+}
+
+func writeLimited(w *limitedWriter, value any) {
+	if w.cut {
+		return
+	}
+	switch value := value.(type) {
+	case *Document:
+		value.load()
+		if len(value.fields) == 0 {
+			w.write("{}")
+			return
+		}
+		w.write("{ ")
+		for i, f := range value.fields {
+			if i > 0 {
+				w.write(", ")
+			}
+			w.write(f.key)
+			w.write(": ")
+			writeLimited(w, f.value)
+			if w.cut {
+				return
+			}
+		}
+		w.write(" }")
+	case *Array:
+		if len(value.s) == 0 {
+			w.write("[]")
+			return
+		}
+		w.write("[ ")
+		for i, elem := range value.s {
+			if i > 0 {
+				w.write(", ")
+			}
+			writeLimited(w, elem)
+			if w.cut {
+				return
+			}
+		}
+		w.write(" ]")
+	case string:
+		w.write(`"`)
+		writeEchoed(w, value, echoedStringLimit)
+		w.write(`"`)
+	case Symbol:
+		w.write(`"`)
+		writeEchoed(w, string(value), echoedStringLimit)
+		w.write(`"`)
+	case JavaScript:
+		writeEchoed(w, string(value), echoedCodeLimit)
+	case Binary:
+		if len(value.B) > w.limit {
+			value.B = value.B[:w.limit]
+		}
+		w.write(FormatAnyValue(value))
+	default:
+		w.write(FormatAnyValue(value))
+	}
+}
+
 // formatDouble formats f as MongoDB's StringBuilder::appendDoubleNice does:
 // %.16g, then ".0" unless the text holds '.', 'E' or 'N' (so "1e+20.0",
 // "nan.0" and "inf.0").
@@ -148,4 +257,33 @@ func formatDouble(f float64) string {
 		s += ".0"
 	}
 	return s
+}
+
+// echoedStringLimit and echoedCodeLimit are the most bytes of a string or
+// Symbol, and of JavaScript code, that mongod repeats in an error message.
+const (
+	echoedStringLimit = 150
+	echoedCodeLimit   = 70
+)
+
+// writeEchoed writes s cut to limit bytes, marking a cut with "...".
+func writeEchoed(w *limitedWriter, s string, limit int) {
+	if len(s) > limit {
+		w.write(s[:runeBoundary(s, limit)])
+		w.write("...")
+		return
+	}
+	w.write(s)
+}
+
+// runeBoundary returns the largest n <= limit at which s can be cut without
+// splitting a UTF-8 character.
+func runeBoundary(s string, limit int) int {
+	if limit >= len(s) {
+		return len(s)
+	}
+	for limit > 0 && !utf8.RuneStart(s[limit]) {
+		limit--
+	}
+	return limit
 }

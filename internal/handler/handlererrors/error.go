@@ -194,6 +194,8 @@ const (
 	// ErrInvalidPipelineOperator indicates that provided aggregation operator is invalid.
 	ErrInvalidPipelineOperator = ErrorCode(168) // InvalidPipelineOperator
 
+	ErrCannotIndexParallelArrays = ErrorCode(171) // CannotIndexParallelArrays
+
 	ErrClientMetadataCannotBeMutated = ErrorCode(186) // ClientMetadataCannotBeMutated
 
 	// ErrNotImplemented indicates that a flag or command is not implemented.
@@ -712,6 +714,16 @@ const (
 
 	// ErrCannotExtractGeoKeys indicates a value a 2dsphere index cannot hold.
 	ErrCannotExtractGeoKeys = ErrorCode(16755) // Location16755
+
+	ErrGeoLocationFormat = ErrorCode(16804) // Location16804
+
+	ErrGeoPointOutOfInterval = ErrorCode(13027) // Location13027
+
+	ErrGeoFieldSingleElement = ErrorCode(13068) // Location13068
+
+	// ErrInvalidGeoHashConverterParameters indicates a 2d index range so wide
+	// its geohash cells overflow.
+	ErrInvalidGeoHashConverterParameters = ErrorCode(4799400) // Location4799400
 
 	// ErrKeyTooLong indicates a key longer than DumboDB stores.
 	ErrKeyTooLong = ErrorCode(17280) // KeyTooLong
@@ -1412,8 +1424,16 @@ func IndexKeyError(err error) (ErrorCode, string, bool) {
 		{index.ErrCannotExtractGeoKeys, ErrCannotExtractGeoKeys},
 		{index.ErrSymbolWithCollation, ErrCannotBuildIndexKeys},
 		{index.ErrSymbolQueryWithCollation, ErrCannotBuildIndexKeys},
+		{index.ErrCannotIndexParallelArrays, ErrCannotIndexParallelArrays},
+		{index.ErrGeoLocationFormat, ErrGeoLocationFormat},
+		{index.ErrGeoPointOutOfInterval, ErrGeoPointOutOfInterval},
+		{index.ErrGeoFieldSingleElement, ErrGeoFieldSingleElement},
+		{index.ErrStalePartialIndex, ErrOperationFailed},
 	} {
 		if errors.Is(err, e.sentinel) {
+			if errors.Is(err, index.ErrMessageElided) {
+				return e.code, "", true
+			}
 			msg := err.Error()
 			if i := strings.Index(msg, e.sentinel.Error()); i >= 0 {
 				msg = msg[i:]

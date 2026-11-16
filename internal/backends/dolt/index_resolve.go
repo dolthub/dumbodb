@@ -24,8 +24,11 @@ package dolt
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -41,6 +44,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/bson"
 	idxpkg "github.com/dolthub/dumbodb/internal/index"
 	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 type resolvedIndexEntry struct {
@@ -345,11 +349,14 @@ func applyInsertsToIndexes(ctx context.Context, infos []backends.IndexInfo, maps
 				return nil, nil, fmt.Errorf("applyInsertsToIndexes: hashing _id for index %q: %w", info.Name, err)
 			}
 			idBytes := h
-			if err := checkGeoKeys(doc, info); err != nil {
+			if err := checkIndexKeys(ctx, doc, info); err != nil {
 				return nil, nil, err
 			}
 			rows, multikey, lossy, err := indexEntriesForDoc(ctx, doc, info)
 			if err != nil {
+				return nil, nil, err
+			}
+			if err := refuseStaleEntries(info, rows); err != nil {
 				return nil, nil, err
 			}
 			outInfos[i].MarkMultikey(multikey)
@@ -421,15 +428,22 @@ func applyUpdatesToIndexes(ctx context.Context, infos []backends.IndexInfo, maps
 			}
 			idBytes := h
 
-			oldRows, _, _, err := indexEntriesForDoc(ctx, oldDocs[d], info)
+			oldRows, _, _, err := indexEntriesForDoc(ctx, oldDocs[d], entriesToRemove(info))
 			if err != nil {
 				return nil, nil, err
 			}
-			if err := checkGeoKeys(newDocs[d], info); err != nil {
+			// A document an older build indexed with parallel arrays can still
+			// be updated while it keeps them; one entering the index cannot.
+			if err := checkIndexKeys(ctx, newDocs[d], info); err != nil &&
+				!(errors.Is(err, idxpkg.ErrCannotIndexParallelArrays) &&
+					errors.Is(checkIndexKeys(ctx, oldDocs[d], info), idxpkg.ErrCannotIndexParallelArrays)) {
 				return nil, nil, err
 			}
 			newRows, multikey, lossy, err := indexEntriesForDoc(ctx, newDocs[d], info)
 			if err != nil {
+				return nil, nil, err
+			}
+			if err := refuseStaleEntries(info, newRows); err != nil {
 				return nil, nil, err
 			}
 			outInfos[i].MarkMultikey(multikey)
@@ -501,7 +515,7 @@ func applyDeletesToIndexes(ctx context.Context, infos []backends.IndexInfo, maps
 				return nil, fmt.Errorf("applyDeletesToIndexes: hashing _id for index %q: %w", info.Name, err)
 			}
 			idBytes := h
-			rows, _, _, err := indexEntriesForDoc(ctx, doc, info)
+			rows, _, _, err := indexEntriesForDoc(ctx, doc, entriesToRemove(info))
 			if err != nil {
 				return nil, err
 			}
@@ -655,4 +669,196 @@ func openIndexMap(ctx context.Context, ns tree.NodeStore, mapRoot hash.Hash) (pr
 		return prolly.Map{}, fmt.Errorf("openIndexMap: %w", err)
 	}
 	return prolly.NewMap(node, ns, idxpkg.KeyDescriptor(), idxpkg.ValDescriptor()), nil
+}
+
+// checkIndexKeys returns the error mongod raises when doc enters idx and idx
+// cannot hold its keys: a geo value it cannot index, or parallel arrays.
+// Documents a partial or sparse index leaves out are not checked, and neither
+// is a document leaving an index, so data stored before the checks existed
+// can still be updated and deleted.
+func checkIndexKeys(ctx context.Context, doc *types.Document, idx backends.IndexInfo) error {
+	if idx.MatchesPartialFilter != nil {
+		match, err := idx.MatchesPartialFilter(doc)
+		if err != nil || !match {
+			return nil
+		}
+	}
+	if sparseExcludes(doc, idx) {
+		return nil
+	}
+	if err := checkGeoKeys(ctx, doc, idx); err != nil {
+		return err
+	}
+	// mongod does not look for parallel arrays in a 2d or 2dsphere index.
+	if len(idx.Key) > 1 && !slices.ContainsFunc(idx.Key, isGeoKey) {
+		return checkParallelArrays(doc, idx)
+	}
+	return nil
+}
+
+// checkUpdatedIndexKeys refuses an updated document an index cannot hold
+// before the stored document is read. A parallel-array error stops the check
+// without refusing: it depends on whether the stored document already had
+// the arrays, which applyUpdatesToIndexes decides.
+func checkUpdatedIndexKeys(ctx context.Context, doc *types.Document, infos []backends.IndexInfo) error {
+	for _, info := range infos {
+		err := checkIndexKeys(ctx, doc, info)
+		if errors.Is(err, idxpkg.ErrCannotIndexParallelArrays) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkParallelArrays returns ErrCannotIndexParallelArrays when two fields of
+// idx reach different arrays in doc, as mongod refuses to index the cross
+// product of unrelated arrays. It follows mongod's key generation: the fields
+// that reach one array are expanded one element at a time, only into elements
+// that are documents, and a numeric path element picks its array element once,
+// so that element counts against the arrays in every other element.
+func checkParallelArrays(doc *types.Document, idx backends.IndexInfo) error {
+	var paths []string
+	for _, kp := range idx.Key {
+		if !kp.Text && !isGeoKey(kp) {
+			paths = append(paths, kp.Field)
+		}
+	}
+	return parallelArrays(doc, paths, make([]positionalElement, len(paths)))
+}
+
+// positionalElement is the array element a numeric path element picked, with
+// the value the rest of the path reaches from it and the path left after that.
+type positionalElement struct {
+	picked    bool
+	value     any
+	name      string
+	remaining string
+}
+
+// parallelArrays checks obj, a document or nil, for the remaining paths of an
+// index's fields; an empty path is a field already resolved.
+func parallelArrays(obj *types.Document, paths []string, positional []positionalElement) error {
+	paths = slices.Clone(paths)
+	var arr *types.Array
+	var arrName string
+	var arrFields []int
+	for i, path := range paths {
+		if path == "" {
+			continue
+		}
+		v, name, rest := nextIndexValue(obj, positional[i], path)
+		paths[i] = rest
+		a, isArray := v.(*types.Array)
+		if !isArray {
+			paths[i] = ""
+			continue
+		}
+		arrFields = append(arrFields, i)
+		switch {
+		case arr == nil:
+			arr, arrName = a, name
+		case a != arr:
+			return fmt.Errorf("%w [%s] [%s]", idxpkg.ErrCannotIndexParallelArrays, name, arrName)
+		}
+	}
+	if arr == nil || arr.Len() == 0 {
+		return nil
+	}
+
+	sub := make([]positionalElement, len(paths))
+	for _, i := range arrFields {
+		if paths[i] == "" {
+			continue
+		}
+		first, _, _ := strings.Cut(paths[i], ".")
+		if !isArrayFieldName(arr, first) {
+			continue
+		}
+		rest := paths[i]
+		value, name := valueOrArrayAlongPath(arr, &rest)
+		sub[i] = positionalElement{picked: true, value: value, name: name, remaining: rest}
+	}
+	for j := range arr.Len() {
+		elem, _ := must.NotFail(arr.Get(j)).(*types.Document)
+		if err := parallelArrays(elem, paths, sub); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// nextIndexValue returns the value path reaches in obj, or, when obj has no
+// field for its first element, the element a numeric path element picked; its
+// name; and the rest of the path past an array it stopped at.
+func nextIndexValue(obj *types.Document, positional positionalElement, path string) (any, string, string) {
+	first, _, _ := strings.Cut(path, ".")
+	if obj != nil && obj.Has(first) {
+		v, name := valueOrArrayAlongPath(obj, &path)
+		return v, name, path
+	}
+	if positional.picked {
+		return positional.value, positional.name, positional.remaining
+	}
+	return nil, "", ""
+}
+
+// valueOrArrayAlongPath follows *path from container, a document or an array
+// read by element name, and returns the value at its end or the first array on
+// the way, with its name; *path is left as the part after that value.
+func valueOrArrayAlongPath(container any, path *string) (any, string) {
+	for {
+		first, rest, _ := strings.Cut(*path, ".")
+		*path = rest
+		var v any
+		switch c := container.(type) {
+		case *types.Document:
+			var err error
+			if v, err = c.Get(first); err != nil {
+				return nil, ""
+			}
+		case *types.Array:
+			if !isArrayFieldName(c, first) {
+				return nil, ""
+			}
+			v = must.NotFail(c.Get(must.NotFail(strconv.Atoi(first))))
+		default:
+			return nil, ""
+		}
+		_, isArray := v.(*types.Array)
+		if isArray || rest == "" {
+			return v, first
+		}
+		if _, isDoc := v.(*types.Document); !isDoc {
+			return nil, ""
+		}
+		container = v
+	}
+}
+
+// isArrayFieldName reports whether name is the field name BSON gives an
+// element of arr.
+func isArrayFieldName(arr *types.Array, name string) bool {
+	n, err := strconv.Atoi(name)
+	return err == nil && n >= 0 && n < arr.Len() && strconv.Itoa(n) == name
+}
+
+// entriesToRemove is info for finding the entries a document may hold in the
+// index: a stale partial index may hold entries for documents outside its
+// filter as matched now, so all of a document's entries are removed.
+func entriesToRemove(info backends.IndexInfo) backends.IndexInfo {
+	if info.PartialFilterStale {
+		info.MatchesPartialFilter = nil
+	}
+	return info
+}
+
+// refuseStaleEntries refuses adding rows to a stale partial index.
+func refuseStaleEntries(info backends.IndexInfo, rows [][]any) error {
+	if info.PartialFilterStale && len(rows) > 0 {
+		return backends.StalePartialIndexError(info.Name)
+	}
+	return nil
 }

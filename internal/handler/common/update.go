@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
@@ -161,7 +162,14 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 			modified, err = processReplacementDoc(cmd, doc, param.Update)
 		} else {
 			mutations = collectSimpleFieldMutations(param.Update)
-			modified, err = processUpdateOperator(cmd, doc, param.Update, upsert, param.Filter, param.ArrayFilters)
+			var dollarBefore map[string]any
+			if !upsert {
+				dollarBefore = dollarPrefixedFieldsBefore(doc, param.Update)
+			}
+			modified, err = processUpdateOperator(cmd, doc, param.Update, upsert, param.Filter, param.ArrayFilters, collation.Parse(param.Collation).Comparator())
+			if err == nil && modified && dollarBefore != nil {
+				err = checkDollarPrefixedUpdatePaths(cmd, param.Update, dollarBefore, doc)
+			}
 		}
 
 		if err != nil {
@@ -241,6 +249,105 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 			}
 		}
 	}
+}
+
+// dollarPrefixWriters are the update operators whose write of a top-level
+// field named with a '$' mongod refuses; $unset, $pop, $pull and $pullAll may
+// change one, and $setOnInsert applies only to an inserted document, which
+// mongod does not check.
+var dollarPrefixWriters = map[string]bool{
+	"$set": true, "$inc": true, "$mul": true, "$min": true, "$max": true, "$currentDate": true,
+	"$bit": true, "$push": true, "$addToSet": true, "$rename": true,
+}
+
+// dollarUpdateTarget returns the path an operator of dollarPrefixWriters writes
+// for the field key of its operand, and whether its top-level element starts
+// with '$'.
+func dollarUpdateTarget(op string, fields *types.Document, key string) (string, bool) {
+	target := key
+	if op == "$rename" {
+		to, isString := must.NotFail(fields.Get(key)).(string)
+		if !isString {
+			return "", false
+		}
+		target = to
+	}
+	return target, strings.HasPrefix(target, "$")
+}
+
+// dollarPrefixedFieldsBefore returns the stored values of the top-level fields
+// named with a '$' that update writes, a missing field mapping to nil, or nil
+// when it writes none.
+func dollarPrefixedFieldsBefore(doc, update *types.Document) map[string]any {
+	var before map[string]any
+	for _, op := range update.Keys() {
+		fields, ok := must.NotFail(update.Get(op)).(*types.Document)
+		if !ok || !dollarPrefixWriters[op] {
+			continue
+		}
+		for _, key := range fields.Keys() {
+			target, dollar := dollarUpdateTarget(op, fields, key)
+			if !dollar {
+				continue
+			}
+			if before == nil {
+				before = map[string]any{}
+			}
+			top, _, _ := strings.Cut(target, ".")
+			if _, captured := before[top]; captured {
+				continue
+			}
+			v, _ := doc.Get(top)
+			// Operators such as $push change a stored array in place.
+			switch composite := v.(type) {
+			case *types.Document:
+				v = composite.DeepCopy()
+			case *types.Array:
+				v = composite.DeepCopy()
+			}
+			before[top] = v
+		}
+	}
+	return before
+}
+
+// checkDollarPrefixedUpdatePaths rejects an update that creates a top-level
+// field named with a '$', or replaces one with a different value or by a
+// $rename. mongod checks
+// it only when it modifies a stored document, not when it inserts an upserted
+// one; a write below an existing field, such as "$x.y", is allowed.
+func checkDollarPrefixedUpdatePaths(command string, update *types.Document, before map[string]any, after *types.Document) error {
+	for _, op := range update.Keys() {
+		fields, ok := must.NotFail(update.Get(op)).(*types.Document)
+		if !ok || !dollarPrefixWriters[op] {
+			continue
+		}
+		for _, key := range fields.Keys() {
+			target, dollar := dollarUpdateTarget(op, fields, key)
+			if !dollar {
+				continue
+			}
+			top, _, dotted := strings.Cut(target, ".")
+			old := before[top]
+			if dotted && old != nil {
+				continue
+			}
+			// A $rename target is replaced even by an equal value.
+			if newValue, _ := after.Get(top); op != "$rename" && old != nil && newValue != nil && types.Identical(old, newValue) {
+				continue
+			}
+			return NewUpdateError(
+				handlererrors.ErrDollarPrefixedFieldName,
+				fmt.Sprintf(
+					"The dollar ($) prefixed field '%[1]s' in '%[1]s' is not allowed in the context of an update's "+
+						"replacement document. Consider using an aggregation pipeline with $replaceWith.",
+					top,
+				),
+				command,
+			)
+		}
+	}
+	return nil
 }
 
 // processFilterEqualityCondition copies the fields with equality condition from
@@ -457,6 +564,39 @@ func seedFromFilter(doc, filter *types.Document, seeded *seededPaths, replacemen
 	}
 }
 
+// ValidateUpsertFilter returns the error mongod raises for a filter it cannot
+// upsert with, before any document is read.
+func ValidateUpsertFilter(command string, filter *types.Document) error {
+	if filter == nil || !filterHasExpr(filter) {
+		return nil
+	}
+	return NewUpdateError(
+		handlererrors.ErrQueryFeatureNotAllowed,
+		"$expr is not allowed in the query predicate for an upsert",
+		command,
+	)
+}
+
+func filterHasExpr(filter *types.Document) bool {
+	for _, key := range filter.Keys() {
+		switch key {
+		case "$expr":
+			return true
+		case "$and", "$or", "$nor":
+			clauses, ok := must.NotFail(filter.Get(key)).(*types.Array)
+			if !ok {
+				continue
+			}
+			for i := range clauses.Len() {
+				if clause, ok := must.NotFail(clauses.Get(i)).(*types.Document); ok && filterHasExpr(clause) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 // parseUpdatePipeline builds the aggregation stages of a pipeline-style
 // update. The stages package registers it, as it imports this one.
 var parseUpdatePipeline func(pipeline *types.Array) ([]aggregations.Stage, error)
@@ -656,28 +796,62 @@ func processReplacementDoc(command string, doc, update *types.Document) (bool, e
 	return changed, nil
 }
 
+// resolveUpdatePaths expands the positional elements ($, $[] and $[id]) of
+// each operator's path against doc as stored, as mongod does before applying
+// any of them, and refuses two resolved paths that reach the same element.
+func resolveUpdatePaths(command string, kvOps []*kvOp, doc, filter *types.Document, arrayFilters *types.Array) ([][]string, error) {
+	resolved := make([][]string, len(kvOps))
+	positional := false
+	for i, kvOp := range kvOps {
+		resolved[i] = []string{kvOp.Key}
+		if !hasPositionalOp(kvOp.Key) {
+			continue
+		}
+		positional = true
+		keys, err := expandPositionalOps(kvOp.Key, doc, filter, arrayFilters)
+		if err != nil {
+			return nil, NewUpdateError(handlererrors.ErrBadValue, err.Error(), command)
+		}
+		resolved[i] = keys
+	}
+	if !positional {
+		return resolved, nil
+	}
+	seen := newUpdatePaths()
+	for _, keys := range resolved {
+		for _, key := range keys {
+			if at, ok := seen.conflict(key); ok {
+				return nil, NewUpdateError(
+					handlererrors.ErrConflictingUpdateOperators,
+					fmt.Sprintf("Update created a conflict at '%s'", at),
+					command,
+				)
+			}
+			seen.add(key)
+		}
+	}
+	return resolved, nil
+}
+
 // processUpdateOperator updates the given document with a series of update operators.
 // Returns true if the document is changed.
 // Returns CommandError if the command is findAndModify, otherwise returns WriteError.
 // filter is the query filter used to match the document (needed for $ positional operator).
 // arrayFilters is used for $[identifier] positional operator.
-func processUpdateOperator(command string, doc, update *types.Document, upsert bool, filter *types.Document, arrayFilters *types.Array) (bool, error) {
+func processUpdateOperator(command string, doc, update *types.Document, upsert bool, filter *types.Document, arrayFilters *types.Array, cmp *collation.Comparator) (bool, error) {
 	var docUpdated bool
 	var err error
 
 	docId, _ := doc.Get("_id")
 
-	for _, kvOp := range getSortedKVOps(update) {
-		// Expand positional operators ($ $[] $[identifier]) to concrete array indices.
-		keys := []string{kvOp.Key}
-		if hasPositionalOp(kvOp.Key) {
-			keys, err = expandPositionalOps(kvOp.Key, doc, filter, arrayFilters)
-			if err != nil {
-				return false, NewUpdateError(handlererrors.ErrBadValue, err.Error(), command)
-			}
-		}
+	kvOps := getSortedKVOps(update)
+	resolved, err := resolveUpdatePaths(command, kvOps, doc, filter, arrayFilters)
+	if err != nil {
+		return false, err
+	}
 
-		for _, key := range keys {
+	for i, kvOp := range kvOps {
+		for _, key := range resolved[i] {
 			var updated bool
 			value := kvOp.Value
 
@@ -766,13 +940,13 @@ func processUpdateOperator(command string, doc, update *types.Document, upsert b
 				}
 
 			case "$pull":
-				updated, err = processPullArrayUpdateExpression(command, doc, key, value)
+				updated, err = processPullArrayUpdateExpression(command, doc, key, value, cmp)
 				if err != nil {
 					return false, err
 				}
 
 			case "$pullAll":
-				updated, err = processPullAllArrayUpdateExpression(command, doc, key, value)
+				updated, err = processPullAllArrayUpdateExpression(command, doc, key, value, cmp)
 				if err != nil {
 					return false, err
 				}
@@ -1513,70 +1687,11 @@ func processBitFieldExpression(command string, doc *types.Document, bitKey strin
 // ValidateUpdateOperators returns CommandError for findAndModify case-insensitive command name,
 // WriteError for other commands.
 func ValidateUpdateOperators(command string, update *types.Document) error {
-	var err error
-
-	currentDate, err := extractValueFromUpdateOperator(command, "$currentDate", update)
-	if err != nil {
+	if err := validateUpdatePaths(command, update, update.Keys()); err != nil {
 		return err
 	}
 
-	inc, err := extractValueFromUpdateOperator(command, "$inc", update)
-	if err != nil {
-		return err
-	}
-
-	max, err := extractValueFromUpdateOperator(command, "$max", update)
-	if err != nil {
-		return err
-	}
-
-	min, err := extractValueFromUpdateOperator(command, "$min", update)
-	if err != nil {
-		return err
-	}
-
-	mul, err := extractValueFromUpdateOperator(command, "$mul", update)
-	if err != nil {
-		return err
-	}
-
-	set, err := extractValueFromUpdateOperator(command, "$set", update)
-	if err != nil {
-		return err
-	}
-
-	unset, err := extractValueFromUpdateOperator(command, "$unset", update)
-	if err != nil {
-		return err
-	}
-
-	setOnInsert, err := extractValueFromUpdateOperator(command, "$setOnInsert", update)
-	if err != nil {
-		return err
-	}
-
-	_, err = extractValueFromUpdateOperator(command, "$rename", update)
-	if err != nil {
-		return err
-	}
-
-	pop, err := extractValueFromUpdateOperator(command, "$pop", update)
-	if err != nil {
-		return err
-	}
-
-	push, err := extractValueFromUpdateOperator(command, "$push", update)
-	if err != nil {
-		return err
-	}
-
-	addToSet, err := extractValueFromUpdateOperator(command, "$addToSet", update)
-	if err != nil {
-		return err
-	}
-
-	pullAll, err := extractValueFromUpdateOperator(command, "$pullAll", update)
-	if err != nil {
+	if err := validateCurrentDateExpression(command, update); err != nil {
 		return err
 	}
 
@@ -1585,44 +1700,7 @@ func ValidateUpdateOperators(command string, update *types.Document) error {
 		return err
 	}
 
-	bit, err := extractValueFromUpdateOperator(command, "$bit", update)
-	if err != nil {
-		return err
-	}
-
-	if err = validateOperatorKeys(
-		command,
-		addToSet,
-		currentDate,
-		inc,
-		min,
-		max,
-		mul,
-		pop,
-		pull,
-		pullAll,
-		push,
-		set,
-		setOnInsert,
-		unset,
-		bit,
-	); err != nil {
-		return err
-	}
-
-	if err = validateCurrentDateExpression(command, update); err != nil {
-		return err
-	}
-
-	if err = validateRenameExpression(command, update); err != nil {
-		return err
-	}
-
-	if err = validatePullConditions(command, pull); err != nil {
-		return err
-	}
-
-	return nil
+	return validatePullConditions(command, pull)
 }
 
 // validatePullConditions returns the error mongod raises while parsing the
@@ -1659,48 +1737,126 @@ func validatePullCondition(condition *types.Document) error {
 			"$pull",
 		)
 	}
-	if isFieldOperatorExpression(condition) {
+	if isPullFieldOperators(condition) {
+		if err := checkPullFieldOperators(condition); err != nil {
+			return err
+		}
 		return ValidateFilter(must.NotFail(types.NewDocument("v", condition)), nil)
 	}
-	if err := checkPullQueryFeatures(condition); err != nil {
+	if err := checkPullQuery(condition, false); err != nil {
 		return err
 	}
 	return ValidateFilter(condition, nil)
 }
 
-// checkPullQueryFeatures rejects the query features mongod does not allow in
-// a $pull condition, at the top level or inside $and, $or and $nor.
-func checkPullQueryFeatures(query *types.Document) error {
+// checkPullQuery rejects the query features mongod does not allow in a $pull
+// condition, in the order it parses them. inElemMatch says whether query is
+// the query of an $elemMatch, where $expr and $text get the generic
+// top-level-only error.
+func checkPullQuery(query *types.Document, inElemMatch bool) error {
 	for _, key := range query.Keys() {
+		value := must.NotFail(query.Get(key))
 		switch key {
+		case "$jsonSchema":
+			return pullFeatureError(handlererrors.ErrQueryFeatureNotAllowed, key)
 		case "$expr":
-			return handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrQueryFeatureNotAllowed, "$expr is not allowed in this context", "$pull",
-			)
-		case "$text", "$where":
-			return handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrBadValue, key+" is not allowed in this context", "$pull",
-			)
+			if !inElemMatch {
+				return pullFeatureError(handlererrors.ErrQueryFeatureNotAllowed, key)
+			}
+		case "$text":
+			if !inElemMatch {
+				return pullFeatureError(handlererrors.ErrBadValue, key)
+			}
+		case "$where":
+			return pullFeatureError(handlererrors.ErrBadValue, key)
 		case "$and", "$or", "$nor":
-			branches, ok := must.NotFail(query.Get(key)).(*types.Array)
+			branches, ok := value.(*types.Array)
 			if !ok {
 				continue
 			}
 			for i := range branches.Len() {
 				if branch, ok := must.NotFail(branches.Get(i)).(*types.Document); ok {
-					if err := checkPullQueryFeatures(branch); err != nil {
+					if err := checkPullQuery(branch, inElemMatch); err != nil {
 						return err
 					}
 				}
 			}
+		default:
+			if ops, ok := value.(*types.Document); ok && !strings.HasPrefix(key, "$") && isOperatorDocument(ops) {
+				if err := checkPullFieldOperators(ops); err != nil {
+					return err
+				}
+			}
 		}
 	}
-	if FindGeoSortKey(query) != nil {
-		return handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrGeoNearNotAllowedInContext, GeoNearNotAllowedMsg, "$pull",
-		)
+	return nil
+}
+
+// checkPullFieldOperators checks the operators applied to one field of a
+// $pull condition, and those inside its $not, $elemMatch and the $elemMatch
+// operands of $all. Operands that are values, as of $eq or $in, are not
+// looked into.
+func checkPullFieldOperators(ops *types.Document) error {
+	for _, op := range ops.Keys() {
+		operand := must.NotFail(ops.Get(op))
+		switch op {
+		case "$near", "$nearSphere", "$geoNear":
+			switch operand.(type) {
+			case *types.Document, *types.Array:
+				return handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrGeoNearNotAllowedInContext, GeoNearNotAllowedMsg, "$pull",
+				)
+			}
+			return handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrBadValue,
+				fmt.Sprintf("near must be first in: { %s: %s }", op, types.FormatAnyValue(operand)),
+				"$pull",
+			)
+		case "$not":
+			if inner, ok := operand.(*types.Document); ok && isOperatorDocument(inner) {
+				if err := checkPullFieldOperators(inner); err != nil {
+					return err
+				}
+			}
+		case "$all":
+			elems, ok := operand.(*types.Array)
+			if !ok {
+				continue
+			}
+			for i := range elems.Len() {
+				if elem, ok := must.NotFail(elems.Get(i)).(*types.Document); ok && isElemMatchDocument(elem) {
+					if err := checkPullFieldOperators(elem); err != nil {
+						return err
+					}
+				}
+			}
+		case "$elemMatch":
+			inner, ok := operand.(*types.Document)
+			if !ok {
+				continue
+			}
+			var err error
+			if isPullFieldOperators(inner) {
+				err = checkPullFieldOperators(inner)
+			} else {
+				err = checkPullQuery(inner, true)
+			}
+			if err != nil {
+				return err
+			}
+		}
 	}
 	return nil
+}
+
+// isPullFieldOperators is isFieldOperatorExpression for a $pull condition,
+// where $jsonSchema, a query operator, starts a query.
+func isPullFieldOperators(doc *types.Document) bool {
+	return isFieldOperatorExpression(doc) && doc.Keys()[0] != "$jsonSchema"
+}
+
+func pullFeatureError(code handlererrors.ErrorCode, feature string) error {
+	return handlererrors.NewCommandErrorMsgWithArgument(code, feature+" is not allowed in this context", "$pull")
 }
 
 // HasSupportedUpdateModifiers checks if the update document contains supported update operators.
@@ -1715,7 +1871,7 @@ func HasSupportedUpdateModifiers(command string, update *types.Document) (bool, 
 		return false, nil
 	}
 
-	for _, operator := range keys {
+	for i, operator := range keys {
 		switch operator {
 		case // field update operators:
 			"$currentDate",
@@ -1727,6 +1883,11 @@ func HasSupportedUpdateModifiers(command string, update *types.Document) (bool, 
 			// array update operators:
 			"$pop", "$push", "$addToSet", "$pullAll", "$pull":
 		default:
+			// mongod parses the operators in order, so a path error of an
+			// operator before this one is reported first.
+			if err := validateUpdatePaths(command, update, keys[:i]); err != nil {
+				return false, err
+			}
 			return false, NewUpdateError(
 				handlererrors.ErrFailedToParse,
 				fmt.Sprintf(
@@ -1739,6 +1900,158 @@ func HasSupportedUpdateModifiers(command string, update *types.Document) (bool, 
 	}
 
 	return true, nil
+}
+
+// validateUpdatePaths returns the first error mongod raises while parsing
+// the operators ops of update in order: an operand that is not a document, a
+// $rename target that is not a string, an empty or positional first path
+// element, a path overlapping one an earlier field updates, or a $rename onto
+// its own path.
+func validateUpdatePaths(command string, update *types.Document, ops []string) error {
+	visited := newUpdatePaths()
+	addPath := func(key string) error {
+		if err := checkUpdatePath(command, key); err != nil {
+			return err
+		}
+		if at, ok := visited.conflict(key); ok {
+			return conflictError(command, key, at)
+		}
+		return nil
+	}
+
+	for _, op := range ops {
+		// A replacement document's fields are not operators.
+		if !strings.HasPrefix(op, "$") {
+			continue
+		}
+		fields, err := extractValueFromUpdateOperator(command, op, update)
+		if err != nil || fields == nil {
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		for _, key := range fields.Keys() {
+			if op != "$rename" {
+				if err := addPath(key); err != nil {
+					return err
+				}
+				visited.add(key)
+				continue
+			}
+
+			value := must.NotFail(fields.Get(key))
+			to, ok := value.(string)
+			if !ok {
+				return NewUpdateError(
+					handlererrors.ErrBadValue,
+					fmt.Sprintf("The 'to' field for $rename must be a string: %s: %v", key, value),
+					command,
+				)
+			}
+			for _, path := range []string{key, to} {
+				if err := addPath(path); err != nil {
+					return err
+				}
+			}
+			if key == to {
+				return NewUpdateError(
+					handlererrors.ErrBadValue,
+					fmt.Sprintf(`The source and target field for $rename must differ: %s: "%[1]s"`, key),
+					command,
+				)
+			}
+			if strings.HasPrefix(to, key+".") || strings.HasPrefix(key, to+".") {
+				return NewUpdateError(
+					handlererrors.ErrBadValue,
+					fmt.Sprintf(`The source and target field for $rename must not be on the same path: %s: "%s"`, key, to),
+					command,
+				)
+			}
+			visited.add(key)
+			visited.add(to)
+		}
+	}
+
+	return nil
+}
+
+// checkUpdatePath returns mongod's error for an update path with an empty
+// element or a positional element in the first position.
+func checkUpdatePath(command, key string) error {
+	if key == "" {
+		return NewUpdateError(handlererrors.ErrEmptyName, "An empty update path is not valid.", command)
+	}
+	if _, err := types.NewPathFromString(key); err != nil {
+		return NewUpdateError(
+			handlererrors.ErrEmptyName,
+			fmt.Sprintf("The update path '%s' contains an empty field name, which is not allowed.", key),
+			command,
+		)
+	}
+	return checkFirstPathElement(command, key)
+}
+
+// updatePaths holds the paths an update has added so far, and their
+// prefixes, so a conflict is found in time linear in the path's length.
+// arrayChildren records, for each prefix, whether the elements added under it
+// are array filters ($[] or $[id]); mongod refuses to mix them with any other
+// element under the same prefix.
+type updatePaths struct {
+	full          map[string]struct{}
+	arrayChildren map[string]bool
+}
+
+func newUpdatePaths() *updatePaths {
+	return &updatePaths{full: map[string]struct{}{}, arrayChildren: map[string]bool{}}
+}
+
+// conflict returns where path overlaps an added path, the shorter of the
+// two, as mongod reports it.
+func (u *updatePaths) conflict(path string) (at string, ok bool) {
+	for i := 0; i < len(path); i++ {
+		if path[i] != '.' {
+			continue
+		}
+		prefix := path[:i]
+		if _, ok := u.full[prefix]; ok {
+			return prefix, true
+		}
+		if arrayChildren, ok := u.arrayChildren[prefix]; ok && arrayChildren != isArrayFilterElement(path[i+1:]) {
+			return prefix, true
+		}
+	}
+	if _, ok := u.full[path]; ok {
+		return path, true
+	}
+	if _, ok := u.arrayChildren[path]; ok {
+		return path, true
+	}
+	return "", false
+}
+
+func (u *updatePaths) add(path string) {
+	u.full[path] = struct{}{}
+	for i := 0; i < len(path); i++ {
+		if path[i] == '.' {
+			u.arrayChildren[path[:i]] = isArrayFilterElement(path[i+1:])
+		}
+	}
+}
+
+// isArrayFilterElement reports whether the first element of rest is $[] or
+// $[id].
+func isArrayFilterElement(rest string) bool {
+	first, _, _ := strings.Cut(rest, ".")
+	return strings.HasPrefix(first, "$[") && strings.HasSuffix(first, "]")
+}
+
+func conflictError(command, path, at string) error {
+	return NewUpdateError(
+		handlererrors.ErrConflictingUpdateOperators,
+		fmt.Sprintf("Updating the path '%s' would create a conflict at '%s'", path, at),
+		command,
+	)
 }
 
 // replacementDollarField returns mongod's error for a replacement document
@@ -1773,52 +2086,24 @@ func NewUpdateError(code handlererrors.ErrorCode, msg, command string) error {
 	return handlererrors.NewWriteErrorMsg(code, msg)
 }
 
-// validateOperatorKeys returns error if any key contains empty path or
-// the same path prefix exists in other key or other document.
-func validateOperatorKeys(command string, docs ...*types.Document) error {
-	var visitedPaths []types.Path
-
-	for _, doc := range docs {
-		for _, key := range doc.Keys() {
-			if key == "" {
-				return NewUpdateError(handlererrors.ErrEmptyName, "An empty update path is not valid.", command)
-			}
-			nextPath, err := types.NewPathFromString(key)
-			if err != nil {
-				return NewUpdateError(
-					handlererrors.ErrEmptyName,
-					fmt.Sprintf(
-						"The update path '%s' contains an empty field name, which is not allowed.",
-						key,
-					),
-					command,
-				)
-			}
-
-			err = types.IsConflictPath(visitedPaths, nextPath)
-			var pathErr *types.PathError
-
-			if errors.As(err, &pathErr) {
-				if pathErr.Code() == types.ErrPathConflictOverwrite ||
-					pathErr.Code() == types.ErrPathConflictCollision {
-					return NewUpdateError(
-						handlererrors.ErrConflictingUpdateOperators,
-						fmt.Sprintf(
-							"Updating the path '%[1]s' would create a conflict at '%[1]s'", key,
-						),
-						command,
-					)
-				}
-			}
-
-			if err != nil {
-				return lazyerrors.Error(err)
-			}
-
-			visitedPaths = append(visitedPaths, nextPath)
-		}
+// checkFirstPathElement refuses an update path whose first element is a
+// positional '$' or an array filter identifier, as mongod does while parsing.
+func checkFirstPathElement(command, path string) error {
+	first, _, _ := strings.Cut(path, ".")
+	switch {
+	case first == "$":
+		return NewUpdateError(
+			handlererrors.ErrBadValue,
+			fmt.Sprintf("Cannot have positional (i.e. '$') element in the first position in path '%s'", path),
+			command,
+		)
+	case strings.HasPrefix(first, "$[") && strings.HasSuffix(first, "]"):
+		return NewUpdateError(
+			handlererrors.ErrBadValue,
+			fmt.Sprintf("Cannot have array filter identifier (i.e. '$[<id>]') element in the first position in path '%s'", path),
+			command,
+		)
 	}
-
 	return nil
 }
 
@@ -1869,76 +2154,6 @@ func extractValueFromUpdateOperator(command, op string, update *types.Document) 
 	}
 
 	return doc, nil
-}
-
-// validateRenameExpression validates $rename input on correctness.
-func validateRenameExpression(command string, update *types.Document) error {
-	if !update.Has("$rename") {
-		return nil
-	}
-
-	updateExpression := must.NotFail(update.Get("$rename"))
-
-	// updateExpression is document, checked in ValidateUpdateOperators.
-	doc := updateExpression.(*types.Document)
-
-	iter := doc.Iterator()
-	defer iter.Close()
-
-	keys := map[string]struct{}{}
-
-	for {
-		k, v, err := iter.Next()
-		if err != nil {
-			if errors.Is(err, iterator.ErrIteratorDone) {
-				break
-			}
-
-			return lazyerrors.Error(err)
-		}
-
-		var vStr string
-
-		vStr, ok := v.(string)
-		if !ok {
-			return NewUpdateError(
-				handlererrors.ErrBadValue,
-				fmt.Sprintf("The 'to' field for $rename must be a string: %s: %v", k, v),
-				command,
-			)
-		}
-
-		// disallow fields where key is equal to the target
-		if k == vStr {
-			return NewUpdateError(
-				handlererrors.ErrBadValue,
-				fmt.Sprintf(`The source and target field for $rename must differ: %s: "%[1]s"`, k, vStr),
-				command,
-			)
-		}
-
-		if _, ok = keys[k]; ok {
-			return NewUpdateError(
-				handlererrors.ErrConflictingUpdateOperators,
-				fmt.Sprintf("Updating the path '%s' would create a conflict at '%s'", k, k),
-				command,
-			)
-		}
-
-		keys[k] = struct{}{}
-
-		if _, ok = keys[vStr]; ok {
-			return NewUpdateError(
-				handlererrors.ErrConflictingUpdateOperators,
-				fmt.Sprintf("Updating the path '%s' would create a conflict at '%s'", vStr, vStr),
-				command,
-			)
-		}
-
-		keys[vStr] = struct{}{}
-	}
-
-	return nil
 }
 
 // validateCurrentDateExpression validates $currentDate input on correctness.

@@ -144,6 +144,13 @@ func (h *Handler) MsgBulkWrite(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		if opDoc == nil || !opDoc.Has("updateMods") {
 			continue
 		}
+		if v, err := opDoc.Get("arrayFilters"); err == nil {
+			if arrayFilters, ok := v.(*types.Array); ok {
+				if err := common.CheckArrayFilterTypes("bulkWrite", arrayFilters); err != nil {
+					return nil, err
+				}
+			}
+		}
 		pipeline, _ := must.NotFail(opDoc.Get("updateMods")).(*types.Array)
 		for j := 0; pipeline != nil && j < pipeline.Len(); j++ {
 			if _, ok := must.NotFail(pipeline.Get(j)).(*types.Document); !ok {
@@ -161,6 +168,7 @@ func (h *Handler) MsgBulkWrite(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		nInserted, nMatched, nModified, nUpserted, nDeleted, nErrors int32
 	)
 	firstBatch := types.MakeArray(ops.Len())
+	var budget errorBudget
 
 	for i := 0; i < ops.Len(); i++ {
 		opDoc, ok := must.NotFail(ops.Get(i)).(*types.Document)
@@ -172,7 +180,7 @@ func (h *Handler) MsgBulkWrite(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			)
 		}
 
-		res, opErr := h.execBulkWriteOp(connCtx, opDoc, namespaces, bypass)
+		res, opErr := h.execBulkWriteOp(budget.context(connCtx), opDoc, namespaces, bypass)
 		entry := must.NotFail(types.NewDocument("idx", int32(i)))
 
 		if opErr != nil {
@@ -180,7 +188,7 @@ func (h *Handler) MsgBulkWrite(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			code, msg := extractCommandError(opErr)
 			entry.Set("ok", float64(0))
 			entry.Set("code", code)
-			entry.Set("errmsg", msg)
+			entry.Set("errmsg", budget.shorten(msg))
 			entry.Set("n", int32(0))
 			if opDoc.Has("update") {
 				entry.Set("nModified", int32(0))
@@ -206,15 +214,12 @@ func (h *Handler) MsgBulkWrite(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		}
 
 		entry.Set("ok", float64(1))
-		entry.Set("n", res.matched+res.inserted+res.deleted)
+		entry.Set("n", res.matched+res.upserted+res.inserted+res.deleted)
 		if res.modified > 0 || res.kind == "update" {
 			entry.Set("nModified", res.modified)
 		}
 		if res.upserted > 0 && res.upsertedID != nil {
-			entry.Set("upserted", must.NotFail(types.NewDocument(
-				"index", int32(i),
-				"_id", res.upsertedID,
-			)))
+			entry.Set("upserted", must.NotFail(types.NewDocument("_id", res.upsertedID)))
 		}
 		firstBatch.Append(entry)
 	}
@@ -349,6 +354,10 @@ func (h *Handler) execBulkWriteOp(ctx context.Context, op *types.Document, names
 		)
 	}
 
+	if code, msg, ok := handlererrors.IndexKeyError(err); ok {
+		err = handlererrors.NewCommandErrorMsgWithArgument(code, msg, "bulkWrite")
+	}
+
 	if err == nil && res.warnAllowed > 0 {
 		h.L.Warn("documents allowed despite failing validation (validationAction:warn)",
 			"collection", ns.coll, "count", res.warnAllowed)
@@ -461,6 +470,11 @@ func execBulkWriteUpdate(ctx context.Context, db backends.Database, c backends.C
 	if !bypass {
 		validator, valLevel, valAction = collectionValidator(ctx, db, ns.coll)
 	}
+	if upsert {
+		if err := common.ValidateUpsertFilter("bulkWrite", filter); err != nil {
+			return bulkWriteOpResult{}, err
+		}
+	}
 	update := &common.Update{
 		Filter:           filter,
 		UpdateRaw:        modsVal,
@@ -470,6 +484,10 @@ func execBulkWriteUpdate(ctx context.Context, db backends.Database, c backends.C
 		Validator:        validator,
 		ValidationLevel:  valLevel,
 		ValidationAction: valAction,
+	}
+
+	if err := common.ParseArrayFilters("bulkWrite", arrayFilters); err != nil {
+		return bulkWriteOpResult{}, err
 	}
 
 	switch u := modsVal.(type) {
@@ -484,6 +502,9 @@ func execBulkWriteUpdate(ctx context.Context, db backends.Database, c backends.C
 			if err := common.ValidateUpdateOperators("bulkWrite", u); err != nil {
 				return bulkWriteOpResult{}, err
 			}
+			if err := common.ValidateArrayFilters("bulkWrite", u, false, arrayFilters); err != nil {
+				return bulkWriteOpResult{}, err
+			}
 		} else if multi {
 			return bulkWriteOpResult{}, common.NewUpdateError(
 				handlererrors.ErrFailedToParse,
@@ -492,6 +513,9 @@ func execBulkWriteUpdate(ctx context.Context, db backends.Database, c backends.C
 			)
 		}
 	case *types.Array:
+		if err := common.ValidateArrayFilters("bulkWrite", nil, true, arrayFilters); err != nil {
+			return bulkWriteOpResult{}, err
+		}
 		stages, err := common.ParseUpdatePipeline(u)
 		if err != nil {
 			return bulkWriteOpResult{}, err
@@ -549,10 +573,6 @@ func execBulkWriteUpdate(ctx context.Context, db backends.Database, c backends.C
 
 	if updRes.Upserted.Doc != nil {
 		out.upserted = 1
-		// Per MongoDB semantics, upsert causes matched=1 but it's reported as
-		// upserted rather than modified; the cumulative counters at the top
-		// level add matched separately, so mirror that here.
-		out.matched = 1
 		out.upsertedID, _ = updRes.Upserted.Doc.Get("_id")
 	}
 

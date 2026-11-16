@@ -343,6 +343,9 @@ func groupScansIndex(ctx context.Context, idx backends.IndexInfo, key string, cl
 			return false
 		}
 	}
+	if idx.PartialFilterStale {
+		return false
+	}
 	if idx.PartialFilterExpression != nil {
 		implied, known, err := backends.QueryImpliesPartialFilter(ctx, filter, idx.PartialFilterExpression, queryCollation, idx.Collation)
 		if err != nil || !known || !implied {

@@ -31,7 +31,11 @@ import (
 // index may serve query. known is false for a pfe shape it does not model.
 // It returns ctx's error once ctx is done.
 func QueryImpliesPartialFilter(ctx context.Context, query, pfe, queryCollation, indexCollation *types.Document) (implied, known bool, err error) {
-	rhs := parseSubsetExpr(pfe)
+	canonical, err := CanonicalPartialFilter(pfe)
+	if err != nil {
+		return false, false, err
+	}
+	rhs := parseSubsetExpr(canonical)
 	if !rhs.modeledAsPartialFilter() {
 		return false, false, nil
 	}

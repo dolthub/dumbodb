@@ -118,6 +118,11 @@ func validateFieldPredicate(empty *types.Document, key string, value any, cmp *c
 		if op == "$options" {
 			continue
 		}
+		if !strings.HasPrefix(op, "$") {
+			return handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrBadValue, fmt.Sprintf("unknown operator: %s", op), op,
+			)
+		}
 		operand := must.NotFail(expr.Get(op))
 		single := must.NotFail(types.NewDocument(op, operand))
 		if options, err := expr.Get("$options"); err == nil && op == "$regex" {
@@ -125,6 +130,11 @@ func validateFieldPredicate(empty *types.Document, key string, value any, cmp *c
 		}
 		if _, err := FilterDocumentColl(empty, must.NotFail(types.NewDocument(key, single)), cmp); err != nil {
 			return err
+		}
+		if op == "$all" {
+			if err := validateAllElemMatches(empty, key, operand, cmp); err != nil {
+				return err
+			}
 		}
 		inner, isDoc := operand.(*types.Document)
 		switch {
@@ -138,9 +148,32 @@ func validateFieldPredicate(empty *types.Document, key string, value any, cmp *c
 				return err
 			}
 		case op == "$elemMatch":
+			if err := checkElemMatchTopLevelOnly(inner); err != nil {
+				return err
+			}
 			if err := ValidateFilter(inner, cmp); err != nil {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+// validateAllElemMatches validates the $elemMatch operands of an $all, which
+// evaluation reaches only for a document holding an array at key.
+func validateAllElemMatches(empty *types.Document, key string, operand any, cmp *collation.Comparator) error {
+	elems, ok := operand.(*types.Array)
+	if !ok {
+		return nil
+	}
+	for i := range elems.Len() {
+		elem, ok := must.NotFail(elems.Get(i)).(*types.Document)
+		if !ok || !isElemMatchDocument(elem) {
+			continue
+		}
+		single := must.NotFail(types.NewDocument("$elemMatch", must.NotFail(elem.Get("$elemMatch"))))
+		if err := validateFieldPredicate(empty, key, single, cmp); err != nil {
+			return err
 		}
 	}
 	return nil

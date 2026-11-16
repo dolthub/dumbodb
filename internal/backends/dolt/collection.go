@@ -1862,7 +1862,7 @@ func compoundIndexBounds(idx backends.IndexInfo, filter *types.Document, queryCm
 			return s, e, true
 		}
 		raw, err := filter.Get(kp.Field)
-		if err != nil {
+		if err != nil || sharesMultikeyPrefix(idx, i) {
 			if i == 0 {
 				return nil, nil, false
 			}
@@ -1898,6 +1898,24 @@ func compoundIndexBounds(idx backends.IndexInfo, filter *types.Document, queryCm
 		return start, stop, true
 	}
 	return nil, nil, false
+}
+
+// sharesMultikeyPrefix reports whether key field i of idx and an earlier key
+// field may both hold arrays reached through the same leading field. As in
+// mongod, their keys come from one array element at a time, so a document can
+// match the two conditions through different elements and have no key
+// holding both values; field i must not narrow the bounds.
+func sharesMultikeyPrefix(idx backends.IndexInfo, i int) bool {
+	if !idx.KeyMultikey(i) {
+		return false
+	}
+	first, _, _ := strings.Cut(idx.Key[i].Field, ".")
+	for j := range i {
+		if other, _, _ := strings.Cut(idx.Key[j].Field, "."); other == first && idx.KeyMultikey(j) {
+			return true
+		}
+	}
+	return false
 }
 
 // compareScalars returns -1 / 0 / 1 using types.Compare. Used to merge
@@ -2011,6 +2029,9 @@ func explainAmount(n int64) any {
 // (backends.QueryImpliesPartialFilter). A filter expression it does not model,
 // or a done ctx, counts as not, leaving the index unused.
 func partialIndexServes(ctx context.Context, filter *types.Document, idx backends.IndexInfo, queryCollation *types.Document) bool {
+	if idx.PartialFilterStale {
+		return false
+	}
 	implied, known, err := backends.QueryImpliesPartialFilter(ctx, filter, idx.PartialFilterExpression, queryCollation, idx.Collation)
 	return err == nil && known && implied
 }
@@ -3398,10 +3419,6 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 		if len(idxInfos) > 0 {
 			// The new doc decodes from newBytes (what was actually stored;
 			// the partial-mutation path may differ from params.Docs).
-			oldDoc, err := readDocFromValue(ctx, state.ns, existingTup)
-			if err != nil {
-				return nil, fmt.Errorf("decoding pre-update document: %w", err)
-			}
 			newDoc, err := bsonToDoc(newBytes)
 			if err != nil {
 				return nil, fmt.Errorf("decoding post-update document: %w", err)
@@ -3411,6 +3428,14 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 				if err := c.validateUniqueOnUpdate(ctx, state, m, idxInfos, idxMaps, newDoc, h, batchClaims); err != nil {
 					return nil, err
 				}
+			}
+			if err := checkUpdatedIndexKeys(ctx, newDoc, idxInfos); err != nil {
+				return nil, fmt.Errorf("updating secondary indexes: %w", err)
+			}
+
+			oldDoc, err := readDocFromValue(ctx, state.ns, existingTup)
+			if err != nil {
+				return nil, fmt.Errorf("decoding pre-update document: %w", err)
 			}
 
 			idxOldDocs = append(idxOldDocs, oldDoc)
@@ -3702,7 +3727,7 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 	}
 
 	field := filter.Keys()[0]
-	if strings.HasPrefix(field, "$") {
+	if strings.HasPrefix(field, "$") || hasArrayIndexComponent(field) {
 		return 0, false, nil
 	}
 
@@ -3824,6 +3849,9 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 // tryExactIndexedCount counts a filter of several fields from an index whose
 // bounds hold exactly its matches, without fetching a document.
 func (c *collection) tryExactIndexedCount(ctx context.Context, state *dbState, filter *types.Document, queryCollation *types.Document, stop int64, hint any) (int64, bool, error) {
+	if slices.ContainsFunc(filter.Keys(), hasArrayIndexComponent) {
+		return 0, false, nil
+	}
 	queryColl := collation.Parse(queryCollation)
 	idxInfos, idxMaps, err := resolveIndexesLocked(ctx, c, state)
 	if err != nil {
@@ -3853,6 +3881,18 @@ func (c *collection) tryExactIndexedCount(ctx context.Context, state *dbState, f
 		return 0, false, nil
 	}
 	return countIndexRange(ctx, idxMaps[found], start, end, idxInfos[found].Multikey, stop)
+}
+
+// hasArrayIndexComponent reports whether a dotted path has a numeric
+// component. Index keys expand the array such a component reaches, which a
+// filter compares as a whole value, so the keys do not count its matches.
+func hasArrayIndexComponent(path string) bool {
+	for _, part := range strings.Split(path, ".") {
+		if part != "" && strings.Trim(part, "0123456789") == "" {
+			return true
+		}
+	}
+	return false
 }
 
 // allCollationFree reports whether every field condition of filter compares
@@ -4678,7 +4718,7 @@ func (c *collection) buildSecondaryIndex(ctx context.Context, state *dbState, id
 			return prolly.Map{}, 0, false, fmt.Errorf("index: reading document for build scan: %w", err)
 		}
 
-		if err := checkGeoKeys(doc, idx); err != nil {
+		if err := checkIndexKeys(ctx, doc, idx); err != nil {
 			return prolly.Map{}, 0, false, err
 		}
 		rows, rowMultikey, rowLossy, err := indexEntriesForDoc(ctx, doc, idx)

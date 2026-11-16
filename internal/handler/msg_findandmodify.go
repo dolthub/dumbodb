@@ -65,8 +65,31 @@ func (h *Handler) MsgFindAndModify(connCtx context.Context, msg *wire.OpMsg) (*w
 		return nil, err
 	}
 
+	if err = common.CheckArrayFilterTypes(document.Command(), params.ArrayFilters); err != nil {
+		return nil, err
+	}
 	if params.Update != nil {
 		if err = common.ValidateUpdateOperators(document.Command(), params.Update); err != nil {
+			return nil, err
+		}
+	}
+	if params.Remove && params.ArrayFilters != nil {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrFailedToParse, "Cannot specify arrayFilters and remove=true", document.Command(),
+		)
+	}
+	if params.Pipeline != nil && params.ArrayFilters != nil {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrFailedToParse, "Cannot specify arrayFilters and a pipeline update", document.Command(),
+		)
+	}
+	if params.HasUpdateOperators || params.Pipeline != nil {
+		if err = common.ValidateArrayFilters(document.Command(), params.Update, params.Pipeline != nil, params.ArrayFilters); err != nil {
+			return nil, err
+		}
+	}
+	if params.Upsert {
+		if err = common.ValidateUpsertFilter(document.Command(), params.Query); err != nil {
 			return nil, err
 		}
 	}
@@ -250,6 +273,7 @@ func (h *Handler) findAndModifyDocument(ctx context.Context, params *common.Find
 		Pipeline:           params.Pipeline,
 		PipelineStages:     params.PipelineStages,
 		ArrayFilters:       params.ArrayFilters,
+		Collation:          params.Collation,
 		Validator:          validator,
 		ValidationLevel:    valLevel,
 		ValidationAction:   valAction,
