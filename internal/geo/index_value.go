@@ -17,6 +17,7 @@ package geo
 import (
 	"fmt"
 
+	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
@@ -329,21 +330,10 @@ func numericType(v any) (any, bool) {
 }
 
 func bsonTypeName(v any) string {
-	switch v.(type) {
-	case nil:
+	if v == nil {
 		return "missing"
-	case *types.Array:
-		return "array"
-	case *types.Document:
-		return "object"
-	case string:
-		return "string"
-	case bool:
-		return "bool"
-	case types.NullType:
-		return "null"
 	}
-	return fmt.Sprintf("%T", v)
+	return handlerparams.AliasFromType(v)
 }
 
 // echoLimit bounds the bytes of a value an error repeats, as mongod truncates
