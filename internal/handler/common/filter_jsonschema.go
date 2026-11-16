@@ -618,6 +618,12 @@ func valueMatchesBSONType(value any, typeName string) bool {
 	case "regex":
 		_, ok := value.(types.Regex)
 		return ok
+	case "javascript":
+		_, ok := value.(types.JavaScript)
+		return ok
+	case "symbol":
+		_, ok := value.(types.Symbol)
+		return ok
 	case "int":
 		_, ok := value.(int32)
 		return ok

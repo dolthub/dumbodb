@@ -32,16 +32,16 @@ func signToResult(n int) types.CompareResult {
 	}
 }
 
-// collCompare compares two values like types.Compare, but compares strings,
-// alone or inside arrays and documents, under cmp when cmp is non-nil. Field
+// collCompare compares two values like types.Compare, but compares strings and
+// Symbols, alone or inside arrays and documents, under cmp when cmp is non-nil. Field
 // names compare bytewise. It walks arrays and documents element by element,
 // as types.Compare does, without copying them.
 func collCompare(a, b any, cmp *collation.Comparator) types.CompareResult {
 	if cmp == nil {
 		return types.Compare(a, b)
 	}
-	if as, ok := a.(string); ok {
-		if bs, ok := b.(string); ok {
+	if as, ok := types.StringOrSymbol(a); ok {
+		if bs, ok := types.StringOrSymbol(b); ok {
 			return signToResult(cmp.CompareStrings(as, bs))
 		}
 	}
@@ -144,8 +144,8 @@ func collCompareOrder(a, b any, cmp *collation.Comparator) types.CompareResult {
 // type, chosen under cmp.
 func collCompareOrderOp(a, b any, order types.SortType, cmp *collation.Comparator) types.CompareResult {
 	if cmp != nil {
-		if as, ok := a.(string); ok {
-			if bs, ok := b.(string); ok {
+		if as, ok := types.StringOrSymbol(a); ok {
+			if bs, ok := types.StringOrSymbol(b); ok {
 				return signToResult(cmp.CompareStrings(as, bs))
 			}
 		}
@@ -196,13 +196,15 @@ func collArrayExtreme(arr *types.Array, order types.SortType, cmp *collation.Com
 	return extreme
 }
 
-// arrayStringKeys returns v with every string, alone or inside arrays,
+// arrayStringKeys returns v with every string and Symbol, alone or inside arrays,
 // replaced by its sort key under cmp, so that values ordered once per value
 // compare bytewise in collation order.
 func arrayStringKeys(v any, cmp *collation.Comparator) any {
 	switch v := v.(type) {
 	case string:
 		return string(cmp.Key(v))
+	case types.Symbol:
+		return types.Symbol(cmp.Key(string(v)))
 	case *types.Array:
 		out := types.MakeArray(v.Len())
 		for i := 0; i < v.Len(); i++ {

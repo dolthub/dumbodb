@@ -39,6 +39,8 @@ const (
 	bsonTypeDate     byte = 0x09
 	bsonTypeNull     byte = 0x0A
 	bsonTypeRegex    byte = 0x0B
+	bsonTypeCode     byte = 0x0D
+	bsonTypeSymbol   byte = 0x0E
 	bsonTypeInt32    byte = 0x10
 	bsonTypeTime     byte = 0x11
 	bsonTypeInt64    byte = 0x12
@@ -298,7 +300,7 @@ func scalarMatch(typeByte byte, valueBytes []byte, target any) bool {
 	case int64, float64:
 		return numericMayMatch(typeByte, valueBytes, t)
 	case string:
-		if typeByte != bsonTypeString {
+		if typeByte != bsonTypeString && typeByte != bsonTypeSymbol {
 			return false
 		}
 		if len(valueBytes) < 4 {
@@ -408,7 +410,7 @@ func bsonValueEnd(buf []byte, valueStart int, typeByte byte, hardEnd int) (int, 
 		return end, end <= hardEnd+1
 	case bsonTypeNull, bsonTypeMinKey, bsonTypeMaxKey:
 		return valueStart, true
-	case bsonTypeString:
+	case bsonTypeString, bsonTypeCode, bsonTypeSymbol:
 		if valueStart+4 > len(buf) {
 			return 0, false
 		}

@@ -117,14 +117,14 @@ func compareScalars(v1, v2 any) CompareResult {
 		}
 
 	case string:
-		if v, ok := stringContent(v2); ok {
+		if v, ok := StringOrSymbol(v2); ok {
 			return compareOrdered(v1, v)
 		}
 
 		return compareTypeOrder(v1, v2)
 
 	case Symbol:
-		if v, ok := stringContent(v2); ok {
+		if v, ok := StringOrSymbol(v2); ok {
 			return compareOrdered(string(v1), v)
 		}
 
@@ -267,7 +267,9 @@ func compareScalars(v1, v2 any) CompareResult {
 
 // stringContent returns the content of a string or Symbol, which MongoDB
 // compares as one type.
-func stringContent(v any) (string, bool) {
+// StringOrSymbol returns the content of a string or Symbol, which compare as
+// one type.
+func StringOrSymbol(v any) (string, bool) {
 	switch v := v.(type) {
 	case string:
 		return v, true
