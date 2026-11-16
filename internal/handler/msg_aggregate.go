@@ -459,7 +459,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		if !cInfo.IsView && collCmp == nil && (hint == nil || backends.HintIsNatural(hint)) {
 			if info, ok := tryCountAggregateShortcut(aggregationStages); ok {
 				if info.filter != nil {
-					if err := common.ValidateFilterNoGeoNear(info.filter, nil); err != nil {
+					if err := common.ValidateFilter(info.filter, nil); err != nil {
 						closer.Close()
 						return nil, err
 					}

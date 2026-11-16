@@ -38,23 +38,6 @@ func ValidateFilter(filter *types.Document, cmp *collation.Comparator) error {
 	return validateFilter(filter, cmp, true)
 }
 
-// ValidateFilterNoGeoNear is ValidateFilter for a context that refuses $near,
-// $nearSphere and $geoNear anywhere in a query, such as $match and validators:
-// mongod reports 5626500 there for any well-formed one, wherever it is.
-func ValidateFilterNoGeoNear(filter *types.Document, cmp *collation.Comparator) error {
-	if err := validateFilter(filter, cmp, true); err != nil {
-		return err
-	}
-	return refuseGeoNear(filter)
-}
-
-func refuseGeoNear(filter *types.Document) error {
-	if checkNearPlacement(filter, false) != nil {
-		return handlererrors.NewCommandErrorMsg(handlererrors.ErrGeoNearNotAllowedInContext, GeoNearNotAllowedMsg)
-	}
-	return nil
-}
-
 // checkNearPlacement refuses $near, $nearSphere and $geoNear outside the top
 // level of a query: mongod accepts them there, in $and and in an $or of one
 // clause, which it folds away. topLevel says whether query is in such a place.
