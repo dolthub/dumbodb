@@ -133,7 +133,7 @@ func SphereIndexProblem(field string, v any) string {
 		}
 		return geoJSONProblem(v)
 	}
-	return fmt.Sprintf("geo element must be an array or object: %s: %s", field, types.FormatAnyValue(v))
+	return fmt.Sprintf("geo element must be an array or object: %s: %s", field, Echo(v))
 }
 
 // legacySpherePoint checks the coordinates of point, a legacy point. anyOrder
@@ -147,7 +147,7 @@ func legacySpherePoint(point any, coords []any, anyOrder bool) string {
 		return "Point coordinates must be finite numbers"
 	}
 	if !onSphere(x, y) && !(anyOrder && onSphere(y, x)) {
-		return "can't project geometry into spherical CRS: " + types.FormatAnyValue(point)
+		return "can't project geometry into spherical CRS: " + Echo(point)
 	}
 	return ""
 }
@@ -199,7 +199,7 @@ func geoJSONProblem(doc *types.Document) string {
 		"Point": 0, "LineString": 1, "MultiPoint": 1, "Polygon": 2, "MultiLineString": 2, "MultiPolygon": 3,
 	}[name]
 	if !known {
-		return "unknown GeoJSON type: " + types.FormatAnyValue(doc)
+		return "unknown GeoJSON type: " + Echo(doc)
 	}
 	coords := getOrNull(doc, "coordinates")
 	if name == "Point" {
@@ -229,7 +229,7 @@ func coordinatesProblem(typ string, coords any, depth int) string {
 	case (typ == "LineString" || typ == "MultiLineString") && depth == 1:
 		if n := distinctPositions(arr, 2); n < 2 {
 			return fmt.Sprintf("GeoJSON LineString must have at least 2 vertices, instead got %d vertices: %s",
-				n, types.FormatAnyValue(arr))
+				n, Echo(arr))
 		}
 	case (typ == "Polygon" || typ == "MultiPolygon") && depth == 1:
 		if p := ringProblem(arr); p != "" {
@@ -272,15 +272,15 @@ func distinctPositions(arr *types.Array, limit int) int {
 func ringProblem(ring *types.Array) string {
 	if ring.Len() < 4 {
 		return fmt.Sprintf("Loop must have at least 3 different vertices, %d unique vertices were provided: %s",
-			distinctPositions(ring, 3), types.FormatAnyValue(ring))
+			distinctPositions(ring, 3), Echo(ring))
 	}
 	first, last := must.NotFail(ring.Get(0)), must.NotFail(ring.Get(ring.Len()-1))
 	if types.Compare(first, last) != types.Equal {
-		return "Loop is not closed, first vertex does not equal last vertex: " + types.FormatAnyValue(ring)
+		return "Loop is not closed, first vertex does not equal last vertex: " + Echo(ring)
 	}
 	if n := distinctPositions(ring, 3); n < 3 {
 		return fmt.Sprintf("Loop must have at least 3 different vertices, %d unique vertices were provided: %s",
-			n, types.FormatAnyValue(ring))
+			n, Echo(ring))
 	}
 	return ""
 }
@@ -344,4 +344,13 @@ func bsonTypeName(v any) string {
 		return "null"
 	}
 	return fmt.Sprintf("%T", v)
+}
+
+// echoLimit bounds the bytes of a value an error repeats, as mongod truncates
+// long messages.
+const echoLimit = 256
+
+// Echo formats v for an error message, cut to echoLimit bytes.
+func Echo(v any) string {
+	return types.FormatAnyValueLimit(v, echoLimit)
 }

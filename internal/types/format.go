@@ -131,6 +131,90 @@ func writeArray(b *strings.Builder, array *Array) {
 	b.WriteString(" ]")
 }
 
+// FormatAnyValueLimit is FormatAnyValue cut to about limit bytes, with "..."
+// marking the cut. It stops walking value once the limit is reached, so a
+// large value costs no more than the limit to format.
+func FormatAnyValueLimit(value any, limit int) string {
+	w := &limitedWriter{limit: limit}
+	writeLimited(w, value)
+	if w.cut {
+		w.b.WriteString("...")
+	}
+	return w.b.String()
+}
+
+type limitedWriter struct {
+	b     strings.Builder
+	limit int
+	cut   bool
+}
+
+func (w *limitedWriter) write(s string) {
+	if w.cut {
+		return
+	}
+	if room := w.limit - w.b.Len(); len(s) > room {
+		w.b.WriteString(s[:max(room, 0)])
+		w.cut = true
+		return
+	}
+	w.b.WriteString(s)
+}
+
+func writeLimited(w *limitedWriter, value any) {
+	if w.cut {
+		return
+	}
+	switch value := value.(type) {
+	case *Document:
+		value.load()
+		if len(value.fields) == 0 {
+			w.write("{}")
+			return
+		}
+		w.write("{ ")
+		for i, f := range value.fields {
+			if i > 0 {
+				w.write(", ")
+			}
+			w.write(f.key)
+			w.write(": ")
+			writeLimited(w, f.value)
+			if w.cut {
+				return
+			}
+		}
+		w.write(" }")
+	case *Array:
+		if len(value.s) == 0 {
+			w.write("[]")
+			return
+		}
+		w.write("[ ")
+		for i, elem := range value.s {
+			if i > 0 {
+				w.write(", ")
+			}
+			writeLimited(w, elem)
+			if w.cut {
+				return
+			}
+		}
+		w.write(" ]")
+	case string:
+		w.write(`"`)
+		w.write(value)
+		w.write(`"`)
+	case Binary:
+		if len(value.B) > w.limit {
+			value.B = value.B[:w.limit]
+		}
+		w.write(FormatAnyValue(value))
+	default:
+		w.write(FormatAnyValue(value))
+	}
+}
+
 // formatDouble formats f as MongoDB's StringBuilder::appendDoubleNice does:
 // %.16g, then ".0" unless the text holds '.', 'E' or 'N' (so "1e+20.0",
 // "nan.0" and "inf.0").

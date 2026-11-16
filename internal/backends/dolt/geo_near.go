@@ -416,7 +416,7 @@ func checkGeoKeys(doc *types.Document, idx backends.IndexInfo) error {
 		for _, v := range geoFieldValues(doc, kp.Field) {
 			if kp.Geo2DSphere {
 				if problem := geo.SphereIndexProblem(kp.Field, v); problem != "" {
-					return fmt.Errorf("%w: %s  %s", idxpkg.ErrCannotExtractGeoKeys, types.FormatAnyValue(doc), problem)
+					return fmt.Errorf("%w: %s  %s", idxpkg.ErrCannotExtractGeoKeys, geo.Echo(doc), problem)
 				}
 				continue
 			}
@@ -425,10 +425,10 @@ func checkGeoKeys(doc *types.Document, idx backends.IndexInfo) error {
 			case geo.PlanarMalformed:
 				return idxpkg.ErrGeoLocationFormat
 			case geo.PlanarSingleElement:
-				return fmt.Errorf("%w :: caused by :: %s", idxpkg.ErrGeoFieldSingleElement, types.FormatAnyValue(doc))
+				return fmt.Errorf("%w :: caused by :: %s", idxpkg.ErrGeoFieldSingleElement, geo.Echo(doc))
 			case geo.PlanarOutOfBounds:
 				return fmt.Errorf("%w [ %s, %s ] :: caused by :: %s", idxpkg.ErrGeoPointOutOfInterval,
-					strconv.FormatFloat(min, 'g', -1, 64), strconv.FormatFloat(max, 'g', -1, 64), types.FormatAnyValue(doc))
+					strconv.FormatFloat(min, 'g', -1, 64), strconv.FormatFloat(max, 'g', -1, 64), geo.Echo(doc))
 			}
 		}
 	}

@@ -16,6 +16,7 @@ package geo
 
 import (
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -51,6 +52,24 @@ func TestSphereIndexProblemLargeShapes(t *testing.T) {
 			start := time.Now()
 			require.Empty(t, SphereIndexProblem("loc", shape))
 			require.Less(t, time.Since(start), 30*time.Second)
+		})
+	}
+}
+
+// A refused value is echoed in the error cut short, however large it is.
+func TestSphereIndexProblemEchoIsBounded(t *testing.T) {
+	pad := strings.Repeat("x", 15<<20)
+	for name, v := range map[string]any{
+		"legacy point":    must.NotFail(types.NewArray(int32(500), int32(0), pad)),
+		"legacy document": must.NotFail(types.NewDocument("x", int32(500), "y", int32(0), "z", pad)),
+		"open polygon": must.NotFail(types.NewDocument("type", "Polygon",
+			"coordinates", must.NotFail(types.NewArray(circle(100_000, false))))),
+		"unknown type": must.NotFail(types.NewDocument("type", "Foo", "pad", pad)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			problem := SphereIndexProblem("loc", v)
+			require.NotEmpty(t, problem)
+			require.Less(t, len(problem), 1024)
 		})
 	}
 }
