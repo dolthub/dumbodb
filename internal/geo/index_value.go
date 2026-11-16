@@ -28,56 +28,85 @@ const (
 	PlanarOK PlanarProblem = iota
 	// PlanarMalformed is mongod's 16804: the value is not a legacy point.
 	PlanarMalformed
-	// PlanarSingleElement is mongod's 13068: an array of one element.
+	// PlanarSingleElement is mongod's 13068: a point of one coordinate.
 	PlanarSingleElement
-	// PlanarOutOfBounds is mongod's 13027: a coordinate outside [-180, 180].
+	// PlanarOutOfBounds is mongod's 13027: a coordinate outside the index's
+	// bounds, or not finite.
 	PlanarOutOfBounds
 )
 
-// PlanarIndexProblem reports whether a 2d index can hold v, a field's value,
-// as mongod decides it. A value that is not an array or document, or is empty,
-// holds no point and is allowed. An array of arrays holds one point per
-// element.
-func PlanarIndexProblem(v any) PlanarProblem {
+// PlanarIndexProblem reports whether a 2d index whose bounds are [min, max] can
+// hold v, a field's value, as mongod decides it. A value that is not an array
+// or document, or is empty, holds no point and is allowed. An array whose
+// first element is an array or document holds one point per element.
+func PlanarIndexProblem(v any, min, max float64) PlanarProblem {
 	switch v := v.(type) {
 	case *types.Array:
 		if v.Len() == 0 {
 			return PlanarOK
 		}
-		if _, nested := must.NotFail(v.Get(0)).(*types.Array); nested {
-			for i := range v.Len() {
-				if p := PlanarIndexProblem(must.NotFail(v.Get(i))); p != PlanarOK {
-					return p
-				}
+		if !isComposite(must.NotFail(v.Get(0))) {
+			return planarPoint(v, min, max)
+		}
+		for i := range v.Len() {
+			if p := planarPoint(must.NotFail(v.Get(i)), min, max); p != PlanarOK {
+				return p
 			}
-			return PlanarOK
 		}
-		if v.Len() == 1 {
-			return PlanarSingleElement
-		}
-		return planarPoint(must.NotFail(v.Get(0)), must.NotFail(v.Get(1)))
+		return PlanarOK
 	case *types.Document:
-		switch v.Len() {
-		case 0:
+		if v.Len() == 0 {
 			return PlanarOK
-		case 1:
-			return PlanarSingleElement
 		}
-		return planarPoint(must.NotFail(v.Get(v.Keys()[0])), must.NotFail(v.Get(v.Keys()[1])))
+		return planarPoint(v, min, max)
 	}
 	return PlanarOK
 }
 
-func planarPoint(a, b any) PlanarProblem {
-	x, okX := number(a)
-	y, okY := number(b)
-	if !okX || !okY {
+func planarPoint(point any, min, max float64) PlanarProblem {
+	coords := pointValues(point)
+	switch {
+	case coords == nil:
 		return PlanarMalformed
+	case len(coords) < 2:
+		return PlanarSingleElement
 	}
-	if x < -180 || x > 180 || y < -180 || y > 180 {
-		return PlanarOutOfBounds
+	for _, c := range coords[:2] {
+		if _, isNumber := numericType(c); !isNumber {
+			return PlanarMalformed
+		}
+	}
+	for _, c := range coords[:2] {
+		f, finite := number(c)
+		if !finite || f < min || f > max {
+			return PlanarOutOfBounds
+		}
 	}
 	return PlanarOK
+}
+
+// pointValues returns the values of an array, or of a document in field
+// order, or nil for any other value.
+func pointValues(point any) []any {
+	switch point := point.(type) {
+	case *types.Array:
+		values := make([]any, point.Len())
+		for i := range values {
+			values[i] = must.NotFail(point.Get(i))
+		}
+		return values
+	case *types.Document:
+		return point.Values()
+	}
+	return nil
+}
+
+func isComposite(v any) bool {
+	switch v.(type) {
+	case *types.Array, *types.Document:
+		return true
+	}
+	return false
 }
 
 // SphereIndexProblem returns why a 2dsphere index on field cannot hold v, a
@@ -92,39 +121,54 @@ func SphereIndexProblem(field string, v any) string {
 		if v.Len() == 0 {
 			return ""
 		}
-		return legacySpherePoint(v)
+		return legacySpherePoint(pointValues(v), false)
 	case *types.Document:
 		if v.Len() == 0 {
 			return ""
 		}
 		if _, err := v.Get("type"); err != nil {
-			// A legacy point document; stored documents have sorted keys,
-			// so which field is x is not known.
-			return ""
+			// Stored documents have sorted keys, so which field is the
+			// longitude is not known; either order may hold the point.
+			return legacySpherePoint(v.Values(), true)
 		}
 		return geoJSONProblem(v)
 	}
 	return fmt.Sprintf("geo element must be an array or object: %s: %s", field, types.FormatAnyValue(v))
 }
 
-func legacySpherePoint(arr *types.Array) string {
-	for i := range 2 {
-		var elem any
-		if i < arr.Len() {
-			elem = must.NotFail(arr.Get(i))
-		}
-		if _, ok := number(elem); !ok {
-			if _, isNumber := numericType(elem); isNumber {
-				continue
-			}
-			return "Point must only contain numeric elements, instead got type " + bsonTypeName(elem)
-		}
+// legacySpherePoint checks a legacy point's coordinates. anyOrder accepts
+// them as latitude then longitude too.
+func legacySpherePoint(coords []any, anyOrder bool) string {
+	if p := numericPair(coords); p != "" {
+		return p
 	}
-	x, y, ok := numberPair(must.NotFail(arr.Get(0)), must.NotFail(arr.Get(1)))
-	if !ok || x < -180 || x > 180 || y < -90 || y > 90 {
-		return "can't project geometry into spherical CRS: " + types.FormatAnyValue(arr)
+	x, y, ok := numberPair(coords[0], coords[1])
+	if !ok {
+		return "Point coordinates must be finite numbers"
+	}
+	if !onSphere(x, y) && !(anyOrder && onSphere(y, x)) {
+		return fmt.Sprintf("can't project geometry into spherical CRS: [ %g, %g ]", x, y)
 	}
 	return ""
+}
+
+// numericPair returns mongod's message when coords does not start with two
+// numbers.
+func numericPair(coords []any) string {
+	for i := range 2 {
+		var c any
+		if i < len(coords) {
+			c = coords[i]
+		}
+		if _, isNumber := numericType(c); !isNumber {
+			return "Point must only contain numeric elements, instead got type " + bsonTypeName(c)
+		}
+	}
+	return ""
+}
+
+func onSphere(lng, lat float64) bool {
+	return lng >= -180 && lng <= 180 && lat >= -90 && lat <= 90
 }
 
 func geoJSONProblem(doc *types.Document) string {
@@ -132,8 +176,8 @@ func geoJSONProblem(doc *types.Document) string {
 	name, _ := typ.(string)
 	if name == "GeometryCollection" {
 		geometries, ok := getOrNull(doc, "geometries").(*types.Array)
-		if !ok {
-			return "GeometryCollection geometries must be an array"
+		if !ok || geometries.Len() == 0 {
+			return "GeometryCollection geometries must be a non-empty array"
 		}
 		for i := range geometries.Len() {
 			g, ok := must.NotFail(geometries.Get(i)).(*types.Document)
@@ -153,7 +197,15 @@ func geoJSONProblem(doc *types.Document) string {
 	if !known {
 		return "unknown GeoJSON type: " + types.FormatAnyValue(doc)
 	}
-	return coordinatesProblem(name, getOrNull(doc, "coordinates"), depth)
+	coords := getOrNull(doc, "coordinates")
+	if name == "Point" {
+		if _, isDoc := coords.(*types.Document); !isDoc {
+			if _, isArray := coords.(*types.Array); !isArray {
+				return "Point must be an array or object, instead got type " + bsonTypeName(missingIfNull(coords))
+			}
+		}
+	}
+	return coordinatesProblem(name, coords, depth)
 }
 
 // coordinatesProblem checks coords, positions nested depth arrays deep.
@@ -166,9 +218,13 @@ func coordinatesProblem(typ string, coords any, depth int) string {
 		return "GeoJSON coordinates must be an array"
 	}
 	switch {
-	case typ == "LineString" && depth == 1, typ == "MultiLineString" && depth == 1:
-		if arr.Len() < 2 {
-			return "GeoJSON LineString must have at least 2 vertices: " + types.FormatAnyValue(arr)
+	case arr.Len() == 0 && typ == "Polygon" && depth == 2:
+		return "Polygon has no loops."
+	case arr.Len() == 0 && depth == geoJSONDepth[typ]:
+		return typ + " coordinates must have at least 1 element"
+	case (typ == "LineString" || typ == "MultiLineString") && depth == 1:
+		if distinctPositions(arr) < 2 {
+			return fmt.Sprintf("GeoJSON LineString must have at least 2 vertices, instead got %d vertices", distinctPositions(arr))
 		}
 	case (typ == "Polygon" || typ == "MultiPolygon") && depth == 1:
 		if p := ringProblem(arr); p != "" {
@@ -183,17 +239,12 @@ func coordinatesProblem(typ string, coords any, depth int) string {
 	return ""
 }
 
-func ringProblem(ring *types.Array) string {
-	if ring.Len() < 4 {
-		return "Loop must have at least 3 different vertices: " + types.FormatAnyValue(ring)
-	}
-	first, last := must.NotFail(ring.Get(0)), must.NotFail(ring.Get(ring.Len()-1))
-	if types.Compare(first, last) != types.Equal {
-		return "Loop is not closed, first vertex does not equal last vertex: " + types.FormatAnyValue(ring)
-	}
+var geoJSONDepth = map[string]int{"MultiPoint": 1, "MultiLineString": 2, "MultiPolygon": 3}
+
+func distinctPositions(arr *types.Array) int {
 	var distinct []any
-	for i := range ring.Len() - 1 {
-		v := must.NotFail(ring.Get(i))
+	for i := range arr.Len() {
+		v := must.NotFail(arr.Get(i))
 		seen := false
 		for _, d := range distinct {
 			if types.Compare(d, v) == types.Equal {
@@ -205,32 +256,48 @@ func ringProblem(ring *types.Array) string {
 			distinct = append(distinct, v)
 		}
 	}
-	if len(distinct) < 3 {
-		return "Loop must have at least 3 different vertices: " + types.FormatAnyValue(ring)
+	return len(distinct)
+}
+
+func ringProblem(ring *types.Array) string {
+	if ring.Len() < 4 {
+		return fmt.Sprintf("Loop must have at least 3 different vertices, %d unique vertices were provided", distinctPositions(ring))
+	}
+	first, last := must.NotFail(ring.Get(0)), must.NotFail(ring.Get(ring.Len()-1))
+	if types.Compare(first, last) != types.Equal {
+		return "Loop is not closed, first vertex does not equal last vertex: " + types.FormatAnyValue(ring)
+	}
+	if n := distinctPositions(ring); n < 3 {
+		return fmt.Sprintf("Loop must have at least 3 different vertices, %d unique vertices were provided", n)
 	}
 	return ""
 }
 
+// positionProblem checks a GeoJSON position: an array, or for a Point a
+// document, starting with a longitude and a latitude.
 func positionProblem(v any) string {
-	arr, ok := v.(*types.Array)
-	if !ok || arr.Len() < 2 {
-		return "GeoJSON coordinates must be an array of at least two numbers"
+	coords := pointValues(v)
+	if coords == nil {
+		return "Point must be an array or object, instead got type " + bsonTypeName(missingIfNull(v))
 	}
-	a, b := must.NotFail(arr.Get(0)), must.NotFail(arr.Get(1))
-	if _, isNumber := numericType(a); !isNumber {
-		return "GeoJSON coordinates must be numbers"
+	if p := numericPair(coords); p != "" {
+		return p
 	}
-	if _, isNumber := numericType(b); !isNumber {
-		return "GeoJSON coordinates must be numbers"
-	}
-	x, y, ok := numberPair(a, b)
+	x, y, ok := numberPair(coords[0], coords[1])
 	if !ok {
 		return "Point coordinates must be finite numbers"
 	}
-	if x < -180 || x > 180 || y < -90 || y > 90 {
+	if !onSphere(x, y) {
 		return fmt.Sprintf("Longitude/latitude is out of bounds, lng: %g lat: %g", x, y)
 	}
 	return ""
+}
+
+func missingIfNull(v any) any {
+	if _, isNull := v.(types.NullType); isNull {
+		return nil
+	}
+	return v
 }
 
 func getOrNull(doc *types.Document, key string) any {

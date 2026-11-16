@@ -228,8 +228,9 @@ func checkCollatable(field string, v any, sentinel error) error {
 // ErrGeoLocationFormat reports a value a 2d index cannot read as a point.
 var ErrGeoLocationFormat = errors.New("location object expected, location array not in correct format")
 
-// ErrGeoPointOutOfInterval reports a point outside a 2d index's bounds.
-var ErrGeoPointOutOfInterval = errors.New("point not in interval of [ -180, 180 ]")
+// ErrGeoPointOutOfInterval reports a point outside a 2d index's bounds, which
+// the error text follows.
+var ErrGeoPointOutOfInterval = errors.New("point not in interval of")
 
 // ErrGeoFieldSingleElement reports a 2d point of one coordinate.
 var ErrGeoFieldSingleElement = errors.New("geo field only has 1 element")

@@ -20,12 +20,15 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strconv"
+	"strings"
 
 	"github.com/dolthub/dolt/go/store/prolly"
 	"github.com/dolthub/dolt/go/store/prolly/tree"
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/geo"
+	"github.com/dolthub/dumbodb/internal/handler/commonpath"
 	idxpkg "github.com/dolthub/dumbodb/internal/index"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
@@ -403,24 +406,49 @@ func finiteFloat(f float64) bool { return !math.IsNaN(f) && !math.IsInf(f, 0) }
 
 // checkGeoKeys refuses doc when a geo field of idx holds a value mongod
 // cannot index: for 2dsphere, anything but valid GeoJSON or an in-range legacy
-// point; for 2d, a malformed or out-of-range legacy point.
+// point; for 2d, a malformed point or one outside the index's bounds. A path
+// through an array checks each value it reaches.
 func checkGeoKeys(doc *types.Document, idx backends.IndexInfo) error {
 	for _, kp := range idx.Key {
-		switch {
-		case kp.Geo2DSphere:
-			if problem := geo.SphereIndexProblem(kp.Field, indexFieldValue(doc, kp.Field)); problem != "" {
-				return fmt.Errorf("%w: %s  %s", idxpkg.ErrCannotExtractGeoKeys, types.FormatAnyValue(doc), problem)
+		if !isGeoKey(kp) {
+			continue
+		}
+		for _, v := range geoFieldValues(doc, kp.Field) {
+			if kp.Geo2DSphere {
+				if problem := geo.SphereIndexProblem(kp.Field, v); problem != "" {
+					return fmt.Errorf("%w: %s  %s", idxpkg.ErrCannotExtractGeoKeys, types.FormatAnyValue(doc), problem)
+				}
+				continue
 			}
-		case kp.Geo2D:
-			switch geo.PlanarIndexProblem(indexFieldValue(doc, kp.Field)) {
+			min, max := idx.Geo2DRange()
+			switch geo.PlanarIndexProblem(v, min, max) {
 			case geo.PlanarMalformed:
 				return idxpkg.ErrGeoLocationFormat
 			case geo.PlanarSingleElement:
 				return fmt.Errorf("%w :: caused by :: %s", idxpkg.ErrGeoFieldSingleElement, types.FormatAnyValue(doc))
 			case geo.PlanarOutOfBounds:
-				return fmt.Errorf("%w :: caused by :: %s", idxpkg.ErrGeoPointOutOfInterval, types.FormatAnyValue(doc))
+				return fmt.Errorf("%w [ %s, %s ] :: caused by :: %s", idxpkg.ErrGeoPointOutOfInterval,
+					strconv.FormatFloat(min, 'g', -1, 64), strconv.FormatFloat(max, 'g', -1, 64), types.FormatAnyValue(doc))
 			}
 		}
 	}
 	return nil
+}
+
+// geoFieldValues returns each value a geo index field reaches in doc, a path
+// through an array reaching one per element document.
+func geoFieldValues(doc *types.Document, field string) []any {
+	if !strings.Contains(field, ".") {
+		v, err := doc.Get(field)
+		if err != nil {
+			return nil
+		}
+		return []any{v}
+	}
+	path, err := types.NewPathFromString(field)
+	if err != nil {
+		return nil
+	}
+	vals, _ := commonpath.FindValues(doc, path, &commonpath.FindValuesOpts{FindArrayDocuments: true, FindArrayIndex: true})
+	return vals
 }

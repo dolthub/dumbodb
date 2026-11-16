@@ -639,6 +639,10 @@ type IndexInfo struct {
 	// PartialFilterExpression  -- both paths route through the predicate registered
 	// by RegisterPartialFilterMatcher to avoid a circular import on handler/common.
 	MatchesPartialFilter func(doc *types.Document) (bool, error)
+
+	// Geo2DBounds holds a 2d index's min and max options; nil means the
+	// default [-180, 180].
+	Geo2DBounds *[2]float64
 }
 
 type IndexKeyPair struct {
@@ -815,4 +819,37 @@ func (i *IndexInfo) MarkMultikey(mask uint64) {
 	}
 	i.Multikey = true
 	i.MultikeyFields |= mask
+}
+
+// SetGeo2DBound records the min or max option of a 2d index from value, and
+// reports whether value is a number.
+func (idx *IndexInfo) SetGeo2DBound(option string, value any) bool {
+	var f float64
+	switch v := value.(type) {
+	case float64:
+		f = v
+	case int32:
+		f = float64(v)
+	case int64:
+		f = float64(v)
+	default:
+		return false
+	}
+	if idx.Geo2DBounds == nil {
+		idx.Geo2DBounds = &[2]float64{-180, 180}
+	}
+	if option == "min" {
+		idx.Geo2DBounds[0] = f
+	} else {
+		idx.Geo2DBounds[1] = f
+	}
+	return true
+}
+
+// Geo2DRange returns the bounds of a 2d index.
+func (idx IndexInfo) Geo2DRange() (min, max float64) {
+	if idx.Geo2DBounds == nil {
+		return -180, 180
+	}
+	return idx.Geo2DBounds[0], idx.Geo2DBounds[1]
 }

@@ -216,7 +216,9 @@ func preflightIndex(database, collection string, document *types.Document) (back
 			if hidden, _ := value.(bool); hidden {
 				return backends.IndexInfo{}, invalidOption(database, collection, name, option, "hidden planner behavior is not enforced")
 			}
-		case "storageEngine", "weights", "default_language", "language_override", "textIndexVersion", "2dsphereIndexVersion", "bits", "min", "max", "bucketSize", "wildcardProjection", "buildUUID":
+		case "min", "max":
+			index.SetGeo2DBound(option, value)
+		case "storageEngine", "weights", "default_language", "language_override", "textIndexVersion", "2dsphereIndexVersion", "bits", "bucketSize", "wildcardProjection", "buildUUID":
 			return backends.IndexInfo{}, invalidOption(database, collection, name, option, "option is not represented or enforced")
 		default:
 			return backends.IndexInfo{}, invalidOption(database, collection, name, option, "unknown index option would be silently degraded")

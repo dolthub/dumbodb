@@ -223,6 +223,10 @@ func encodeIndexDefinition(idx backends.IndexInfo) ([]byte, error) {
 	if idx.Collation != nil {
 		doc.Set("collation", idx.Collation)
 	}
+	if idx.Geo2DBounds != nil {
+		doc.Set("geo2dMin", idx.Geo2DBounds[0])
+		doc.Set("geo2dMax", idx.Geo2DBounds[1])
+	}
 	return doc.AppendBSONSortedKeys(nil), nil
 }
 
@@ -288,6 +292,11 @@ func decodeIndexDefinition(doc *types.Document) (backends.IndexInfo, error) {
 			Geo2DSphere: getBool(kd, "geo2dsphere"),
 			Hashed:      getBool(kd, "hashed"),
 		})
+	}
+	if lo, err := doc.Get("geo2dMin"); err == nil {
+		hi, _ := doc.Get("geo2dMax")
+		info.SetGeo2DBound("min", lo)
+		info.SetGeo2DBound("max", hi)
 	}
 	info.PartialFilterExpression = getDoc("partial")
 	info.Collation = getDoc("collation")

@@ -522,8 +522,11 @@ func processIndex(command string, indexDoc *types.Document, ignoreUnknownIndexOp
 				index.Hidden = hidden
 			}
 
+		case "min", "max":
+			index.SetGeo2DBound(opt, must.NotFail(indexDoc.Get(opt)))
+
 		case "storageEngine",
-			"bits", "min", "max", "bucketSize", "wildcardProjection":
+			"bits", "bucketSize", "wildcardProjection":
 			// Accepted but not enforced  -- stored index behaves as a regular index.
 
 		default:
