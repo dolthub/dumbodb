@@ -227,9 +227,9 @@ func coordinatesProblem(typ string, coords any, depth int) string {
 	case arr.Len() == 0 && depth == geoJSONDepth[typ]:
 		return typ + " coordinates must have at least 1 element"
 	case (typ == "LineString" || typ == "MultiLineString") && depth == 1:
-		if distinctPositions(arr) < 2 {
+		if n := distinctPositions(arr, 2); n < 2 {
 			return fmt.Sprintf("GeoJSON LineString must have at least 2 vertices, instead got %d vertices: %s",
-				distinctPositions(arr), types.FormatAnyValue(arr))
+				n, types.FormatAnyValue(arr))
 		}
 	case (typ == "Polygon" || typ == "MultiPolygon") && depth == 1:
 		if p := ringProblem(arr); p != "" {
@@ -246,7 +246,10 @@ func coordinatesProblem(typ string, coords any, depth int) string {
 
 var geoJSONDepth = map[string]int{"MultiPoint": 1, "MultiLineString": 2, "MultiPolygon": 3}
 
-func distinctPositions(arr *types.Array) int {
+// distinctPositions returns the number of distinct positions in arr, counting
+// no further than limit, so a check for a few distinct vertices stays linear
+// in the number of positions.
+func distinctPositions(arr *types.Array, limit int) int {
 	var distinct []any
 	for i := range arr.Len() {
 		v := must.NotFail(arr.Get(i))
@@ -258,7 +261,9 @@ func distinctPositions(arr *types.Array) int {
 			}
 		}
 		if !seen {
-			distinct = append(distinct, v)
+			if distinct = append(distinct, v); len(distinct) == limit {
+				break
+			}
 		}
 	}
 	return len(distinct)
@@ -267,13 +272,13 @@ func distinctPositions(arr *types.Array) int {
 func ringProblem(ring *types.Array) string {
 	if ring.Len() < 4 {
 		return fmt.Sprintf("Loop must have at least 3 different vertices, %d unique vertices were provided: %s",
-			distinctPositions(ring), types.FormatAnyValue(ring))
+			distinctPositions(ring, 3), types.FormatAnyValue(ring))
 	}
 	first, last := must.NotFail(ring.Get(0)), must.NotFail(ring.Get(ring.Len()-1))
 	if types.Compare(first, last) != types.Equal {
 		return "Loop is not closed, first vertex does not equal last vertex: " + types.FormatAnyValue(ring)
 	}
-	if n := distinctPositions(ring); n < 3 {
+	if n := distinctPositions(ring, 3); n < 3 {
 		return fmt.Sprintf("Loop must have at least 3 different vertices, %d unique vertices were provided: %s",
 			n, types.FormatAnyValue(ring))
 	}
