@@ -296,6 +296,10 @@ func toArray(a wirebson.AnyArray, depth int) (*types.Array, error) {
 //
 // Input nested deeper than [MaxNestingDepth] returns [ErrNestingTooDeep].
 func ToDocument(d wirebson.AnyDocument) (*types.Document, error) {
+	// Raw documents may hold types wirebson cannot decode, such as Symbol.
+	if raw, ok := d.(wirebson.RawDocument); ok {
+		return DecodeRawDocument(raw)
+	}
 	return toDocument(d, 1)
 }
 

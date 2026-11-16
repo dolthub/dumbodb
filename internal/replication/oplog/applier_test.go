@@ -990,3 +990,30 @@ func TestApplyReportsUnstorableKey(t *testing.T) {
 		t.Fatalf("Apply error = %v, want it to wrap index.ErrKeyTooLong", err)
 	}
 }
+
+func TestApplierSymbolAndJavaScript(t *testing.T) {
+	ctx := context.Background()
+	backend, applier, sourceUUID := newTestApplier(t)
+	createTestCollection(t, ctx, backend, applier, sourceUUID, "orders", "items")
+
+	inserted := must.NotFail(types.NewDocument(
+		"_id", types.Symbol("abc"), "code", types.JavaScript("return 1"),
+		"nested", must.NotFail(types.NewDocument("s", must.NotFail(types.NewArray(types.Symbol("n"))))),
+	))
+	if err := applier.Apply(ctx, makeOplogEntry(t, 2, "i", "orders.items", sourceUUID, inserted, nil)); err != nil {
+		t.Fatal(err)
+	}
+	assertStoredDocument(t, ctx, backend, "orders", "items", inserted)
+
+	key := must.NotFail(types.NewDocument("_id", types.Symbol("abc")))
+	replacement := must.NotFail(types.NewDocument("_id", types.Symbol("abc"), "code", types.JavaScript("return 2")))
+	if err := applier.Apply(ctx, makeOplogEntry(t, 3, "u", "orders.items", sourceUUID, replacement, key)); err != nil {
+		t.Fatal(err)
+	}
+	assertStoredDocument(t, ctx, backend, "orders", "items", replacement)
+
+	if err := applier.Apply(ctx, makeOplogEntry(t, 4, "d", "orders.items", sourceUUID, key, nil)); err != nil {
+		t.Fatal(err)
+	}
+	assertCollectionCount(t, ctx, backend, "orders", "items", 0)
+}

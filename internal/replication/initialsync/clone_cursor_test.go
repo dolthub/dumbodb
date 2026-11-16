@@ -108,7 +108,7 @@ func TestCloneDocumentsReportsUnsupportedBSONType(t *testing.T) {
 		{Key: "cursor", Value: mongobson.D{
 			{Key: "firstBatch", Value: mongobson.A{mongobson.D{
 				{Key: "_id", Value: int32(1)},
-				{Key: "value", Value: primitive.JavaScript("return 1")},
+				{Key: "value", Value: primitive.DBPointer{DB: "orders.other", Pointer: primitive.NewObjectID()}},
 			}}},
 			{Key: "id", Value: int64(0)},
 			{Key: "ns", Value: "orders.items"},
@@ -127,8 +127,8 @@ func TestCloneDocumentsReportsUnsupportedBSONType(t *testing.T) {
 		Database: "orders", SourceUUID: types.Binary{Subtype: types.BinaryUUID, B: sourceUUID[:]},
 	}, func(*types.Document) error { return nil })
 	var unsupported *UnsupportedBSONTypeError
-	if !errors.As(err, &unsupported) || unsupported.BSONType != "JavaScript" {
-		t.Fatalf("clone error = %v, want unsupported JavaScript", err)
+	if !errors.As(err, &unsupported) || unsupported.BSONType != "DBPointer" {
+		t.Fatalf("clone error = %v, want unsupported DBPointer", err)
 	}
 }
 

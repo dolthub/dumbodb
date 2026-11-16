@@ -51,12 +51,8 @@ func unsupportedTypeName(raw mongobson.Raw) (string, bool, error) {
 
 func unsupportedScalarTypeName(valueType bsontype.Type) (string, bool) {
 	switch valueType {
-	case bsontype.JavaScript:
-		return "JavaScript", true
 	case bsontype.CodeWithScope:
 		return "JavaScriptWithScope", true
-	case bsontype.Symbol:
-		return "Symbol", true
 	case bsontype.DBPointer:
 		return "DBPointer", true
 	case bsontype.Undefined:

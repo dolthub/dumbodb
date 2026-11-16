@@ -27,9 +27,7 @@ func TestUnsupportedTypeName(t *testing.T) {
 		value any
 		want  string
 	}{
-		{name: "javascript", value: primitive.JavaScript("return 1"), want: "JavaScript"},
 		{name: "javascript with scope", value: primitive.CodeWithScope{Code: "return x", Scope: mongobson.D{{Key: "x", Value: int32(1)}}}, want: "JavaScriptWithScope"},
-		{name: "symbol", value: primitive.Symbol("symbol"), want: "Symbol"},
 		{name: "db pointer", value: primitive.DBPointer{DB: "archive.items", Pointer: primitive.NewObjectID()}, want: "DBPointer"},
 		{name: "undefined", value: primitive.Undefined{}, want: "Undefined"},
 	}
@@ -54,6 +52,8 @@ func TestUnsupportedTypeNameAcceptsRepresentedTypes(t *testing.T) {
 	raw, err := mongobson.Marshal(mongobson.D{
 		{Key: "minimum", Value: primitive.MinKey{}},
 		{Key: "maximum", Value: primitive.MaxKey{}},
+		{Key: "javascript", Value: primitive.JavaScript("return 1")},
+		{Key: "symbol", Value: mongobson.A{primitive.Symbol("symbol")}},
 		{Key: "nested", Value: mongobson.D{{Key: "value", Value: int32(1)}}},
 	})
 	if err != nil {

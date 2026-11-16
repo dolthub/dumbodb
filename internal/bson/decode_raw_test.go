@@ -143,7 +143,7 @@ func decodeViaWirebson(raw []byte) (*types.Document, error) {
 	if doc, err := ToDocumentHandlingMinMaxKey(wirebson.RawDocument(raw)); doc != nil || err != nil {
 		return doc, err
 	}
-	return ToDocument(wirebson.RawDocument(raw))
+	return toDocument(wirebson.RawDocument(raw), 1)
 }
 
 // Both decoders must agree on every input, except that only DecodeRawDocument
