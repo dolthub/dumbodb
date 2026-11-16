@@ -260,6 +260,20 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 				return nil, common.TranslateBackendWriteError(connCtx, err)
 			}
 
+			// mongod reports a database being dropped as each document's
+			// write error.
+			if backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseDropPending) {
+				writeErrors = append(writeErrors, &mongo.WriteError{
+					Index:   docsIndexes[j],
+					Code:    int(handlererrors.ErrDatabaseDropPending),
+					Message: dropPendingMessage(params.DB, params.Collection),
+				})
+				if params.Ordered {
+					break
+				}
+				continue
+			}
+
 			if backends.ErrorCodeIs(err, backends.ErrorCodeWriteConflict) {
 				return nil, common.TranslateBackendWriteError(connCtx, err)
 			}

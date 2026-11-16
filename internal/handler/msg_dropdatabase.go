@@ -16,6 +16,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/FerretDB/wire"
@@ -23,6 +24,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 	"github.com/dolthub/dumbodb/internal/util/must"
@@ -65,20 +67,26 @@ func (h *Handler) MsgDropDatabase(connCtx context.Context, msg *wire.OpMsg) (*wi
 		)
 	}
 
-	// Most backends would block on `DropDatabase` below otherwise.
-	//
-	// There is a race condition: another client could create a new cursor for that database
-	// after we closed all of them, but before we drop the database itself.
-	// In that case, we expect the client to wait or to retry the operation.
-	for _, c := range h.cursors.All() {
-		if c.DB == dbName {
-			h.cursors.CloseAndRemove(c)
-		}
+	v, _ := document.Get("maxTimeMS")
+	if v == nil {
+		v = int64(0)
 	}
+	maxTimeMS, err := handlerparams.FindMaxTimeMS(v, "dropDatabase")
+	if err != nil {
+		return nil, err
+	}
+	// The drop waits for the database's commands in flight; maxTimeMS bounds
+	// that wait, and a drop that runs out keeps the database.
+	ctx, cancel := withMaxTimeMS(connCtx, maxTimeMS)
+	defer cancel()
 
-	err = h.b.DropDatabase(connCtx, &backends.DropDatabaseParams{
-		Name: dbName,
+	err = h.b.DropDatabase(ctx, &backends.DropDatabaseParams{
+		Name:           dbName,
+		CloseIterators: h.closeDatabaseCursors,
 	})
+	if maxTimeMS != 0 && (errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)) {
+		return nil, handleMaxTimeMSError(err, maxTimeMS, "dropDatabase")
+	}
 
 	res := must.NotFail(types.NewDocument())
 
@@ -98,4 +106,23 @@ func (h *Handler) MsgDropDatabase(connCtx context.Context, msg *wire.OpMsg) (*wi
 	return documentOpMsg(
 		res,
 	)
+}
+
+// droppedCursorReason is mongod's QueryPlanKilled message for a getMore whose
+// collection was dropped.
+const droppedCursorReason = "collection dropped"
+
+// closeDatabaseCursors kills every cursor reading dbName, on any branch.
+func (h *Handler) closeDatabaseCursors(dbName string) {
+	for _, c := range h.cursors.All() {
+		if base, _ := backends.SplitEncodedDBName(c.DB); base == dbName {
+			h.cursors.Kill(c, droppedCursorReason)
+		}
+	}
+}
+
+// dropPendingMessage is mongod's message for a write that would create
+// db.coll while db is being dropped.
+func dropPendingMessage(db, coll string) string {
+	return fmt.Sprintf("Cannot create collection %s.%s - database is in the process of being dropped.", db, coll)
 }

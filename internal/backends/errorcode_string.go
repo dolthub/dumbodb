@@ -19,11 +19,12 @@ func _() {
 	_ = x[ErrorCodeWriteConflict-9]
 	_ = x[ErrorCodeReadOnlyCollection-10]
 	_ = x[ErrorCodeBranchInConflict-11]
+	_ = x[ErrorCodeDatabaseDropPending-12]
 }
 
-const _ErrorCode_name = "ErrorCodeDatabaseNameIsInvalidErrorCodeDatabaseDoesNotExistErrorCodeDatabaseDifferCaseErrorCodeCollectionNameIsInvalidErrorCodeCollectionDoesNotExistErrorCodeCollectionAlreadyExistsErrorCodeInsertDuplicateIDErrorCodeReadOnlyDatabaseErrorCodeWriteConflictErrorCodeReadOnlyCollectionErrorCodeBranchInConflict"
+const _ErrorCode_name = "ErrorCodeDatabaseNameIsInvalidErrorCodeDatabaseDoesNotExistErrorCodeDatabaseDifferCaseErrorCodeCollectionNameIsInvalidErrorCodeCollectionDoesNotExistErrorCodeCollectionAlreadyExistsErrorCodeInsertDuplicateIDErrorCodeReadOnlyDatabaseErrorCodeWriteConflictErrorCodeReadOnlyCollectionErrorCodeBranchInConflictErrorCodeDatabaseDropPending"
 
-var _ErrorCode_index = [...]uint16{0, 30, 59, 86, 118, 149, 181, 207, 232, 254, 281, 306}
+var _ErrorCode_index = [...]uint16{0, 30, 59, 86, 118, 149, 181, 207, 232, 254, 281, 306, 334}
 
 func (i ErrorCode) String() string {
 	idx := int(i) - 1

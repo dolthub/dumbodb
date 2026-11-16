@@ -41,12 +41,14 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	fb "github.com/dolthub/flatbuffers/v23/go"
@@ -126,8 +128,18 @@ type dbState struct {
 	backend *Backend // back-pointer; lets helpers read backend-level config
 	name    string   // user-visible db name; needed to build qualified names for dsess
 
-	mu    sync.RWMutex
-	dbDir string
+	mu sync.RWMutex
+	// closeMu is held shared by GC, which a drop's wait for the store's users
+	// does not cover; the drop holds it to close the store.
+	closeMu sync.RWMutex
+	dbDir   string
+
+	// users counts the commands using the store, and detached marks it as
+	// being dropped; see store_users.go. usersGone signals a detached
+	// store's count reaching zero.
+	users     atomic.Int64
+	detached  atomic.Bool
+	usersGone chan struct{}
 
 	cs *nbs.GenerationalNBS
 	ns tree.NodeStore
@@ -192,8 +204,14 @@ type Backend struct {
 	l          *slog.Logger
 	autoCommit bool // when true, each write auto-creates a Dolt commit
 
-	mu       sync.RWMutex
-	dbs      map[string]*dbState // dbName -> dbState
+	// mu guards dbs, dropping and the layout of dataDir. Never acquire it,
+	// not even RLock, while holding a dbState.mu or the provider's dbCacheMu:
+	// Dolt's session calls back into lookupDbStateForDsess from under both.
+	mu  sync.RWMutex
+	dbs map[string]*dbState // dbName -> dbState
+	// dropping holds the names being dropped; opening one is refused.
+	dropping map[string]struct{}
+
 	branchMu sync.Mutex
 
 	// configURLMu serializes registering a remote or backup URL, so the
@@ -283,10 +301,24 @@ func (b *Backend) OnTransactionCommit(ctx context.Context, owner string) error {
 	}
 	sqlCtx := sqlctx.Wrap(ctx, sess)
 
+	uses := usesOf(ctx)
+	if uses == nil && b.sessions != nil {
+		if shadow, ok := b.sessions.Get(owner); ok && shadow != nil {
+			uses = usesOfShadow(shadow)
+		}
+	}
+	// Only databases with branches this session dirtied have anything to
+	// commit, and only those become stores this command uses.
+	dirty := map[string]struct{}{}
+	for _, branch := range sess.DirtyBranches() {
+		dirty[strings.ToLower(branch.DbName)] = struct{}{}
+	}
 	b.mu.RLock()
-	dbs := make([]*dbState, 0, len(b.dbs))
-	for _, db := range b.dbs {
-		dbs = append(dbs, db)
+	dbs := make([]*dbState, 0, len(dirty))
+	for name, db := range b.dbs {
+		if _, ok := dirty[strings.ToLower(name)]; ok && noteUser(uses, db) {
+			dbs = append(dbs, db)
+		}
 	}
 	b.mu.RUnlock()
 
@@ -345,10 +377,24 @@ func (b *Backend) releaseLocksForOwner(owner string) {
 	}
 }
 
-func (b *Backend) lookupDbStateForDsess(name string) (*dbState, bool) {
+// lookupDbStateForDsess finds an open database and counts the command with
+// uses, which may be nil, as its user. dsess folds names to lower case, and no two
+// databases differ only in case, so a name that misses matches case-blind.
+func (b *Backend) lookupDbStateForDsess(uses *commandUses, name string) (*dbState, bool) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	state, ok := b.dbs[name]
+	if !ok {
+		for openName, open := range b.dbs {
+			if strings.EqualFold(openName, name) {
+				state, ok = open, true
+				break
+			}
+		}
+	}
+	if ok && !noteUser(uses, state) {
+		return nil, false
+	}
 	return state, ok
 }
 
@@ -434,6 +480,7 @@ func newBackend(dataDir string, l *slog.Logger, autoCommit bool, sessionTimeout,
 		l:               l,
 		autoCommit:      autoCommit,
 		dbs:             make(map[string]*dbState),
+		dropping:        make(map[string]struct{}),
 		docLocks:        make(map[string]*DocLockManager),
 		sweeperStop:     make(chan struct{}),
 		sweeperDone:     make(chan struct{}),
@@ -460,11 +507,16 @@ func newBackend(dataDir string, l *slog.Logger, autoCommit bool, sessionTimeout,
 		return nil, fmt.Errorf("constructing dsess provider: %w", err)
 	}
 	b.provider = provider
+	provider.withCommandScope = b.withCommandScope
 	if sessionTimeout <= 0 {
 		sessionTimeout = defaultSessionTimeout
 	}
 	b.sessions = sqlctx.NewSessionRegistry(sessionTimeout, func(lsid string) (*dsess.DoltSession, error) {
 		return sqlctx.NewSessionWithGC(b.provider, writer.NewWriteSession, b.gcController)
+	})
+	b.sessions.SetCommandHook(func(*dsess.DoltSession) (any, func()) {
+		uses := &commandUses{}
+		return uses, uses.end
 	})
 
 	// Initialize the admin database so it always exists on disk, matching
@@ -580,9 +632,11 @@ func (b *Backend) Close() {
 	}
 
 	b.mu.Lock()
-	defer b.mu.Unlock()
+	open := b.dbs
+	b.dbs = make(map[string]*dbState)
+	b.mu.Unlock()
 
-	for name, db := range b.dbs {
+	for name, db := range open {
 		db.mu.Lock()
 		if err := db.doltDB.Close(); err != nil {
 			b.l.Error("closing database", "db", name, "err", err)
@@ -590,8 +644,6 @@ func (b *Backend) Close() {
 		db.mu.Unlock()
 		forgetEmptySecondaryIndexes(db.ns)
 	}
-
-	b.dbs = make(map[string]*dbState)
 }
 
 func (b *Backend) ReplicationControlCollection() (backends.Collection, error) {
@@ -606,11 +658,17 @@ func (b *Backend) Status(ctx context.Context, params *backends.StatusParams) (*b
 	sess := sessionFromContext(ctx)
 
 	b.mu.RLock()
-	defer b.mu.RUnlock()
+	open := maps.Clone(b.dbs)
+	for name, db := range open {
+		if !noteUser(usesOf(ctx), db) {
+			delete(open, name)
+		}
+	}
+	b.mu.RUnlock()
 
 	var totalCollections int64
 
-	for dbName, db := range b.dbs {
+	for dbName, db := range open {
 		ws, err := db.loadBranchWS(ctx, defaultBranch)
 		if err != nil {
 			return nil, err
@@ -735,48 +793,188 @@ func (b *Backend) ListDatabases(ctx context.Context, params *backends.ListDataba
 	return &backends.ListDatabasesResult{Databases: dbs}, nil
 }
 
+// DropDatabase soft-deletes a database. Commands already running when the
+// drop starts finish before the store closes; later ones find no database.
 func (b *Backend) DropDatabase(ctx context.Context, params *backends.DropDatabaseParams) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.dropDatabaseLocked(params)
-}
-
-// dropDatabaseLocked soft-deletes a database. The caller holds b.mu.
-func (b *Backend) dropDatabaseLocked(params *backends.DropDatabaseParams) error {
-	if !backends.ValidDatabaseDirName(params.Name) {
-		return backends.NewError(backends.ErrorCodeDatabaseNameIsInvalid, fmt.Errorf("invalid database name %q", params.Name))
-	}
 	defer b.planCache.clearPrefix(planCacheDBPrefix(params.Name))
-	dbDir := filepath.Join(b.dataDir, params.Name)
 
-	existing, err := b.differentlyCasedDatabase(params.Name)
+	b.mu.Lock()
+	db, err := b.beginDropLocked(params.Name)
+	b.mu.Unlock()
 	if err != nil {
 		return err
 	}
-	if _, statErr := os.Stat(dbDir); existing != "" || os.IsNotExist(statErr) {
-		return backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
-			fmt.Errorf("database %q does not exist", params.Name))
+
+	if err := b.closeDroppedDatabase(ctx, params.Name, db, params.CloseIterators); err != nil {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		b.abortDropLocked(params.Name, db)
+		return fmt.Errorf("dropping database %q: %w", params.Name, err)
 	}
 
-	b.provider.forgetDatabase(params.Name)
-	if db, ok := b.dbs[params.Name]; ok {
-		db.mu.Lock()
-		_ = db.doltDB.Close()
-		db.mu.Unlock()
-		forgetEmptySecondaryIndexes(db.ns)
-		delete(b.dbs, params.Name)
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	defer delete(b.dropping, params.Name)
+	return b.preserveDroppedDirLocked(params.Name)
+}
+
+// beginDropLocked removes name from the open databases and marks it as being
+// dropped, so nothing reopens its directory until the drop ends. It returns
+// the open dbState, or nil when the database exists only on disk. The caller
+// holds b.mu and must release it before closeDroppedDatabase.
+func (b *Backend) beginDropLocked(name string) (*dbState, error) {
+	if !backends.ValidDatabaseDirName(name) {
+		return nil, backends.NewError(backends.ErrorCodeDatabaseNameIsInvalid, fmt.Errorf("invalid database name %q", name))
+	}
+	notFound := backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
+		fmt.Errorf("database %q does not exist", name))
+	if _, ok := b.dropping[name]; ok {
+		return nil, notFound
 	}
 
-	// Soft delete: move (not remove) into the preserved-drops store so UndropDatabase can restore it.
-	dest, err := b.preservedDest(params.Name)
+	existing, err := b.differentlyCasedDatabase(name)
 	if err != nil {
-		return fmt.Errorf("dropping database %q: %w", params.Name, err)
+		return nil, err
+	}
+	if _, statErr := os.Stat(filepath.Join(b.dataDir, name)); existing != "" || os.IsNotExist(statErr) {
+		return nil, notFound
 	}
 
-	if err := os.Rename(dbDir, dest); err != nil {
-		return fmt.Errorf("dropping database %q: %w", params.Name, err)
+	b.dropping[name] = struct{}{}
+	db := b.dbs[name]
+	delete(b.dbs, name)
+	if db != nil {
+		db.detach()
+	}
+	return db, nil
+}
+
+// abortDropLocked undoes beginDropLocked. The caller holds b.mu.
+func (b *Backend) abortDropLocked(name string, db *dbState) {
+	if db != nil {
+		db.reattach()
+		b.dbs[name] = db
+	}
+	delete(b.dropping, name)
+}
+
+// closeDroppedDatabase closes a database detached by beginDropLocked once no
+// other command uses it, and after closeIterators, when set, has closed the
+// iterators that outlive commands. Writes parked on the database's document
+// locks are interrupted rather than waited for. It fails, leaving the store
+// open, only when ctx ends first. The caller must not hold b.mu: the commands
+// it waits for may need it.
+func (b *Backend) closeDroppedDatabase(ctx context.Context, name string, db *dbState, closeIterators func(string)) error {
+	// Forget the cached sqle.Database before closing the store it reads.
+	b.provider.forgetDatabase(name)
+	if db == nil {
+		return nil
+	}
+	// A write parked on a document lock would hold the drop open for as long
+	// as the lock's holder likes, so it fails instead.
+	locks := b.docLockManagersOf(name)
+	for _, m := range locks {
+		m.interruptWaiters()
 	}
 
+	// A GC waits for every session to leave its command, this one included,
+	// while holding closeMu that this drop needs.
+	defer b.idleForGC(ctx)()
+
+	usesOf(ctx).release()
+	if err := db.waitForUsers(ctx); err != nil {
+		// The database stays, and its open transactions keep their locks.
+		for _, m := range locks {
+			m.resumeWaiters()
+		}
+		return err
+	}
+	b.retireDocLockManagers(name, locks)
+	// No command that started after the detach can reach this store, so no
+	// new iterator over it can appear.
+	if closeIterators != nil {
+		closeIterators(name)
+	}
+	if err := lockWithContext(ctx, &db.closeMu); err != nil {
+		return err
+	}
+	defer db.closeMu.Unlock()
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	_ = db.doltDB.Close()
+	forgetEmptySecondaryIndexes(db.ns)
+	return nil
+}
+
+// idleForGC lets a GC safepoint treat ctx's session as idle, though its command
+// is still open, until the returned function runs. The caller must not change
+// the session's roots in between.
+func (b *Backend) idleForGC(ctx context.Context) func() {
+	sess := sessionFromContext(ctx)
+	if sess == nil || b.gcController == nil {
+		return func() {}
+	}
+	// A waiter makes its own session visitable while it is outstanding. This
+	// one waits for nothing: it is cancelled as soon as the caller is done.
+	visitNothing := func(context.Context, gcctx.GCRootsProvider) error { return nil }
+	waiter := b.gcController.Waiter(context.Background(), sess, visitNothing)
+	return func() {
+		canceled, cancel := context.WithCancel(context.Background())
+		cancel()
+		_ = waiter.Wait(canceled)
+	}
+}
+
+// lockWithContext locks mu, or returns ctx's error when ctx ends first.
+func lockWithContext(ctx context.Context, mu *sync.RWMutex) error {
+	for !mu.TryLock() {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Millisecond):
+		}
+	}
+	return nil
+}
+
+// docLockManagersOf returns the document lock managers of every branch of
+// dbName.
+func (b *Backend) docLockManagersOf(dbName string) []*DocLockManager {
+	b.docLocksMu.Lock()
+	defer b.docLocksMu.Unlock()
+	prefix := docLocksKey(dbName, "")
+	var managers []*DocLockManager
+	for key, m := range b.docLocks {
+		if strings.HasPrefix(key, prefix) {
+			managers = append(managers, m)
+		}
+	}
+	return managers
+}
+
+// retireDocLockManagers forgets a dropped database's lock managers, so a
+// database later created under its name starts with no locks.
+func (b *Backend) retireDocLockManagers(dbName string, managers []*DocLockManager) {
+	b.docLocksMu.Lock()
+	defer b.docLocksMu.Unlock()
+	prefix := docLocksKey(dbName, "")
+	for key, m := range b.docLocks {
+		if strings.HasPrefix(key, prefix) && slices.Contains(managers, m) {
+			delete(b.docLocks, key)
+		}
+	}
+}
+
+// preserveDroppedDirLocked moves a dropped database's directory into the
+// preserved-drops store so UndropDatabase can restore it. The caller holds b.mu.
+func (b *Backend) preserveDroppedDirLocked(name string) error {
+	dest, err := b.preservedDest(name)
+	if err != nil {
+		return fmt.Errorf("dropping database %q: %w", name, err)
+	}
+	if err := os.Rename(filepath.Join(b.dataDir, name), dest); err != nil {
+		return fmt.Errorf("dropping database %q: %w", name, err)
+	}
 	return nil
 }
 
@@ -890,6 +1088,7 @@ func openDatabaseStore(ctx context.Context, dbDir string) (*nbs.GenerationalNBS,
 func (b *Backend) getOrOpenDBLocked(ctx context.Context, dbName string, create bool) (*dbState, bool, error) {
 	b.mu.RLock()
 	db, ok := b.dbs[dbName]
+	ok = ok && noteUser(usesOf(ctx), db)
 	b.mu.RUnlock()
 
 	if ok {
@@ -900,8 +1099,17 @@ func (b *Backend) getOrOpenDBLocked(ctx context.Context, dbName string, create b
 	defer b.mu.Unlock()
 
 	// Double-check after acquiring write lock.
-	if db, ok := b.dbs[dbName]; ok {
+	if db, ok := b.dbs[dbName]; ok && noteUser(usesOf(ctx), db) {
 		return db, false, nil
+	}
+	// Refuse rather than wait: the drop waits for commands in flight, which
+	// may include this one.
+	if _, ok := b.dropping[dbName]; ok {
+		if !create {
+			return nil, false, nil
+		}
+		return nil, false, backends.NewError(backends.ErrorCodeDatabaseDropPending,
+			fmt.Errorf("database %q is in the process of being dropped", dbName))
 	}
 
 	// Every route from a database name to the filesystem passes here; names
@@ -1119,15 +1327,16 @@ func (b *Backend) getOrOpenDBLocked(ctx context.Context, dbName string, create b
 	}
 
 	db = &dbState{
-		backend:  b,
-		name:     dbName,
-		dbDir:    dbDir,
-		cs:       cs,
-		ns:       ns,
-		vs:       vs,
-		doltDB:   doltDB,
-		datasDB:  datasDB,
-		branchWS: make(map[string]*branchWS),
+		usersGone: make(chan struct{}, 1),
+		backend:   b,
+		name:      dbName,
+		dbDir:     dbDir,
+		cs:        cs,
+		ns:        ns,
+		vs:        vs,
+		doltDB:    doltDB,
+		datasDB:   datasDB,
+		branchWS:  make(map[string]*branchWS),
 	}
 
 	// Write the shared DSCH chunk once; the empty secondary indexes are
@@ -1141,6 +1350,7 @@ func (b *Backend) getOrOpenDBLocked(ctx context.Context, dbName string, create b
 	db.collSchemaHash = schemaRef.TargetHash()
 
 	b.dbs[dbName] = db
+	noteUser(usesOf(ctx), db)
 
 	// If the working set was not on disk (new database or first open after migration),
 	// persist it now so that dolt CLI tools can read it.

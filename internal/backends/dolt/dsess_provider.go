@@ -46,9 +46,13 @@ type dumbodbProvider struct {
 	fs      filesys.Filesys
 	txLocks keymutex.Keymutex
 
-	dbLookup     func(name string) (*dbState, bool)
-	dbNames      func() []string
-	gcController *gcctx.GCSafepointController
+	// dbLookup finds an open database and counts the command with uses, which
+	// may be nil, as its user.
+	dbLookup func(uses *commandUses, name string) (*dbState, bool)
+	// withCommandScope starts a command scope; see ScopeTxnStart.
+	withCommandScope func(ctx context.Context) (context.Context, func())
+	dbNames          func() []string
+	gcController     *gcctx.GCSafepointController
 
 	dbCacheMu sync.Mutex
 	dbCache   map[string]sqle.Database
@@ -56,7 +60,7 @@ type dumbodbProvider struct {
 
 var _ dsess.DoltDatabaseProvider = (*dumbodbProvider)(nil)
 
-func newDumbodbProvider(dataDir string, dbLookup func(name string) (*dbState, bool), dbNames func() []string, gc *gcctx.GCSafepointController) (*dumbodbProvider, error) {
+func newDumbodbProvider(dataDir string, dbLookup func(uses *commandUses, name string) (*dbState, bool), dbNames func() []string, gc *gcctx.GCSafepointController) (*dumbodbProvider, error) {
 	fs, err := filesys.LocalFilesysWithWorkingDir(dataDir)
 	if err != nil {
 		return nil, fmt.Errorf("constructing local filesystem for dsess provider: %w", err)
@@ -84,9 +88,9 @@ func (p *dumbodbProvider) Database(ctx *sql.Context, name string) (sql.Database,
 	return db, nil
 }
 
-func (p *dumbodbProvider) HasDatabase(_ *sql.Context, name string) bool {
+func (p *dumbodbProvider) HasDatabase(ctx *sql.Context, name string) bool {
 	baseName, _ := doltdb.SplitRevisionDbName(name)
-	_, ok := p.dbLookup(baseName)
+	_, ok := p.dbLookup(usesOf(ctx), baseName)
 	return ok
 }
 
@@ -120,7 +124,7 @@ func (p *dumbodbProvider) CloneDatabaseFromRemote(_ *sql.Context, _, _, _, _ str
 // to a state that was never created and every write to it would fail with
 // "branch not found".
 func (p *dumbodbProvider) canonicalBranchRev(ctx *sql.Context, baseName, rev string) (string, error) {
-	state, found := p.dbLookup(baseName)
+	state, found := p.dbLookup(usesOf(ctx), baseName)
 	if !found {
 		return rev, nil
 	}
@@ -186,6 +190,8 @@ func (p *dumbodbProvider) BaseDatabase(ctx *sql.Context, name string) (dsess.Sql
 
 // DoltDatabases enumerates from the backend's open db list (not just
 // provider cache) so StartTransaction's dbStartPoints covers every db.
+// The databases are not recorded as used: dsess expects this snapshot to hold
+// a database a concurrent drop has since closed, and skips it.
 func (p *dumbodbProvider) DoltDatabases() []dsess.SqlDatabase {
 	names := p.dbNames()
 	out := make([]dsess.SqlDatabase, 0, len(names))
@@ -209,13 +215,14 @@ func (p *dumbodbProvider) buildSqleDatabaseNoSession(baseName string) (sqle.Data
 	p.dbCacheMu.Lock()
 	defer p.dbCacheMu.Unlock()
 
-	if db, ok := p.dbCache[key]; ok {
-		return db, true, nil
-	}
-
-	state, ok := p.dbLookup(baseName)
+	// Look up first even on a cache hit, so a database being dropped is not
+	// served.
+	state, ok := p.dbLookup(nil, baseName)
 	if !ok {
 		return sqle.Database{}, false, nil
+	}
+	if db, ok := p.dbCache[key]; ok {
+		return db, true, nil
 	}
 
 	rsrw := newRepoStateAdapter(defaultBranch)
@@ -251,13 +258,14 @@ func (p *dumbodbProvider) getOrBuildSqleDatabase(ctx *sql.Context, baseName stri
 	p.dbCacheMu.Lock()
 	defer p.dbCacheMu.Unlock()
 
-	if db, ok := p.dbCache[key]; ok {
-		return db, true, nil
-	}
-
-	state, ok := p.dbLookup(baseName)
+	// Look up first even on a cache hit, so the command is recorded as using
+	// the database and a database being dropped is not served.
+	state, ok := p.dbLookup(usesOf(ctx), baseName)
 	if !ok {
 		return sqle.Database{}, false, nil
+	}
+	if db, ok := p.dbCache[key]; ok {
+		return db, true, nil
 	}
 
 	rsrw := newRepoStateAdapter(defaultBranch)

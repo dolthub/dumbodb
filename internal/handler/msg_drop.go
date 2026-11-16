@@ -66,7 +66,7 @@ func (h *Handler) MsgDrop(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 	// In that case, we expect the client to wait or to retry the operation.
 	for _, c := range h.cursors.All() {
 		if c.DB == dbName && c.Collection == collectionName {
-			h.cursors.CloseAndRemove(c)
+			h.cursors.Kill(c, droppedCursorReason)
 		}
 	}
 

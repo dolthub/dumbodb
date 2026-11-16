@@ -34,14 +34,20 @@ type Registry struct {
 	rw sync.RWMutex
 	m  map[int64]*Cursor
 
+	// killed remembers cursors closed by Kill, oldest first in killedOrder,
+	// so getMore can report why instead of "not found". Guarded by rw.
+	killed      map[int64]killedCursor
+	killedOrder []int64
+
 	l  *slog.Logger
 	wg sync.WaitGroup
 }
 
 func NewRegistry(l *slog.Logger) *Registry {
 	return &Registry{
-		m: map[int64]*Cursor{},
-		l: l,
+		m:      map[int64]*Cursor{},
+		killed: map[int64]killedCursor{},
+		l:      l,
 	}
 }
 
@@ -139,6 +145,46 @@ func (r *Registry) CloseAndRemove(c *Cursor) {
 	close(c.removed)
 	c.stopWatch()
 	r.wg.Done()
+}
+
+// maxKilledCursors bounds how many killed cursors the registry remembers for
+// clients that never ask about them again.
+const maxKilledCursors = 4096
+
+type killedCursor struct {
+	owner      string
+	db         string
+	collection string
+	reason     string
+}
+
+// Kill closes and removes c, remembering reason for one TakeKilled call.
+func (r *Registry) Kill(c *Cursor, reason string) {
+	// Record first, so a getMore that finds c gone also finds why.
+	r.rw.Lock()
+	r.killed[c.ID] = killedCursor{owner: c.Owner, db: c.DB, collection: c.Collection, reason: reason}
+	r.killedOrder = append(r.killedOrder, c.ID)
+	for len(r.killedOrder) > maxKilledCursors {
+		delete(r.killed, r.killedOrder[0])
+		r.killedOrder = r.killedOrder[1:]
+	}
+	r.rw.Unlock()
+
+	r.CloseAndRemove(c)
+}
+
+// TakeKilled returns why the cursor id was killed and forgets it, when it was
+// killed while open on db.collection for owner.
+func (r *Registry) TakeKilled(id int64, owner, db, collection string) (string, bool) {
+	r.rw.Lock()
+	defer r.rw.Unlock()
+
+	k, ok := r.killed[id]
+	if !ok || k.owner != owner || k.db != db || k.collection != collection {
+		return "", false
+	}
+	delete(r.killed, id)
+	return k.reason, true
 }
 
 // randomCursorID returns a random positive 63-bit cursor ID.

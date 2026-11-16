@@ -31,7 +31,7 @@ import (
 )
 
 func TestBackendNewSessionConstructs(t *testing.T) {
-	provider, err := newDumbodbProvider(t.TempDir(), func(string) (*dbState, bool) { return nil, false }, func() []string { return nil }, gcctx.NewGCSafepointController())
+	provider, err := newDumbodbProvider(t.TempDir(), func(*commandUses, string) (*dbState, bool) { return nil, false }, func() []string { return nil }, gcctx.NewGCSafepointController())
 	require.NoError(t, err)
 	b := &Backend{provider: provider}
 
@@ -66,7 +66,7 @@ func TestSessionLookupDbStateResolvesRealDb(t *testing.T) {
 }
 
 func TestProviderSurface(t *testing.T) {
-	provider, err := newDumbodbProvider(t.TempDir(), func(string) (*dbState, bool) { return nil, false }, func() []string { return nil }, gcctx.NewGCSafepointController())
+	provider, err := newDumbodbProvider(t.TempDir(), func(*commandUses, string) (*dbState, bool) { return nil, false }, func() []string { return nil }, gcctx.NewGCSafepointController())
 	require.NoError(t, err)
 
 	require.NotNil(t, provider.FileSystem(), "FileSystem must not be nil; dsess accesses it during construction")

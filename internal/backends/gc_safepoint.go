@@ -27,5 +27,7 @@ import "context"
 // can skip implementing this interface; callers fall back to invoking
 // fn directly.
 type GCSafepointBackend interface {
-	RunUnderGCSafepointKeeper(ctx context.Context, fn func() error) error
+	// fn must use the context it is given, which identifies the work to the
+	// backend.
+	RunUnderGCSafepointKeeper(ctx context.Context, fn func(context.Context) error) error
 }

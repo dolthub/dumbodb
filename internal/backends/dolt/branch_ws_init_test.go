@@ -27,7 +27,7 @@ func TestInitializeBranchWorkingSet(t *testing.T) {
 	b := newTestBackend(t)
 	insertDoc(t, b, "testdb", "items", mustDoc(t, "_id", int32(1)))
 	commitDB(t, b, "testdb", "base")
-	state, ok := b.lookupDbStateForDsess("testdb")
+	state, ok := b.lookupDbStateForDsess(nil, "testdb")
 	require.True(t, ok)
 
 	require.Error(t, initializeBranchWorkingSet(ctx, state.doltDB, "no-such-branch"),

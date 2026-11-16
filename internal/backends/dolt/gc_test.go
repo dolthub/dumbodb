@@ -53,7 +53,7 @@ func TestRunUnderGCSafepointKeeper_GCWaitsForBracket(t *testing.T) {
 	bracketDone := make(chan struct{})
 	go func() {
 		defer close(bracketDone)
-		err := be.RunUnderGCSafepointKeeper(context.Background(), func() error {
+		err := be.RunUnderGCSafepointKeeper(context.Background(), func(context.Context) error {
 			close(bracketEntered)
 			<-bracketReleased
 			return nil
@@ -108,7 +108,7 @@ func TestRunUnderGCSafepointKeeper_GCWaitsForBracket(t *testing.T) {
 func TestRunUnderGCSafepointKeeper_NilControllerFallsThrough(t *testing.T) {
 	be := &Backend{}
 	called := false
-	err := be.RunUnderGCSafepointKeeper(context.Background(), func() error {
+	err := be.RunUnderGCSafepointKeeper(context.Background(), func(context.Context) error {
 		called = true
 		return nil
 	})
@@ -160,7 +160,7 @@ func TestDumboDBGC_DefaultModeShrinksAfterDelete(t *testing.T) {
 	}
 
 	// Capture pre-GC count to ensure the GC actually has something to sweep.
-	state, ok := be.lookupDbStateForDsess(dbName)
+	state, ok := be.lookupDbStateForDsess(nil, dbName)
 	require.True(t, ok)
 
 	res, err := be.DumboDBGC(ctx, &backends.GCParams{DBName: dbName, Mode: "default"})

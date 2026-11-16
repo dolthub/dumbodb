@@ -104,7 +104,7 @@ func TestStorageDecomposition_Dumbo(t *testing.T) {
 	_, err = be.DumboDBGC(ctx, &backends.GCParams{DBName: dbName, Mode: "default"})
 	require.NoError(t, err)
 
-	state, ok := be.lookupDbStateForDsess(dbName)
+	state, ok := be.lookupDbStateForDsess(nil, dbName)
 	require.True(t, ok)
 
 	byType := make(map[string]*chunkStat)

@@ -64,7 +64,7 @@ func (h *Handler) MsgDumboDBBackup(connCtx context.Context, msg *wire.OpMsg) (*w
 	}
 	action = normalizeBackupAction(action)
 
-	params := &backends.BackupParams{Action: action}
+	params := &backends.BackupParams{Action: action, CloseIterators: h.closeDatabaseCursors}
 	if params.DBName, err = common.GetOptionalParam[string](document, "db", ""); err != nil {
 		return nil, err
 	}
