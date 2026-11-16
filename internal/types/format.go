@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
@@ -131,9 +132,12 @@ func writeArray(b *strings.Builder, array *Array) {
 	b.WriteString(" ]")
 }
 
-// FormatAnyValueLimit is FormatAnyValue cut to about limit bytes, with "..."
-// marking the cut. It stops walking value once the limit is reached, so a
-// large value costs no more than the limit to format.
+// FormatAnyValueLimit formats value as mongod echoes it in an error message:
+// like FormatAnyValue, but with each string longer than echoedStringLimit
+// bytes cut to that length followed by "...". The result is also cut to about
+// limit bytes, with "..." marking the cut, and formatting stops there, so a
+// large value costs no more than the limit to format. Cuts never split a
+// UTF-8 character.
 func FormatAnyValueLimit(value any, limit int) string {
 	w := &limitedWriter{limit: limit}
 	writeLimited(w, value)
@@ -154,7 +158,7 @@ func (w *limitedWriter) write(s string) {
 		return
 	}
 	if room := w.limit - w.b.Len(); len(s) > room {
-		w.b.WriteString(s[:max(room, 0)])
+		w.b.WriteString(s[:runeBoundary(s, max(room, 0))])
 		w.cut = true
 		return
 	}
@@ -203,7 +207,12 @@ func writeLimited(w *limitedWriter, value any) {
 		w.write(" ]")
 	case string:
 		w.write(`"`)
-		w.write(value)
+		if len(value) > echoedStringLimit {
+			w.write(value[:runeBoundary(value, echoedStringLimit)])
+			w.write("...")
+		} else {
+			w.write(value)
+		}
 		w.write(`"`)
 	case Binary:
 		if len(value.B) > w.limit {
@@ -232,4 +241,20 @@ func formatDouble(f float64) string {
 		s += ".0"
 	}
 	return s
+}
+
+// echoedStringLimit is the most bytes of a string mongod repeats in an error
+// message.
+const echoedStringLimit = 150
+
+// runeBoundary returns the largest n <= limit at which s can be cut without
+// splitting a UTF-8 character.
+func runeBoundary(s string, limit int) int {
+	if limit >= len(s) {
+		return len(s)
+	}
+	for limit > 0 && !utf8.RuneStart(s[limit]) {
+		limit--
+	}
+	return limit
 }

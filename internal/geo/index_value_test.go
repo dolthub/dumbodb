@@ -56,7 +56,8 @@ func TestSphereIndexProblemLargeShapes(t *testing.T) {
 	}
 }
 
-// A refused value is echoed in the error cut short, however large it is.
+// A refused value is echoed in full up to echoLimit, and cut short above it,
+// however large it is.
 func TestSphereIndexProblemEchoIsBounded(t *testing.T) {
 	pad := strings.Repeat("x", 15<<20)
 	for name, v := range map[string]any{
@@ -69,7 +70,26 @@ func TestSphereIndexProblemEchoIsBounded(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			problem := SphereIndexProblem("loc", v)
 			require.NotEmpty(t, problem)
-			require.Less(t, len(problem), 1024)
+			require.Less(t, len(problem), echoLimit+1024)
 		})
+	}
+}
+
+func TestEchoThreshold(t *testing.T) {
+	realistic := circle(5_000, false)
+	require.Equal(t, types.FormatAnyValue(realistic), Echo(realistic))
+	require.False(t, strings.HasSuffix(Echo(realistic), "..."))
+
+	for n := 1; ; n *= 2 {
+		points := circle(n, false)
+		full := types.FormatAnyValue(points)
+		if len(full) <= echoLimit {
+			require.Equal(t, full, Echo(points))
+			continue
+		}
+		echoed := Echo(points)
+		require.True(t, strings.HasSuffix(echoed, "..."))
+		require.Equal(t, full[:echoLimit], strings.TrimSuffix(echoed, "..."))
+		break
 	}
 }

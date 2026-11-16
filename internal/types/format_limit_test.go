@@ -17,6 +17,7 @@ package types
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
 
@@ -30,4 +31,22 @@ func TestFormatAnyValueLimit(t *testing.T) {
 	big := must.NotFail(NewDocument("pad", strings.Repeat("x", 1<<20), "a", int32(1)))
 	cut := FormatAnyValueLimit(big, 64)
 	require.Equal(t, `{ pad: "`+strings.Repeat("x", 56)+"...", cut)
+}
+
+func TestFormatAnyValueLimitStrings(t *testing.T) {
+	doc := must.NotFail(NewDocument("s", strings.Repeat("x", 1000)))
+	require.Equal(t, `{ s: "`+strings.Repeat("x", 150)+`..." }`, FormatAnyValueLimit(doc, 1<<20))
+	require.Equal(t, `{ s: "`+strings.Repeat("x", 150)+`" }`,
+		FormatAnyValueLimit(must.NotFail(NewDocument("s", strings.Repeat("x", 150))), 1<<20))
+	odd := "x" + strings.Repeat("\u00e9", 100)
+	require.Equal(t, `"x`+strings.Repeat("\u00e9", 74)+`..."`, FormatAnyValueLimit(odd, 1<<20))
+}
+
+func TestFormatAnyValueLimitCutsWholeCharacters(t *testing.T) {
+	s := strings.Repeat("\u00e9\u4e2d\U0001F600", 20)
+	for limit := range 120 {
+		cut := FormatAnyValueLimit(s, limit)
+		require.True(t, utf8.ValidString(cut), "limit %d: %q", limit, cut)
+		require.LessOrEqual(t, len(cut), limit+len("..."))
+	}
 }

@@ -336,11 +336,12 @@ func bsonTypeName(v any) string {
 	return handlerparams.AliasFromType(v)
 }
 
-// echoLimit bounds the bytes of a value an error repeats, as mongod truncates
-// long messages.
-const echoLimit = 256
+// echoLimit bounds the bytes of a value an error repeats. mongod repeats a
+// value in full; the bound is far above any realistic geometry and only cuts
+// values large enough to bloat a reply.
+const echoLimit = 1 << 20
 
-// Echo formats v for an error message, cut to echoLimit bytes.
+// Echo formats v for an error message as mongod does, cut to echoLimit bytes.
 func Echo(v any) string {
 	return types.FormatAnyValueLimit(v, echoLimit)
 }
