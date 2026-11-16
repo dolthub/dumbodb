@@ -1874,13 +1874,12 @@ func HasSupportedUpdateModifiers(command string, update *types.Document) (bool, 
 // element, a path overlapping one an earlier field updates, or a $rename onto
 // its own path.
 func validateUpdatePaths(command string, update *types.Document, ops []string) error {
-	var visited []types.Path
+	visited := newUpdatePaths()
 	addPath := func(key string) error {
 		if err := checkUpdatePath(command, key); err != nil {
 			return err
 		}
-		path := must.NotFail(types.NewPathFromString(key))
-		if at, ok := conflictingPath(visited, path); ok {
+		if at, ok := visited.conflict(key); ok {
 			return conflictError(command, key, at)
 		}
 		return nil
@@ -1903,7 +1902,7 @@ func validateUpdatePaths(command string, update *types.Document, ops []string) e
 				if err := addPath(key); err != nil {
 					return err
 				}
-				visited = append(visited, must.NotFail(types.NewPathFromString(key)))
+				visited.add(key)
 				continue
 			}
 
@@ -1935,7 +1934,8 @@ func validateUpdatePaths(command string, update *types.Document, ops []string) e
 					command,
 				)
 			}
-			visited = append(visited, must.NotFail(types.NewPathFromString(key)), must.NotFail(types.NewPathFromString(to)))
+			visited.add(key)
+			visited.add(to)
 		}
 	}
 
@@ -1958,19 +1958,43 @@ func checkUpdatePath(command, key string) error {
 	return checkFirstPathElement(command, key)
 }
 
-// conflictingPath returns the first of paths that path overlaps, and the
-// shorter of the two, where mongod reports the conflict.
-func conflictingPath(paths []types.Path, path types.Path) (at string, ok bool) {
-	for _, p := range paths {
-		shorter, longer := p, path
-		if path.Len() < p.Len() {
-			shorter, longer = path, p
-		}
-		if slices.Equal(longer.Slice()[:shorter.Len()], shorter.Slice()) {
-			return shorter.String(), true
+// updatePaths holds the paths an update has added so far, and their
+// prefixes, so a conflict is found in time linear in the path's length.
+type updatePaths struct {
+	full     map[string]struct{}
+	prefixes map[string]struct{}
+}
+
+func newUpdatePaths() *updatePaths {
+	return &updatePaths{full: map[string]struct{}{}, prefixes: map[string]struct{}{}}
+}
+
+// conflict returns where path overlaps an added path, the shorter of the
+// two, as mongod reports it.
+func (u *updatePaths) conflict(path string) (at string, ok bool) {
+	for i := 0; i < len(path); i++ {
+		if path[i] == '.' {
+			if _, ok := u.full[path[:i]]; ok {
+				return path[:i], true
+			}
 		}
 	}
+	if _, ok := u.full[path]; ok {
+		return path, true
+	}
+	if _, ok := u.prefixes[path]; ok {
+		return path, true
+	}
 	return "", false
+}
+
+func (u *updatePaths) add(path string) {
+	u.full[path] = struct{}{}
+	for i := 0; i < len(path); i++ {
+		if path[i] == '.' {
+			u.prefixes[path[:i]] = struct{}{}
+		}
+	}
 }
 
 func conflictError(command, path, at string) error {
