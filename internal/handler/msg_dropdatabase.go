@@ -120,3 +120,9 @@ func (h *Handler) closeDatabaseCursors(dbName string) {
 		}
 	}
 }
+
+// dropPendingMessage is mongod's message for a write that would create
+// db.coll while db is being dropped.
+func dropPendingMessage(db, coll string) string {
+	return fmt.Sprintf("Cannot create collection %s.%s - database is in the process of being dropped.", db, coll)
+}

@@ -133,6 +133,8 @@ func (h *Handler) updateDocument(ctx context.Context, params *common.UpdateParam
 		// nothing
 	case backends.ErrorCodeIs(err, backends.ErrorCodeCollectionAlreadyExists):
 		// nothing
+	case backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseDropPending):
+		// Each upsert reports it as its own write error, as mongod does.
 	case backends.ErrorCodeIs(err, backends.ErrorCodeCollectionNameIsInvalid):
 		msg := fmt.Sprintf("Invalid collection name: %s", params.Collection)
 		return 0, 0, nil, nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace, msg, "insert")
@@ -264,7 +266,7 @@ statements:
 		result, err := common.UpdateDocument(ctx, c, "update", iter, &u)
 		if err != nil {
 			if backends.ErrorCodeIs(err, backends.ErrorCodeReadOnlyDatabase, backends.ErrorCodeReadOnlyCollection,
-				backends.ErrorCodeBranchInConflict, backends.ErrorCodeWriteConflict, backends.ErrorCodeDatabaseDropPending) {
+				backends.ErrorCodeBranchInConflict, backends.ErrorCodeWriteConflict) {
 				return 0, 0, nil, nil, common.TranslateBackendWriteError(ctx, err)
 			}
 			// mongod reports a statement that fails as it writes as that
@@ -315,6 +317,10 @@ func hasNonDocumentElement(pipeline *types.Array) bool {
 // statementWriteError returns the write error an update statement's failed
 // write reports, or nil when err is not one.
 func statementWriteError(db, coll string, err error) *handlererrors.CommandError {
+	if backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseDropPending) {
+		ce, _ := handlererrors.NewCommandErrorMsg(handlererrors.ErrDatabaseDropPending, dropPendingMessage(db, coll)).(*handlererrors.CommandError)
+		return ce
+	}
 	var be *backends.Error
 	if errors.As(err, &be) && be.Code() == backends.ErrorCodeInsertDuplicateID {
 		idxName, keyDoc := backends.DefaultIndexName, types.MakeDocument(0)
