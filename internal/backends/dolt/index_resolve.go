@@ -24,6 +24,7 @@ package dolt
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
@@ -275,11 +276,6 @@ func indexEntriesForDoc(ctx context.Context, doc *types.Document, idx backends.I
 			multikey |= 1 << i
 		}
 	}
-	if len(idx.Key) > 1 {
-		if err = checkParallelArrays(doc, idx); err != nil {
-			return nil, 0, false, err
-		}
-	}
 	rows = expandMultiKeyValues(fieldVals)
 	if cmp != nil {
 		for i := range rows {
@@ -353,7 +349,7 @@ func applyInsertsToIndexes(ctx context.Context, infos []backends.IndexInfo, maps
 				return nil, nil, fmt.Errorf("applyInsertsToIndexes: hashing _id for index %q: %w", info.Name, err)
 			}
 			idBytes := h
-			if err := checkGeoKeys(doc, info); err != nil {
+			if err := checkIndexKeys(doc, info); err != nil {
 				return nil, nil, err
 			}
 			rows, multikey, lossy, err := indexEntriesForDoc(ctx, doc, info)
@@ -433,7 +429,10 @@ func applyUpdatesToIndexes(ctx context.Context, infos []backends.IndexInfo, maps
 			if err != nil {
 				return nil, nil, err
 			}
-			if err := checkGeoKeys(newDocs[d], info); err != nil {
+			// A document stored before the parallel array check existed can
+			// still be updated while it keeps its parallel arrays.
+			if err := checkIndexKeys(newDocs[d], info); err != nil &&
+				!(errors.Is(err, idxpkg.ErrCannotIndexParallelArrays) && checkParallelArrays(oldDocs[d], info) != nil) {
 				return nil, nil, err
 			}
 			newRows, multikey, lossy, err := indexEntriesForDoc(ctx, newDocs[d], info)
@@ -665,6 +664,30 @@ func openIndexMap(ctx context.Context, ns tree.NodeStore, mapRoot hash.Hash) (pr
 	return prolly.NewMap(node, ns, idxpkg.KeyDescriptor(), idxpkg.ValDescriptor()), nil
 }
 
+// checkIndexKeys returns the error mongod raises when doc enters idx and idx
+// cannot hold its keys: a geo value it cannot index, or parallel arrays.
+// Documents a partial or sparse index leaves out are not checked, and neither
+// is a document leaving an index, so data stored before the checks existed
+// can still be updated and deleted.
+func checkIndexKeys(doc *types.Document, idx backends.IndexInfo) error {
+	if idx.MatchesPartialFilter != nil {
+		if match, err := idx.MatchesPartialFilter(doc); err != nil || !match {
+			return nil
+		}
+	}
+	if sparseExcludes(doc, idx) {
+		return nil
+	}
+	if err := checkGeoKeys(doc, idx); err != nil {
+		return err
+	}
+	// mongod does not look for parallel arrays in a 2d or 2dsphere index.
+	if len(idx.Key) > 1 && !slices.ContainsFunc(idx.Key, isGeoKey) {
+		return checkParallelArrays(doc, idx)
+	}
+	return nil
+}
+
 // checkParallelArrays returns ErrCannotIndexParallelArrays when two fields of
 // idx each pass through an array the other does not, as mongod refuses to
 // index the cross product of unrelated arrays. Fields under one array, like
@@ -688,12 +711,19 @@ func checkParallelArrays(doc *types.Document, idx backends.IndexInfo) error {
 	return nil
 }
 
-// arraysAlongPath returns the paths, without array positions, of the arrays
-// path expands in doc. An array a numeric element indexes into is not
-// expanded.
+// arraysAlongPath returns the paths, without array positions past them, of
+// the arrays path passes through in doc, the outermost first. An array a
+// numeric element indexes into counts, though only its element is followed.
 func arraysAlongPath(doc *types.Document, path []string) []string {
 	seen := map[string]struct{}{}
 	var res []string
+	record := func(depth int) {
+		arrayPath := strings.Join(path[:depth], ".")
+		if _, ok := seen[arrayPath]; !ok {
+			seen[arrayPath] = struct{}{}
+			res = append(res, arrayPath)
+		}
+	}
 	var walk func(v any, depth int)
 	walk = func(v any, depth int) {
 		switch v := v.(type) {
@@ -705,6 +735,7 @@ func arraysAlongPath(doc *types.Document, path []string) []string {
 				walk(next, depth+1)
 			}
 		case *types.Array:
+			record(depth)
 			if depth < len(path) {
 				if i, err := strconv.Atoi(path[depth]); err == nil {
 					if elem, err := v.Get(i); err == nil {
@@ -712,11 +743,6 @@ func arraysAlongPath(doc *types.Document, path []string) []string {
 					}
 					return
 				}
-			}
-			arrayPath := strings.Join(path[:depth], ".")
-			if _, ok := seen[arrayPath]; !ok {
-				seen[arrayPath] = struct{}{}
-				res = append(res, arrayPath)
 			}
 			for i := range v.Len() {
 				if elem, ok := must.NotFail(v.Get(i)).(*types.Document); ok {

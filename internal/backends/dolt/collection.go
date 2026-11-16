@@ -4693,7 +4693,7 @@ func (c *collection) buildSecondaryIndex(ctx context.Context, state *dbState, id
 			return prolly.Map{}, 0, false, fmt.Errorf("index: reading document for build scan: %w", err)
 		}
 
-		if err := checkGeoKeys(doc, idx); err != nil {
+		if err := checkIndexKeys(doc, idx); err != nil {
 			return prolly.Map{}, 0, false, err
 		}
 		rows, rowMultikey, rowLossy, err := indexEntriesForDoc(ctx, doc, idx)
