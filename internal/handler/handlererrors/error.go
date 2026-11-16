@@ -159,6 +159,9 @@ const (
 	// ErrKeysNotFound indicates no signing key matches a $clusterTime signature.
 	ErrKeysNotFound = ErrorCode(211) // KeysNotFound
 
+	// ErrQueryPlanKilled indicates a cursor killed because what it read was dropped.
+	ErrQueryPlanKilled = ErrorCode(175) // QueryPlanKilled
+
 	// ErrDatabaseDropPending indicates a create in a database that is being dropped.
 	ErrDatabaseDropPending = ErrorCode(215) // DatabaseDropPending
 

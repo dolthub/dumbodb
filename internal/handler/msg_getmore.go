@@ -159,6 +159,13 @@ func (h *Handler) MsgGetMore(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 	owner := conninfo.Get(connCtx).SessionPrincipal()
 
 	c := h.cursors.Get(cursorID)
+	if c == nil {
+		if reason, killed := h.cursors.TakeKilled(cursorID, owner, db, collection); killed {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrQueryPlanKilled, reason, document.Command(),
+			)
+		}
+	}
 	if c == nil || c.Owner != owner {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrCursorNotFound,

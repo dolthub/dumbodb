@@ -113,3 +113,45 @@ func TestNextBatch_UnlimitedAndZero(t *testing.T) {
 	require.True(t, done)
 	require.Len(t, all, 300)
 }
+
+// A killed cursor's reason is reported once, and only to its owner on its
+// namespace; everyone else sees it as not found.
+func TestRegistryKillReportsReasonOnce(t *testing.T) {
+	r := NewRegistry(slog.Default())
+	t.Cleanup(r.Close)
+
+	iter := iterator.Values(iterator.ForSlice([]*types.Document{}))
+	c := r.NewCursor(context.Background(), iter, &NewParams{Type: Normal, DB: "db", Collection: "c", Owner: "alice"})
+	r.Kill(c, "collection dropped")
+	require.Nil(t, r.Get(c.ID))
+
+	_, ok := r.TakeKilled(c.ID, "mallory", "db", "c")
+	require.False(t, ok, "another user must not learn the cursor existed")
+	_, ok = r.TakeKilled(c.ID, "alice", "db", "other")
+	require.False(t, ok, "a different namespace must not match")
+
+	reason, ok := r.TakeKilled(c.ID, "alice", "db", "c")
+	require.True(t, ok)
+	require.Equal(t, "collection dropped", reason)
+	_, ok = r.TakeKilled(c.ID, "alice", "db", "c")
+	require.False(t, ok, "the reason is reported once")
+}
+
+// The registry forgets the oldest killed cursors beyond its bound.
+func TestRegistryKilledIsBounded(t *testing.T) {
+	r := NewRegistry(slog.Default())
+	t.Cleanup(r.Close)
+
+	var first int64
+	for i := range maxKilledCursors + 1 {
+		iter := iterator.Values(iterator.ForSlice([]*types.Document{}))
+		c := r.NewCursor(context.Background(), iter, &NewParams{Type: Normal, DB: "db", Collection: "c"})
+		if i == 0 {
+			first = c.ID
+		}
+		r.Kill(c, "collection dropped")
+	}
+	require.Len(t, r.killed, maxKilledCursors)
+	_, ok := r.TakeKilled(first, "", "db", "c")
+	require.False(t, ok)
+}

@@ -90,11 +90,15 @@ func (h *Handler) MsgDropDatabase(connCtx context.Context, msg *wire.OpMsg) (*wi
 	)
 }
 
-// closeDatabaseCursors closes every cursor reading dbName, on any branch.
+// droppedCursorReason is mongod's QueryPlanKilled message for a getMore whose
+// collection was dropped.
+const droppedCursorReason = "collection dropped"
+
+// closeDatabaseCursors kills every cursor reading dbName, on any branch.
 func (h *Handler) closeDatabaseCursors(dbName string) {
 	for _, c := range h.cursors.All() {
 		if base, _ := backends.SplitEncodedDBName(c.DB); base == dbName {
-			h.cursors.CloseAndRemove(c)
+			h.cursors.Kill(c, droppedCursorReason)
 		}
 	}
 }
