@@ -180,7 +180,7 @@ func (h *Handler) MsgBulkWrite(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			)
 		}
 
-		res, opErr := h.execBulkWriteOp(connCtx, opDoc, namespaces, bypass)
+		res, opErr := h.execBulkWriteOp(budget.context(connCtx), opDoc, namespaces, bypass)
 		entry := must.NotFail(types.NewDocument("idx", int32(i)))
 
 		if opErr != nil {

@@ -15,7 +15,11 @@
 package handler
 
 import (
+	"context"
+
 	"go.mongodb.org/mongo-driver/v2/mongo"
+
+	"github.com/dolthub/dumbodb/internal/index"
 )
 
 const (
@@ -48,6 +52,15 @@ func (b *errorBudget) shorten(msg string) string {
 	}
 	b.total += len(msg)
 	return msg
+}
+
+// context returns ctx for the next write, marked when the budget would empty
+// a large message so the backend skips formatting one.
+func (b *errorBudget) context(ctx context.Context) context.Context {
+	if b.total >= errorMessagesBudget || b.large >= keptLargeErrorMessages {
+		return index.WithLargeMessagesEmptied(ctx)
+	}
+	return ctx
 }
 
 // appendError appends we to errs with its message shortened.

@@ -408,7 +408,7 @@ func finiteFloat(f float64) bool { return !math.IsNaN(f) && !math.IsInf(f, 0) }
 // cannot index: for 2dsphere, anything but valid GeoJSON or an in-range legacy
 // point; for 2d, a malformed point or one outside the index's bounds. A path
 // through an array checks each value it reaches.
-func checkGeoKeys(doc *types.Document, idx backends.IndexInfo) error {
+func checkGeoKeys(ctx context.Context, doc *types.Document, idx backends.IndexInfo) error {
 	for _, kp := range idx.Key {
 		if !isGeoKey(kp) {
 			continue
@@ -416,6 +416,9 @@ func checkGeoKeys(doc *types.Document, idx backends.IndexInfo) error {
 		for _, v := range geoFieldValues(doc, kp.Field) {
 			if kp.Geo2DSphere {
 				if problem := geo.SphereIndexProblem(kp.Field, v); problem != "" {
+					if echoElided(ctx, doc) {
+						return fmt.Errorf("%w: %w", idxpkg.ErrCannotExtractGeoKeys, idxpkg.ErrMessageElided)
+					}
 					return fmt.Errorf("%w: %s  %s", idxpkg.ErrCannotExtractGeoKeys, geo.Echo(doc), problem)
 				}
 				continue
@@ -425,14 +428,26 @@ func checkGeoKeys(doc *types.Document, idx backends.IndexInfo) error {
 			case geo.PlanarMalformed:
 				return idxpkg.ErrGeoLocationFormat
 			case geo.PlanarSingleElement:
+				if echoElided(ctx, doc) {
+					return fmt.Errorf("%w: %w", idxpkg.ErrGeoFieldSingleElement, idxpkg.ErrMessageElided)
+				}
 				return fmt.Errorf("%w :: caused by :: %s", idxpkg.ErrGeoFieldSingleElement, geo.Echo(doc))
 			case geo.PlanarOutOfBounds:
+				if echoElided(ctx, doc) {
+					return fmt.Errorf("%w: %w", idxpkg.ErrGeoPointOutOfInterval, idxpkg.ErrMessageElided)
+				}
 				return fmt.Errorf("%w [ %s, %s ] :: caused by :: %s", idxpkg.ErrGeoPointOutOfInterval,
 					strconv.FormatFloat(min, 'g', -1, 64), strconv.FormatFloat(max, 'g', -1, 64), geo.Echo(doc))
 			}
 		}
 	}
 	return nil
+}
+
+// echoElided reports whether an error echoing doc would be emptied by the
+// reply ctx serves: its echo is cut, so the message is over a megabyte.
+func echoElided(ctx context.Context, doc *types.Document) bool {
+	return idxpkg.LargeMessagesEmptied(ctx) && geo.EchoIsCut(doc)
 }
 
 // geoFieldValues returns each value a geo index field reaches in doc, a path

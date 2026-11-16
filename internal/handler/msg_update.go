@@ -271,7 +271,7 @@ statements:
 			iter = common.LimitIterator(iter, closer, 1)
 		}
 
-		result, err := common.UpdateDocument(ctx, c, "update", iter, &u)
+		result, err := common.UpdateDocument(budget.context(ctx), c, "update", iter, &u)
 		if err != nil {
 			if backends.ErrorCodeIs(err, backends.ErrorCodeReadOnlyDatabase, backends.ErrorCodeReadOnlyCollection,
 				backends.ErrorCodeBranchInConflict, backends.ErrorCodeWriteConflict) {

@@ -50,3 +50,18 @@ func TestFormatAnyValueLimitCutsWholeCharacters(t *testing.T) {
 		require.LessOrEqual(t, len(cut), limit+len("..."))
 	}
 }
+
+func TestFormatAnyValueFits(t *testing.T) {
+	doc := must.NotFail(NewDocument("a", int32(1), "b", must.NotFail(NewArray("x", 2.5))))
+	n := len(FormatAnyValue(doc))
+	require.True(t, FormatAnyValueFits(doc, n))
+	require.False(t, FormatAnyValueFits(doc, n-1))
+
+	big := must.NotFail(NewDocument("pad", strings.Repeat("x", 1<<20)))
+	require.True(t, FormatAnyValueFits(big, 1<<10))
+	arr := MakeArray(10000)
+	for range 10000 {
+		arr.Append(strings.Repeat("x", 150))
+	}
+	require.False(t, FormatAnyValueFits(arr, 1<<20))
+}

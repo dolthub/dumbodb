@@ -3419,10 +3419,6 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 		if len(idxInfos) > 0 {
 			// The new doc decodes from newBytes (what was actually stored;
 			// the partial-mutation path may differ from params.Docs).
-			oldDoc, err := readDocFromValue(ctx, state.ns, existingTup)
-			if err != nil {
-				return nil, fmt.Errorf("decoding pre-update document: %w", err)
-			}
 			newDoc, err := bsonToDoc(newBytes)
 			if err != nil {
 				return nil, fmt.Errorf("decoding post-update document: %w", err)
@@ -3432,6 +3428,14 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 				if err := c.validateUniqueOnUpdate(ctx, state, m, idxInfos, idxMaps, newDoc, h, batchClaims); err != nil {
 					return nil, err
 				}
+			}
+			if err := checkUpdatedIndexKeys(ctx, newDoc, idxInfos); err != nil {
+				return nil, fmt.Errorf("updating secondary indexes: %w", err)
+			}
+
+			oldDoc, err := readDocFromValue(ctx, state.ns, existingTup)
+			if err != nil {
+				return nil, fmt.Errorf("decoding pre-update document: %w", err)
 			}
 
 			idxOldDocs = append(idxOldDocs, oldDoc)
@@ -4714,7 +4718,7 @@ func (c *collection) buildSecondaryIndex(ctx context.Context, state *dbState, id
 			return prolly.Map{}, 0, false, fmt.Errorf("index: reading document for build scan: %w", err)
 		}
 
-		if err := checkIndexKeys(doc, idx); err != nil {
+		if err := checkIndexKeys(ctx, doc, idx); err != nil {
 			return prolly.Map{}, 0, false, err
 		}
 		rows, rowMultikey, rowLossy, err := indexEntriesForDoc(ctx, doc, idx)

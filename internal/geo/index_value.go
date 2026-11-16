@@ -392,3 +392,8 @@ const echoLimit = 1 << 20
 func Echo(v any) string {
 	return types.FormatAnyValueLimit(v, echoLimit)
 }
+
+// EchoIsCut reports whether Echo(v) cuts v, without formatting it.
+func EchoIsCut(v any) bool {
+	return !types.FormatAnyValueFits(v, echoLimit)
+}

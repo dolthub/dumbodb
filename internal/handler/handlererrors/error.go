@@ -1431,6 +1431,9 @@ func IndexKeyError(err error) (ErrorCode, string, bool) {
 		{index.ErrStalePartialIndex, ErrOperationFailed},
 	} {
 		if errors.Is(err, e.sentinel) {
+			if errors.Is(err, index.ErrMessageElided) {
+				return e.code, "", true
+			}
 			msg := err.Error()
 			if i := strings.Index(msg, e.sentinel.Error()); i >= 0 {
 				msg = msg[i:]

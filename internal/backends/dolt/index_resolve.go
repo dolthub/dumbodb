@@ -349,7 +349,7 @@ func applyInsertsToIndexes(ctx context.Context, infos []backends.IndexInfo, maps
 				return nil, nil, fmt.Errorf("applyInsertsToIndexes: hashing _id for index %q: %w", info.Name, err)
 			}
 			idBytes := h
-			if err := checkIndexKeys(doc, info); err != nil {
+			if err := checkIndexKeys(ctx, doc, info); err != nil {
 				return nil, nil, err
 			}
 			rows, multikey, lossy, err := indexEntriesForDoc(ctx, doc, info)
@@ -434,9 +434,9 @@ func applyUpdatesToIndexes(ctx context.Context, infos []backends.IndexInfo, maps
 			}
 			// A document an older build indexed with parallel arrays can still
 			// be updated while it keeps them; one entering the index cannot.
-			if err := checkIndexKeys(newDocs[d], info); err != nil &&
+			if err := checkIndexKeys(ctx, newDocs[d], info); err != nil &&
 				!(errors.Is(err, idxpkg.ErrCannotIndexParallelArrays) &&
-					errors.Is(checkIndexKeys(oldDocs[d], info), idxpkg.ErrCannotIndexParallelArrays)) {
+					errors.Is(checkIndexKeys(ctx, oldDocs[d], info), idxpkg.ErrCannotIndexParallelArrays)) {
 				return nil, nil, err
 			}
 			newRows, multikey, lossy, err := indexEntriesForDoc(ctx, newDocs[d], info)
@@ -676,7 +676,7 @@ func openIndexMap(ctx context.Context, ns tree.NodeStore, mapRoot hash.Hash) (pr
 // Documents a partial or sparse index leaves out are not checked, and neither
 // is a document leaving an index, so data stored before the checks existed
 // can still be updated and deleted.
-func checkIndexKeys(doc *types.Document, idx backends.IndexInfo) error {
+func checkIndexKeys(ctx context.Context, doc *types.Document, idx backends.IndexInfo) error {
 	if idx.MatchesPartialFilter != nil {
 		match, err := idx.MatchesPartialFilter(doc)
 		if err != nil || !match {
@@ -686,12 +686,29 @@ func checkIndexKeys(doc *types.Document, idx backends.IndexInfo) error {
 	if sparseExcludes(doc, idx) {
 		return nil
 	}
-	if err := checkGeoKeys(doc, idx); err != nil {
+	if err := checkGeoKeys(ctx, doc, idx); err != nil {
 		return err
 	}
 	// mongod does not look for parallel arrays in a 2d or 2dsphere index.
 	if len(idx.Key) > 1 && !slices.ContainsFunc(idx.Key, isGeoKey) {
 		return checkParallelArrays(doc, idx)
+	}
+	return nil
+}
+
+// checkUpdatedIndexKeys refuses an updated document an index cannot hold
+// before the stored document is read. A parallel-array error stops the check
+// without refusing: it depends on whether the stored document already had
+// the arrays, which applyUpdatesToIndexes decides.
+func checkUpdatedIndexKeys(ctx context.Context, doc *types.Document, infos []backends.IndexInfo) error {
+	for _, info := range infos {
+		err := checkIndexKeys(ctx, doc, info)
+		if errors.Is(err, idxpkg.ErrCannotIndexParallelArrays) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }

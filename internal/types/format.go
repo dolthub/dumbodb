@@ -147,22 +147,37 @@ func FormatAnyValueLimit(value any, limit int) string {
 	return w.b.String()
 }
 
+// FormatAnyValueFits reports whether FormatAnyValueLimit(value, limit) would
+// not cut value, without building the text.
+func FormatAnyValueFits(value any, limit int) bool {
+	w := &limitedWriter{limit: limit, countOnly: true}
+	writeLimited(w, value)
+	return !w.cut
+}
+
 type limitedWriter struct {
-	b     strings.Builder
-	limit int
-	cut   bool
+	b         strings.Builder
+	n         int
+	limit     int
+	cut       bool
+	countOnly bool
 }
 
 func (w *limitedWriter) write(s string) {
 	if w.cut {
 		return
 	}
-	if room := w.limit - w.b.Len(); len(s) > room {
-		w.b.WriteString(s[:runeBoundary(s, max(room, 0))])
+	if room := w.limit - w.n; len(s) > room {
+		if !w.countOnly {
+			w.b.WriteString(s[:runeBoundary(s, max(room, 0))])
+		}
 		w.cut = true
 		return
 	}
-	w.b.WriteString(s)
+	w.n += len(s)
+	if !w.countOnly {
+		w.b.WriteString(s)
+	}
 }
 
 func writeLimited(w *limitedWriter, value any) {

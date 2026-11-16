@@ -225,6 +225,25 @@ func checkCollatable(field string, v any, sentinel error) error {
 	return nil
 }
 
+// ErrMessageElided marks an index key error whose message was not built
+// because the reply would empty it.
+var ErrMessageElided = errors.New("message elided")
+
+type largeMessagesEmptiedKey struct{}
+
+// WithLargeMessagesEmptied marks ctx as serving a reply that empties any
+// error message past a megabyte, so a document echo cut at that size need
+// not be formatted.
+func WithLargeMessagesEmptied(ctx context.Context) context.Context {
+	return context.WithValue(ctx, largeMessagesEmptiedKey{}, true)
+}
+
+// LargeMessagesEmptied reports whether ctx came from WithLargeMessagesEmptied.
+func LargeMessagesEmptied(ctx context.Context) bool {
+	emptied, _ := ctx.Value(largeMessagesEmptiedKey{}).(bool)
+	return emptied
+}
+
 // ErrGeoLocationFormat reports a value a 2d index cannot read as a point.
 var ErrGeoLocationFormat = errors.New("location object expected, location array not in correct format")
 
