@@ -212,9 +212,6 @@ type Backend struct {
 	// dropping holds the names being dropped; opening one is refused.
 	dropping map[string]struct{}
 
-	// commands maps each running command's key to its *commandUses; see
-	// store_users.go.
-	commands sync.Map
 	branchMu sync.Mutex
 
 	// configURLMu serializes registering a remote or backup URL, so the
@@ -304,6 +301,12 @@ func (b *Backend) OnTransactionCommit(ctx context.Context, owner string) error {
 	}
 	sqlCtx := sqlctx.Wrap(ctx, sess)
 
+	uses := usesOf(ctx)
+	if uses == nil && b.sessions != nil {
+		if shadow, ok := b.sessions.Get(owner); ok && shadow != nil {
+			uses = usesOfShadow(shadow)
+		}
+	}
 	// Only databases with branches this session dirtied have anything to
 	// commit, and only those become stores this command uses.
 	dirty := map[string]struct{}{}
@@ -313,7 +316,7 @@ func (b *Backend) OnTransactionCommit(ctx context.Context, owner string) error {
 	b.mu.RLock()
 	dbs := make([]*dbState, 0, len(dirty))
 	for name, db := range b.dbs {
-		if _, ok := dirty[strings.ToLower(name)]; ok && b.noteUser(sess, db) {
+		if _, ok := dirty[strings.ToLower(name)]; ok && noteUser(uses, db) {
 			dbs = append(dbs, db)
 		}
 	}
@@ -374,10 +377,10 @@ func (b *Backend) releaseLocksForOwner(owner string) {
 	}
 }
 
-// lookupDbStateForDsess finds an open database and records it as used by the
-// command key, which may be nil. dsess folds names to lower case, and no two
+// lookupDbStateForDsess finds an open database and counts the command with
+// uses, which may be nil, as its user. dsess folds names to lower case, and no two
 // databases differ only in case, so a name that misses matches case-blind.
-func (b *Backend) lookupDbStateForDsess(key any, name string) (*dbState, bool) {
+func (b *Backend) lookupDbStateForDsess(uses *commandUses, name string) (*dbState, bool) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	state, ok := b.dbs[name]
@@ -389,7 +392,7 @@ func (b *Backend) lookupDbStateForDsess(key any, name string) (*dbState, bool) {
 			}
 		}
 	}
-	if ok && !b.noteUser(key, state) {
+	if ok && !noteUser(uses, state) {
 		return nil, false
 	}
 	return state, ok
@@ -511,9 +514,9 @@ func newBackend(dataDir string, l *slog.Logger, autoCommit bool, sessionTimeout,
 	b.sessions = sqlctx.NewSessionRegistry(sessionTimeout, func(lsid string) (*dsess.DoltSession, error) {
 		return sqlctx.NewSessionWithGC(b.provider, writer.NewWriteSession, b.gcController)
 	})
-	b.sessions.SetCommandHook(func(sess *dsess.DoltSession) func() {
-		b.beginCommand(sess)
-		return func() { b.endCommand(sess) }
+	b.sessions.SetCommandHook(func(*dsess.DoltSession) (any, func()) {
+		uses := &commandUses{}
+		return uses, uses.end
 	})
 
 	// Initialize the admin database so it always exists on disk, matching
@@ -657,7 +660,7 @@ func (b *Backend) Status(ctx context.Context, params *backends.StatusParams) (*b
 	b.mu.RLock()
 	open := maps.Clone(b.dbs)
 	for name, db := range open {
-		if !b.noteUser(commandKey(ctx), db) {
+		if !noteUser(usesOf(ctx), db) {
 			delete(open, name)
 		}
 	}
@@ -878,7 +881,7 @@ func (b *Backend) closeDroppedDatabase(ctx context.Context, name string, db *dbS
 	// while holding closeMu that this drop needs.
 	defer b.idleForGC(ctx)()
 
-	b.releaseUses(commandKey(ctx))
+	usesOf(ctx).release()
 	if err := db.waitForUsers(ctx); err != nil {
 		// The database stays, and its open transactions keep their locks.
 		for _, m := range locks {
@@ -1085,7 +1088,7 @@ func openDatabaseStore(ctx context.Context, dbDir string) (*nbs.GenerationalNBS,
 func (b *Backend) getOrOpenDBLocked(ctx context.Context, dbName string, create bool) (*dbState, bool, error) {
 	b.mu.RLock()
 	db, ok := b.dbs[dbName]
-	ok = ok && b.noteUser(commandKey(ctx), db)
+	ok = ok && noteUser(usesOf(ctx), db)
 	b.mu.RUnlock()
 
 	if ok {
@@ -1096,7 +1099,7 @@ func (b *Backend) getOrOpenDBLocked(ctx context.Context, dbName string, create b
 	defer b.mu.Unlock()
 
 	// Double-check after acquiring write lock.
-	if db, ok := b.dbs[dbName]; ok && b.noteUser(commandKey(ctx), db) {
+	if db, ok := b.dbs[dbName]; ok && noteUser(usesOf(ctx), db) {
 		return db, false, nil
 	}
 	// Refuse rather than wait: the drop waits for commands in flight, which
@@ -1347,7 +1350,7 @@ func (b *Backend) getOrOpenDBLocked(ctx context.Context, dbName string, create b
 	db.collSchemaHash = schemaRef.TargetHash()
 
 	b.dbs[dbName] = db
-	b.noteUser(commandKey(ctx), db)
+	noteUser(usesOf(ctx), db)
 
 	// If the working set was not on disk (new database or first open after migration),
 	// persist it now so that dolt CLI tools can read it.

@@ -46,9 +46,9 @@ type dumbodbProvider struct {
 	fs      filesys.Filesys
 	txLocks keymutex.Keymutex
 
-	// dbLookup finds an open database and records it as used by the command
-	// key, which may be nil.
-	dbLookup func(key any, name string) (*dbState, bool)
+	// dbLookup finds an open database and counts the command with uses, which
+	// may be nil, as its user.
+	dbLookup func(uses *commandUses, name string) (*dbState, bool)
 	// withCommandScope starts a command scope; see ScopeTxnStart.
 	withCommandScope func(ctx context.Context) (context.Context, func())
 	dbNames          func() []string
@@ -60,7 +60,7 @@ type dumbodbProvider struct {
 
 var _ dsess.DoltDatabaseProvider = (*dumbodbProvider)(nil)
 
-func newDumbodbProvider(dataDir string, dbLookup func(key any, name string) (*dbState, bool), dbNames func() []string, gc *gcctx.GCSafepointController) (*dumbodbProvider, error) {
+func newDumbodbProvider(dataDir string, dbLookup func(uses *commandUses, name string) (*dbState, bool), dbNames func() []string, gc *gcctx.GCSafepointController) (*dumbodbProvider, error) {
 	fs, err := filesys.LocalFilesysWithWorkingDir(dataDir)
 	if err != nil {
 		return nil, fmt.Errorf("constructing local filesystem for dsess provider: %w", err)
@@ -90,7 +90,7 @@ func (p *dumbodbProvider) Database(ctx *sql.Context, name string) (sql.Database,
 
 func (p *dumbodbProvider) HasDatabase(ctx *sql.Context, name string) bool {
 	baseName, _ := doltdb.SplitRevisionDbName(name)
-	_, ok := p.dbLookup(commandKey(ctx), baseName)
+	_, ok := p.dbLookup(usesOf(ctx), baseName)
 	return ok
 }
 
@@ -124,7 +124,7 @@ func (p *dumbodbProvider) CloneDatabaseFromRemote(_ *sql.Context, _, _, _, _ str
 // to a state that was never created and every write to it would fail with
 // "branch not found".
 func (p *dumbodbProvider) canonicalBranchRev(ctx *sql.Context, baseName, rev string) (string, error) {
-	state, found := p.dbLookup(commandKey(ctx), baseName)
+	state, found := p.dbLookup(usesOf(ctx), baseName)
 	if !found {
 		return rev, nil
 	}
@@ -260,7 +260,7 @@ func (p *dumbodbProvider) getOrBuildSqleDatabase(ctx *sql.Context, baseName stri
 
 	// Look up first even on a cache hit, so the command is recorded as using
 	// the database and a database being dropped is not served.
-	state, ok := p.dbLookup(commandKey(ctx), baseName)
+	state, ok := p.dbLookup(usesOf(ctx), baseName)
 	if !ok {
 		return sqle.Database{}, false, nil
 	}

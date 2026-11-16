@@ -19,53 +19,59 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/dsess"
 	"github.com/dolthub/go-mysql-server/sql"
+
+	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
+	"github.com/dolthub/dumbodb/internal/sqlctx"
 )
 
-// A command is identified by its session, or by a commandScope for work that
-// runs outside any session or is tracked apart from its session's command.
-// While it runs, each database it reaches counts it as a user, and a drop of
-// that database waits for its count to reach zero. Commits and most reads use
-// a store without db.mu, so this is what keeps a drop from closing a store
-// under them.
+// While a command runs, each database it reaches counts it as a user, and a
+// drop of that database waits for its count to reach zero. Commits and most
+// reads use a store without db.mu, so this is what keeps a drop from closing a
+// store under them. A command keeps the databases it counted in a
+// commandUses: a session's command on its shadow (see Shadow.CommandData), and
+// work outside any session, or tracked apart from its session's command, on a
+// commandScope carried by its context.
 
-// commandScope identifies one run of background work, such as a capped
-// collection cleanup tick, or one transaction start. It is not zero-sized:
-// pointers to distinct zero-sized values may be equal, and each scope must be
-// a distinct key.
-type commandScope struct{ _ byte }
+// commandScope tracks one run of background work, such as a capped
+// collection cleanup tick, or one transaction start.
+type commandScope struct {
+	uses commandUses
+}
 
 type commandScopeKey struct{}
 
 // commandUses is the databases one running command counts as a user of.
 type commandUses struct {
-	mu  sync.Mutex
-	dbs []*dbState
+	mu    sync.Mutex
+	dbs   []*dbState
+	ended bool
 }
 
-// commandKey returns the command ctx runs in, or nil outside any command.
-func commandKey(ctx context.Context) any {
+// usesOf returns the commandUses of the command ctx runs in, or nil outside
+// any command.
+func usesOf(ctx context.Context) *commandUses {
 	if scope, ok := ctx.Value(commandScopeKey{}).(*commandScope); ok {
-		return scope
+		return &scope.uses
 	}
-	if sqlCtx, ok := ctx.(*sql.Context); ok {
-		if sess, ok := sqlCtx.Session.(*dsess.DoltSession); ok {
-			return sess
+	if ci := conninfo.GetIfPresent(ctx); ci != nil {
+		if shadow, _ := ci.CachedShadow(); shadow != nil {
+			return usesOfShadow(shadow)
 		}
 	}
-	if sess := sessionFromContext(ctx); sess != nil {
-		return sess
-	}
 	return nil
+}
+
+func usesOfShadow(shadow *sqlctx.Shadow) *commandUses {
+	uses, _ := shadow.CommandData().(*commandUses)
+	return uses
 }
 
 // withCommandScope begins a scope of its own for work done with the returned
 // context, and returns the function that ends it.
 func (b *Backend) withCommandScope(ctx context.Context) (context.Context, func()) {
 	scope := &commandScope{}
-	b.beginCommand(scope)
-	return context.WithValue(ctx, commandScopeKey{}, scope), func() { b.endCommand(scope) }
+	return context.WithValue(ctx, commandScopeKey{}, scope), scope.uses.end
 }
 
 // ScopeTxnStart implements sqlctx.TxnStartScoper. StartTransaction reads every
@@ -79,30 +85,22 @@ func (p *dumbodbProvider) ScopeTxnStart(ctx *sql.Context) (*sql.Context, func())
 	return ctx.WithContext(scoped), end
 }
 
-// beginCommand starts counting the command key as a user of the databases it
-// reaches.
-func (b *Backend) beginCommand(key any) {
-	b.commands.Store(key, &commandUses{})
+// end stops counting the command as a user of any database, for good.
+func (u *commandUses) end() {
+	u.mu.Lock()
+	u.ended = true
+	u.mu.Unlock()
+	u.release()
 }
 
-// endCommand stops counting the command key as a user of any database.
-func (b *Backend) endCommand(key any) {
-	if uses, ok := b.commands.LoadAndDelete(key); ok {
-		uses.(*commandUses).release()
-	}
-}
-
-// releaseUses stops counting the running command key as a user of the
-// databases it has reached so far; one it reaches again counts it again. A
-// drop calls it before waiting, so it never waits on its own command and two
-// commands that each drop a database the other used do not wait on each other.
-func (b *Backend) releaseUses(key any) {
-	if uses, ok := b.commands.Load(key); ok {
-		uses.(*commandUses).release()
-	}
-}
-
+// release stops counting the command as a user of the databases it has
+// reached so far; one it reaches again counts it again. A drop calls it
+// before waiting, so it never waits on its own command and two commands that
+// each drop a database the other used do not wait on each other.
 func (u *commandUses) release() {
+	if u == nil {
+		return
+	}
 	u.mu.Lock()
 	dbs := u.dbs
 	u.dbs = nil
@@ -112,23 +110,21 @@ func (u *commandUses) release() {
 	}
 }
 
-// noteUser counts the command key as a user of db, once per command. It
-// reports false, counting nothing, when db is being dropped. A key outside
-// any command counts nothing.
-func (b *Backend) noteUser(key any, db *dbState) bool {
+// noteUser counts the command with uses as a user of db, once per command. It
+// reports false, counting nothing, when db is being dropped. Outside any
+// command, uses is nil and nothing is counted.
+func noteUser(uses *commandUses, db *dbState) bool {
 	if db.detached.Load() {
 		return false
 	}
-	if key == nil {
+	if uses == nil {
 		return true
 	}
-	value, running := b.commands.Load(key)
-	if !running {
-		return true
-	}
-	uses := value.(*commandUses)
 	uses.mu.Lock()
 	defer uses.mu.Unlock()
+	if uses.ended {
+		return true
+	}
 	for _, used := range uses.dbs {
 		if used == db {
 			return true

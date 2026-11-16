@@ -41,6 +41,8 @@ type sessionState struct {
 	lastUsed    atomic.Int64
 	cmdMu       sync.Mutex
 	commandHook CommandHook
+	// commandData is the CommandHook's data for the running command.
+	commandData atomic.Pointer[any]
 }
 
 // Shadow is a connection's handle on a registry session. purged
@@ -67,6 +69,15 @@ func newShadow(state *sessionState) *Shadow {
 }
 
 func (s *Shadow) Session() *dsess.DoltSession { return s.state.sess }
+
+// CommandData returns the CommandHook's data for the session's running
+// command, or nil between commands.
+func (s *Shadow) CommandData() any {
+	if data := s.state.commandData.Load(); data != nil {
+		return *data
+	}
+	return nil
+}
 
 func (s *Shadow) LastUsed() time.Time { return time.Unix(0, s.state.lastUsed.Load()) }
 
@@ -123,7 +134,12 @@ func (s *Shadow) run(now time.Time, fn func(*dsess.DoltSession) error) error {
 	}
 	defer s.state.sess.CommandEnd()
 	if s.state.commandHook != nil {
-		defer s.state.commandHook(s.state.sess)()
+		data, end := s.state.commandHook(s.state.sess)
+		s.state.commandData.Store(&data)
+		defer func() {
+			s.state.commandData.Store(nil)
+			end()
+		}()
 	}
 
 	return fn(s.state.sess)

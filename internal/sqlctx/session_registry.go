@@ -47,9 +47,10 @@ type SessionRegistry struct {
 	commandHook CommandHook
 }
 
-// CommandHook runs as each command on a registry session begins; the function
-// it returns runs as that command ends.
-type CommandHook func(sess *dsess.DoltSession) (end func())
+// CommandHook runs as each command on a registry session begins. The session's
+// shadow holds data for the command (see Shadow.CommandData), and end runs as
+// the command ends.
+type CommandHook func(sess *dsess.DoltSession) (data any, end func())
 
 // SetCommandHook installs hook for sessions created after the call.
 func (r *SessionRegistry) SetCommandHook(hook CommandHook) {
