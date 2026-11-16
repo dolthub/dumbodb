@@ -1917,7 +1917,7 @@ func HasSupportedUpdateModifiers(command string, update *types.Document) (bool, 
 		return false, nil
 	}
 
-	for _, operator := range keys {
+	for i, operator := range keys {
 		switch operator {
 		case // field update operators:
 			"$currentDate",
@@ -1929,6 +1929,11 @@ func HasSupportedUpdateModifiers(command string, update *types.Document) (bool, 
 			// array update operators:
 			"$pop", "$push", "$addToSet", "$pullAll", "$pull":
 		default:
+			// mongod parses the operators in order, so a path error of an
+			// operator before this one is reported first.
+			if err := pathErrorBefore(command, update, keys[:i]); err != nil {
+				return false, err
+			}
 			return false, NewUpdateError(
 				handlererrors.ErrFailedToParse,
 				fmt.Sprintf(
@@ -1941,6 +1946,41 @@ func HasSupportedUpdateModifiers(command string, update *types.Document) (bool, 
 	}
 
 	return true, nil
+}
+
+// pathErrorBefore returns the path error mongod meets parsing the fields of
+// the operators named by ops, in order, if any.
+func pathErrorBefore(command string, update *types.Document, ops []string) error {
+	var docs []*types.Document
+	for _, op := range ops {
+		if fields, ok := must.NotFail(update.Get(op)).(*types.Document); ok && op != "$rename" {
+			docs = append(docs, fields)
+		}
+	}
+	return validateOperatorKeys(command, docs...)
+}
+
+// conflictingPath returns the first of paths that path overlaps, and the
+// shorter of the two, where mongod reports the conflict.
+func conflictingPath(paths []types.Path, path types.Path) (at string, ok bool) {
+	for _, p := range paths {
+		shorter, longer := p, path
+		if path.Len() < p.Len() {
+			shorter, longer = path, p
+		}
+		if slices.Equal(longer.Slice()[:shorter.Len()], shorter.Slice()) {
+			return shorter.String(), true
+		}
+	}
+	return "", false
+}
+
+func conflictError(command, path, at string) error {
+	return NewUpdateError(
+		handlererrors.ErrConflictingUpdateOperators,
+		fmt.Sprintf("Updating the path '%s' would create a conflict at '%s'", path, at),
+		command,
+	)
 }
 
 // replacementDollarField returns mongod's error for a replacement document
@@ -2001,24 +2041,8 @@ func validateOperatorKeys(command string, docs ...*types.Document) error {
 				return err
 			}
 
-			err = types.IsConflictPath(visitedPaths, nextPath)
-			var pathErr *types.PathError
-
-			if errors.As(err, &pathErr) {
-				if pathErr.Code() == types.ErrPathConflictOverwrite ||
-					pathErr.Code() == types.ErrPathConflictCollision {
-					return NewUpdateError(
-						handlererrors.ErrConflictingUpdateOperators,
-						fmt.Sprintf(
-							"Updating the path '%[1]s' would create a conflict at '%[1]s'", key,
-						),
-						command,
-					)
-				}
-			}
-
-			if err != nil {
-				return lazyerrors.Error(err)
+			if at, ok := conflictingPath(visitedPaths, nextPath); ok {
+				return conflictError(command, key, at)
 			}
 
 			visitedPaths = append(visitedPaths, nextPath)
@@ -2136,6 +2160,9 @@ func validateRenameExpression(command string, update *types.Document) error {
 			)
 		}
 
+		// mongod adds each operator's paths in the order the update lists
+		// them, so a conflict with an earlier operator wins over the checks
+		// of $rename itself, and one with a later operator loses to them.
 		for _, path := range []string{k, vStr} {
 			if path != "" && slices.Contains(strings.Split(path, "."), "") {
 				return NewUpdateError(
@@ -2144,13 +2171,9 @@ func validateRenameExpression(command string, update *types.Document) error {
 					command,
 				)
 			}
-		}
-
-		// mongod adds each operator's paths in the order the update lists
-		// them, so a conflict with an earlier operator wins over the checks
-		// of $rename itself, and one with a later operator loses to them.
-		if err = renameConflict(command, earlier, k, vStr); err != nil {
-			return err
+			if err = renameConflict(command, earlier, path); err != nil {
+				return err
+			}
 		}
 
 		// disallow fields where key is equal to the target
@@ -2193,8 +2216,10 @@ func validateRenameExpression(command string, update *types.Document) error {
 
 	for _, k := range doc.Keys() {
 		if vStr, ok := must.NotFail(doc.Get(k)).(string); ok {
-			if err := renameConflict(command, later, k, vStr); err != nil {
-				return err
+			for _, path := range []string{k, vStr} {
+				if err := renameConflict(command, later, path); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -2230,21 +2255,15 @@ func pathsAroundOperator(update *types.Document, op string) (earlier, later []ty
 	return earlier, later
 }
 
-// renameConflict returns mongod's conflict error when the source or target of
-// a $rename overlaps one of paths.
-func renameConflict(command string, paths []types.Path, from, to string) error {
-	for _, key := range []string{from, to} {
-		path, err := types.NewPathFromString(key)
-		if err != nil {
-			continue
-		}
-		if types.IsConflictPath(paths, path) != nil {
-			return NewUpdateError(
-				handlererrors.ErrConflictingUpdateOperators,
-				fmt.Sprintf("Updating the path '%[1]s' would create a conflict at '%[1]s'", key),
-				command,
-			)
-		}
+// renameConflict returns mongod's conflict error when a $rename path
+// overlaps one of paths.
+func renameConflict(command string, paths []types.Path, key string) error {
+	path, err := types.NewPathFromString(key)
+	if err != nil {
+		return nil
+	}
+	if at, ok := conflictingPath(paths, path); ok {
+		return conflictError(command, key, at)
 	}
 	return nil
 }
