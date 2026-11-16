@@ -25,6 +25,7 @@ import (
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/backends/dolt"
+	"github.com/dolthub/dumbodb/internal/index"
 	"github.com/dolthub/dumbodb/internal/replication/catalog"
 	"github.com/dolthub/dumbodb/internal/replication/control"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -114,5 +115,54 @@ func assertDocumentCount(t *testing.T, ctx context.Context, collection backends.
 	}
 	if count != want {
 		t.Fatalf("document count = %d, want %d", count, want)
+	}
+}
+
+// The catalog gate refuses geo indexes, so only parallel arrays reach a
+// collection's index build here.
+func TestMaterializeCollectionReportsDocumentsAnIndexCannotHold(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		key   *types.Document
+		doc   *types.Document
+		cause error
+	}{{
+		name:  "parallel_arrays",
+		key:   must.NotFail(types.NewDocument("a", int32(1), "b", int32(1))),
+		doc:   must.NotFail(types.NewDocument("_id", int32(1), "a", must.NotFail(types.NewArray(int32(1))), "b", must.NotFail(types.NewArray(int32(2))))),
+		cause: index.ErrCannotIndexParallelArrays,
+	}} {
+		t.Run(c.name, func(t *testing.T) {
+			ctx := context.Background()
+			backend, err := dolt.NewBackend(t.TempDir(), slog.Default(), false, 0, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer backend.Close()
+			store, err := control.Open(backend, control.Configuration{SetName: "rs0", MemberHost: "dumbo:27017"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			catalogApplier, err := catalog.NewApplier(backend, store)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sourceUUID := uuid.MustParse("12345678-1234-4234-9234-123456789abc")
+			client := &boundaryClient{responses: []*wire.OpMsg{
+				cloneCursorResponse(t, "firstBatch", 0, "orders.items", must.NotFail(types.NewDocument("$recordId", int64(1))), c.doc),
+			}}
+			indexes := []*types.Document{
+				must.NotFail(types.NewDocument("v", int32(2), "key", must.NotFail(types.NewDocument("_id", int32(1))), "name", "_id_")),
+				must.NotFail(types.NewDocument("v", int32(2), "key", c.key, "name", "k")),
+			}
+			_, err = MaterializeCollection(ctx, client, catalogApplier, "orders", Collection{
+				Name: "items", SourceUUID: sourceUUID.String(), UUIDBinary: types.Binary{Subtype: types.BinaryUUID, B: sourceUUID[:]},
+				Options: must.NotFail(types.NewDocument()), Indexes: indexes,
+			}, control.OpTime{Seconds: 100, Increment: 1, Term: 8}, LoaderLimits{Documents: 2, Bytes: 1024}, nil, nil)
+			var unstorable *UnstorableKeyError
+			if !errors.As(err, &unstorable) || unstorable.Namespace != "orders.items" || !errors.Is(err, c.cause) {
+				t.Fatalf("MaterializeCollection error = %v, want *UnstorableKeyError for orders.items wrapping %v", err, c.cause)
+			}
+		})
 	}
 }

@@ -53,7 +53,7 @@ type UnstorableKeyError struct {
 }
 
 func (e *UnstorableKeyError) Error() string {
-	return fmt.Sprintf("%s has a key DumboDB cannot store: %v", e.Namespace, e.Err)
+	return fmt.Sprintf("%s has a document an index cannot hold: %v", e.Namespace, e.Err)
 }
 
 func (e *UnstorableKeyError) Unwrap() error { return e.Err }

@@ -54,10 +54,12 @@ func TestTerminalInitialSyncFailureClassifiesUnsupportedData(t *testing.T) {
 	if !terminal || failure.Namespace != "archive.active_items" || failure.BSONType != "" || failure.Message != unsupportedCatalog.Error() {
 		t.Fatalf("terminal catalog failure = %+v, %v", failure, terminal)
 	}
-	unstorable := &initialsync.UnstorableKeyError{Namespace: "archive.urls", Err: idxpkg.ErrKeyTooLong}
-	failure, terminal = terminalInitialSyncFailure(fmt.Errorf("initial sync: %w", unstorable))
-	if !terminal || failure.Namespace != "archive.urls" || failure.Message != unstorable.Error() {
-		t.Fatalf("terminal key failure = %+v, %v", failure, terminal)
+	for _, cause := range []error{idxpkg.ErrKeyTooLong, idxpkg.ErrCannotIndexParallelArrays, idxpkg.ErrGeoLocationFormat} {
+		unstorable := &initialsync.UnstorableKeyError{Namespace: "archive.urls", Err: cause}
+		failure, terminal = terminalInitialSyncFailure(fmt.Errorf("initial sync: %w", unstorable))
+		if !terminal || failure.Namespace != "archive.urls" || failure.Message != unstorable.Error() {
+			t.Fatalf("terminal key failure for %v = %+v, %v", cause, failure, terminal)
+		}
 	}
 	if failure, terminal := terminalInitialSyncFailure(errors.New("connection reset")); terminal || failure != (control.InitialSyncFailure{}) {
 		t.Fatalf("transient failure = %+v, %v", failure, terminal)
@@ -557,28 +559,36 @@ func TestStopOnFatalStopsOnFetchPanic(t *testing.T) {
 	}
 }
 
-// An entry with a key DumboDB cannot store fails the same way on every
-// retry, so replication stops instead of stalling on it.
+// An entry with a document an index cannot hold fails the same way on every
+// retry, so replication stops instead of stalling on it, and names the cause.
 func TestStopOnFatalStopsOnUnstorableKey(t *testing.T) {
-	replicationRuntime, _, store := newRecoveryRuntime(t)
-	err := &oplog.UnstorableKeyError{
-		OpTime: control.OpTime{Seconds: 100, Increment: 1, Term: 2}, Namespace: "shop.urls", Operation: "i", Err: idxpkg.ErrKeyTooLong,
-	}
-	if err := store.SetInitialSyncPhase(control.InitialSyncComplete); err != nil {
-		t.Fatal(err)
-	}
-	if err := replicationRuntime.manager.MarkSteady(); err != nil {
-		t.Fatal(err)
-	}
-	if !replicationRuntime.stopOnFatal(fmt.Errorf("steady: %w", err)) {
-		t.Fatal("stopOnFatal did not stop on an unstorable key")
-	}
-	if phase := replicationRuntime.manager.Snapshot().Runtime.Phase; phase != "failed" {
-		t.Fatalf("runtime phase = %q, want failed", phase)
-	}
-	failure := lastReplicationFailure(t, store)
-	if failure.Retryable || failure.Classification != "key_too_long" || !strings.Contains(failure.Message, "shop.urls") {
-		t.Fatalf("recorded failure = %+v", failure)
+	for cause, want := range map[error]string{
+		idxpkg.ErrKeyTooLong:                "key_too_long",
+		idxpkg.ErrCannotIndexParallelArrays: "parallel_arrays",
+		idxpkg.ErrGeoPointOutOfInterval:     "unindexable_geo_value",
+	} {
+		t.Run(want, func(t *testing.T) {
+			replicationRuntime, _, store := newRecoveryRuntime(t)
+			err := &oplog.UnstorableKeyError{
+				OpTime: control.OpTime{Seconds: 100, Increment: 1, Term: 2}, Namespace: "shop.urls", Operation: "i", Err: cause,
+			}
+			if err := store.SetInitialSyncPhase(control.InitialSyncComplete); err != nil {
+				t.Fatal(err)
+			}
+			if err := replicationRuntime.manager.MarkSteady(); err != nil {
+				t.Fatal(err)
+			}
+			if !replicationRuntime.stopOnFatal(fmt.Errorf("steady: %w", err)) {
+				t.Fatal("stopOnFatal did not stop on an unstorable key")
+			}
+			if phase := replicationRuntime.manager.Snapshot().Runtime.Phase; phase != "failed" {
+				t.Fatalf("runtime phase = %q, want failed", phase)
+			}
+			failure := lastReplicationFailure(t, store)
+			if failure.Retryable || failure.Classification != want || !strings.Contains(failure.Message, "shop.urls") {
+				t.Fatalf("recorded failure = %+v", failure)
+			}
+		})
 	}
 }
 

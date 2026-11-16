@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/dolthub/dumbodb/internal/backends"
+	idxpkg "github.com/dolthub/dumbodb/internal/index"
 	"github.com/dolthub/dumbodb/internal/replication/catalog"
 	"github.com/dolthub/dumbodb/internal/replication/control"
 	"github.com/dolthub/dumbodb/internal/replication/initialsync"
@@ -521,13 +522,13 @@ func (r *Runtime) waitForSource(ctx context.Context) (topology.Snapshot, error) 
 }
 
 // stopOnFatal stops replication when err carries a panic raised while
-// fetching or applying the oplog, or an entry with a key too long to store.
-// Retrying would hit the same entry again.
+// fetching or applying the oplog, or an entry with a document an index
+// cannot hold. Retrying would hit the same entry again.
 func (r *Runtime) stopOnFatal(err error) bool {
 	var unstorable *oplog.UnstorableKeyError
 	if errors.As(err, &unstorable) {
-		r.stopReplication("applying oplog entry", "key_too_long", err.Error(),
-			"MongoDB replication stopped by an oplog entry with a key DumboDB cannot store",
+		r.stopReplication("applying oplog entry", idxpkg.UnindexableReason(unstorable.Err), err.Error(),
+			"MongoDB replication stopped by an oplog entry with a document an index cannot hold",
 			"opTime", unstorable.OpTime, "ns", unstorable.Namespace, "op", unstorable.Operation, "err", err)
 		return true
 	}

@@ -239,6 +239,21 @@ var ErrGeoFieldSingleElement = errors.New("geo field only has 1 element")
 // compound index reach different arrays.
 var ErrCannotIndexParallelArrays = errors.New("cannot index parallel arrays")
 
+// UnindexableReason classifies err, an error IsUnindexable accepts, as
+// key_too_long, parallel_arrays or unindexable_geo_value; it returns "" for
+// any other error.
+func UnindexableReason(err error) string {
+	switch {
+	case errors.Is(err, ErrKeyTooLong):
+		return "key_too_long"
+	case errors.Is(err, ErrCannotIndexParallelArrays):
+		return "parallel_arrays"
+	case IsUnindexable(err):
+		return "unindexable_geo_value"
+	}
+	return ""
+}
+
 // IsUnindexable reports whether err refuses a document because an index
 // cannot hold its keys: too long, parallel arrays, or an unindexable geo
 // value. Applying the same document again fails the same way.

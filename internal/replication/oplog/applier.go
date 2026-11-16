@@ -108,7 +108,7 @@ type UnstorableKeyError struct {
 }
 
 func (e *UnstorableKeyError) Error() string {
-	return fmt.Sprintf("oplog entry at %v (op %q, ns %q) has a key DumboDB cannot store: %v", e.OpTime, e.Operation, e.Namespace, e.Err)
+	return fmt.Sprintf("oplog entry at %v (op %q, ns %q) has a document an index cannot hold: %v", e.OpTime, e.Operation, e.Namespace, e.Err)
 }
 
 func (e *UnstorableKeyError) Unwrap() error { return e.Err }
