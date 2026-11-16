@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"go.mongodb.org/mongo-driver/v2/mongo"
 
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
@@ -58,4 +59,18 @@ func errorMessages(errs *types.Array) []string {
 		}
 	}
 	return out
+}
+
+func TestErrorBudgetAppendError(t *testing.T) {
+	big := strings.Repeat("b", 1<<20+1)
+	var b errorBudget
+	var errs []*mongo.WriteError
+	for i := range 4 {
+		errs = b.appendError(errs, &mongo.WriteError{Index: i, Code: 16755, Message: big})
+	}
+	var got []string
+	for _, we := range errs {
+		got = append(got, we.Message)
+	}
+	require.Equal(t, []string{big, big, "", ""}, got)
 }

@@ -15,6 +15,8 @@
 package handler
 
 import (
+	"go.mongodb.org/mongo-driver/v2/mongo"
+
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
@@ -32,10 +34,35 @@ const (
 	errorMessagesBudget = 8 << 20
 )
 
+// errorBudget applies the rule of capErrorMessages to messages one at a time,
+// in reply order, so a long batch never holds more than the budget.
+type errorBudget struct {
+	total, large int
+}
+
+// shorten returns msg, or "" when mongod would empty it or the budget is spent.
+func (b *errorBudget) shorten(msg string) string {
+	isLarge := len(msg) > largeErrorMessage
+	if b.total >= errorMessagesBudget || (isLarge && b.large >= keptLargeErrorMessages) {
+		return ""
+	}
+	if isLarge {
+		b.large++
+	}
+	b.total += len(msg)
+	return msg
+}
+
+// appendError appends we to errs with its message shortened.
+func (b *errorBudget) appendError(errs []*mongo.WriteError, we *mongo.WriteError) []*mongo.WriteError {
+	we.Message = b.shorten(we.Message)
+	return append(errs, we)
+}
+
 // capErrorMessages empties, in place, the "errmsg" of each document in errs
 // that mongod would empty, and of each past errorMessagesBudget.
 func capErrorMessages(errs *types.Array) {
-	total, large := 0, 0
+	var b errorBudget
 	for i := range errs.Len() {
 		doc, ok := must.NotFail(errs.Get(i)).(*types.Document)
 		if !ok {
@@ -45,18 +72,8 @@ func capErrorMessages(errs *types.Array) {
 		if err != nil {
 			continue
 		}
-		msg, ok := v.(string)
-		if !ok {
-			continue
+		if msg, ok := v.(string); ok {
+			doc.Set("errmsg", b.shorten(msg))
 		}
-		isLarge := len(msg) > largeErrorMessage
-		if total >= errorMessagesBudget || (isLarge && large >= keptLargeErrorMessages) {
-			doc.Set("errmsg", "")
-			continue
-		}
-		if isLarge {
-			large++
-		}
-		total += len(msg)
 	}
 }
