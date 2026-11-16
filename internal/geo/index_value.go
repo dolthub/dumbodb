@@ -121,7 +121,7 @@ func SphereIndexProblem(field string, v any) string {
 		if v.Len() == 0 {
 			return ""
 		}
-		return legacySpherePoint(pointValues(v), false)
+		return legacySpherePoint(v, pointValues(v), false)
 	case *types.Document:
 		if v.Len() == 0 {
 			return ""
@@ -129,16 +129,16 @@ func SphereIndexProblem(field string, v any) string {
 		if _, err := v.Get("type"); err != nil {
 			// Stored documents have sorted keys, so which field is the
 			// longitude is not known; either order may hold the point.
-			return legacySpherePoint(v.Values(), true)
+			return legacySpherePoint(v, v.Values(), true)
 		}
 		return geoJSONProblem(v)
 	}
 	return fmt.Sprintf("geo element must be an array or object: %s: %s", field, types.FormatAnyValue(v))
 }
 
-// legacySpherePoint checks a legacy point's coordinates. anyOrder accepts
-// them as latitude then longitude too.
-func legacySpherePoint(coords []any, anyOrder bool) string {
+// legacySpherePoint checks the coordinates of point, a legacy point. anyOrder
+// accepts them as latitude then longitude too.
+func legacySpherePoint(point any, coords []any, anyOrder bool) string {
 	if p := numericPair(coords); p != "" {
 		return p
 	}
@@ -147,7 +147,7 @@ func legacySpherePoint(coords []any, anyOrder bool) string {
 		return "Point coordinates must be finite numbers"
 	}
 	if !onSphere(x, y) && !(anyOrder && onSphere(y, x)) {
-		return fmt.Sprintf("can't project geometry into spherical CRS: [ %g, %g ]", x, y)
+		return "can't project geometry into spherical CRS: " + types.FormatAnyValue(point)
 	}
 	return ""
 }
@@ -176,8 +176,12 @@ func geoJSONProblem(doc *types.Document) string {
 	name, _ := typ.(string)
 	if name == "GeometryCollection" {
 		geometries, ok := getOrNull(doc, "geometries").(*types.Array)
-		if !ok || geometries.Len() == 0 {
-			return "GeometryCollection geometries must be a non-empty array"
+		if !ok {
+			return "GeometryCollection geometries must be an array, instead got type " +
+				bsonTypeName(missingIfNull(getOrNull(doc, "geometries")))
+		}
+		if geometries.Len() == 0 {
+			return "GeometryCollection geometries must have at least 1 element"
 		}
 		for i := range geometries.Len() {
 			g, ok := must.NotFail(geometries.Get(i)).(*types.Document)
@@ -224,7 +228,8 @@ func coordinatesProblem(typ string, coords any, depth int) string {
 		return typ + " coordinates must have at least 1 element"
 	case (typ == "LineString" || typ == "MultiLineString") && depth == 1:
 		if distinctPositions(arr) < 2 {
-			return fmt.Sprintf("GeoJSON LineString must have at least 2 vertices, instead got %d vertices", distinctPositions(arr))
+			return fmt.Sprintf("GeoJSON LineString must have at least 2 vertices, instead got %d vertices: %s",
+				distinctPositions(arr), types.FormatAnyValue(arr))
 		}
 	case (typ == "Polygon" || typ == "MultiPolygon") && depth == 1:
 		if p := ringProblem(arr); p != "" {
@@ -261,14 +266,16 @@ func distinctPositions(arr *types.Array) int {
 
 func ringProblem(ring *types.Array) string {
 	if ring.Len() < 4 {
-		return fmt.Sprintf("Loop must have at least 3 different vertices, %d unique vertices were provided", distinctPositions(ring))
+		return fmt.Sprintf("Loop must have at least 3 different vertices, %d unique vertices were provided: %s",
+			distinctPositions(ring), types.FormatAnyValue(ring))
 	}
 	first, last := must.NotFail(ring.Get(0)), must.NotFail(ring.Get(ring.Len()-1))
 	if types.Compare(first, last) != types.Equal {
 		return "Loop is not closed, first vertex does not equal last vertex: " + types.FormatAnyValue(ring)
 	}
 	if n := distinctPositions(ring); n < 3 {
-		return fmt.Sprintf("Loop must have at least 3 different vertices, %d unique vertices were provided", n)
+		return fmt.Sprintf("Loop must have at least 3 different vertices, %d unique vertices were provided: %s",
+			n, types.FormatAnyValue(ring))
 	}
 	return ""
 }
