@@ -546,8 +546,10 @@ func CompareKeyed(cmp *Comparator, a, b *Keyed, compare func(x, y any) types.Com
 			return types.Equal
 		}
 	}
+	// As in MongoDB's expressions, a string on the left collates against a
+	// string or Symbol, and a Symbol on the left compares by its bytes.
 	if as, ok := a.V.(string); ok {
-		if bs, ok := b.V.(string); ok {
+		if bs, ok := types.StringOrSymbol(b.V); ok {
 			switch c := cmp.CompareStrings(as, bs); {
 			case c < 0:
 				return types.Less
@@ -557,7 +559,6 @@ func CompareKeyed(cmp *Comparator, a, b *Keyed, compare func(x, y any) types.Com
 			return types.Equal
 		}
 	}
-	// As in MongoDB's expressions, a Symbol compares by its bytes.
 	if _, ok := types.StringOrSymbol(a.V); ok {
 		if _, ok := types.StringOrSymbol(b.V); ok {
 			return compare(a.V, b.V)

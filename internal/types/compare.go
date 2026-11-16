@@ -265,10 +265,8 @@ func compareScalars(v1, v2 any) CompareResult {
 	panic("not reached")
 }
 
-// stringContent returns the content of a string or Symbol, which MongoDB
+// StringOrSymbol returns the content of a string or Symbol, which MongoDB
 // compares as one type.
-// StringOrSymbol returns the content of a string or Symbol, which compare as
-// one type.
 func StringOrSymbol(v any) (string, bool) {
 	switch v := v.(type) {
 	case string:

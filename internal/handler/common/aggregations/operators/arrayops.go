@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
+	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -657,9 +658,10 @@ func (op *inArrayOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	valKey := op.cmp.KeyValue(val)
+	// The value is the left operand of each comparison, as in $eq.
+	needle := &collation.Keyed{V: val}
 	for _, item := range items {
-		if types.CompareForAggregation(op.cmp.KeyValue(item), valKey) == types.Equal {
+		if collation.CompareKeyed(op.cmp, needle, &collation.Keyed{V: item}, types.CompareForAggregation) == types.Equal {
 			return true, nil
 		}
 	}
