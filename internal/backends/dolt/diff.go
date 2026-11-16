@@ -316,7 +316,7 @@ func amFromCommitHash(ctx context.Context, state *dbState, hashStr string) (prol
 	}
 
 	rtvlFileID := serial.GetFileID(rtvlChunk.Data())
-	if rtvlFileID != serial.RootValueFileID {
+	if !isRootValueFileID(rtvlFileID) {
 		return prolly.AddressMap{}, fmt.Errorf("unexpected root value file ID %q for commit %q", rtvlFileID, hashStr)
 	}
 

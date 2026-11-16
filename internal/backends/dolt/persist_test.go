@@ -86,7 +86,7 @@ func TestInitialCommitMessage(t *testing.T) {
 
 }
 
-// TestRTVLFormat verifies that the head commit's rootValue has file ID "RTVL"
+// TestRTVLFormat verifies that the head commit's rootValue has file ID "DBRV"
 // and that the embedded ADRM in RTVL.tables can be parsed.
 func TestRTVLFormat(t *testing.T) {
 	dir, err := os.MkdirTemp("", "dolt-rtvl-test-*")
@@ -124,8 +124,8 @@ func TestRTVLFormat(t *testing.T) {
 	}
 
 	fileID := serial.GetFileID([]byte(headMsg))
-	if fileID != serial.RootValueFileID {
-		t.Errorf("head commit rootValue file ID = %q, want %q", fileID, serial.RootValueFileID)
+	if fileID != serial.DumboRootValueFileID {
+		t.Errorf("head commit rootValue file ID = %q, want %q", fileID, serial.DumboRootValueFileID)
 	}
 
 	// Verify we can parse the RTVL and extract the tables ADRM.
@@ -198,8 +198,8 @@ func TestWorkingSetRTVL(t *testing.T) {
 	}
 
 	workingFileID := serial.GetFileID(workingChunk.Data())
-	if workingFileID != serial.RootValueFileID {
-		t.Errorf("working_root_addr chunk file ID = %q, want %q", workingFileID, serial.RootValueFileID)
+	if workingFileID != serial.DumboRootValueFileID {
+		t.Errorf("working_root_addr chunk file ID = %q, want %q", workingFileID, serial.DumboRootValueFileID)
 	}
 
 	// Read staged root chunk and verify it's also RTVL.
@@ -209,8 +209,8 @@ func TestWorkingSetRTVL(t *testing.T) {
 	}
 
 	stagedFileID := serial.GetFileID(stagedChunk.Data())
-	if stagedFileID != serial.RootValueFileID {
-		t.Errorf("staged_root_addr chunk file ID = %q, want %q", stagedFileID, serial.RootValueFileID)
+	if stagedFileID != serial.DumboRootValueFileID {
+		t.Errorf("staged_root_addr chunk file ID = %q, want %q", stagedFileID, serial.DumboRootValueFileID)
 	}
 
 	// At init (before any writes), working == staged == HEAD's rootValue.
@@ -1169,4 +1169,41 @@ func TestDumboDBLogCommitInfoSupportsParent2(t *testing.T) {
 	if ci.Parent2 != "somemergehash" {
 		t.Error("CommitInfo.Parent2 field not working as expected")
 	}
+}
+
+// TestLegacyRTVLRootReadable verifies that a commit whose root carries the
+// pre-DBRV "RTVL" file id is still read, and that the database reopens.
+func TestLegacyRTVLRootReadable(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	newBackend := func() *Backend {
+		return &Backend{dataDir: dir, l: slog.Default(), dbs: make(map[string]*dbState)}
+	}
+
+	b := newBackend()
+	state, err := b.getOrOpenDB(ctx, "testdb", true)
+	require.NoError(t, err)
+
+	am, err := readAMFromWorkingSet(ctx, state.datasDB, state.cs, state.ns)
+	require.NoError(t, err)
+
+	legacy := append([]byte(nil), buildRootValueFlatbuffer(am)...)
+	copy(legacy[serial.MessagePrefixSz+4:serial.MessagePrefixSz+8], serial.RootValueFileID)
+	require.Equal(t, serial.RootValueFileID, serial.GetFileID(legacy))
+
+	meta, err := datas.NewCommitMeta("dumbodb", "dumbodb@dumbodb", "legacy root")
+	require.NoError(t, err)
+	ds, err := state.datasDB.Commit(ctx, mainDS(t, state), dolttypes.SerialMessage(legacy), datas.CommitOptions{Meta: meta})
+	require.NoError(t, err)
+	commitAddr, ok := ds.MaybeHeadAddr()
+	require.True(t, ok)
+
+	_, err = amFromCommitHash(ctx, state, commitAddr.String())
+	require.NoError(t, err)
+	b.Close()
+
+	b = newBackend()
+	defer b.Close()
+	_, err = b.getOrOpenDB(ctx, "testdb", false)
+	require.NoError(t, err)
 }
