@@ -15,26 +15,27 @@
 package handler
 
 import (
-	"unicode/utf8"
-
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 const (
-	// errorMessagesBudget bounds the error text one reply repeats in full:
-	// once the messages before an error reach it, that error's message is
-	// shortened, so a batch of large refusals cannot bloat the reply.
-	errorMessagesBudget = 3 << 20
+	// largeErrorMessage is the length past which mongod keeps a message in
+	// full only for the first keptLargeErrorMessages of a reply and empties
+	// the rest.
+	largeErrorMessage      = 1 << 20
+	keptLargeErrorMessages = 2
 
-	// shortenedErrorMessage is how much of a message past the budget is kept.
-	shortenedErrorMessage = 1 << 10
+	// errorMessagesBudget bounds the error text of one reply: once the
+	// messages before an error reach it, that error's message is emptied, so
+	// the reply stays well under the 16 MiB a document may hold.
+	errorMessagesBudget = 8 << 20
 )
 
-// capErrorMessages shortens, in place, the "errmsg" of each document in
-// errs once the messages before it reach errorMessagesBudget.
+// capErrorMessages empties, in place, the "errmsg" of each document in errs
+// that mongod would empty, and of each past errorMessagesBudget.
 func capErrorMessages(errs *types.Array) {
-	total := 0
+	total, large := 0, 0
 	for i := range errs.Len() {
 		doc, ok := must.NotFail(errs.Get(i)).(*types.Document)
 		if !ok {
@@ -48,12 +49,13 @@ func capErrorMessages(errs *types.Array) {
 		if !ok {
 			continue
 		}
-		if total >= errorMessagesBudget && len(msg) > shortenedErrorMessage {
-			cut := shortenedErrorMessage
-			for cut > 0 && !utf8.RuneStart(msg[cut]) {
-				cut--
-			}
-			doc.Set("errmsg", msg[:cut]+"...")
+		isLarge := len(msg) > largeErrorMessage
+		if total >= errorMessagesBudget || (isLarge && large >= keptLargeErrorMessages) {
+			doc.Set("errmsg", "")
+			continue
+		}
+		if isLarge {
+			large++
 		}
 		total += len(msg)
 	}

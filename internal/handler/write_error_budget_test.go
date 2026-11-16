@@ -17,7 +17,6 @@ package handler
 import (
 	"strings"
 	"testing"
-	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
 
@@ -27,28 +26,36 @@ import (
 
 func TestCapErrorMessages(t *testing.T) {
 	big := strings.Repeat("\u00e9", 1<<20)
+	medium := strings.Repeat("m", 1000000)
+	small := strings.Repeat("s", 1000)
+
 	errs := types.MakeArray(0)
-	for range 66 {
-		errs.Append(must.NotFail(types.NewDocument("index", int32(0), "code", int32(16755), "errmsg", big)))
+	for _, msg := range []string{big, medium, big, medium, big, big} {
+		errs.Append(must.NotFail(types.NewDocument("index", int32(0), "code", int32(16755), "errmsg", msg)))
 	}
 	errs.Append(must.NotFail(types.NewDocument("index", int32(0), "ok", int32(1))))
 	capErrorMessages(errs)
+	require.Equal(t, []string{big, medium, big, medium, "", ""}, errorMessages(errs))
 
+	errs = types.MakeArray(0)
+	for range 100000 {
+		errs.Append(must.NotFail(types.NewDocument("index", int32(0), "code", int32(16755), "errmsg", small)))
+	}
+	capErrorMessages(errs)
 	total := 0
-	for i := range errs.Len() {
-		doc := must.NotFail(errs.Get(i)).(*types.Document)
-		v, err := doc.Get("errmsg")
-		if err != nil {
-			continue
-		}
-		msg := v.(string)
-		require.True(t, utf8.ValidString(msg))
-		if i < 2 {
-			require.Equal(t, big, msg)
-		} else {
-			require.LessOrEqual(t, len(msg), shortenedErrorMessage+len("..."))
-		}
+	for _, msg := range errorMessages(errs) {
 		total += len(msg)
 	}
-	require.Less(t, total, errorMessagesBudget+len(big)+66*(shortenedErrorMessage+3))
+	require.LessOrEqual(t, total, errorMessagesBudget+len(small))
+}
+
+func errorMessages(errs *types.Array) []string {
+	var out []string
+	for i := range errs.Len() {
+		doc := must.NotFail(errs.Get(i)).(*types.Document)
+		if v, err := doc.Get("errmsg"); err == nil {
+			out = append(out, v.(string))
+		}
+	}
+	return out
 }
