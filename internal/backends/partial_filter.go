@@ -55,43 +55,48 @@ func matchPartialFilterColl(doc, filter *types.Document, cmp *collation.Comparat
 	return (*fn)(doc, filter, cmp)
 }
 
-var filterCanonicalizer atomic.Pointer[func(filter *types.Document) *types.Document]
-
-var partialFilterCompiler atomic.Pointer[func(pfe *types.Document, cmp *collation.Comparator) func(doc *types.Document) (bool, error)]
+// filterCanonicalizer and partialFilterCompiler are set once by the handler
+// layer's init, which Go runs before any reader.
+var (
+	filterCanonicalizer   func(filter *types.Document) *types.Document
+	partialFilterCompiler func(pfe *types.Document, cmp *collation.Comparator) func(doc *types.Document) (bool, error)
+)
 
 // RegisterFilterCanonicalizer installs fn, which returns a copy of a filter
 // whose document values have the sorted-key form documents are stored in.
 // The handler layer must call this once at process init.
 func RegisterFilterCanonicalizer(fn func(filter *types.Document) *types.Document) {
-	filterCanonicalizer.Store(&fn)
+	filterCanonicalizer = fn
 }
 
 // RegisterPartialFilterCompiler installs fn, which returns the membership
 // predicate of a partial filter, matching documents whether or not their
 // keys are sorted yet. The handler layer must call this once at process init.
 func RegisterPartialFilterCompiler(fn func(pfe *types.Document, cmp *collation.Comparator) func(doc *types.Document) (bool, error)) {
-	partialFilterCompiler.Store(&fn)
+	partialFilterCompiler = fn
 }
 
 // CanonicalPartialFilter returns pfe in the form that matches stored
-// documents, leaving pfe itself as written for listIndexes.
-func CanonicalPartialFilter(pfe *types.Document) *types.Document {
-	fn := filterCanonicalizer.Load()
-	if fn == nil || pfe == nil {
-		return pfe
+// documents, leaving pfe itself as written for listIndexes. It returns an
+// error if no canonicalizer has been registered.
+func CanonicalPartialFilter(pfe *types.Document) (*types.Document, error) {
+	if filterCanonicalizer == nil {
+		return nil, fmt.Errorf("backends: partial filter canonicalizer not registered")
 	}
-	return (*fn)(pfe)
+	if pfe == nil {
+		return nil, nil
+	}
+	return filterCanonicalizer(pfe), nil
 }
 
 // PartialFilterMembership returns IndexInfo.MatchesPartialFilter for a partial
 // index with filter expression pfe and collation indexCollation: as in mongod,
 // the expression is evaluated under the index's collation.
 func PartialFilterMembership(pfe, indexCollation *types.Document) func(doc *types.Document) (bool, error) {
-	cmp := collation.Parse(indexCollation).Comparator()
-	if compile := partialFilterCompiler.Load(); compile != nil {
-		return (*compile)(pfe, cmp)
+	if partialFilterCompiler == nil {
+		return func(*types.Document) (bool, error) {
+			return false, fmt.Errorf("backends: partial filter compiler not registered")
+		}
 	}
-	return func(doc *types.Document) (bool, error) {
-		return matchPartialFilterColl(doc, pfe, cmp)
-	}
+	return partialFilterCompiler(pfe, collation.Parse(indexCollation).Comparator())
 }
