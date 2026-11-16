@@ -70,7 +70,7 @@ func NewMatchStage(stage *types.Document, cmp *collation.Comparator, storedInput
 	}
 	// mongod parses the whole pipeline before running it, so a malformed
 	// filter fails before any later stage's errors.
-	if err := common.ValidateFilter(filter, cmp); err != nil {
+	if err := common.ValidateFilterNoGeoNear(filter, cmp); err != nil {
 		return nil, err
 	}
 
@@ -112,16 +112,6 @@ func validateMatch(filter *types.Document) error {
 		if err != nil {
 			return err
 		}
-	}
-
-	// $near / $nearSphere require a sort context, so they are not permitted in
-	// a $match stage (the path used by count and general aggregation). MongoDB
-	// rejects them here with Location5626500.
-	if common.FindGeoSortKey(filter) != nil {
-		return handlererrors.NewCommandErrorMsg(
-			handlererrors.ErrGeoNearNotAllowedInContext,
-			common.GeoNearNotAllowedMsg,
-		)
 	}
 
 	return nil

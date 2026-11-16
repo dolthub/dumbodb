@@ -45,10 +45,10 @@ func ValidateValidatorExpressions(validator *types.Document) error {
 				name+" is not allowed in collection validators", "validator")
 		}
 	}
-	if FindGeoSortKey(validator) != nil {
-		return handlererrors.NewCommandErrorMsg(handlererrors.ErrGeoNearNotAllowedInContext, GeoNearNotAllowedMsg)
-	}
 	if err := validateFilter(validator, nil, false); err != nil {
+		return err
+	}
+	if err := refuseGeoNear(validator); err != nil {
 		return err
 	}
 	return validateExprs(validator)
