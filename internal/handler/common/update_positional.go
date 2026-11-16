@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
@@ -165,12 +166,24 @@ func ValidateArrayFilters(command string, update *types.Document, isPipeline boo
 		return nil
 	}
 
+	for i := 0; arrayFilters != nil && i < arrayFilters.Len(); i++ {
+		elem := must.NotFail(arrayFilters.Get(i))
+		if _, ok := elem.(*types.Document); !ok {
+			return NewUpdateError(
+				handlererrors.ErrTypeMismatch,
+				fmt.Sprintf("BSON field '%s.%d' is the wrong type '%s', expected type 'object'",
+					arrayFiltersField(command), i, handlerparams.AliasFromType(elem)),
+				command,
+			)
+		}
+	}
+
 	filterIdentifiers := map[string]bool{}
 	var orderedIdentifiers []string
 	for i := 0; arrayFilters != nil && i < arrayFilters.Len(); i++ {
-		filter, ok := must.NotFail(arrayFilters.Get(i)).(*types.Document)
-		if !ok {
-			continue
+		filter := must.NotFail(arrayFilters.Get(i)).(*types.Document)
+		if err := parseArrayFilter(command, filter); err != nil {
+			return err
 		}
 		identifier, err := arrayFilterIdentifier(command, filter)
 		if err != nil {
@@ -224,6 +237,33 @@ func ValidateArrayFilters(command string, update *types.Document, isPipeline boo
 	}
 
 	return nil
+}
+
+// arrayFiltersField names the arrayFilters field of command in mongod's
+// type errors.
+func arrayFiltersField(command string) string {
+	switch strings.ToLower(command) {
+	case "findandmodify":
+		return "findAndModify.arrayFilters"
+	case "bulkwrite":
+		return "bulkWrite.ops.arrayFilters"
+	default:
+		return "update.updates.arrayFilters"
+	}
+}
+
+// parseArrayFilter returns the error mongod raises parsing the body of an
+// array filter, as for a $pull condition, prefixed as mongod prefixes it.
+func parseArrayFilter(command string, filter *types.Document) error {
+	err := checkPullQuery(filter, false)
+	if err == nil {
+		err = ValidateFilter(filter, nil)
+	}
+	var cmdErr *handlererrors.CommandError
+	if err == nil || !errors.As(err, &cmdErr) {
+		return err
+	}
+	return NewUpdateError(cmdErr.Code(), "Error parsing array filter :: caused by :: "+cmdErr.Err().Error(), command)
 }
 
 // arrayFilterIdentifier returns the one top-level field name every path of
