@@ -49,7 +49,7 @@ type DocLockManager struct {
 	// notify is closed and replaced on every Release, waking any ordinary write
 	// parked in WaitUntilFree so it can re-check whether its document is free.
 	notify chan struct{}
-	// interrupted fails every current and later WaitUntilFree.
+	// interrupted fails every WaitUntilFree until resumeWaiters.
 	interrupted bool
 }
 
@@ -275,11 +275,19 @@ func (m *DocLockManager) Holds(owner string, collection string, id hash.Hash) bo
 }
 
 // interruptWaiters fails every write parked in WaitUntilFree, and every later
-// one, as the manager's database is dropped.
+// one until resumeWaiters, as the manager's database is dropped. The locks
+// themselves are kept.
 func (m *DocLockManager) interruptWaiters() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.interrupted = true
 	close(m.notify)
 	m.notify = make(chan struct{})
+}
+
+// resumeWaiters undoes interruptWaiters when the drop does not go ahead.
+func (m *DocLockManager) resumeWaiters() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.interrupted = false
 }

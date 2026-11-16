@@ -496,3 +496,74 @@ func TestDropDatabaseInterruptsParkedWrites(t *testing.T) {
 	err = <-parkedErr
 	require.True(t, backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseDropPending), "got %v", err)
 }
+
+// A command that has used a database and then drops it does not wait on
+// itself.
+func TestDropDatabaseByACommandThatUsedIt(t *testing.T) {
+	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, 0, 0)
+	require.NoError(t, err)
+	t.Cleanup(be.Close)
+
+	const dbName = "selfused"
+	ctx, ci := ctxWithSessionAs(t, be, "drop-self-user", "")
+	shadow, _ := ci.CachedShadow()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- shadow.Use(time.Now(), func(*dsess.DoltSession) error {
+			db, err := be.Database(dbName)
+			if err != nil {
+				return err
+			}
+			if err := db.CreateCollection(ctx, &backends.CreateCollectionParams{Name: "items"}); err != nil {
+				return err
+			}
+			return be.DropDatabase(ctx, &backends.DropDatabaseParams{Name: dbName})
+		})
+	}()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("a drop waited on its own command")
+	}
+}
+
+// A drop that runs out of time keeps the database, and its open transactions
+// keep their document locks: a write to a locked document still waits.
+func TestDropDatabaseTimedOutKeepsDocumentLocks(t *testing.T) {
+	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, 0, 0)
+	require.NoError(t, err)
+	t.Cleanup(be.Close)
+
+	const dbName = "locked"
+	userCtx, userCI := ctxWithSessionAs(t, be, "drop-timeout-user", "")
+	dropperCtx, dropperCI := ctxWithSessionAs(t, be, "drop-timeout-dropper", "")
+	userShadow, _ := userCI.CachedShadow()
+	dropperShadow, _ := dropperCI.CachedShadow()
+
+	db, err := be.Database(dbName)
+	require.NoError(t, err)
+	require.NoError(t, db.CreateCollection(dropperCtx, &backends.CreateCollectionParams{Name: "items"}))
+	locks := be.docLockManager(dbName, defaultBranch)
+	id := hash.Of([]byte("doc"))
+	require.NoError(t, locks.Acquire("txn-holder", "items", []hash.Hash{id}, true))
+
+	require.NoError(t, userShadow.Use(time.Now(), func(*dsess.DoltSession) error {
+		_, err := be.getOrOpenDB(userCtx, dbName, false)
+		require.NoError(t, err)
+
+		ctx, cancel := context.WithTimeout(dropperCtx, 100*time.Millisecond)
+		defer cancel()
+		return dropperShadow.Use(time.Now(), func(*dsess.DoltSession) error {
+			require.ErrorIs(t, be.DropDatabase(ctx, &backends.DropDatabaseParams{Name: dbName}), context.DeadlineExceeded)
+			return nil
+		})
+	}))
+
+	require.Same(t, locks, be.docLockManager(dbName, defaultBranch), "the lock manager must survive")
+	waitCtx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	require.ErrorIs(t, locks.WaitUntilFree(waitCtx, "items", []hash.Hash{id}), context.DeadlineExceeded,
+		"a write to the locked document must still wait for the transaction")
+}

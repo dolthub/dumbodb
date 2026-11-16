@@ -16,16 +16,19 @@ package dolt
 
 import (
 	"context"
+	"sync"
+	"time"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/dsess"
 	"github.com/dolthub/go-mysql-server/sql"
 )
 
 // A command is identified by its session, or by a commandScope for work that
-// runs outside any session or is tracked apart from its session's command. While it runs, every database it reaches is
-// recorded as one of its stores in use, and a drop of that database waits for
-// it to end. Commits and most reads use a store without db.mu, so this is what
-// keeps a drop from closing a store under them.
+// runs outside any session or is tracked apart from its session's command.
+// While it runs, each database it reaches counts it as a user, and a drop of
+// that database waits for its count to reach zero. Commits and most reads use
+// a store without db.mu, so this is what keeps a drop from closing a store
+// under them.
 
 // commandScope identifies one run of background work, such as a capped
 // collection cleanup tick, or one transaction start. It is not zero-sized:
@@ -34,6 +37,12 @@ import (
 type commandScope struct{ _ byte }
 
 type commandScopeKey struct{}
+
+// commandUses is the databases one running command counts as a user of.
+type commandUses struct {
+	mu  sync.Mutex
+	dbs []*dbState
+}
 
 // commandKey returns the command ctx runs in, or nil outside any command.
 func commandKey(ctx context.Context) any {
@@ -60,8 +69,8 @@ func (b *Backend) withCommandScope(ctx context.Context) (context.Context, func()
 }
 
 // ScopeTxnStart implements sqlctx.TxnStartScoper. StartTransaction reads every
-// open database; recording them all as used for the rest of the command would
-// make every drop wait for every write.
+// open database; counting it as a user of all of them for the rest of the
+// command would make every drop wait for every write.
 func (p *dumbodbProvider) ScopeTxnStart(ctx *sql.Context) (*sql.Context, func()) {
 	if p.withCommandScope == nil {
 		return ctx, func() {}
@@ -70,108 +79,101 @@ func (p *dumbodbProvider) ScopeTxnStart(ctx *sql.Context) (*sql.Context, func())
 	return ctx.WithContext(scoped), end
 }
 
-// beginCommand starts recording the stores the command key uses.
+// beginCommand starts counting the command key as a user of the databases it
+// reaches.
 func (b *Backend) beginCommand(key any) {
-	b.commandsMu.Lock()
-	defer b.commandsMu.Unlock()
-	b.commands[key] = map[*dbState]struct{}{}
+	b.commands.Store(key, &commandUses{})
 }
 
-// endCommand releases every store the command key used.
+// endCommand stops counting the command key as a user of any database.
 func (b *Backend) endCommand(key any) {
-	b.commandsMu.Lock()
-	used := b.commands[key]
-	delete(b.commands, key)
-	b.commandsMu.Unlock()
-
-	for db := range used {
-		db.releaseUser(key)
+	if uses, ok := b.commands.LoadAndDelete(key); ok {
+		uses.(*commandUses).release()
 	}
 }
 
-// releaseUses releases every store the running command key has used so far;
-// a store it reaches again is recorded again. A drop calls it before waiting,
-// so two commands that each drop a database the other used do not wait on
-// each other.
+// releaseUses stops counting the running command key as a user of the
+// databases it has reached so far; one it reaches again counts it again. A
+// drop calls it before waiting, so it never waits on its own command and two
+// commands that each drop a database the other used do not wait on each other.
 func (b *Backend) releaseUses(key any) {
-	b.commandsMu.Lock()
-	used, running := b.commands[key]
-	if running {
-		b.commands[key] = map[*dbState]struct{}{}
-	}
-	b.commandsMu.Unlock()
-
-	for db := range used {
-		db.releaseUser(key)
+	if uses, ok := b.commands.Load(key); ok {
+		uses.(*commandUses).release()
 	}
 }
 
-// noteUserLocked records that the command key uses db. A key outside any
-// command records nothing. The caller holds b.mu, so a drop cannot detach db
-// between the lookup and this record.
-func (b *Backend) noteUserLocked(key any, db *dbState) {
-	if key == nil || db == nil {
-		return
+func (u *commandUses) release() {
+	u.mu.Lock()
+	dbs := u.dbs
+	u.dbs = nil
+	u.mu.Unlock()
+	for _, db := range dbs {
+		db.removeUser()
 	}
-	b.commandsMu.Lock()
-	defer b.commandsMu.Unlock()
+}
 
-	used, running := b.commands[key]
+// noteUser counts the command key as a user of db, once per command. It
+// reports false, counting nothing, when db is being dropped. A key outside
+// any command counts nothing.
+func (b *Backend) noteUser(key any, db *dbState) bool {
+	if db.detached.Load() {
+		return false
+	}
+	if key == nil {
+		return true
+	}
+	value, running := b.commands.Load(key)
 	if !running {
-		return
+		return true
 	}
-	if _, ok := used[db]; ok {
-		return
+	uses := value.(*commandUses)
+	uses.mu.Lock()
+	defer uses.mu.Unlock()
+	for _, used := range uses.dbs {
+		if used == db {
+			return true
+		}
 	}
-	used[db] = struct{}{}
-	db.addUser(key)
+	// Count first, then check: the drop marks db detached first, then reads
+	// the count, so at least one of the two sees the other.
+	db.users.Add(1)
+	if db.detached.Load() {
+		db.removeUser()
+		return false
+	}
+	uses.dbs = append(uses.dbs, db)
+	return true
 }
 
-func (s *dbState) addUser(key any) {
-	s.usersMu.Lock()
-	defer s.usersMu.Unlock()
-	if s.users == nil {
-		s.users = map[any]struct{}{}
-	}
-	s.users[key] = struct{}{}
-}
-
-func (s *dbState) releaseUser(key any) {
-	s.usersMu.Lock()
-	defer s.usersMu.Unlock()
-	delete(s.users, key)
-	if s.usersChanged != nil {
-		close(s.usersChanged)
-		s.usersChanged = nil
-	}
-}
-
-// waitForOtherUsers returns once no command but self uses the store, or ctx's
-// error when ctx ends first.
-func (s *dbState) waitForOtherUsers(ctx context.Context, self any) error {
-	for {
-		s.usersMu.Lock()
-		busy := false
-		for key := range s.users {
-			if key != self {
-				busy = true
-				break
-			}
-		}
-		if !busy {
-			s.usersMu.Unlock()
-			return nil
-		}
-		if s.usersChanged == nil {
-			s.usersChanged = make(chan struct{})
-		}
-		changed := s.usersChanged
-		s.usersMu.Unlock()
-
+func (s *dbState) removeUser() {
+	if s.users.Add(-1) == 0 && s.detached.Load() {
 		select {
-		case <-changed:
+		case s.usersGone <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// detach marks the database as being dropped, so no new command counts as its
+// user; reattach undoes it. Both run under b.mu.
+func (s *dbState) detach() {
+	s.detached.Store(true)
+}
+
+func (s *dbState) reattach() {
+	s.detached.Store(false)
+}
+
+// waitForUsers returns once no command counts as a user of the detached
+// database, or ctx's error when ctx ends first.
+func (s *dbState) waitForUsers(ctx context.Context) error {
+	for s.users.Load() > 0 {
+		select {
+		case <-s.usersGone:
+		case <-time.After(10 * time.Millisecond):
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 	}
+	return nil
 }
