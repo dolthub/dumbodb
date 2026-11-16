@@ -1650,70 +1650,11 @@ func processBitFieldExpression(command string, doc *types.Document, bitKey strin
 // ValidateUpdateOperators returns CommandError for findAndModify case-insensitive command name,
 // WriteError for other commands.
 func ValidateUpdateOperators(command string, update *types.Document) error {
-	var err error
-
-	currentDate, err := extractValueFromUpdateOperator(command, "$currentDate", update)
-	if err != nil {
+	if err := validateUpdatePaths(command, update, update.Keys()); err != nil {
 		return err
 	}
 
-	inc, err := extractValueFromUpdateOperator(command, "$inc", update)
-	if err != nil {
-		return err
-	}
-
-	max, err := extractValueFromUpdateOperator(command, "$max", update)
-	if err != nil {
-		return err
-	}
-
-	min, err := extractValueFromUpdateOperator(command, "$min", update)
-	if err != nil {
-		return err
-	}
-
-	mul, err := extractValueFromUpdateOperator(command, "$mul", update)
-	if err != nil {
-		return err
-	}
-
-	set, err := extractValueFromUpdateOperator(command, "$set", update)
-	if err != nil {
-		return err
-	}
-
-	unset, err := extractValueFromUpdateOperator(command, "$unset", update)
-	if err != nil {
-		return err
-	}
-
-	setOnInsert, err := extractValueFromUpdateOperator(command, "$setOnInsert", update)
-	if err != nil {
-		return err
-	}
-
-	_, err = extractValueFromUpdateOperator(command, "$rename", update)
-	if err != nil {
-		return err
-	}
-
-	pop, err := extractValueFromUpdateOperator(command, "$pop", update)
-	if err != nil {
-		return err
-	}
-
-	push, err := extractValueFromUpdateOperator(command, "$push", update)
-	if err != nil {
-		return err
-	}
-
-	addToSet, err := extractValueFromUpdateOperator(command, "$addToSet", update)
-	if err != nil {
-		return err
-	}
-
-	pullAll, err := extractValueFromUpdateOperator(command, "$pullAll", update)
-	if err != nil {
+	if err := validateCurrentDateExpression(command, update); err != nil {
 		return err
 	}
 
@@ -1722,44 +1663,7 @@ func ValidateUpdateOperators(command string, update *types.Document) error {
 		return err
 	}
 
-	bit, err := extractValueFromUpdateOperator(command, "$bit", update)
-	if err != nil {
-		return err
-	}
-
-	if err = validateOperatorKeys(
-		command,
-		addToSet,
-		currentDate,
-		inc,
-		min,
-		max,
-		mul,
-		pop,
-		pull,
-		pullAll,
-		push,
-		set,
-		setOnInsert,
-		unset,
-		bit,
-	); err != nil {
-		return err
-	}
-
-	if err = validateCurrentDateExpression(command, update); err != nil {
-		return err
-	}
-
-	if err = validateRenameExpression(command, update); err != nil {
-		return err
-	}
-
-	if err = validatePullConditions(command, pull); err != nil {
-		return err
-	}
-
-	return nil
+	return validatePullConditions(command, pull)
 }
 
 // validatePullConditions returns the error mongod raises while parsing the
@@ -1931,7 +1835,7 @@ func HasSupportedUpdateModifiers(command string, update *types.Document) (bool, 
 		default:
 			// mongod parses the operators in order, so a path error of an
 			// operator before this one is reported first.
-			if err := pathErrorBefore(command, update, keys[:i]); err != nil {
+			if err := validateUpdatePaths(command, update, keys[:i]); err != nil {
 				return false, err
 			}
 			return false, NewUpdateError(
@@ -1948,16 +1852,94 @@ func HasSupportedUpdateModifiers(command string, update *types.Document) (bool, 
 	return true, nil
 }
 
-// pathErrorBefore returns the path error mongod meets parsing the fields of
-// the operators named by ops, in order, if any.
-func pathErrorBefore(command string, update *types.Document, ops []string) error {
-	var docs []*types.Document
+// validateUpdatePaths returns the first error mongod raises while parsing
+// the operators ops of update in order: an operand that is not a document, a
+// $rename target that is not a string, an empty or positional first path
+// element, a path overlapping one an earlier field updates, or a $rename onto
+// its own path.
+func validateUpdatePaths(command string, update *types.Document, ops []string) error {
+	var visited []types.Path
+	addPath := func(key string) error {
+		if err := checkUpdatePath(command, key); err != nil {
+			return err
+		}
+		path := must.NotFail(types.NewPathFromString(key))
+		if at, ok := conflictingPath(visited, path); ok {
+			return conflictError(command, key, at)
+		}
+		return nil
+	}
+
 	for _, op := range ops {
-		if fields, ok := must.NotFail(update.Get(op)).(*types.Document); ok && op != "$rename" {
-			docs = append(docs, fields)
+		// A replacement document's fields are not operators.
+		if !strings.HasPrefix(op, "$") {
+			continue
+		}
+		fields, err := extractValueFromUpdateOperator(command, op, update)
+		if err != nil || fields == nil {
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		for _, key := range fields.Keys() {
+			if op != "$rename" {
+				if err := addPath(key); err != nil {
+					return err
+				}
+				visited = append(visited, must.NotFail(types.NewPathFromString(key)))
+				continue
+			}
+
+			value := must.NotFail(fields.Get(key))
+			to, ok := value.(string)
+			if !ok {
+				return NewUpdateError(
+					handlererrors.ErrBadValue,
+					fmt.Sprintf("The 'to' field for $rename must be a string: %s: %v", key, value),
+					command,
+				)
+			}
+			for _, path := range []string{key, to} {
+				if err := addPath(path); err != nil {
+					return err
+				}
+			}
+			if key == to {
+				return NewUpdateError(
+					handlererrors.ErrBadValue,
+					fmt.Sprintf(`The source and target field for $rename must differ: %s: "%[1]s"`, key),
+					command,
+				)
+			}
+			if strings.HasPrefix(to, key+".") || strings.HasPrefix(key, to+".") {
+				return NewUpdateError(
+					handlererrors.ErrBadValue,
+					fmt.Sprintf(`The source and target field for $rename must not be on the same path: %s: "%s"`, key, to),
+					command,
+				)
+			}
+			visited = append(visited, must.NotFail(types.NewPathFromString(key)), must.NotFail(types.NewPathFromString(to)))
 		}
 	}
-	return validateOperatorKeys(command, docs...)
+
+	return nil
+}
+
+// checkUpdatePath returns mongod's error for an update path with an empty
+// element or a positional element in the first position.
+func checkUpdatePath(command, key string) error {
+	if key == "" {
+		return NewUpdateError(handlererrors.ErrEmptyName, "An empty update path is not valid.", command)
+	}
+	if _, err := types.NewPathFromString(key); err != nil {
+		return NewUpdateError(
+			handlererrors.ErrEmptyName,
+			fmt.Sprintf("The update path '%s' contains an empty field name, which is not allowed.", key),
+			command,
+		)
+	}
+	return checkFirstPathElement(command, key)
 }
 
 // conflictingPath returns the first of paths that path overlaps, and the
@@ -2013,43 +1995,6 @@ func NewUpdateError(code handlererrors.ErrorCode, msg, command string) error {
 	}
 
 	return handlererrors.NewWriteErrorMsg(code, msg)
-}
-
-// validateOperatorKeys returns error if any key contains empty path or
-// the same path prefix exists in other key or other document.
-func validateOperatorKeys(command string, docs ...*types.Document) error {
-	var visitedPaths []types.Path
-
-	for _, doc := range docs {
-		for _, key := range doc.Keys() {
-			if key == "" {
-				return NewUpdateError(handlererrors.ErrEmptyName, "An empty update path is not valid.", command)
-			}
-			nextPath, err := types.NewPathFromString(key)
-			if err != nil {
-				return NewUpdateError(
-					handlererrors.ErrEmptyName,
-					fmt.Sprintf(
-						"The update path '%s' contains an empty field name, which is not allowed.",
-						key,
-					),
-					command,
-				)
-			}
-
-			if err := checkFirstPathElement(command, key); err != nil {
-				return err
-			}
-
-			if at, ok := conflictingPath(visitedPaths, nextPath); ok {
-				return conflictError(command, key, at)
-			}
-
-			visitedPaths = append(visitedPaths, nextPath)
-		}
-	}
-
-	return nil
 }
 
 // checkFirstPathElement refuses an update path whose first element is a
@@ -2120,152 +2065,6 @@ func extractValueFromUpdateOperator(command, op string, update *types.Document) 
 	}
 
 	return doc, nil
-}
-
-// validateRenameExpression validates $rename input on correctness.
-func validateRenameExpression(command string, update *types.Document) error {
-	if !update.Has("$rename") {
-		return nil
-	}
-
-	updateExpression := must.NotFail(update.Get("$rename"))
-
-	// updateExpression is document, checked in ValidateUpdateOperators.
-	doc := updateExpression.(*types.Document)
-
-	iter := doc.Iterator()
-	defer iter.Close()
-
-	keys := map[string]struct{}{}
-	earlier, later := pathsAroundOperator(update, "$rename")
-
-	for {
-		k, v, err := iter.Next()
-		if err != nil {
-			if errors.Is(err, iterator.ErrIteratorDone) {
-				break
-			}
-
-			return lazyerrors.Error(err)
-		}
-
-		var vStr string
-
-		vStr, ok := v.(string)
-		if !ok {
-			return NewUpdateError(
-				handlererrors.ErrBadValue,
-				fmt.Sprintf("The 'to' field for $rename must be a string: %s: %v", k, v),
-				command,
-			)
-		}
-
-		// mongod adds each operator's paths in the order the update lists
-		// them, so a conflict with an earlier operator wins over the checks
-		// of $rename itself, and one with a later operator loses to them.
-		for _, path := range []string{k, vStr} {
-			if path != "" && slices.Contains(strings.Split(path, "."), "") {
-				return NewUpdateError(
-					handlererrors.ErrEmptyName,
-					fmt.Sprintf("The update path '%s' contains an empty field name, which is not allowed.", path),
-					command,
-				)
-			}
-			if err = renameConflict(command, earlier, path); err != nil {
-				return err
-			}
-		}
-
-		// disallow fields where key is equal to the target
-		if k == vStr {
-			return NewUpdateError(
-				handlererrors.ErrBadValue,
-				fmt.Sprintf(`The source and target field for $rename must differ: %s: "%[1]s"`, k, vStr),
-				command,
-			)
-		}
-
-		if strings.HasPrefix(vStr, k+".") || strings.HasPrefix(k, vStr+".") {
-			return NewUpdateError(
-				handlererrors.ErrBadValue,
-				fmt.Sprintf(`The source and target field for $rename must not be on the same path: %s: "%s"`, k, vStr),
-				command,
-			)
-		}
-
-		if _, ok = keys[k]; ok {
-			return NewUpdateError(
-				handlererrors.ErrConflictingUpdateOperators,
-				fmt.Sprintf("Updating the path '%s' would create a conflict at '%s'", k, k),
-				command,
-			)
-		}
-
-		keys[k] = struct{}{}
-
-		if _, ok = keys[vStr]; ok {
-			return NewUpdateError(
-				handlererrors.ErrConflictingUpdateOperators,
-				fmt.Sprintf("Updating the path '%s' would create a conflict at '%s'", vStr, vStr),
-				command,
-			)
-		}
-
-		keys[vStr] = struct{}{}
-	}
-
-	for _, k := range doc.Keys() {
-		if vStr, ok := must.NotFail(doc.Get(k)).(string); ok {
-			for _, path := range []string{k, vStr} {
-				if err := renameConflict(command, later, path); err != nil {
-					return err
-				}
-			}
-		}
-	}
-
-	return nil
-}
-
-// pathsAroundOperator returns the paths of the operators update lists before
-// op, and those it lists after it.
-func pathsAroundOperator(update *types.Document, op string) (earlier, later []types.Path) {
-	seen := false
-	for _, other := range update.Keys() {
-		if other == op {
-			seen = true
-			continue
-		}
-		fields, ok := must.NotFail(update.Get(other)).(*types.Document)
-		if !ok {
-			continue
-		}
-		for _, key := range fields.Keys() {
-			path, err := types.NewPathFromString(key)
-			if err != nil {
-				continue
-			}
-			if seen {
-				later = append(later, path)
-			} else {
-				earlier = append(earlier, path)
-			}
-		}
-	}
-	return earlier, later
-}
-
-// renameConflict returns mongod's conflict error when a $rename path
-// overlaps one of paths.
-func renameConflict(command string, paths []types.Path, key string) error {
-	path, err := types.NewPathFromString(key)
-	if err != nil {
-		return nil
-	}
-	if at, ok := conflictingPath(paths, path); ok {
-		return conflictError(command, key, at)
-	}
-	return nil
 }
 
 // validateCurrentDateExpression validates $currentDate input on correctness.
