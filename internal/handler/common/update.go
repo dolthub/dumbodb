@@ -1759,7 +1759,8 @@ func checkPullQuery(query *types.Document, inElemMatch bool) error {
 }
 
 // checkPullFieldOperators checks the operators applied to one field of a
-// $pull condition. Operands that are values, as of $eq or $in, are not
+// $pull condition, and those inside its $not, $elemMatch and the $elemMatch
+// operands of $all. Operands that are values, as of $eq or $in, are not
 // looked into.
 func checkPullFieldOperators(ops *types.Document) error {
 	for _, op := range ops.Keys() {
@@ -1781,6 +1782,18 @@ func checkPullFieldOperators(ops *types.Document) error {
 			if inner, ok := operand.(*types.Document); ok && isOperatorDocument(inner) {
 				if err := checkPullFieldOperators(inner); err != nil {
 					return err
+				}
+			}
+		case "$all":
+			elems, ok := operand.(*types.Array)
+			if !ok {
+				continue
+			}
+			for i := range elems.Len() {
+				if elem, ok := must.NotFail(elems.Get(i)).(*types.Document); ok && isElemMatchDocument(elem) {
+					if err := checkPullFieldOperators(elem); err != nil {
+						return err
+					}
 				}
 			}
 		case "$elemMatch":
