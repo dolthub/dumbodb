@@ -54,10 +54,20 @@ func CanonicalizeFilter(filter *types.Document) {
 }
 
 // canonicalCondition canonicalizes the condition on one field: either a
-// value to equal or a document of query operators.
+// value to equal or a document of query operators. A value that sorting would
+// turn into a document of operators is wrapped in $eq.
 func canonicalCondition(value any) any {
-	if doc, ok := value.(*types.Document); ok && isDBRefLiteral(doc) {
+	doc, ok := value.(*types.Document)
+	if !ok {
+		return canonicalOperators(value)
+	}
+	if isDBRefLiteral(doc) {
 		return must.NotFail(types.NewDocument("$eq", sortedKeys(doc)))
+	}
+	if !isOperatorDocument(doc) {
+		if sorted := sortedKeys(doc).(*types.Document); isOperatorDocument(sorted) {
+			return must.NotFail(types.NewDocument("$eq", sorted))
+		}
 	}
 	return canonicalOperators(value)
 }
