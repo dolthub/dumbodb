@@ -172,126 +172,179 @@ func onSphere(lng, lat float64) bool {
 	return lng >= -180 && lng <= 180 && lat >= -90 && lat <= 90
 }
 
+// geoJSONProblem checks a GeoJSON object as mongod's parser does, in its
+// order and words.
 func geoJSONProblem(doc *types.Document) string {
-	typ, _ := doc.Get("type")
-	name, _ := typ.(string)
-	if name == "GeometryCollection" {
-		geometries, ok := getOrNull(doc, "geometries").(*types.Array)
-		if !ok {
-			return "GeometryCollection geometries must be an array, instead got type " +
-				bsonTypeName(missingIfNull(getOrNull(doc, "geometries")))
+	name, _ := fieldOrMissing(doc, "type").(string)
+	coords := fieldOrMissing(doc, "coordinates")
+	switch name {
+	case "Point":
+		return flatPointProblem(coords)
+	case "LineString":
+		return lineProblem(coords)
+	case "MultiPoint":
+		n, p := coordinatesArrayProblem(coords)
+		if p == "" && n == 0 {
+			return "MultiPoint coordinates must have at least 1 element"
 		}
-		if geometries.Len() == 0 {
-			return "GeometryCollection geometries must have at least 1 element"
-		}
-		for i := range geometries.Len() {
-			g, ok := must.NotFail(geometries.Get(i)).(*types.Document)
-			if !ok {
-				return "Element " + fmt.Sprint(i) + " of \"geometries\" is not an object"
-			}
-			if p := geoJSONProblem(g); p != "" {
-				return p
-			}
-		}
-		return ""
+		return p
+	case "Polygon":
+		return polygonProblem(coords)
+	case "MultiLineString":
+		return eachProblem("MultiLineString", coords, lineProblem)
+	case "MultiPolygon":
+		return eachProblem("MultiPolygon", coords, polygonProblem)
+	case "GeometryCollection":
+		return geometryCollectionProblem(fieldOrMissing(doc, "geometries"))
 	}
-
-	depth, known := map[string]int{
-		"Point": 0, "LineString": 1, "MultiPoint": 1, "Polygon": 2, "MultiLineString": 2, "MultiPolygon": 3,
-	}[name]
-	if !known {
-		return "unknown GeoJSON type: " + Echo(doc)
-	}
-	coords := getOrNull(doc, "coordinates")
-	if name == "Point" {
-		if _, isDoc := coords.(*types.Document); !isDoc {
-			if _, isArray := coords.(*types.Array); !isArray {
-				return "Point must be an array or object, instead got type " + bsonTypeName(missingIfNull(coords))
-			}
-		}
-	}
-	return coordinatesProblem(name, coords, depth)
+	return "unknown GeoJSON type: " + Echo(doc)
 }
 
-// coordinatesProblem checks coords, positions nested depth arrays deep.
-func coordinatesProblem(typ string, coords any, depth int) string {
-	if depth == 0 {
-		return positionProblem(coords)
-	}
+// eachProblem checks coords, the array of lines or polygons of a typ
+// geometry, with check.
+func eachProblem(typ string, coords any, check func(any) string) string {
 	arr, ok := coords.(*types.Array)
 	if !ok {
-		return "GeoJSON coordinates must be an array"
+		return typ + " coordinates must be an array, instead got type " + bsonTypeName(coords)
 	}
-	switch {
-	case arr.Len() == 0 && typ == "Polygon" && depth == 2:
-		return "Polygon has no loops."
-	case arr.Len() == 0 && depth == geoJSONDepth[typ]:
+	for i := range arr.Len() {
+		if p := check(must.NotFail(arr.Get(i))); p != "" {
+			return p
+		}
+	}
+	if arr.Len() == 0 {
 		return typ + " coordinates must have at least 1 element"
-	case (typ == "LineString" || typ == "MultiLineString") && depth == 1:
-		if n := distinctPositions(arr, 2); n < 2 {
-			return fmt.Sprintf("GeoJSON LineString must have at least 2 vertices, instead got %d vertices: %s",
-				n, Echo(arr))
-		}
-	case (typ == "Polygon" || typ == "MultiPolygon") && depth == 1:
-		if p := ringProblem(arr); p != "" {
-			return p
-		}
+	}
+	return ""
+}
+
+func geometryCollectionProblem(geometries any) string {
+	arr, ok := geometries.(*types.Array)
+	if !ok {
+		return "GeometryCollection geometries must be an array, instead got type " + bsonTypeName(geometries)
+	}
+	if arr.Len() == 0 {
+		return "GeometryCollection geometries must have at least 1 element"
 	}
 	for i := range arr.Len() {
-		if p := coordinatesProblem(typ, must.NotFail(arr.Get(i)), depth-1); p != "" {
+		elem := must.NotFail(arr.Get(i))
+		g, ok := elem.(*types.Document)
+		if !ok {
+			return fmt.Sprintf(`Element %d of "geometries" must be an object, instead got type %s: %s`,
+				i, bsonTypeName(elem), Echo(elem))
+		}
+		if p := geoJSONProblem(g); p != "" {
 			return p
 		}
 	}
 	return ""
 }
 
-var geoJSONDepth = map[string]int{"MultiPoint": 1, "MultiLineString": 2, "MultiPolygon": 3}
-
-// distinctPositions returns the number of distinct positions in arr, counting
-// no further than limit, so a check for a few distinct vertices stays linear
-// in the number of positions.
-func distinctPositions(arr *types.Array, limit int) int {
-	var distinct []any
-	for i := range arr.Len() {
-		v := must.NotFail(arr.Get(i))
-		seen := false
-		for _, d := range distinct {
-			if types.Compare(d, v) == types.Equal {
-				seen = true
-				break
-			}
-		}
-		if !seen {
-			if distinct = append(distinct, v); len(distinct) == limit {
-				break
-			}
-		}
+func lineProblem(coords any) string {
+	n, p := coordinatesArrayProblem(coords)
+	if p != "" {
+		return p
 	}
-	return len(distinct)
-}
-
-func ringProblem(ring *types.Array) string {
-	if ring.Len() < 4 {
-		return fmt.Sprintf("Loop must have at least 3 different vertices, %d unique vertices were provided: %s",
-			distinctPositions(ring, 3), Echo(ring))
-	}
-	first, last := must.NotFail(ring.Get(0)), must.NotFail(ring.Get(ring.Len()-1))
-	if types.Compare(first, last) != types.Equal {
-		return "Loop is not closed, first vertex does not equal last vertex: " + Echo(ring)
-	}
-	if n := distinctPositions(ring, 3); n < 3 {
-		return fmt.Sprintf("Loop must have at least 3 different vertices, %d unique vertices were provided: %s",
-			n, Echo(ring))
+	if vertices := dedupedVertices(coords.(*types.Array), n); len(vertices) < 2 {
+		return fmt.Sprintf("GeoJSON LineString must have at least 2 vertices, instead got %d vertices: %s",
+			len(vertices), Echo(coords))
 	}
 	return ""
 }
 
-// positionProblem checks a GeoJSON position: an array, or for a Point a
-// document, starting with a longitude and a latitude.
+func polygonProblem(coords any) string {
+	loops, ok := coords.(*types.Array)
+	if !ok {
+		return "Polygon coordinates must be an array, instead got type " + bsonTypeName(coords)
+	}
+	for i := range loops.Len() {
+		if p := loopProblem(must.NotFail(loops.Get(i))); p != "" {
+			return p
+		}
+	}
+	if loops.Len() == 0 {
+		return "Polygon has no loops."
+	}
+	return ""
+}
+
+func loopProblem(loop any) string {
+	n, p := coordinatesArrayProblem(loop)
+	if p != "" {
+		return p
+	}
+	arr := loop.(*types.Array)
+	if n == 0 {
+		return "Loop has no vertices: " + Echo(loop)
+	}
+	if vertex(must.NotFail(arr.Get(0))) != vertex(must.NotFail(arr.Get(n-1))) {
+		return "Loop is not closed, first vertex does not equal last vertex: " + Echo(loop)
+	}
+	vertices := dedupedVertices(arr, n)
+	vertices = vertices[:len(vertices)-1]
+	if len(vertices) < 3 {
+		return fmt.Sprintf("Loop must have at least 3 different vertices, %d unique vertices were provided: %s",
+			len(vertices), Echo(loop))
+	}
+	seen := make(map[[2]float64]int, len(vertices))
+	for i, v := range vertices {
+		if first, dup := seen[v]; dup {
+			return fmt.Sprintf("Loop is not valid: %s Duplicate vertices: %d and %d", Echo(loop), first, i)
+		}
+		seen[v] = i
+	}
+	return ""
+}
+
+// coordinatesArrayProblem checks coords, an array of GeoJSON positions, and
+// returns how many it holds.
+func coordinatesArrayProblem(coords any) (int, string) {
+	arr, ok := coords.(*types.Array)
+	if !ok {
+		return 0, "GeoJSON coordinates must be an array of coordinates, instead got type " + bsonTypeName(coords)
+	}
+	for i := range arr.Len() {
+		if p := positionProblem(must.NotFail(arr.Get(i))); p != "" {
+			return 0, p
+		}
+	}
+	return arr.Len(), ""
+}
+
+// dedupedVertices returns the first n positions of arr, all valid, without
+// adjacent repeats, as mongod counts a line's or loop's vertices.
+func dedupedVertices(arr *types.Array, n int) [][2]float64 {
+	var out [][2]float64
+	for i := range n {
+		v := vertex(must.NotFail(arr.Get(i)))
+		if len(out) == 0 || out[len(out)-1] != v {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// vertex returns the longitude and latitude of a valid GeoJSON position.
+func vertex(position any) [2]float64 {
+	values := pointValues(position)
+	x, y, _ := numberPair(values[0], values[1])
+	return [2]float64{x, y}
+}
+
+// positionProblem checks a GeoJSON position, which must be an array.
 func positionProblem(v any) string {
+	if _, ok := v.(*types.Array); !ok {
+		return "GeoJSON coordinates must be an array, instead got type " + bsonTypeName(v)
+	}
+	return flatPointProblem(v)
+}
+
+// flatPointProblem checks a point given as an array or a document starting
+// with a longitude and a latitude.
+func flatPointProblem(v any) string {
 	coords := pointValues(v)
 	if coords == nil {
-		return "Point must be an array or object, instead got type " + bsonTypeName(missingIfNull(v))
+		return "Point must be an array or object, instead got type " + bsonTypeName(v)
 	}
 	if p := numericPair(coords); p != "" {
 		return p
@@ -306,17 +359,11 @@ func positionProblem(v any) string {
 	return ""
 }
 
-func missingIfNull(v any) any {
-	if _, isNull := v.(types.NullType); isNull {
-		return nil
-	}
-	return v
-}
-
-func getOrNull(doc *types.Document, key string) any {
+// fieldOrMissing returns doc's field key, or nil when doc has none.
+func fieldOrMissing(doc *types.Document, key string) any {
 	v, err := doc.Get(key)
 	if err != nil {
-		return types.Null
+		return nil
 	}
 	return v
 }

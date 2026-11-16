@@ -93,3 +93,29 @@ func TestEchoThreshold(t *testing.T) {
 		break
 	}
 }
+
+func TestSphereIndexProblemLoops(t *testing.T) {
+	ring := func(coords ...int32) *types.Array {
+		arr := types.MakeArray(len(coords) / 2)
+		for i := 0; i < len(coords); i += 2 {
+			arr.Append(must.NotFail(types.NewArray(coords[i], coords[i+1])))
+		}
+		return arr
+	}
+	polygon := func(r *types.Array) *types.Document {
+		return must.NotFail(types.NewDocument("type", "Polygon", "coordinates", must.NotFail(types.NewArray(r))))
+	}
+	for r, want := range map[*types.Array]string{
+		ring(0, 0, 1, 1, 2, 0): "Loop is not closed, first vertex does not equal last vertex: [ [ 0, 0 ], [ 1, 1 ], [ 2, 0 ] ]",
+		ring(0, 0, 1, 1, 0, 0): "Loop must have at least 3 different vertices, 2 unique vertices were provided: " +
+			"[ [ 0, 0 ], [ 1, 1 ], [ 0, 0 ] ]",
+		ring(0, 0, 0, 0, 0, 0, 0, 0): "Loop must have at least 3 different vertices, 0 unique vertices were provided: " +
+			"[ [ 0, 0 ], [ 0, 0 ], [ 0, 0 ], [ 0, 0 ] ]",
+		ring(0, 0, 1, 0, 0, 0, 1, 0, 0, 0): "Loop is not valid: [ [ 0, 0 ], [ 1, 0 ], [ 0, 0 ], [ 1, 0 ], [ 0, 0 ] ] " +
+			"Duplicate vertices: 0 and 2",
+		ring():                             "Loop has no vertices: []",
+		ring(0, 0, 1, 0, 1, 1, 1, 1, 0, 0): "",
+	} {
+		require.Equal(t, want, SphereIndexProblem("loc", polygon(r)))
+	}
+}
