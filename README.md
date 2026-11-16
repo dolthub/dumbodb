@@ -106,6 +106,12 @@ DumboDB's version control features are exposed via a set of custom commands (e.g
 | [`dumboTag`](https://github.com/dolthub/dumbodb/wiki/Commands#dumbotag) | Create, list, or delete tags at specific commits |
 | [`dumboGC`](https://github.com/dolthub/dumbodb/wiki/Commands#dumbogc) | Run garbage collection on the database's chunk store |
 | [`dumboUndrop`](https://github.com/dolthub/dumbodb/wiki/Commands#dumboundrop) | Restore a soft-deleted database, or list databases available to undrop |
+| [`dumboRemote`](https://github.com/dolthub/dumbodb/wiki/Commands#dumboremote) | Add, list, or remove a named remote |
+| [`dumboClone`](https://github.com/dolthub/dumbodb/wiki/Commands#dumboclone) | Create a new database by cloning a remote |
+| [`dumboPush`](https://github.com/dolthub/dumbodb/wiki/Commands#dumbopush) | Push a commit to a branch on a remote |
+| [`dumboFetch`](https://github.com/dolthub/dumbodb/wiki/Commands#dumbofetch) | Download every branch from a remote into tracking refs |
+| [`dumboPull`](https://github.com/dolthub/dumbodb/wiki/Commands#dumbopull) | Fetch from a remote and merge into the current branch |
+| [`dumboBackup`](https://github.com/dolthub/dumbodb/wiki/Commands#dumbobackup) | Back up a database to a URL, or restore one from it |
 
 All commands have a `dolt*` alias (e.g. `doltCommit`, `doltMerge`). Use whichever prefix you prefer!
 
@@ -298,7 +304,12 @@ DumboDB is built on two open-source projects:
 
 ## Roadmap
 
-- **v0.7**: Branch Level Permissions
-- **v0.8**: Server support for Clone/Push/Pull
-- **v0.9**: Visualization and operations via a custom Workbench UI.
-- **v1.0**: General availability release, with a focus on stability, performance, and usability improvements.
+Before calling DumboDB beta, we need:
+
+- Mongo Query Parity
+- Branch Permissions
+- Signed Executables
+- Auto-GC
+- Commit Signing / Tag Signing
+
+After beta, **v1.0** will be the general availability release, with a focus on stability, performance, and usability improvements.
