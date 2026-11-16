@@ -29,6 +29,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -550,12 +551,13 @@ func processIndex(command string, indexDoc *types.Document, ignoreUnknownIndexOp
 }
 
 // validateGeo2DOptions refuses the bits, min and max options of a 2d index
-// that mongod refuses; other indexes ignore them.
+// as mongod's geohash converter does, and records the bounds on index.
 func validateGeo2DOptions(command string, indexDoc *types.Document, index *backends.IndexInfo) error {
 	if !slices.ContainsFunc(index.Key, func(kp backends.IndexKeyPair) bool { return kp.Geo2D }) {
 		index.Geo2DBounds = nil
 		return nil
 	}
+	bits := int32(26)
 	for _, opt := range []string{"bits", "min", "max"} {
 		v, err := indexDoc.Get(opt)
 		if err != nil {
@@ -570,21 +572,40 @@ func validateGeo2DOptions(command string, indexDoc *types.Document, index *backe
 				command,
 			)
 		}
-		if opt == "bits" && !(f > 0 && f <= 32) {
-			return handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrInvalidOptions,
-				fmt.Sprintf("bits for hash must be > 0 and <= 32, but %d bits were specified", int64(f)),
-				command,
-			)
+		if opt == "bits" {
+			bits = geo2DInt32(v, f)
+			continue
 		}
+		index.SetGeo2DBound(opt, f)
+	}
+	if bits <= 0 || bits > 32 {
+		return handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrInvalidOptions,
+			fmt.Sprintf("bits for hash must be > 0 and <= 32, but %d bits were specified", bits),
+			command,
+		)
 	}
 	lo, hi := index.Geo2DRange()
-	if math.IsNaN(lo) || math.IsNaN(hi) || math.IsInf(lo, 0) || math.IsInf(hi, 0) || lo >= hi {
+	if lo >= hi {
 		return handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrInvalidOptions,
 			fmt.Sprintf("region for hash must be valid and have positive area, but [%s, %s] was specified",
 				geo2DBoundString(lo), geo2DBoundString(hi)),
 			command,
+		)
+	}
+	if scaling := (1 << 32) / (hi - lo); !(scaling > 0) || math.IsInf(scaling, 0) {
+		return handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrInvalidOptions,
+			fmt.Sprintf("range [%s, %s] is too small.", geo2DBoundString(lo), geo2DBoundString(hi)),
+			command,
+		)
+	}
+	// mongod measures the diagonal of one geohash cell, which overflows for a
+	// range this wide.
+	if cell := (hi - lo) / float64(uint64(1)<<bits); math.IsInf(cell*cell+cell*cell, 0) {
+		return handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrInvalidGeoHashConverterParameters, "Invalid GeoHashConverter parameters", command,
 		)
 	}
 	return nil
@@ -598,8 +619,28 @@ func geo2DOptionNumber(v any) (float64, bool) {
 		return float64(v), true
 	case int64:
 		return float64(v), true
+	case types.Decimal128:
+		f, err := aggregations.DecimalToAPD(v).Float64()
+		return f, err == nil
 	}
 	return 0, false
+}
+
+// geo2DInt32 converts v, a number whose value is f, to int32 as mongod reads
+// bits: truncated, saturated, and 0 for NaN.
+func geo2DInt32(v any, f float64) int32 {
+	switch {
+	case math.IsNaN(f):
+		return 0
+	case f >= math.MaxInt32:
+		return math.MaxInt32
+	case f <= math.MinInt32:
+		return math.MinInt32
+	}
+	if n, ok := v.(int64); ok {
+		return int32(n)
+	}
+	return int32(f)
 }
 
 func geo2DBoundString(f float64) string {
@@ -611,7 +652,7 @@ func geo2DBoundString(f float64) string {
 	case math.IsInf(f, -1):
 		return "-inf"
 	}
-	return strconv.FormatFloat(f, 'g', -1, 64)
+	return strconv.FormatFloat(f, 'g', 6, 64)
 }
 
 func processIndexKey(command string, keyDoc *types.Document) ([]backends.IndexKeyPair, error) {

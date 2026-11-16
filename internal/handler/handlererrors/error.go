@@ -721,6 +721,10 @@ const (
 
 	ErrGeoFieldSingleElement = ErrorCode(13068) // Location13068
 
+	// ErrInvalidGeoHashConverterParameters indicates a 2d index range so wide
+	// its geohash cells overflow.
+	ErrInvalidGeoHashConverterParameters = ErrorCode(4799400) // Location4799400
+
 	// ErrKeyTooLong indicates a key longer than DumboDB stores.
 	ErrKeyTooLong = ErrorCode(17280) // KeyTooLong
 
