@@ -82,7 +82,6 @@ func (h *Handler) MsgUpdate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 
 	// mongod's reply order.
 	if writeErrors.Len() > 0 {
-		capErrorMessages(writeErrors)
 		res.Set("writeErrors", writeErrors)
 	}
 	if upserted.Len() != 0 {
@@ -161,10 +160,11 @@ func (h *Handler) updateDocument(ctx context.Context, params *common.UpdateParam
 	}
 
 	writeErrors := types.MakeArray(0)
+	var budget errorBudget
 	// statementFailed records statement i's write error and reports whether
 	// the update stops there.
 	statementFailed := func(i int, ce *handlererrors.CommandError) bool {
-		writeErrors.Append(WriteErrorDocument(&mongo.WriteError{Index: i, Code: int(ce.Code()), Message: ce.Err().Error()}))
+		writeErrors.Append(WriteErrorDocument(&mongo.WriteError{Index: i, Code: int(ce.Code()), Message: budget.shorten(ce.Err().Error())}))
 		return params.Ordered
 	}
 

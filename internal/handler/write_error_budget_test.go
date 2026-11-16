@@ -20,45 +20,26 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/v2/mongo"
-
-	"github.com/dolthub/dumbodb/internal/types"
-	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-func TestCapErrorMessages(t *testing.T) {
+func TestErrorBudgetShorten(t *testing.T) {
 	big := strings.Repeat("\u00e9", 1<<20)
 	medium := strings.Repeat("m", 1000000)
 	small := strings.Repeat("s", 1000)
 
-	errs := types.MakeArray(0)
+	var b errorBudget
+	var got []string
 	for _, msg := range []string{big, medium, big, medium, big, big} {
-		errs.Append(must.NotFail(types.NewDocument("index", int32(0), "code", int32(16755), "errmsg", msg)))
+		got = append(got, b.shorten(msg))
 	}
-	errs.Append(must.NotFail(types.NewDocument("index", int32(0), "ok", int32(1))))
-	capErrorMessages(errs)
-	require.Equal(t, []string{big, medium, big, medium, "", ""}, errorMessages(errs))
+	require.Equal(t, []string{big, medium, big, medium, "", ""}, got)
 
-	errs = types.MakeArray(0)
-	for range 100000 {
-		errs.Append(must.NotFail(types.NewDocument("index", int32(0), "code", int32(16755), "errmsg", small)))
-	}
-	capErrorMessages(errs)
+	b = errorBudget{}
 	total := 0
-	for _, msg := range errorMessages(errs) {
-		total += len(msg)
+	for range 100000 {
+		total += len(b.shorten(small))
 	}
 	require.LessOrEqual(t, total, errorMessagesBudget+len(small))
-}
-
-func errorMessages(errs *types.Array) []string {
-	var out []string
-	for i := range errs.Len() {
-		doc := must.NotFail(errs.Get(i)).(*types.Document)
-		if v, err := doc.Get("errmsg"); err == nil {
-			out = append(out, v.(string))
-		}
-	}
-	return out
 }
 
 func TestErrorBudgetAppendError(t *testing.T) {

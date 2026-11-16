@@ -16,9 +16,6 @@ package handler
 
 import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
-
-	"github.com/dolthub/dumbodb/internal/types"
-	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 const (
@@ -34,8 +31,8 @@ const (
 	errorMessagesBudget = 8 << 20
 )
 
-// errorBudget applies the rule of capErrorMessages to messages one at a time,
-// in reply order, so a long batch never holds more than the budget.
+// errorBudget shortens a reply's error messages as each is recorded, in reply
+// order, so a long batch never holds more error text than the budget.
 type errorBudget struct {
 	total, large int
 }
@@ -57,23 +54,4 @@ func (b *errorBudget) shorten(msg string) string {
 func (b *errorBudget) appendError(errs []*mongo.WriteError, we *mongo.WriteError) []*mongo.WriteError {
 	we.Message = b.shorten(we.Message)
 	return append(errs, we)
-}
-
-// capErrorMessages empties, in place, the "errmsg" of each document in errs
-// that mongod would empty, and of each past errorMessagesBudget.
-func capErrorMessages(errs *types.Array) {
-	var b errorBudget
-	for i := range errs.Len() {
-		doc, ok := must.NotFail(errs.Get(i)).(*types.Document)
-		if !ok {
-			continue
-		}
-		v, err := doc.Get("errmsg")
-		if err != nil {
-			continue
-		}
-		if msg, ok := v.(string); ok {
-			doc.Set("errmsg", b.shorten(msg))
-		}
-	}
 }

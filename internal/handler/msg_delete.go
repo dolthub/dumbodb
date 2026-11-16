@@ -88,6 +88,7 @@ func (h *Handler) MsgDelete(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 
 	var deleted int32
 	writeErrors := types.MakeArray(0)
+	var budget errorBudget
 
 	clusteredName := recordedClusteredName(connCtx, db, params.Collection)
 	for i := range params.Deletes {
@@ -121,7 +122,7 @@ func (h *Handler) MsgDelete(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 				we := &mongo.WriteError{
 					Index:   i,
 					Code:    int(ce.Code()),
-					Message: ce.Err().Error(),
+					Message: budget.shorten(ce.Err().Error()),
 				}
 
 				writeErrors.Append(WriteErrorDocument(we))
@@ -142,7 +143,6 @@ func (h *Handler) MsgDelete(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 	))
 
 	if writeErrors.Len() > 0 {
-		capErrorMessages(writeErrors)
 		res.Set("writeErrors", writeErrors)
 	}
 

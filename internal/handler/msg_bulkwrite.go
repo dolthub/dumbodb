@@ -168,6 +168,7 @@ func (h *Handler) MsgBulkWrite(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		nInserted, nMatched, nModified, nUpserted, nDeleted, nErrors int32
 	)
 	firstBatch := types.MakeArray(ops.Len())
+	var budget errorBudget
 
 	for i := 0; i < ops.Len(); i++ {
 		opDoc, ok := must.NotFail(ops.Get(i)).(*types.Document)
@@ -187,7 +188,7 @@ func (h *Handler) MsgBulkWrite(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			code, msg := extractCommandError(opErr)
 			entry.Set("ok", float64(0))
 			entry.Set("code", code)
-			entry.Set("errmsg", msg)
+			entry.Set("errmsg", budget.shorten(msg))
 			entry.Set("n", int32(0))
 			if opDoc.Has("update") {
 				entry.Set("nModified", int32(0))
@@ -226,7 +227,6 @@ func (h *Handler) MsgBulkWrite(connCtx context.Context, msg *wire.OpMsg) (*wire.
 	conninfo.Get(connCtx).SetAutoCommitMessage(fmt.Sprintf(
 		"auto: bulkWrite (%d inserted, %d updated, %d deleted)", nInserted, nModified+nUpserted, nDeleted))
 
-	capErrorMessages(firstBatch)
 	resDoc := must.NotFail(types.NewDocument(
 		"cursor", must.NotFail(types.NewDocument(
 			"id", int64(0),
