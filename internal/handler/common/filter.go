@@ -1861,7 +1861,7 @@ func filterFieldExprAll(doc *types.Document, filterKey, filterSuffix string, fie
 			}
 			continue
 		}
-		if d, isDoc := elem.(*types.Document); isDoc && d.Len() > 0 && strings.HasPrefix(d.Keys()[0], "$") {
+		if d, isDoc := elem.(*types.Document); isDoc && d.Len() > 0 && isPathOperator(d.Keys()[0]) {
 			return false, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue, "no $ expressions in $all", "$all")
 		}
 	}
@@ -1899,6 +1899,7 @@ func filterFieldExprAll(doc *types.Document, filterKey, filterSuffix string, fie
 			}
 			continue
 		}
+		q = storedForm(q)
 		if cmp == nil && fc.cmp != nil {
 			q = fc.cmp.MatchKeyValue(q)
 		}
@@ -1907,6 +1908,50 @@ func filterFieldExprAll(doc *types.Document, filterKey, filterSuffix string, fie
 		}
 	}
 	return true, nil
+}
+
+// isPathOperator reports whether mongod parses name as a query operator on a
+// field, so that a document starting with it is an expression, not a value.
+func isPathOperator(name string) bool {
+	switch name {
+	case "$all", "$bitsAllClear", "$bitsAllSet", "$bitsAnyClear", "$bitsAnySet", "$elemMatch", "$eq", "$exists",
+		"$geoIntersects", "$geoNear", "$geoWithin", "$gt", "$gte", "$in", "$lt", "$lte", "$mod", "$ne", "$near",
+		"$nearSphere", "$nin", "$options", "$regex", "$size", "$type", "$within":
+		return true
+	}
+	return strings.HasPrefix(name, "$_internalExpr") || strings.HasPrefix(name, "$_internalSchema")
+}
+
+// storedForm returns v with its documents' keys sorted, as DumboDB stores
+// them; canonicalAll leaves a literal unsorted when sorting would change how
+// it is classified.
+func storedForm(v any) any {
+	if keysSorted(v) {
+		return v
+	}
+	return sortedKeys(v)
+}
+
+func keysSorted(v any) bool {
+	switch x := v.(type) {
+	case *types.Document:
+		keys := x.Keys()
+		for i, k := range keys {
+			if i > 0 && keys[i-1] > k {
+				return false
+			}
+			if !keysSorted(must.NotFail(x.Get(k))) {
+				return false
+			}
+		}
+	case *types.Array:
+		for i := range x.Len() {
+			if !keysSorted(must.NotFail(x.Get(i))) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func isElemMatchDocument(v any) bool {
