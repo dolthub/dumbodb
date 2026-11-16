@@ -309,7 +309,7 @@ func decodeIndexDefinition(doc *types.Document) (backends.IndexInfo, error) {
 		info.MatchesPartialFilter = backends.PartialFilterMembership(pf, info.Collation)
 		if backends.FilterComparesDocuments(pf) && !getBool(doc, "partialStoredForm") {
 			info.PartialFilterStale = true
-			info.MatchesPartialFilter = backends.StalePartialFilterMembership(name, pf)
+			backends.LogStalePartialIndex(name, pf)
 		}
 	}
 	return info, nil

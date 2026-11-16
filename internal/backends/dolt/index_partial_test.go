@@ -163,7 +163,8 @@ func TestPartialIndexUniquenessSurvivesRestart(t *testing.T) {
 
 // An older version matched a partial filter on embedded documents
 // differently and wrote no marker: such an index decodes as stale, stays
-// stale when re-encoded, and refuses writes.
+// stale when re-encoded, refuses only writes that add entries, and has all of
+// a document's entries removed.
 func TestPartialIndexFromOlderVersionIsStale(t *testing.T) {
 	keys := must.NotFail(types.NewArray(
 		must.NotFail(types.NewDocument("field", "k", "desc", false, "text", false, "geo2d", false, "geo2dsphere", false, "hashed", false)),
@@ -197,13 +198,24 @@ func TestPartialIndexFromOlderVersionIsStale(t *testing.T) {
 			if info.PartialFilterStale != c.stale {
 				t.Fatalf("stale = %t, want %t", info.PartialFilterStale, c.stale)
 			}
-			_, err = info.MatchesPartialFilter(doc)
-			if got := errors.Is(err, idxpkg.ErrStalePartialIndex); got != c.stale {
-				t.Fatalf("membership error %v, want stale error %t", err, c.stale)
+			rows, _, _, err := indexEntriesForDoc(context.Background(), doc, info)
+			if err != nil {
+				t.Fatal(err)
 			}
-			_, _, _, err = indexEntriesForDoc(context.Background(), doc, info)
-			if got := errors.Is(err, idxpkg.ErrStalePartialIndex); got != c.stale {
-				t.Fatalf("indexEntriesForDoc error %v, want stale error %t", err, c.stale)
+			if got := errors.Is(refuseStaleEntries(info, rows), idxpkg.ErrStalePartialIndex); got != c.stale {
+				t.Fatalf("adding entries refused = %t, want %t", got, c.stale)
+			}
+			outside := must.NotFail(types.NewDocument("_id", int32(2), "k", int32(2), "a", int32(5)))
+			rows, _, _, err = indexEntriesForDoc(context.Background(), outside, info)
+			if err != nil || refuseStaleEntries(info, rows) != nil {
+				t.Fatalf("a document outside the filter: rows %v, err %v", rows, err)
+			}
+			removed, _, _, err := indexEntriesForDoc(context.Background(), outside, entriesToRemove(info))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := len(removed) > 0; got != c.stale {
+				t.Fatalf("entries removed for a document outside the filter = %d, want removal %t", len(removed), c.stale)
 			}
 
 			encoded, err := encodeIndexDefinition(info)

@@ -104,14 +104,11 @@ func PartialFilterMembership(pfe, indexCollation *types.Document) func(doc *type
 	return partialFilterCompiler(pfe, collation.Parse(indexCollation).Comparator())
 }
 
-// StalePartialFilterMembership is IndexInfo.MatchesPartialFilter for the stale
-// partial index name; it logs the index once.
-func StalePartialFilterMembership(name string, pfe *types.Document) func(doc *types.Document) (bool, error) {
-	slog.Warn("partial index built by an older version; writes to its collection fail until it is dropped and recreated",
+// LogStalePartialIndex logs the stale partial index name once, when its
+// definition is first read.
+func LogStalePartialIndex(name string, pfe *types.Document) {
+	slog.Warn("partial index built by an older version; writes that would add entries to it fail until it is dropped and recreated",
 		"index", name, "partialFilterExpression", types.FormatAnyValue(pfe))
-	return func(*types.Document) (bool, error) {
-		return false, StalePartialIndexError(name)
-	}
 }
 
 // StalePartialIndexError returns index.ErrStalePartialIndex for the index name.

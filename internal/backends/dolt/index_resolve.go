@@ -254,9 +254,6 @@ func resolveBranchIndexState(ctx context.Context, c *collection, state *dbState)
 func indexEntriesForDoc(ctx context.Context, doc *types.Document, idx backends.IndexInfo) (rows [][]any, multikey uint64, lossy bool, err error) {
 	if idx.MatchesPartialFilter != nil {
 		match, err := idx.MatchesPartialFilter(doc)
-		if errors.Is(err, idxpkg.ErrStalePartialIndex) {
-			return nil, 0, false, err
-		}
 		if err != nil || !match {
 			return nil, 0, false, nil
 		}
@@ -359,6 +356,9 @@ func applyInsertsToIndexes(ctx context.Context, infos []backends.IndexInfo, maps
 			if err != nil {
 				return nil, nil, err
 			}
+			if err := refuseStaleEntries(info, rows); err != nil {
+				return nil, nil, err
+			}
 			outInfos[i].MarkMultikey(multikey)
 			outInfos[i].Lossy = outInfos[i].Lossy || lossy
 			for j, fv := range rows {
@@ -428,7 +428,7 @@ func applyUpdatesToIndexes(ctx context.Context, infos []backends.IndexInfo, maps
 			}
 			idBytes := h
 
-			oldRows, _, _, err := indexEntriesForDoc(ctx, oldDocs[d], info)
+			oldRows, _, _, err := indexEntriesForDoc(ctx, oldDocs[d], entriesToRemove(info))
 			if err != nil {
 				return nil, nil, err
 			}
@@ -441,6 +441,9 @@ func applyUpdatesToIndexes(ctx context.Context, infos []backends.IndexInfo, maps
 			}
 			newRows, multikey, lossy, err := indexEntriesForDoc(ctx, newDocs[d], info)
 			if err != nil {
+				return nil, nil, err
+			}
+			if err := refuseStaleEntries(info, newRows); err != nil {
 				return nil, nil, err
 			}
 			outInfos[i].MarkMultikey(multikey)
@@ -512,7 +515,7 @@ func applyDeletesToIndexes(ctx context.Context, infos []backends.IndexInfo, maps
 				return nil, fmt.Errorf("applyDeletesToIndexes: hashing _id for index %q: %w", info.Name, err)
 			}
 			idBytes := h
-			rows, _, _, err := indexEntriesForDoc(ctx, doc, info)
+			rows, _, _, err := indexEntriesForDoc(ctx, doc, entriesToRemove(info))
 			if err != nil {
 				return nil, err
 			}
@@ -676,9 +679,6 @@ func openIndexMap(ctx context.Context, ns tree.NodeStore, mapRoot hash.Hash) (pr
 func checkIndexKeys(doc *types.Document, idx backends.IndexInfo) error {
 	if idx.MatchesPartialFilter != nil {
 		match, err := idx.MatchesPartialFilter(doc)
-		if errors.Is(err, idxpkg.ErrStalePartialIndex) {
-			return err
-		}
 		if err != nil || !match {
 			return nil
 		}
@@ -826,4 +826,22 @@ func valueOrArrayAlongPath(container any, path *string) (any, string) {
 func isArrayFieldName(arr *types.Array, name string) bool {
 	n, err := strconv.Atoi(name)
 	return err == nil && n >= 0 && n < arr.Len() && strconv.Itoa(n) == name
+}
+
+// entriesToRemove is info for finding the entries a document may hold in the
+// index: a stale partial index may hold entries for documents outside its
+// filter as matched now, so all of a document's entries are removed.
+func entriesToRemove(info backends.IndexInfo) backends.IndexInfo {
+	if info.PartialFilterStale {
+		info.MatchesPartialFilter = nil
+	}
+	return info
+}
+
+// refuseStaleEntries refuses adding rows to a stale partial index.
+func refuseStaleEntries(info backends.IndexInfo, rows [][]any) error {
+	if info.PartialFilterStale && len(rows) > 0 {
+		return backends.StalePartialIndexError(info.Name)
+	}
+	return nil
 }
