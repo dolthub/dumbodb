@@ -18,7 +18,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/FerretDB/wire"
@@ -364,6 +366,10 @@ func processIndex(command string, indexDoc *types.Document, ignoreUnknownIndexOp
 				index.MatchesPartialFilter = backends.PartialFilterMembership(index.PartialFilterExpression, index.Collation)
 			}
 
+			if err := validateGeo2DOptions(command, indexDoc, &index); err != nil {
+				return nil, err
+			}
+
 			return &index, nil
 		default:
 			return nil, lazyerrors.Error(err)
@@ -541,6 +547,71 @@ func processIndex(command string, indexDoc *types.Document, ignoreUnknownIndexOp
 			)
 		}
 	}
+}
+
+// validateGeo2DOptions refuses the bits, min and max options of a 2d index
+// that mongod refuses; other indexes ignore them.
+func validateGeo2DOptions(command string, indexDoc *types.Document, index *backends.IndexInfo) error {
+	if !slices.ContainsFunc(index.Key, func(kp backends.IndexKeyPair) bool { return kp.Geo2D }) {
+		index.Geo2DBounds = nil
+		return nil
+	}
+	for _, opt := range []string{"bits", "min", "max"} {
+		v, err := indexDoc.Get(opt)
+		if err != nil {
+			continue
+		}
+		f, ok := geo2DOptionNumber(v)
+		if !ok {
+			return handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrTypeMismatch,
+				fmt.Sprintf("Error in specification %s :: caused by :: The field '%s' must be a number, but got %s",
+					types.FormatAnyValue(indexDoc), opt, handlerparams.AliasFromType(v)),
+				command,
+			)
+		}
+		if opt == "bits" && !(f > 0 && f <= 32) {
+			return handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrInvalidOptions,
+				fmt.Sprintf("bits for hash must be > 0 and <= 32, but %d bits were specified", int64(f)),
+				command,
+			)
+		}
+	}
+	lo, hi := index.Geo2DRange()
+	if math.IsNaN(lo) || math.IsNaN(hi) || math.IsInf(lo, 0) || math.IsInf(hi, 0) || lo >= hi {
+		return handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrInvalidOptions,
+			fmt.Sprintf("region for hash must be valid and have positive area, but [%s, %s] was specified",
+				geo2DBoundString(lo), geo2DBoundString(hi)),
+			command,
+		)
+	}
+	return nil
+}
+
+func geo2DOptionNumber(v any) (float64, bool) {
+	switch v := v.(type) {
+	case float64:
+		return v, true
+	case int32:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	}
+	return 0, false
+}
+
+func geo2DBoundString(f float64) string {
+	switch {
+	case math.IsNaN(f):
+		return "nan"
+	case math.IsInf(f, 1):
+		return "inf"
+	case math.IsInf(f, -1):
+		return "-inf"
+	}
+	return strconv.FormatFloat(f, 'g', -1, 64)
 }
 
 func processIndexKey(command string, keyDoc *types.Document) ([]backends.IndexKeyPair, error) {
