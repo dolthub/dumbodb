@@ -65,3 +65,10 @@ func TestFormatAnyValueFits(t *testing.T) {
 	}
 	require.False(t, FormatAnyValueFits(arr, 1<<20))
 }
+
+func TestFormatAnyValueLimitSymbolAndJavaScript(t *testing.T) {
+	doc := must.NotFail(NewDocument("s", Symbol("x"), "c", JavaScript("f")))
+	require.Equal(t, `{ s: "x", c: f }`, FormatAnyValueLimit(doc, 1<<20))
+	require.Equal(t, `"`+strings.Repeat("x", 150)+`..."`, FormatAnyValueLimit(Symbol(strings.Repeat("x", 1000)), 1<<20))
+	require.Equal(t, strings.Repeat("x", 70)+"...", FormatAnyValueLimit(JavaScript(strings.Repeat("x", 1000)), 1<<20))
+}

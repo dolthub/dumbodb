@@ -222,13 +222,14 @@ func writeLimited(w *limitedWriter, value any) {
 		w.write(" ]")
 	case string:
 		w.write(`"`)
-		if len(value) > echoedStringLimit {
-			w.write(value[:runeBoundary(value, echoedStringLimit)])
-			w.write("...")
-		} else {
-			w.write(value)
-		}
+		writeEchoed(w, value, echoedStringLimit)
 		w.write(`"`)
+	case Symbol:
+		w.write(`"`)
+		writeEchoed(w, string(value), echoedStringLimit)
+		w.write(`"`)
+	case JavaScript:
+		writeEchoed(w, string(value), echoedCodeLimit)
 	case Binary:
 		if len(value.B) > w.limit {
 			value.B = value.B[:w.limit]
@@ -258,9 +259,22 @@ func formatDouble(f float64) string {
 	return s
 }
 
-// echoedStringLimit is the most bytes of a string mongod repeats in an error
-// message.
-const echoedStringLimit = 150
+// echoedStringLimit and echoedCodeLimit are the most bytes of a string or
+// Symbol, and of JavaScript code, that mongod repeats in an error message.
+const (
+	echoedStringLimit = 150
+	echoedCodeLimit   = 70
+)
+
+// writeEchoed writes s cut to limit bytes, marking a cut with "...".
+func writeEchoed(w *limitedWriter, s string, limit int) {
+	if len(s) > limit {
+		w.write(s[:runeBoundary(s, limit)])
+		w.write("...")
+		return
+	}
+	w.write(s)
+}
 
 // runeBoundary returns the largest n <= limit at which s can be cut without
 // splitting a UTF-8 character.
