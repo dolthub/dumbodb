@@ -97,9 +97,9 @@ func (e *ApplyPanicError) Error() string {
 	return fmt.Sprintf("panic applying oplog entry at %v (op %q, ns %q): %v", e.OpTime, e.Operation, e.Namespace, e.Value)
 }
 
-// UnstorableKeyError reports an oplog entry whose document has a key longer
-// than DumboDB stores. Reapplying the entry fails the same way, so
-// replication must stop.
+// UnstorableKeyError reports an oplog entry whose document has keys an index
+// cannot hold. Reapplying the entry fails the same way, so replication must
+// stop.
 type UnstorableKeyError struct {
 	OpTime    control.OpTime
 	Namespace string
@@ -114,7 +114,7 @@ func (e *UnstorableKeyError) Error() string {
 func (e *UnstorableKeyError) Unwrap() error { return e.Err }
 
 // Apply applies entry. A panic is recovered and returned as *ApplyPanicError,
-// and a key too long to store as *UnstorableKeyError.
+// and keys an index cannot hold as *UnstorableKeyError.
 func (a *Applier) Apply(ctx context.Context, entry Entry) (err error) {
 	defer func() {
 		if value := recover(); value != nil {
@@ -129,7 +129,7 @@ func (a *Applier) Apply(ctx context.Context, entry Entry) (err error) {
 		}
 	}()
 	err = a.apply(ctx, entry)
-	if errors.Is(err, index.ErrKeyTooLong) {
+	if index.IsUnindexable(err) {
 		err = &UnstorableKeyError{OpTime: entry.OpTime, Namespace: entry.Namespace, Operation: entry.Operation, Err: err}
 	}
 	return err

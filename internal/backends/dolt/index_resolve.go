@@ -690,81 +690,105 @@ func checkIndexKeys(doc *types.Document, idx backends.IndexInfo) error {
 }
 
 // checkParallelArrays returns ErrCannotIndexParallelArrays when two fields of
-// idx each pass through an array the other does not, as mongod refuses to
-// index the cross product of unrelated arrays. Fields under one array, like
-// a.x and a.y, share it and are allowed.
+// idx reach different arrays in doc, as mongod refuses to index the cross
+// product of unrelated arrays. As in mongod, an array several fields reach
+// together is checked one element at a time, so arrays in different elements
+// of it are not parallel, and an array a numeric path element indexes into
+// counts like any other.
 func checkParallelArrays(doc *types.Document, idx backends.IndexInfo) error {
-	arrayPaths := make([][]string, len(idx.Key))
+	var fields []parallelField
 	for i, kp := range idx.Key {
-		if kp.Text || isGeoKey(kp) {
-			continue
-		}
-		arrayPaths[i] = arraysAlongPath(doc, strings.Split(kp.Field, "."))
-	}
-	for i := range arrayPaths {
-		for j := 0; j < i; j++ {
-			own, other := firstUnshared(arrayPaths[i], arrayPaths[j]), firstUnshared(arrayPaths[j], arrayPaths[i])
-			if own != "" && other != "" {
-				return fmt.Errorf("%w [%s] [%s]", idxpkg.ErrCannotIndexParallelArrays, lastPathElement(own), lastPathElement(other))
-			}
+		if !kp.Text && !isGeoKey(kp) {
+			fields = append(fields, parallelField{index: i, path: strings.Split(kp.Field, ".")})
 		}
 	}
-	return nil
+	_, err := parallelArrays(doc, fields)
+	return err
 }
 
-// arraysAlongPath returns the paths, without array positions past them, of
-// the arrays path passes through in doc, the outermost first. An array a
-// numeric element indexes into counts, though only its element is followed.
-func arraysAlongPath(doc *types.Document, path []string) []string {
-	seen := map[string]struct{}{}
-	var res []string
-	record := func(depth int) {
-		arrayPath := strings.Join(path[:depth], ".")
-		if _, ok := seen[arrayPath]; !ok {
-			seen[arrayPath] = struct{}{}
-			res = append(res, arrayPath)
+// parallelField is an index field's path and how much of it is consumed.
+type parallelField struct {
+	index int
+	path  []string
+	pos   int
+}
+
+// arrayHit is an index field that reached an array, and the array's name.
+type arrayHit struct {
+	index int
+	name  string
+}
+
+// parallelArrays walks v with fields, which all reached v by the same path,
+// and returns the fields that reach an array within it, or the error for two
+// fields that reach different arrays.
+func parallelArrays(v any, fields []parallelField) ([]arrayHit, error) {
+	switch v := v.(type) {
+	case *types.Array:
+		hits := make([]arrayHit, len(fields))
+		for k, f := range fields {
+			hits[k] = arrayHit{index: f.index, name: f.path[f.pos-1]}
 		}
-	}
-	var walk func(v any, depth int)
-	walk = func(v any, depth int) {
-		switch v := v.(type) {
-		case *types.Document:
-			if depth == len(path) {
-				return
-			}
-			if next, err := v.Get(path[depth]); err == nil {
-				walk(next, depth+1)
-			}
-		case *types.Array:
-			record(depth)
-			if depth < len(path) {
-				if i, err := strconv.Atoi(path[depth]); err == nil {
-					if elem, err := v.Get(i); err == nil {
-						walk(elem, depth+1)
+		for i := range v.Len() {
+			var sub []parallelField
+			for _, f := range fields {
+				if f.pos == len(f.path) {
+					continue
+				}
+				if n, err := strconv.Atoi(f.path[f.pos]); err == nil {
+					if n == i {
+						f.pos++
+						sub = append(sub, f)
 					}
-					return
+					continue
 				}
+				sub = append(sub, f)
 			}
-			for i := range v.Len() {
-				if elem, ok := must.NotFail(v.Get(i)).(*types.Document); ok {
-					walk(elem, depth)
-				}
+			if _, err := parallelArrays(must.NotFail(v.Get(i)), sub); err != nil {
+				return nil, err
 			}
 		}
-	}
-	walk(doc, 0)
-	return res
-}
+		return hits, nil
 
-func firstUnshared(paths, others []string) string {
-	for _, p := range paths {
-		if !slices.Contains(others, p) {
-			return p
+	case *types.Document:
+		var groups [][]parallelField
+		for _, f := range fields {
+			if f.pos == len(f.path) {
+				continue
+			}
+			f.pos++
+			placed := false
+			for g := range groups {
+				if groups[g][0].path[groups[g][0].pos-1] == f.path[f.pos-1] {
+					groups[g] = append(groups[g], f)
+					placed = true
+					break
+				}
+			}
+			if !placed {
+				groups = append(groups, []parallelField{f})
+			}
 		}
+		var hits []arrayHit
+		for _, group := range groups {
+			child, err := v.Get(group[0].path[group[0].pos-1])
+			if err != nil {
+				continue
+			}
+			groupHits, err := parallelArrays(child, group)
+			if err != nil {
+				return nil, err
+			}
+			if len(groupHits) > 0 && len(hits) > 0 {
+				first, second := hits[0], groupHits[0]
+				if second.index < first.index {
+					first, second = second, first
+				}
+				return nil, fmt.Errorf("%w [%s] [%s]", idxpkg.ErrCannotIndexParallelArrays, second.name, first.name)
+			}
+			hits = append(hits, groupHits...)
+		}
+		return hits, nil
 	}
-	return ""
-}
-
-func lastPathElement(path string) string {
-	return path[strings.LastIndexByte(path, '.')+1:]
+	return nil, nil
 }

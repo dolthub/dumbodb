@@ -45,8 +45,8 @@ func (e *UnsupportedBSONTypeError) Error() string {
 	return fmt.Sprintf("DumboDB does not support BSON type %s while cloning %s", e.BSONType, e.Namespace)
 }
 
-// UnstorableKeyError reports a source collection with a document or index
-// key longer than DumboDB stores.
+// UnstorableKeyError reports a source collection with a document whose keys an
+// index cannot hold.
 type UnstorableKeyError struct {
 	Namespace string
 	Err       error

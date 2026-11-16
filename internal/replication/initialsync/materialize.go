@@ -91,13 +91,13 @@ func MaterializeCollection(
 				BSONType:  unsupported.BSONType,
 			}
 		}
-		if errors.Is(err, index.ErrKeyTooLong) {
+		if index.IsUnindexable(err) {
 			return result, &UnstorableKeyError{Namespace: database + "." + collection.Name, Err: err}
 		}
 		return result, fmt.Errorf("cloning %s.%s: %w", database, collection.Name, err)
 	}
 	if err := catalogApplier.CreateIndexes(ctx, collection.SourceUUID, plan.Indexes); err != nil {
-		if errors.Is(err, index.ErrKeyTooLong) {
+		if index.IsUnindexable(err) {
 			return result, &UnstorableKeyError{Namespace: database + "." + collection.Name, Err: err}
 		}
 		return result, fmt.Errorf("building %s.%s indexes: %w", database, collection.Name, err)

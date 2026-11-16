@@ -239,6 +239,21 @@ var ErrGeoFieldSingleElement = errors.New("geo field only has 1 element")
 // compound index reach different arrays.
 var ErrCannotIndexParallelArrays = errors.New("cannot index parallel arrays")
 
+// IsUnindexable reports whether err refuses a document because an index
+// cannot hold its keys: too long, parallel arrays, or an unindexable geo
+// value. Applying the same document again fails the same way.
+func IsUnindexable(err error) bool {
+	for _, sentinel := range []error{
+		ErrKeyTooLong, ErrCannotIndexParallelArrays, ErrCannotExtractGeoKeys,
+		ErrGeoLocationFormat, ErrGeoPointOutOfInterval, ErrGeoFieldSingleElement,
+	} {
+		if errors.Is(err, sentinel) {
+			return true
+		}
+	}
+	return false
+}
+
 // CheckKeyLength returns ErrKeyTooLong for a key longer than MaxKeyLength.
 func CheckKeyLength(key []byte) error {
 	if len(key) > MaxKeyLength {
