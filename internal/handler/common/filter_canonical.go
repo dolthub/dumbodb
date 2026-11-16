@@ -72,8 +72,10 @@ func canonicalOperators(value any) any {
 	for _, op := range doc.Keys() {
 		operand := must.NotFail(doc.Get(op))
 		switch op {
-		case "$eq", "$ne", "$gt", "$gte", "$lt", "$lte", "$in", "$nin", "$all":
+		case "$eq", "$ne", "$gt", "$gte", "$lt", "$lte", "$in", "$nin":
 			doc.Set(op, sortedKeys(operand))
+		case "$all":
+			doc.Set(op, canonicalAll(operand))
 		case "$not":
 			doc.Set(op, canonicalOperators(operand))
 		case "$elemMatch":
@@ -87,6 +89,38 @@ func canonicalOperators(value any) any {
 		}
 	}
 	return doc
+}
+
+// canonicalAll canonicalizes the elements of an $all operand without changing
+// how mongod classifies each by its first key: an operator document keeps its
+// order, with an $elemMatch canonicalized as one, and a value keeps its
+// order when sorting would put a '$' key first.
+func canonicalAll(operand any) any {
+	elems, ok := operand.(*types.Array)
+	if !ok {
+		return sortedKeys(operand)
+	}
+	out := types.MakeArray(elems.Len())
+	for i := range elems.Len() {
+		elem := must.NotFail(elems.Get(i))
+		doc, isDoc := elem.(*types.Document)
+		switch {
+		case !isDoc:
+			out.Append(sortedKeys(elem))
+		case isOperatorDocument(doc):
+			if doc.Keys()[0] == "$elemMatch" {
+				elem = canonicalOperators(doc)
+			}
+			out.Append(elem)
+		default:
+			sorted := sortedKeys(doc).(*types.Document)
+			if isOperatorDocument(sorted) {
+				sorted = doc
+			}
+			out.Append(sorted)
+		}
+	}
+	return out
 }
 
 // canonicalExpression sorts a document literal in a $expr expression only
