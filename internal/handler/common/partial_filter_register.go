@@ -15,7 +15,6 @@
 package common
 
 import (
-
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/types"
