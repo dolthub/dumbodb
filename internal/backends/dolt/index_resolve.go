@@ -429,10 +429,11 @@ func applyUpdatesToIndexes(ctx context.Context, infos []backends.IndexInfo, maps
 			if err != nil {
 				return nil, nil, err
 			}
-			// A document stored before the parallel array check existed can
-			// still be updated while it keeps its parallel arrays.
+			// A document an older build indexed with parallel arrays can still
+			// be updated while it keeps them; one entering the index cannot.
 			if err := checkIndexKeys(newDocs[d], info); err != nil &&
-				!(errors.Is(err, idxpkg.ErrCannotIndexParallelArrays) && checkParallelArrays(oldDocs[d], info) != nil) {
+				!(errors.Is(err, idxpkg.ErrCannotIndexParallelArrays) &&
+					errors.Is(checkIndexKeys(oldDocs[d], info), idxpkg.ErrCannotIndexParallelArrays)) {
 				return nil, nil, err
 			}
 			newRows, multikey, lossy, err := indexEntriesForDoc(ctx, newDocs[d], info)
