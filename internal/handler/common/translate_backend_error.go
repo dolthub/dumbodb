@@ -43,6 +43,10 @@ func TranslateBackendWriteError(ctx context.Context, err error) error {
 			"cannot modify a protected system collection",
 		)
 	}
+	var dropPending *backends.Error
+	if errors.As(err, &dropPending) && dropPending.Code() == backends.ErrorCodeDatabaseDropPending {
+		return handlererrors.NewCommandErrorMsg(handlererrors.ErrDatabaseDropPending, dropPending.Message())
+	}
 	if backends.ErrorCodeIs(err, backends.ErrorCodeWriteConflict) {
 		if ci := conninfo.GetIfPresent(ctx); ci != nil && ci.InTransaction() {
 			return handlererrors.NewCommandErrorWithLabels(

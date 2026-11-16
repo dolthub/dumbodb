@@ -49,6 +49,10 @@ const (
 	// ErrorCodeBranchInConflict refuses a write to a branch that has an
 	// operation paused on conflicts.
 	ErrorCodeBranchInConflict
+
+	// ErrorCodeDatabaseDropPending refuses to create a database, or anything
+	// in it, while a drop of that database is in progress.
+	ErrorCodeDatabaseDropPending
 )
 
 // Error represents a backend error returned by all Backend, Database and Collection methods.

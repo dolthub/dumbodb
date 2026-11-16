@@ -264,7 +264,7 @@ statements:
 		result, err := common.UpdateDocument(ctx, c, "update", iter, &u)
 		if err != nil {
 			if backends.ErrorCodeIs(err, backends.ErrorCodeReadOnlyDatabase, backends.ErrorCodeReadOnlyCollection,
-				backends.ErrorCodeBranchInConflict, backends.ErrorCodeWriteConflict) {
+				backends.ErrorCodeBranchInConflict, backends.ErrorCodeWriteConflict, backends.ErrorCodeDatabaseDropPending) {
 				return 0, 0, nil, nil, common.TranslateBackendWriteError(ctx, err)
 			}
 			// mongod reports a statement that fails as it writes as that

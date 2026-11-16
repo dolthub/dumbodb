@@ -159,6 +159,9 @@ const (
 	// ErrKeysNotFound indicates no signing key matches a $clusterTime signature.
 	ErrKeysNotFound = ErrorCode(211) // KeysNotFound
 
+	// ErrDatabaseDropPending indicates a create in a database that is being dropped.
+	ErrDatabaseDropPending = ErrorCode(215) // DatabaseDropPending
+
 	ErrExceededMemoryLimit = ErrorCode(146) // ExceededMemoryLimit
 
 	// ErrLookupMatchesTooLarge indicates a $lookup's matches for one document

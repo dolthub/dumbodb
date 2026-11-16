@@ -260,7 +260,7 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 				return nil, common.TranslateBackendWriteError(connCtx, err)
 			}
 
-			if backends.ErrorCodeIs(err, backends.ErrorCodeWriteConflict) {
+			if backends.ErrorCodeIs(err, backends.ErrorCodeWriteConflict, backends.ErrorCodeDatabaseDropPending) {
 				return nil, common.TranslateBackendWriteError(connCtx, err)
 			}
 

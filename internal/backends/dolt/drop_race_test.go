@@ -203,6 +203,17 @@ func TestDropDatabaseWaitsForCommandUsingTheStore(t *testing.T) {
 		case <-time.After(200 * time.Millisecond):
 		}
 
+		// While the drop waits, the database is gone to lookups and refuses
+		// creates the way mongod does, with DatabaseDropPending.
+		bystanderCtx, _ := ctxWithSessionAs(t, be, "drop-wait-bystander", "")
+		looked, err := be.getOrOpenDB(bystanderCtx, dbName, false)
+		require.NoError(t, err)
+		require.Nil(t, looked)
+		db, err := be.Database(dbName)
+		require.NoError(t, err)
+		createErr := db.CreateCollection(bystanderCtx, &backends.CreateCollectionParams{Name: "late"})
+		require.True(t, backends.ErrorCodeIs(createErr, backends.ErrorCodeDatabaseDropPending), "got %v", createErr)
+
 		readRoot := func() (err error) {
 			defer func() {
 				if r := recover(); r != nil {

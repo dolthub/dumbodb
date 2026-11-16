@@ -231,7 +231,7 @@ func (h *Handler) execDelete(ctx context.Context, db backends.Database, collName
 		if backends.ErrorCodeIs(err, backends.ErrorCodeReadOnlyDatabase, backends.ErrorCodeReadOnlyCollection, backends.ErrorCodeBranchInConflict) {
 			return 0, common.TranslateBackendWriteError(ctx, err)
 		}
-		if backends.ErrorCodeIs(err, backends.ErrorCodeWriteConflict) {
+		if backends.ErrorCodeIs(err, backends.ErrorCodeWriteConflict, backends.ErrorCodeDatabaseDropPending) {
 			return 0, common.TranslateBackendWriteError(ctx, err)
 		}
 		return 0, lazyerrors.Error(err)

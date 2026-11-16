@@ -639,9 +639,10 @@ func (c *conn) route(connCtx context.Context, reqHeader *wire.MsgHeader, reqBody
 
 	// set body for error
 	if err != nil {
-		// A write refused because its branch is paused on conflicts can reach
-		// here wrapped by any handler; it is a refusal, not an internal error.
-		if backends.ErrorCodeIs(err, backends.ErrorCodeBranchInConflict) {
+		// A write refused because its branch is paused on conflicts, or because
+		// its database is being dropped, can reach here wrapped by any handler;
+		// it is a refusal, not an internal error.
+		if backends.ErrorCodeIs(err, backends.ErrorCodeBranchInConflict, backends.ErrorCodeDatabaseDropPending) {
 			err = common.TranslateBackendWriteError(connCtx, err)
 		}
 		switch resHeader.OpCode {

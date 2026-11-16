@@ -989,8 +989,8 @@ func (b *Backend) getOrOpenDBLocked(ctx context.Context, dbName string, create b
 		if !create {
 			return nil, false, nil
 		}
-		return nil, false, backends.NewError(backends.ErrorCodeWriteConflict,
-			fmt.Errorf("database %q is being dropped", dbName))
+		return nil, false, backends.NewError(backends.ErrorCodeDatabaseDropPending,
+			fmt.Errorf("database %q is in the process of being dropped", dbName))
 	}
 
 	// Every route from a database name to the filesystem passes here; names
