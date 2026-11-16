@@ -1411,6 +1411,7 @@ func IndexKeyError(err error) (ErrorCode, string, bool) {
 		{index.ErrKeyTooLong, ErrKeyTooLong},
 		{index.ErrCannotExtractGeoKeys, ErrCannotExtractGeoKeys},
 		{index.ErrSymbolWithCollation, ErrCannotBuildIndexKeys},
+		{index.ErrSymbolQueryWithCollation, ErrCannotBuildIndexKeys},
 	} {
 		if errors.Is(err, e.sentinel) {
 			msg := err.Error()

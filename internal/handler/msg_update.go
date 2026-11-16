@@ -244,6 +244,13 @@ statements:
 
 		res, err := c.Query(ctx, &qp)
 		if err != nil {
+			// mongod reports a filter its planner cannot bound as a write error.
+			if code, msg, ok := handlererrors.IndexKeyError(err); ok {
+				if statementFailed(i, handlererrors.NewCommandErrorMsg(code, msg).(*handlererrors.CommandError)) {
+					break statements
+				}
+				continue
+			}
 			return 0, 0, nil, nil, lazyerrors.Error(err)
 		}
 

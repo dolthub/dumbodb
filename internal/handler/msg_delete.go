@@ -113,6 +113,10 @@ func (h *Handler) MsgDelete(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 
 		if err != nil {
 			var ce *handlererrors.CommandError
+			if code, msg, ok := handlererrors.IndexKeyError(err); ok {
+				ce = handlererrors.NewCommandErrorMsg(code, msg).(*handlererrors.CommandError)
+				err = ce
+			}
 			if errors.As(err, &ce) {
 				we := &mongo.WriteError{
 					Index:   i,
