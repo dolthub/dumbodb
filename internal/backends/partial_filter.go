@@ -17,6 +17,7 @@ package backends
 import (
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync/atomic"
 
@@ -116,8 +117,33 @@ func StalePartialIndexError(name string) error {
 	return fmt.Errorf("%w: %q", index.ErrStalePartialIndex, name)
 }
 
+// SortedKeys returns a copy of v with the keys of every document in it in
+// byte order, the form an index definition stores a partial filter in.
+func SortedKeys(v any) any {
+	switch x := v.(type) {
+	case *types.Document:
+		keys := slices.Clone(x.Keys())
+		slices.Sort(keys)
+		out := types.MakeDocument(len(keys))
+		for _, k := range keys {
+			value, _ := x.Get(k)
+			out.Set(k, SortedKeys(value))
+		}
+		return out
+	case *types.Array:
+		out := types.MakeArray(x.Len())
+		for i := range x.Len() {
+			value, _ := x.Get(i)
+			out.Append(SortedKeys(value))
+		}
+		return out
+	}
+	return v
+}
+
 // FilterComparesDocuments reports whether a filter compares a field with a
-// document value, at any depth.
+// document value, at any depth. Index definitions decide it on the filter's
+// stored, key-sorted form, both when written and when read.
 func FilterComparesDocuments(v any) bool {
 	switch v := v.(type) {
 	case *types.Document:

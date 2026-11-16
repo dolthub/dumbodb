@@ -232,3 +232,33 @@ func TestPartialIndexFromOlderVersionIsStale(t *testing.T) {
 		})
 	}
 }
+
+// The stale marker is decided on the filter's stored form, so a filter whose
+// keys sort differently is not stale once written and read back.
+func TestPartialIndexMarkerUsesStoredForm(t *testing.T) {
+	keys := must.NotFail(types.NewArray(
+		must.NotFail(types.NewDocument("field", "k", "desc", false, "text", false, "geo2d", false, "geo2dsphere", false, "hashed", false)),
+	))
+	for _, pfe := range []*types.Document{
+		must.NotFail(types.NewDocument("a", must.NotFail(types.NewDocument("$eq", int32(1), "#y", int32(1))))),
+		must.NotFail(types.NewDocument("a", must.NotFail(types.NewDocument("y", int32(1), "x", int32(1))))),
+		must.NotFail(types.NewDocument("k", int32(1))),
+	} {
+		info, err := decodeIndexDefinition(must.NotFail(types.NewDocument("name", "k_1", "keys", keys)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		info.PartialFilterExpression = pfe
+		encoded, err := encodeIndexDefinition(info)
+		if err != nil {
+			t.Fatal(err)
+		}
+		again, err := decodeIndexDefinition(must.NotFail(bson.ToDocument(wirebson.RawDocument(encoded))))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if again.PartialFilterStale {
+			t.Fatalf("a filter written by this version reads back stale: %v", pfe)
+		}
+	}
+}

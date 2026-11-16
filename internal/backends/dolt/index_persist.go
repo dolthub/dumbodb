@@ -221,7 +221,7 @@ func encodeIndexDefinition(idx backends.IndexInfo) ([]byte, error) {
 		doc.Set("partial", idx.PartialFilterExpression)
 		// Older versions matched such a filter differently, and wrote no
 		// marker; decodeIndexDefinition marks those indexes stale.
-		if !idx.PartialFilterStale && backends.FilterComparesDocuments(idx.PartialFilterExpression) {
+		if !idx.PartialFilterStale && backends.FilterComparesDocuments(backends.SortedKeys(idx.PartialFilterExpression)) {
 			doc.Set("partialStoredForm", true)
 		}
 	}
