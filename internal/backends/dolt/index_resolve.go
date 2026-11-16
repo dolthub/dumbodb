@@ -26,6 +26,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/FerretDB/wire/wirebson"
@@ -257,13 +258,22 @@ func indexEntriesForDoc(ctx context.Context, doc *types.Document, idx backends.I
 		return nil, 0, false, nil
 	}
 	fieldVals := extractIndexFieldValues(doc, idx)
+	cmp := indexComparator(idx)
+	if cmp != nil {
+		for i, v := range fieldVals {
+			field := idx.Key[i].Field
+			if err := idxpkg.CheckCollatable(field[strings.LastIndexByte(field, '.')+1:], v); err != nil {
+				return nil, 0, false, err
+			}
+		}
+	}
 	for i, v := range fieldVals {
 		if _, isArr := v.(*types.Array); isArr && i < 64 {
 			multikey |= 1 << i
 		}
 	}
 	rows = expandMultiKeyValues(fieldVals)
-	if cmp := indexComparator(idx); cmp != nil {
+	if cmp != nil {
 		for i := range rows {
 			rows[i] = collateRowValues(rows[i], cmp)
 		}

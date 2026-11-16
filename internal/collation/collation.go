@@ -462,26 +462,41 @@ func must(doc *types.Document, err error) *types.Document {
 
 // KeyValue returns v with every string, nested in documents and arrays too,
 // replaced by its sort key under cmp, so values equal under the collation are
-// equal as BSON. A nil cmp returns v unchanged.
+// equal as BSON. Symbols keep their bytes, as in sorts and expressions. A nil
+// cmp returns v unchanged.
 func (cmp *Comparator) KeyValue(v any) any {
+	return cmp.keyValue(v, false)
+}
+
+// MatchKeyValue is KeyValue that also replaces Symbols, which query matching
+// and grouping collate as strings.
+func (cmp *Comparator) MatchKeyValue(v any) any {
+	return cmp.keyValue(v, true)
+}
+
+func (cmp *Comparator) keyValue(v any, symbols bool) any {
 	if cmp == nil {
 		return v
 	}
 	switch v := v.(type) {
 	case string:
 		return string(cmp.Key(v))
+	case types.Symbol:
+		if symbols {
+			return types.Symbol(cmp.Key(string(v)))
+		}
 	case *types.Document:
 		out := types.MakeDocument(v.Len())
 		for _, k := range v.Keys() {
 			fv, _ := v.Get(k)
-			out.Set(k, cmp.KeyValue(fv))
+			out.Set(k, cmp.keyValue(fv, symbols))
 		}
 		return out
 	case *types.Array:
 		out := types.MakeArray(v.Len())
 		for i := 0; i < v.Len(); i++ {
 			ev, _ := v.Get(i)
-			out.Append(cmp.KeyValue(ev))
+			out.Append(cmp.keyValue(ev, symbols))
 		}
 		return out
 	}
@@ -531,8 +546,10 @@ func CompareKeyed(cmp *Comparator, a, b *Keyed, compare func(x, y any) types.Com
 			return types.Equal
 		}
 	}
+	// As in MongoDB's expressions, a string on the left collates against a
+	// string or Symbol, and a Symbol on the left compares by its bytes.
 	if as, ok := a.V.(string); ok {
-		if bs, ok := b.V.(string); ok {
+		if bs, ok := types.StringOrSymbol(b.V); ok {
 			switch c := cmp.CompareStrings(as, bs); {
 			case c < 0:
 				return types.Less
@@ -540,6 +557,11 @@ func CompareKeyed(cmp *Comparator, a, b *Keyed, compare func(x, y any) types.Com
 				return types.Greater
 			}
 			return types.Equal
+		}
+	}
+	if _, ok := types.StringOrSymbol(a.V); ok {
+		if _, ok := types.StringOrSymbol(b.V); ok {
+			return compare(a.V, b.V)
 		}
 	}
 	return compare(a.Key(cmp), b.Key(cmp))

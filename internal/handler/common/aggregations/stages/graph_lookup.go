@@ -28,6 +28,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
+	"github.com/dolthub/dumbodb/internal/index"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
@@ -439,10 +440,10 @@ func (src *indexedGraphSource) levelMatches(ctx context.Context, keys map[string
 	return matches, nil
 }
 
-// graphKey is the traversal's key for a connect value, with strings as sort
-// keys under cmp when it is set.
+// graphKey is the traversal's key for a connect value, shared by the values
+// that compare equal, with strings as sort keys under cmp when it is set.
 func graphKey(cmp *collation.Comparator, v any) string {
-	return fmt.Sprintf("%v", cmp.KeyValue(v))
+	return string(index.EncodeID(cmp.KeyValue(v)))
 }
 
 // valuesAsDocs wraps values as {v: value} documents for equalityFetchFilter.

@@ -50,6 +50,10 @@ func bsonValueSize(v any) int {
 		return 8
 	case string:
 		return 4 + len(v) + 1
+	case Symbol:
+		return 4 + len(v) + 1
+	case JavaScript:
+		return 4 + len(v) + 1
 	case Binary:
 		return 4 + 1 + len(v.B)
 	case ObjectID:

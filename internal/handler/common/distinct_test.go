@@ -183,3 +183,16 @@ func TestDistinctSet_DateAndOID(t *testing.T) {
 		t.Fatalf("expected %d distinct, got %d", want, got)
 	}
 }
+
+func TestDistinctSet_SymbolAndJavaScript(t *testing.T) {
+	t.Parallel()
+
+	s := newDistinctSet()
+	for _, v := range []any{types.Symbol("a"), "a", types.Symbol("b"), types.JavaScript("a"), types.JavaScript("a"), "b"} {
+		s.add(v)
+	}
+	want := must.NotFail(types.NewArray(types.Symbol("a"), types.Symbol("b"), types.JavaScript("a")))
+	if !types.Identical(s.array(), want) {
+		t.Fatalf("got %v, want %v", s.array(), want)
+	}
+}

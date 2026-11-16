@@ -287,7 +287,7 @@ func (g *group) evalGroupKey(doc *types.Document) (any, error) {
 		}
 		return v, nil
 	case float64, types.Binary, types.ObjectID, bool, time.Time, types.NullType,
-		types.Regex, int32, types.Timestamp, int64:
+		types.Regex, int32, types.Timestamp, int64, types.Symbol, types.JavaScript:
 		return groupKey, nil
 	case string:
 		// g.groupExprCompiled is set iff groupKey is a valid "$path"
@@ -485,7 +485,7 @@ func (m *groupMap) accumulate(groupKey any, doc *types.Document) error {
 // index returns the slot for groupKey, creating a new group with fresh
 // accumulators when none exists yet.
 func (m *groupMap) index(groupKey any) int {
-	matchKey := m.cmp.KeyValue(groupKey)
+	matchKey := m.cmp.MatchKeyValue(groupKey)
 	key, numericFree := canonicalGroupKey(matchKey)
 
 	if m.fast == nil {
@@ -576,6 +576,14 @@ func appendGroupKey(b *strings.Builder, v any) bool {
 	case string:
 		b.WriteByte('s')
 		appendLenString(b, v)
+		return true
+	case types.Symbol:
+		b.WriteByte('s')
+		appendLenString(b, string(v))
+		return true
+	case types.JavaScript:
+		b.WriteByte('j')
+		appendLenString(b, string(v))
 		return true
 	case bool:
 		if v {

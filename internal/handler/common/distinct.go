@@ -104,7 +104,8 @@ func GetDistinctParams(document *types.Document, l *slog.Logger) (*DistinctParam
 // The canonical form mirrors compareScalars semantics:
 //   - Numbers equal in value share a key whatever their types: int32(5),
 //     int64(5), 5.0 and NumberDecimal("5.00") are one value, as are 0 and -0.
-//   - Strings, ObjectIDs, dates, binary, regex, timestamps, bool, null,
+//   - A string and a Symbol with the same content share a key.
+//   - Strings, JavaScript, ObjectIDs, dates, binary, regex, timestamps, bool, null,
 //     min/max keys each occupy distinct buckets via a leading tag byte.
 func distinctKey(v any) ([]byte, bool) {
 	switch val := v.(type) {
@@ -122,10 +123,13 @@ func distinctKey(v any) ([]byte, bool) {
 		return index.AppendValue([]byte{tagNumeric}, val), true
 
 	case string:
-		b := make([]byte, 1+len(val))
-		b[0] = tagString
-		copy(b[1:], val)
-		return b, true
+		return append([]byte{tagString}, val...), true
+
+	case types.Symbol:
+		return append([]byte{tagString}, val...), true
+
+	case types.JavaScript:
+		return append([]byte{tagJavaScript}, val...), true
 
 	case types.ObjectID:
 		b := make([]byte, 1+types.ObjectIDLen)
@@ -177,18 +181,19 @@ func distinctKey(v any) ([]byte, bool) {
 // Tag bytes that prefix each distinctKey, ensuring values from different type
 // buckets never collide.
 const (
-	tagNull      byte = 0x00
-	tagBool      byte = 0x01
-	tagNumeric   byte = 0x02
-	tagString    byte = 0x03
-	tagObjectID  byte = 0x04
-	tagDate      byte = 0x05
-	tagBinary    byte = 0x06
-	tagTimestamp byte = 0x07
-	tagRegex     byte = 0x08
-	tagMinKey    byte = 0x09
-	tagMaxKey    byte = 0x0a
-	tagUndefined byte = 0x0c
+	tagNull       byte = 0x00
+	tagBool       byte = 0x01
+	tagNumeric    byte = 0x02
+	tagString     byte = 0x03
+	tagObjectID   byte = 0x04
+	tagDate       byte = 0x05
+	tagBinary     byte = 0x06
+	tagTimestamp  byte = 0x07
+	tagRegex      byte = 0x08
+	tagMinKey     byte = 0x09
+	tagMaxKey     byte = 0x0a
+	tagUndefined  byte = 0x0c
+	tagJavaScript byte = 0x0d
 )
 
 // FilterDistinctValues returns distinct values from the given slice of documents with the given key.
@@ -342,7 +347,7 @@ func newDistinctSet() *distinctSet {
 
 // add appends v to the set if not already present.
 func (s *distinctSet) add(v any) {
-	if str, isString := v.(string); isString && s.cmp != nil {
+	if str, isString := types.StringOrSymbol(v); isString && s.cmp != nil {
 		s.addKeyed(append([]byte{tagString}, s.cmp.Key(str)...), v)
 		return
 	}

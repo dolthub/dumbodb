@@ -60,6 +60,10 @@ func FormatAnyValue(value any) string {
 		return fmt.Sprintf("%d", value)
 	case Decimal128:
 		return primitive.NewDecimal128(value.H, value.L).String()
+	case Symbol:
+		return fmt.Sprintf(`Symbol("%v")`, string(value))
+	case JavaScript:
+		return fmt.Sprintf(`Code("%v")`, string(value))
 	case MinKeyType:
 		return "MinKey"
 	case MaxKeyType:

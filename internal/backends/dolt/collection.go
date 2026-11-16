@@ -124,6 +124,11 @@ func (c *collection) query(ctx context.Context, params *backends.QueryParams) (*
 	// A {$natural: ...} hint forces a collection scan: skip both the secondary
 	// index lookup and the _id point lookup below.
 	naturalHint := params != nil && backends.HintIsNatural(params.Hint)
+	if params != nil && !naturalHint {
+		if err := c.checkFilterSymbols(ctx, state, params.Filter, params.Collation, params.Hint); err != nil {
+			return nil, nil, err
+		}
+	}
 
 	memberHint, err := c.hintedMemberIndex(ctx, state, params)
 	if err != nil {
@@ -930,6 +935,14 @@ func chooseIndexRange(ctx context.Context, idxInfos []backends.IndexInfo, filter
 		// matches. (Sparse is fine: no admitted operator matches a missing field.)
 		// A geo index's leading key is its point's cell, not the field's value.
 		if idx.Lossy || len(idx.Key) == 0 || idx.Key[0].Field == "" || isGeoKey(idx.Key[0]) {
+			continue
+		}
+		// A collated index holds collation keys, which a Symbol's bytes
+		// cannot bound; hinted, it is scanned whole.
+		if indexComparator(idx) != nil && filterBindsSymbol(filter, idx) {
+			if hintedName != "" {
+				return indexRangeChoice{mapIdx: i}, true
+			}
 			continue
 		}
 		// An index of another collation serves bounds that hold no string,
@@ -3637,6 +3650,11 @@ func (c *collection) Count(ctx context.Context, params *backends.CountParams) (*
 	if params != nil && filterNeverMatches(params.Filter) {
 		return &backends.CountResult{Count: 0, Filtered: true}, nil
 	}
+	if params != nil && !backends.HintIsNatural(params.Hint) {
+		if err := c.checkFilterSymbols(ctx, state, params.Filter, params.Collation, params.Hint); err != nil {
+			return nil, err
+		}
+	}
 	if params != nil && params.Filter != nil && params.Filter.Len() > 0 {
 		n, used, ferr := c.tryIndexedCount(ctx, state, params.Filter, params.Collation, params.Stop, params.Hint)
 		if ferr != nil {
@@ -4214,6 +4232,9 @@ func (c *collection) DistinctScan(ctx context.Context, params *backends.Distinct
 
 	idxInfos, idxMaps, err := resolveIndexesLocked(ctx, c, state)
 	if err != nil {
+		return nil, err
+	}
+	if err := checkFilterSymbols(ctx, idxInfos, params.Filter, nil, nil); err != nil {
 		return nil, err
 	}
 

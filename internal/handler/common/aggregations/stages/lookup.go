@@ -573,6 +573,10 @@ func equalityKey(v any) (string, bool) {
 	switch v := v.(type) {
 	case string:
 		return "s" + v, true
+	case types.Symbol:
+		return "s" + string(v), true
+	case types.JavaScript:
+		return "j" + string(v), true
 	case bool:
 		return "b" + strconv.FormatBool(v), true
 	case int32:
@@ -743,16 +747,16 @@ func lookupForeignPathValues(doc *types.Document, parts []string) ([]any, bool) 
 	return out, missing
 }
 
-// collatedLookupValue returns v with its strings as sort keys under cmp, so
-// values equal under the collation are equal as BSON.
+// collatedLookupValue returns v with its strings and Symbols as sort keys
+// under cmp, so values equal under the collation are equal as BSON.
 func collatedLookupValue(cmp *collation.Comparator, v any) any {
 	if cmp == nil {
 		return v
 	}
 	if indexed, ok := v.(indexedArray); ok {
-		return indexedArray{arr: cmp.KeyValue(indexed.arr).(*types.Array)}
+		return indexedArray{arr: cmp.MatchKeyValue(indexed.arr).(*types.Array)}
 	}
-	return cmp.KeyValue(v)
+	return cmp.MatchKeyValue(v)
 }
 
 // foreignMatches reports whether doc matches {field: {$in: candidates}}.
@@ -1961,10 +1965,11 @@ func valuesEqual(a, b any) bool {
 		return isNullOrMissing(a) && isNullOrMissing(b)
 	}
 
+	if as, ok := types.StringOrSymbol(a); ok {
+		bs, ok := types.StringOrSymbol(b)
+		return ok && as == bs
+	}
 	switch av := a.(type) {
-	case string:
-		bv, ok := b.(string)
-		return ok && av == bv
 	case bool:
 		bv, ok := b.(bool)
 		return ok && av == bv

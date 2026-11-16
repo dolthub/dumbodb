@@ -22,7 +22,6 @@ import (
 	"github.com/FerretDB/wire"
 
 	"github.com/dolthub/dumbodb/internal/backends"
-	internalbson "github.com/dolthub/dumbodb/internal/bson"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
@@ -185,17 +184,7 @@ func collectionBSONDataSize(ctx context.Context, c backends.Collection, filter *
 			}
 		}
 
-		wdoc, convErr := internalbson.FromDocument(doc)
-		if convErr != nil {
-			return 0, 0, lazyerrors.Error(convErr)
-		}
-
-		raw, encErr := wdoc.Encode()
-		if encErr != nil {
-			return 0, 0, lazyerrors.Error(encErr)
-		}
-
-		totalSize += int64(len(raw))
+		totalSize += int64(doc.BSONSize())
 		numDocs++
 	}
 

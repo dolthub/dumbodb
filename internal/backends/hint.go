@@ -108,11 +108,11 @@ func hintDirectionDescending(v any) (descending, ok bool) {
 	return false, false
 }
 
-// CollationFree reports whether a filter condition compares no string, so
+// CollationFree reports whether a filter condition compares no string or Symbol, so
 // its index bounds are the same under every collation.
 func CollationFree(v any) bool {
 	switch v := v.(type) {
-	case string, types.Regex:
+	case string, types.Symbol, types.Regex:
 		return false
 	case *types.Array:
 		for i := 0; i < v.Len(); i++ {

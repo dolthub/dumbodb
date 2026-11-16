@@ -20,11 +20,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 
 	"github.com/dolthub/dolt/go/store/pool"
 	"github.com/dolthub/dolt/go/store/prolly"
 	"github.com/dolthub/dolt/go/store/prolly/tree"
 	"github.com/dolthub/dolt/go/store/val"
+
+	"github.com/dolthub/dumbodb/internal/types"
 )
 
 // idxKeyDesc describes the secondary index key tuple: one varbinary field
@@ -180,6 +183,47 @@ var ErrKeyTooLong = errors.New("key too large to index")
 
 // ErrCannotExtractGeoKeys reports a value a 2dsphere index cannot hold.
 var ErrCannotExtractGeoKeys = errors.New("Can't extract geo keys")
+
+// ErrSymbolWithCollation reports a Symbol bound for an index with a collation.
+var ErrSymbolWithCollation = errors.New("KeyString format error: Cannot index type Symbol with a collation")
+
+// ErrSymbolQueryWithCollation reports a Symbol in a filter on a field that an
+// index with a collation keys.
+var ErrSymbolQueryWithCollation = errors.New("Cannot index type Symbol with a collation")
+
+// CheckCollatable returns ErrSymbolWithCollation, naming the innermost field,
+// when v holds a Symbol. field is v's own name.
+func CheckCollatable(field string, v any) error {
+	return checkCollatable(field, v, ErrSymbolWithCollation)
+}
+
+// CheckCollatableQuery is CheckCollatable for a filter value, returning
+// ErrSymbolQueryWithCollation.
+func CheckCollatableQuery(field string, v any) error {
+	return checkCollatable(field, v, ErrSymbolQueryWithCollation)
+}
+
+func checkCollatable(field string, v any, sentinel error) error {
+	switch v := v.(type) {
+	case types.Symbol:
+		return fmt.Errorf("%w. Failed to index element: %s: %q.", sentinel, field, string(v))
+	case *types.Document:
+		keys, values := v.Keys(), v.Values()
+		for i := range keys {
+			if err := checkCollatable(keys[i], values[i], sentinel); err != nil {
+				return err
+			}
+		}
+	case *types.Array:
+		for i := range v.Len() {
+			ev, _ := v.Get(i)
+			if err := checkCollatable(strconv.Itoa(i), ev, sentinel); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
 
 // CheckKeyLength returns ErrKeyTooLong for a key longer than MaxKeyLength.
 func CheckKeyLength(key []byte) error {

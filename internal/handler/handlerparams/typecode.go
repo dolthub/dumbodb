@@ -44,6 +44,10 @@ const (
 	TypeCodeDate      = TypeCode(9)  // date
 	TypeCodeNull      = TypeCode(10) // null
 	TypeCodeRegex     = TypeCode(11) // regex
+
+	TypeCodeJavaScript = TypeCode(13) // javascript
+	TypeCodeSymbol     = TypeCode(14) // symbol
+
 	TypeCodeInt       = TypeCode(16) // int
 	TypeCodeTimestamp = TypeCode(17) // timestamp
 	TypeCodeLong      = TypeCode(18) // long
@@ -62,7 +66,8 @@ func NewTypeCode(code int32) (TypeCode, error) {
 	switch c {
 	case TypeCodeDouble, TypeCodeString, TypeCodeObject, TypeCodeArray,
 		TypeCodeBinData, TypeCodeUndefined, TypeCodeObjectID, TypeCodeBool, TypeCodeDate,
-		TypeCodeNull, TypeCodeRegex, TypeCodeInt, TypeCodeTimestamp, TypeCodeLong, TypeCodeNumber:
+		TypeCodeNull, TypeCodeRegex, TypeCodeInt, TypeCodeTimestamp, TypeCodeLong, TypeCodeNumber,
+		TypeCodeJavaScript, TypeCodeSymbol:
 		return c, nil
 	case TypeCodeDecimal:
 		return c, nil
@@ -114,7 +119,7 @@ func init() {
 		TypeCodeDouble, TypeCodeString, TypeCodeObject, TypeCodeArray,
 		TypeCodeBinData, TypeCodeUndefined, TypeCodeObjectID, TypeCodeBool, TypeCodeDate, TypeCodeNull,
 		TypeCodeRegex, TypeCodeInt, TypeCodeTimestamp, TypeCodeLong, TypeCodeDecimal, TypeCodeNumber,
-		TypeCodeMinKey, TypeCodeMaxKey,
+		TypeCodeMinKey, TypeCodeMaxKey, TypeCodeJavaScript, TypeCodeSymbol,
 	} {
 		aliasToTypeCode[i.String()] = i
 	}
@@ -157,6 +162,10 @@ func AliasFromType(v any) string {
 		return TypeCodeMaxKey.String()
 	case types.UndefinedType:
 		return TypeCodeUndefined.String()
+	case types.JavaScript:
+		return TypeCodeJavaScript.String()
+	case types.Symbol:
+		return TypeCodeSymbol.String()
 	default:
 		panic(fmt.Sprintf("not supported type %T", v))
 	}

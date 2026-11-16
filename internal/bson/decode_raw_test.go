@@ -39,6 +39,10 @@ func decodeRawTestDocs() map[string]*types.Document {
 
 	return map[string]*types.Document{
 		"empty": doc(),
+		"symbol and javascript": doc(
+			"s", types.Symbol("abc"), "j", types.JavaScript("x"),
+			"a", arr(types.Symbol(""), doc("j", types.JavaScript("y"))),
+		),
 		"every type": doc(
 			"_id", types.ObjectID{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12},
 			"double", 1.5,
@@ -78,13 +82,17 @@ func TestDecodeRawDocumentMatchesToDocument(t *testing.T) {
 			raw, err := FromDocumentRaw(want)
 			require.NoError(t, err)
 
-			viaWirebson, err := decodeViaWirebson(raw)
-			require.NoError(t, err)
 			direct, err := DecodeRawDocument(raw)
 			require.NoError(t, err)
-
-			requireSameValue(t, viaWirebson, direct)
 			require.Equal(t, types.Equal, types.Compare(want, direct))
+
+			viaWirebson, err := decodeViaWirebson(raw)
+			if containsSymbolOrJavaScript(want) {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			requireSameValue(t, viaWirebson, direct)
 		})
 	}
 }
@@ -135,11 +143,11 @@ func decodeViaWirebson(raw []byte) (*types.Document, error) {
 	if doc, err := ToDocumentHandlingMinMaxKey(wirebson.RawDocument(raw)); doc != nil || err != nil {
 		return doc, err
 	}
-	return ToDocument(wirebson.RawDocument(raw))
+	return toDocument(wirebson.RawDocument(raw), 1)
 }
 
 // Both decoders must agree on every input, except that only DecodeRawDocument
-// accepts MinKey or MaxKey inside arrays.
+// accepts MinKey or MaxKey inside arrays, and Symbol and JavaScript anywhere.
 func FuzzDecodeRawDocument(f *testing.F) {
 	for _, d := range decodeRawTestDocs() {
 		f.Add(must.NotFail(FromDocumentRaw(d)))
@@ -150,6 +158,9 @@ func FuzzDecodeRawDocument(f *testing.F) {
 
 		if directErr == nil && wireErr != nil {
 			if bytes.IndexByte(raw, bsonTagMinKey) >= 0 || bytes.IndexByte(raw, bsonTagMaxKey) >= 0 {
+				return
+			}
+			if containsSymbolOrJavaScript(direct) {
 				return
 			}
 			t.Fatalf("direct decoder accepted input the wirebson path rejects (%v): %x", wireErr, raw)
@@ -248,4 +259,30 @@ func keepFields(t *testing.T, doc *types.Document, fields []string) *types.Docum
 		}
 	}
 	return kept
+}
+
+func containsSymbolOrJavaScript(v any) bool {
+	switch v := v.(type) {
+	case types.Symbol, types.JavaScript:
+		return true
+	case *types.Document:
+		iter := v.Iterator()
+		defer iter.Close()
+		for {
+			_, value, err := iter.Next()
+			if err != nil {
+				return false
+			}
+			if containsSymbolOrJavaScript(value) {
+				return true
+			}
+		}
+	case *types.Array:
+		for i := 0; i < v.Len(); i++ {
+			if containsSymbolOrJavaScript(must.NotFail(v.Get(i))) {
+				return true
+			}
+		}
+	}
+	return false
 }

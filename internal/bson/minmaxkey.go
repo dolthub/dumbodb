@@ -29,10 +29,12 @@ import (
 )
 
 const (
-	bsonTagMinKey    byte = 0xFF
-	bsonTagMaxKey    byte = 0x7F
-	bsonTagNull      byte = 0x0A
-	bsonTagUndefined byte = 0x06
+	bsonTagMinKey     byte = 0xFF
+	bsonTagMaxKey     byte = 0x7F
+	bsonTagNull       byte = 0x0A
+	bsonTagUndefined  byte = 0x06
+	bsonTagJavaScript byte = 0x0D
+	bsonTagSymbol     byte = 0x0E
 )
 
 // hasMinMaxKey returns true if the raw BSON document contains MinKey or MaxKey at the top level.
@@ -126,7 +128,7 @@ func rawBSONValueSize(data []byte, t byte) (int, error) {
 	switch t {
 	case 0x01: // float64
 		return 8, nil
-	case 0x02: // string
+	case 0x02, bsonTagJavaScript, bsonTagSymbol: // string
 		if len(data) < 4 {
 			return 0, fmt.Errorf("bson: short string length")
 		}
@@ -221,22 +223,21 @@ func toDocumentHandlingMinMaxKey(d wirebson.AnyDocument, depth int) (*types.Docu
 	return result, nil
 }
 
-// AnyContainsMinMaxKey reports whether a value (or any value nested within it)
-// is a MinKey or MaxKey.
-func AnyContainsMinMaxKey(v any) bool {
+// AnyNeedsRawEncoding reports whether v, or any value nested within it, has a
+// type wirebson cannot encode: MinKey, MaxKey, Symbol or JavaScript.
+func AnyNeedsRawEncoding(v any) bool {
 	switch val := v.(type) {
-	case types.MinKeyType, types.MaxKeyType:
+	case types.MinKeyType, types.MaxKeyType, types.Symbol, types.JavaScript:
 		return true
 	case *types.Document:
-		return docContainsMinMaxKey(val)
+		return docNeedsRawEncoding(val)
 	case *types.Array:
-		return arrContainsMinMaxKey(val)
+		return arrNeedsRawEncoding(val)
 	}
 	return false
 }
 
-// docContainsMinMaxKey recursively checks a document for MinKey/MaxKey.
-func docContainsMinMaxKey(doc *types.Document) bool {
+func docNeedsRawEncoding(doc *types.Document) bool {
 	if doc == nil {
 		return false
 	}
@@ -247,14 +248,13 @@ func docContainsMinMaxKey(doc *types.Document) bool {
 		if err != nil {
 			return false
 		}
-		if AnyContainsMinMaxKey(v) {
+		if AnyNeedsRawEncoding(v) {
 			return true
 		}
 	}
 }
 
-// arrContainsMinMaxKey recursively checks an array for MinKey/MaxKey.
-func arrContainsMinMaxKey(arr *types.Array) bool {
+func arrNeedsRawEncoding(arr *types.Array) bool {
 	if arr == nil {
 		return false
 	}
@@ -265,7 +265,7 @@ func arrContainsMinMaxKey(arr *types.Array) bool {
 		if err != nil {
 			return false
 		}
-		if AnyContainsMinMaxKey(v) {
+		if AnyNeedsRawEncoding(v) {
 			return true
 		}
 	}
@@ -357,6 +357,14 @@ func writeRawField(buf *bytes.Buffer, k string, v any) error {
 		buf.WriteByte(bsonTagMaxKey)
 		writeRawCString(buf, k)
 		// No value bytes.
+	case types.Symbol:
+		buf.WriteByte(bsonTagSymbol)
+		writeRawCString(buf, k)
+		writeRawString(buf, string(val))
+	case types.JavaScript:
+		buf.WriteByte(bsonTagJavaScript)
+		writeRawCString(buf, k)
+		writeRawString(buf, string(val))
 	case types.UndefinedType:
 		buf.WriteByte(bsonTagUndefined)
 		writeRawCString(buf, k)
@@ -403,4 +411,11 @@ func writeRawField(buf *bytes.Buffer, k string, v any) error {
 func writeRawCString(buf *bytes.Buffer, s string) {
 	buf.WriteString(s)
 	buf.WriteByte(0)
+}
+
+func writeRawString(buf *bytes.Buffer, s string) {
+	var length [4]byte
+	binary.LittleEndian.PutUint32(length[:], uint32(len(s)+1))
+	buf.Write(length[:])
+	writeRawCString(buf, s)
 }

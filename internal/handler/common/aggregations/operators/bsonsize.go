@@ -17,11 +17,9 @@ package operators
 import (
 	"fmt"
 
-	internalbson "github.com/dolthub/dumbodb/internal/bson"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
-	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 )
 
 type bsonSizeOp struct {
@@ -58,15 +56,7 @@ func (b *bsonSizeOp) Process(doc *types.Document) (any, error) {
 		)
 	}
 
-	wdoc, err := internalbson.FromDocument(d)
-	if err != nil {
-		return nil, lazyerrors.Error(err)
-	}
-	raw, err := wdoc.Encode()
-	if err != nil {
-		return nil, lazyerrors.Error(err)
-	}
-	return int32(len(raw)), nil
+	return int32(d.BSONSize()), nil
 }
 
 var _ Operator = (*bsonSizeOp)(nil)

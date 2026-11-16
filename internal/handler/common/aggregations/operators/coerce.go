@@ -34,6 +34,10 @@ func coerceToString(v any) (string, error) {
 	switch v := v.(type) {
 	case string:
 		return v, nil
+	case types.Symbol:
+		return string(v), nil
+	case types.JavaScript:
+		return string(v), nil
 	case int32:
 		return strconv.FormatInt(int64(v), 10), nil
 	case int64:

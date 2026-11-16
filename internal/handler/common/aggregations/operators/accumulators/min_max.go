@@ -78,7 +78,9 @@ type extremeState struct {
 	arg    operand
 	want   types.CompareResult
 	result *collation.Keyed
-	cmp    *collation.Comparator
+	// compared is result as SBE compares it.
+	compared *collation.Keyed
+	cmp      *collation.Comparator
 	// lastTie replaces the running value with an equal one, as SBE does.
 	lastTie bool
 }
@@ -95,13 +97,18 @@ func (s *extremeState) Accumulate(doc *types.Document) error {
 	}
 
 	v := &collation.Keyed{V: val}
+	compared := v
+	if sym, ok := val.(types.Symbol); ok && s.lastTie {
+		// SBE collates a Symbol as a string.
+		compared = &collation.Keyed{V: string(sym)}
+	}
 	if s.result == nil {
-		s.result = v
+		s.result, s.compared = v, compared
 		return nil
 	}
 
-	if c := collation.CompareKeyed(s.cmp, v, s.result, compareAscending); c == s.want || (s.lastTie && c == types.Equal) {
-		s.result = v
+	if c := collation.CompareKeyed(s.cmp, compared, s.compared, compareAscending); c == s.want || (s.lastTie && c == types.Equal) {
+		s.result, s.compared = v, compared
 	}
 
 	return nil

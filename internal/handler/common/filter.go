@@ -1002,7 +1002,8 @@ func (fc *FilterContext) exprOperator(doc *types.Document, exprValue any) (bool,
 	}
 
 	switch v := v.(type) {
-	case *types.Document, *types.Array, string, types.Binary, types.ObjectID, time.Time, types.Regex, types.Timestamp:
+	case *types.Document, *types.Array, string, types.Binary, types.ObjectID, time.Time, types.Regex, types.Timestamp,
+		types.Symbol, types.JavaScript:
 		return true, nil
 	case float64, int32, int64:
 		return types.Compare(v, int32(0)) != types.Equal, nil
@@ -1659,6 +1660,10 @@ func filterFieldRegex(fieldValue any, regex types.Regex) (bool, error) {
 				if matched, err := re.MatchString(arrValue); err != nil || matched {
 					return matched, regexMatchError(err)
 				}
+			case types.Symbol:
+				if matched, err := re.MatchString(string(arrValue)); err != nil || matched {
+					return matched, regexMatchError(err)
+				}
 			case types.Regex:
 				if types.Compare(arrValue, regex) == types.Equal {
 					return true, nil
@@ -1668,6 +1673,10 @@ func filterFieldRegex(fieldValue any, regex types.Regex) (bool, error) {
 
 	case string:
 		matched, err := re.MatchString(fieldValue)
+		return matched, regexMatchError(err)
+
+	case types.Symbol:
+		matched, err := re.MatchString(string(fieldValue))
 		return matched, regexMatchError(err)
 
 	case types.Regex:
@@ -1850,7 +1859,7 @@ func filterFieldExprAll(doc *types.Document, filterKey, filterSuffix string, fie
 	// collated again for every query element.
 	cmp, keyedField := fc.cmp, fieldValue
 	if _, isArray := fieldValue.(*types.Array); isArray && cmp != nil && query.Len() > 1 {
-		cmp, keyedField = nil, fc.cmp.KeyValue(fieldValue)
+		cmp, keyedField = nil, fc.cmp.MatchKeyValue(fieldValue)
 	}
 	for i := 0; i < query.Len(); i++ {
 		q := must.NotFail(query.Get(i))
@@ -1862,7 +1871,7 @@ func filterFieldExprAll(doc *types.Document, filterKey, filterSuffix string, fie
 			continue
 		}
 		if cmp == nil && fc.cmp != nil {
-			q = fc.cmp.KeyValue(q)
+			q = fc.cmp.MatchKeyValue(q)
 		}
 		if !equalsOrHasElement(keyedField, q, cmp) {
 			return false, nil
@@ -2547,6 +2556,14 @@ func filterFieldValueByTypeCode(fieldValue any, code handlerparams.TypeCode) (bo
 		}
 	case handlerparams.TypeCodeDecimal:
 		if _, ok := fieldValue.(types.Decimal128); !ok {
+			return false, nil
+		}
+	case handlerparams.TypeCodeJavaScript:
+		if _, ok := fieldValue.(types.JavaScript); !ok {
+			return false, nil
+		}
+	case handlerparams.TypeCodeSymbol:
+		if _, ok := fieldValue.(types.Symbol); !ok {
 			return false, nil
 		}
 	case handlerparams.TypeCodeUndefined:

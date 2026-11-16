@@ -72,6 +72,7 @@ const (
 	ctypeDate      = byte(0x78)
 	ctypeTimestamp = byte(0x82)
 	ctypeRegex     = byte(0x8C)
+	ctypeCode      = byte(0xA0)
 	ctypeMaxKey    = byte(0xF0)
 )
 
@@ -122,6 +123,10 @@ func appendValue(out []byte, v any, canonical bool) []byte {
 		return appendDecimal128(out, val)
 	case string:
 		return appendEscaped(append(out, ctypeString), val)
+	case types.Symbol:
+		return appendEscaped(append(out, ctypeString), string(val))
+	case types.JavaScript:
+		return appendEscaped(append(out, ctypeCode), string(val))
 	case PreEncoded:
 		return appendEscaped(append(out, ctypeString), string(val))
 	case types.ObjectID:
@@ -325,7 +330,7 @@ func byteLen(v uint64) int {
 func EncodeValueLossy(v any) bool {
 	switch v.(type) {
 	case nil, types.NullType, bool, int32, int64, float64, types.Decimal128, string, PreEncoded,
-		types.ObjectID, time.Time, types.Binary, types.Timestamp,
+		types.Symbol, types.JavaScript, types.ObjectID, time.Time, types.Binary, types.Timestamp,
 		types.Regex, *types.Document, *types.Array,
 		types.MaxKeyType, types.MinKeyType, types.UndefinedType:
 		return false
@@ -381,7 +386,7 @@ func valueLen(b []byte) (int, bool) {
 		return 1, true
 	case c >= ctypeNegLarge && c <= ctypePosLarge:
 		return numberLen(b)
-	case c == ctypeString:
+	case c == ctypeString, c == ctypeCode:
 		return escapedEnd(b, 1)
 	case c == ctypeRegex:
 		if l, ok := cstringEnd(b, 1); ok {
@@ -534,8 +539,10 @@ func BracketRange(v any) (start, stop []byte, ok bool) {
 	switch v.(type) {
 	case int32, int64, float64, types.Decimal128:
 		return []byte{ctypeNegLarge}, []byte{ctypePosLarge + 1}, true
-	case string, PreEncoded:
+	case string, PreEncoded, types.Symbol:
 		return []byte{ctypeString}, []byte{ctypeString + 1}, true
+	case types.JavaScript:
+		return []byte{ctypeCode}, []byte{ctypeCode + 1}, true
 	case time.Time:
 		return []byte{ctypeDate}, []byte{ctypeDate + 1}, true
 	case types.ObjectID:
