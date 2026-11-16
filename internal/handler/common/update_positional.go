@@ -216,8 +216,6 @@ func ValidateArrayFilters(command string, update *types.Document, isPipeline boo
 	return nil
 }
 
-// arrayFiltersField names the arrayFilters field of command in mongod's
-// type errors.
 // CheckArrayFilterTypes returns mongod's command error for an arrayFilters
 // element that is not a document, which fails the whole command before any
 // statement runs.
