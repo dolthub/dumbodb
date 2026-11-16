@@ -605,6 +605,9 @@ type IndexInfo struct {
 	Unique                  bool
 	Sparse                  bool            // true if the index only covers documents with the indexed field(s)
 	PartialFilterExpression *types.Document // non-nil for partial indexes; only matching docs are indexed
+	// PartialFilterCanonical is the filter's canonical form, taken in written
+	// order; nil until the definition has been stored.
+	PartialFilterCanonical *types.Document
 
 	// Collation is the index's collation spec, nil for the binary default.
 	// MongoDB distinguishes indexes on the same key by collation, so two

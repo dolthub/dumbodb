@@ -224,6 +224,17 @@ func encodeIndexDefinition(idx backends.IndexInfo) ([]byte, error) {
 		if !idx.PartialFilterStale && backends.FilterComparesDocuments(backends.SortedKeys(idx.PartialFilterExpression)) {
 			doc.Set("partialStoredForm", true)
 		}
+		// The definition is stored with sorted keys, which would turn a value
+		// such as {y: 1, $eq: 1} into operators; its canonical form, taken
+		// in written order, keeps it a value.
+		canonical := idx.PartialFilterCanonical
+		if canonical == nil {
+			var err error
+			if canonical, err = backends.CanonicalPartialFilter(idx.PartialFilterExpression); err != nil {
+				return nil, err
+			}
+		}
+		doc.Set("partialCanonical", canonical)
 	}
 	if idx.Collation != nil {
 		doc.Set("collation", idx.Collation)
@@ -306,7 +317,12 @@ func decodeIndexDefinition(doc *types.Document) (backends.IndexInfo, error) {
 	info.PartialFilterExpression = getDoc("partial")
 	info.Collation = getDoc("collation")
 	if pf := info.PartialFilterExpression; pf != nil {
-		info.MatchesPartialFilter = backends.PartialFilterMembership(pf, info.Collation)
+		membership := pf
+		if canonical := getDoc("partialCanonical"); canonical != nil {
+			info.PartialFilterCanonical = canonical
+			membership = canonical
+		}
+		info.MatchesPartialFilter = backends.PartialFilterMembership(membership, info.Collation)
 		if backends.FilterComparesDocuments(pf) && !getBool(doc, "partialStoredForm") {
 			info.PartialFilterStale = true
 			backends.LogStalePartialIndex(name, pf)
