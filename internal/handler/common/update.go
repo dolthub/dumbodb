@@ -294,6 +294,9 @@ func dollarPrefixedFieldsBefore(doc, update *types.Document) map[string]any {
 				before = map[string]any{}
 			}
 			top, _, _ := strings.Cut(target, ".")
+			if _, captured := before[top]; captured {
+				continue
+			}
 			v, _ := doc.Get(top)
 			// Operators such as $push change a stored array in place.
 			switch composite := v.(type) {
