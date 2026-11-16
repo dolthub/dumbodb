@@ -264,7 +264,7 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 			// mongod reports a database being dropped as each document's
 			// write error.
 			if backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseDropPending) {
-				writeErrors = append(writeErrors, &mongo.WriteError{
+				writeErrors = budget.appendError(writeErrors, &mongo.WriteError{
 					Index:   docsIndexes[j],
 					Code:    int(handlererrors.ErrDatabaseDropPending),
 					Message: dropPendingMessage(params.DB, params.Collection),
