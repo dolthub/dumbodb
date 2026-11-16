@@ -64,12 +64,14 @@ func canonicalCondition(value any) any {
 	if isDBRefLiteral(doc) {
 		return must.NotFail(types.NewDocument("$eq", sortedKeys(doc)))
 	}
-	if !isOperatorDocument(doc) {
-		if sorted := sortedKeys(doc).(*types.Document); isOperatorDocument(sorted) {
-			return must.NotFail(types.NewDocument("$eq", sorted))
-		}
+	if isOperatorDocument(doc) {
+		return canonicalOperators(doc)
 	}
-	return canonicalOperators(value)
+	sorted := sortedKeys(doc).(*types.Document)
+	if isOperatorDocument(sorted) {
+		return must.NotFail(types.NewDocument("$eq", sorted))
+	}
+	return sorted
 }
 
 // canonicalOperators is canonicalCondition for a value that mongod parses as
