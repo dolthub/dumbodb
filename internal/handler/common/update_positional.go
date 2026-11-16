@@ -159,7 +159,7 @@ func arrayForUpdateByPath(doc *types.Document, path string) (*types.Array, error
 // identifier with no filter, or a filter no identifier uses.
 func ValidateArrayFilters(command string, update *types.Document, isPipeline bool, arrayFilters *types.Array) error {
 	if isPipeline {
-		if arrayFilters != nil {
+		if arrayFilters != nil && arrayFilters.Len() > 0 {
 			return NewUpdateError(handlererrors.ErrFailedToParse, "arrayFilters may not be specified for pipeline-style updates", command)
 		}
 		return nil
