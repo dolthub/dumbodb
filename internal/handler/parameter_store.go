@@ -15,6 +15,7 @@
 package handler
 
 import (
+	"fmt"
 	"math"
 	"math/big"
 	"sort"
@@ -51,6 +52,10 @@ func knownParameters() map[string]paramMeta {
 			defaultValue: int32(5), settableAtRuntime: true, settableAtStartup: true, coerce: coerceInt32,
 		},
 		"quiet": {defaultValue: false, settableAtRuntime: true, settableAtStartup: true, coerce: coerceBool},
+		"transactionLifetimeLimitSeconds": {
+			defaultValue: int32(defaultTransactionLifetimeLimitSeconds), settableAtRuntime: true, settableAtStartup: true,
+			coerce: coercePositiveInt32,
+		},
 	}
 }
 
@@ -122,6 +127,18 @@ func (s *parameterStore) Set(name string, value any) (prev any, code ParamSetCod
 
 // coerceInt32 follows mongod's BSONElement coercion to an int parameter:
 // numbers truncate toward zero, booleans become 0 or 1.
+// coercePositiveInt32 is coerceInt32 for a value that must be at least 1.
+func coercePositiveInt32(v any) (any, string) {
+	coerced, reason := coerceInt32(v)
+	if reason != "" {
+		return nil, reason
+	}
+	if n := coerced.(int32); n < 1 {
+		return nil, fmt.Sprintf("%d is not greater than or equal to 1", n)
+	}
+	return coerced, ""
+}
+
 func coerceInt32(v any) (any, string) {
 	const outOfBounds = "Out of bounds coercing to integral value"
 	switch v := v.(type) {

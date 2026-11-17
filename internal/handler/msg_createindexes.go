@@ -251,6 +251,11 @@ func (h *Handler) MsgCreateIndexes(connCtx context.Context, msg *wire.OpMsg) (*w
 	}
 
 	_, err = c.CreateIndexes(connCtx, &backends.CreateIndexesParams{Indexes: toCreate})
+	if errors.Is(err, backends.ErrWriteRaced) {
+		// A write published while the index was built; the build published
+		// nothing, so the command runs again against the new tip.
+		return nil, fmt.Errorf("%w: %w", ErrWriteRaced, err)
+	}
 	if err != nil {
 		// Building a unique index over data that already contains duplicate
 		// values fails like a duplicate-key write (E11000), matching MongoDB.

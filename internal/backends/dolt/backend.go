@@ -48,7 +48,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	fb "github.com/dolthub/flatbuffers/v23/go"
@@ -134,12 +133,13 @@ type dbState struct {
 	closeMu sync.RWMutex
 	dbDir   string
 
-	// users counts the commands using the store, and detached marks it as
-	// being dropped; see store_users.go. usersGone signals a detached
-	// store's count reaching zero.
-	users     atomic.Int64
-	detached  atomic.Bool
-	usersGone chan struct{}
+	// leases holds the commands and open transactions using the store, and
+	// detached marks it as being dropped; see store_users.go. leasesGone
+	// closes when the last lease goes while a drop waits for it.
+	leasesMu   sync.Mutex
+	leases     map[*commandUses]struct{}
+	detached   bool
+	leasesGone chan struct{}
 
 	cs *nbs.GenerationalNBS
 	ns tree.NodeStore
@@ -268,6 +268,7 @@ func (b *Backend) docLockManager(db, branch string) *DocLockManager {
 func (b *Backend) OnSessionEnd(owner string) {
 	b.releaseLocksForOwner(owner)
 	b.rollbackOwnerTxn(owner)
+	b.endTransaction(owner)
 	// End() only sets lastUsed=0; calling PurgeNow here would deadlock
 	// because OnSessionEnd runs inside the Shadow.Use holding this
 	// session's command latch, which PurgeNow's teardown waits on. The
@@ -313,8 +314,16 @@ func (b *Backend) OnTransactionCommit(ctx context.Context, owner string) error {
 	for _, branch := range sess.DirtyBranches() {
 		dirty[strings.ToLower(branch.DbName)] = struct{}{}
 	}
-	b.mu.RLock()
+	// A database the transaction already uses is found through it even while
+	// it is being dropped: the drop waits for this commit.
 	dbs := make([]*dbState, 0, len(dirty))
+	for name := range dirty {
+		if db := uses.find(name); db != nil {
+			dbs = append(dbs, db)
+			delete(dirty, name)
+		}
+	}
+	b.mu.RLock()
 	for name, db := range b.dbs {
 		if _, ok := dirty[strings.ToLower(name)]; ok && noteUser(uses, db) {
 			dbs = append(dbs, db)
@@ -339,6 +348,7 @@ func (b *Backend) OnTransactionCommit(ctx context.Context, owner string) error {
 	if firstErr == nil {
 		// CommitWorkingSet (unlike CommitTransaction) doesn't reset ctx.Transaction.
 		sqlCtx.SetTransaction(nil)
+		b.endTransaction(owner)
 	}
 
 	b.releaseLocksForOwner(owner)
@@ -348,6 +358,20 @@ func (b *Backend) OnTransactionCommit(ctx context.Context, owner string) error {
 func (b *Backend) OnTransactionAbort(owner string) {
 	b.rollbackOwnerTxn(owner)
 	b.releaseLocksForOwner(owner)
+	b.endTransaction(owner)
+}
+
+// endTransaction records on owner's session that its client transaction is
+// over, so the lifetime limit no longer applies to it, and releases the
+// databases the transaction held.
+func (b *Backend) endTransaction(owner string) {
+	if b.sessions == nil {
+		return
+	}
+	if shadow, ok := b.sessions.Get(owner); ok && shadow != nil {
+		shadow.EndTransaction()
+		transactionUsesOfShadow(shadow).release()
+	}
 }
 
 func (b *Backend) rollbackOwnerTxn(owner string) {
@@ -392,10 +416,13 @@ func (b *Backend) lookupDbStateForDsess(uses *commandUses, name string) (*dbStat
 			}
 		}
 	}
-	if ok && !noteUser(uses, state) {
-		return nil, false
+	if ok && noteUser(uses, state) {
+		return state, true
 	}
-	return state, ok
+	if held := uses.find(name); held != nil {
+		return held, true
+	}
+	return nil, false
 }
 
 func (b *Backend) openDbNames() []string {
@@ -517,6 +544,9 @@ func newBackend(dataDir string, l *slog.Logger, autoCommit bool, sessionTimeout,
 	b.sessions.SetCommandHook(func(*dsess.DoltSession) (any, func()) {
 		uses := &commandUses{}
 		return uses, uses.end
+	})
+	b.sessions.SetSessionDataFactory(func(*dsess.DoltSession) sqlctx.SessionData {
+		return &commandUses{}
 	})
 
 	// Initialize the admin database so it always exists on disk, matching
@@ -858,42 +888,35 @@ func (b *Backend) abortDropLocked(name string, db *dbState) {
 	delete(b.dropping, name)
 }
 
-// closeDroppedDatabase closes a database detached by beginDropLocked once no
-// other command uses it, and after closeIterators, when set, has closed the
-// iterators that outlive commands. Writes parked on the database's document
-// locks are interrupted rather than waited for. It fails, leaving the store
-// open, only when ctx ends first. The caller must not hold b.mu: the commands
-// it waits for may need it.
-func (b *Backend) closeDroppedDatabase(ctx context.Context, name string, db *dbState, closeIterators func(string)) error {
+// closeDroppedDatabase closes a database detached by beginDropLocked once
+// nothing uses it, and after closeIterators, when set, has closed the
+// iterators that outlive commands. Like mongod's drop, it interrupts the
+// commands running on the database, which fail with the drop as their cause,
+// and waits for its open transactions. It fails, leaving the store open, only
+// when ctx ends first. The caller must not hold b.mu: what it waits for may
+// need it.
+func (b *Backend) closeDroppedDatabase(ctx context.Context, name string, db *dbState, closeIterators func(*backends.DatabaseDroppedError)) error {
 	// Forget the cached sqle.Database before closing the store it reads.
 	b.provider.forgetDatabase(name)
 	if db == nil {
 		return nil
 	}
-	// A write parked on a document lock would hold the drop open for as long
-	// as the lock's holder likes, so it fails instead.
-	locks := b.docLockManagersOf(name)
-	for _, m := range locks {
-		m.interruptWaiters()
-	}
+	dropped := &backends.DatabaseDroppedError{Database: name, CollectionUUIDs: db.collectionUUIDs(ctx)}
 
 	// A GC waits for every session to leave its command, this one included,
 	// while holding closeMu that this drop needs.
 	defer b.idleForGC(ctx)()
 
 	usesOf(ctx).release()
+	db.cancelCommands(dropped)
 	if err := db.waitForUsers(ctx); err != nil {
-		// The database stays, and its open transactions keep their locks.
-		for _, m := range locks {
-			m.resumeWaiters()
-		}
 		return err
 	}
-	b.retireDocLockManagers(name, locks)
+	b.retireDocLockManagers(name, b.docLockManagersOf(name))
 	// No command that started after the detach can reach this store, so no
 	// new iterator over it can appear.
 	if closeIterators != nil {
-		closeIterators(name)
+		closeIterators(dropped)
 	}
 	if err := lockWithContext(ctx, &db.closeMu); err != nil {
 		return err
@@ -1101,6 +1124,11 @@ func (b *Backend) getOrOpenDBLocked(ctx context.Context, dbName string, create b
 	// Double-check after acquiring write lock.
 	if db, ok := b.dbs[dbName]; ok && noteUser(usesOf(ctx), db) {
 		return db, false, nil
+	}
+	// A command whose transaction already uses the database keeps reaching it
+	// while it is being dropped; the drop waits for the transaction.
+	if held := usesOf(ctx).find(dbName); held != nil {
+		return held, false, nil
 	}
 	// Refuse rather than wait: the drop waits for commands in flight, which
 	// may include this one.
@@ -1327,16 +1355,15 @@ func (b *Backend) getOrOpenDBLocked(ctx context.Context, dbName string, create b
 	}
 
 	db = &dbState{
-		usersGone: make(chan struct{}, 1),
-		backend:   b,
-		name:      dbName,
-		dbDir:     dbDir,
-		cs:        cs,
-		ns:        ns,
-		vs:        vs,
-		doltDB:    doltDB,
-		datasDB:   datasDB,
-		branchWS:  make(map[string]*branchWS),
+		backend:  b,
+		name:     dbName,
+		dbDir:    dbDir,
+		cs:       cs,
+		ns:       ns,
+		vs:       vs,
+		doltDB:   doltDB,
+		datasDB:  datasDB,
+		branchWS: make(map[string]*branchWS),
 	}
 
 	// Write the shared DSCH chunk once; the empty secondary indexes are

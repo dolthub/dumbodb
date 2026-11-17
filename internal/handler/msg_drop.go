@@ -64,9 +64,10 @@ func (h *Handler) MsgDrop(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 	// There is a race condition: another client could create a new cursor for that collection
 	// after we closed all of them, but before we drop the collection itself.
 	// In that case, we expect the client to wait or to retry the operation.
+	reason := h.collectionDroppedReason(connCtx, dbName, collectionName)
 	for _, c := range h.cursors.All() {
 		if c.DB == dbName && c.Collection == collectionName {
-			h.cursors.Kill(c, droppedCursorReason)
+			h.cursors.Kill(c, reason)
 		}
 	}
 

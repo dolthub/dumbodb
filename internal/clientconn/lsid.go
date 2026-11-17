@@ -72,6 +72,7 @@ func extractAndSetTransactionFlag(ctx context.Context, doc *types.Document) {
 	ci := conninfo.Get(ctx)
 
 	var started bool
+	defer func() { ci.SetTxnStarting(started) }()
 	if doc.Has("startTransaction") {
 		if v, err := doc.Get("startTransaction"); err == nil {
 			if b, ok := v.(bool); ok && b {

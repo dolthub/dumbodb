@@ -24,6 +24,7 @@ import (
 
 	"golang.org/x/exp/maps"
 
+	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
@@ -101,7 +102,7 @@ func (r *Registry) NewCursor(ctx context.Context, iter types.DocumentsIterator, 
 	r.m[id] = c
 
 	r.wg.Add(1)
-	c.stopWatch = context.AfterFunc(ctx, func() { r.CloseAndRemove(c) })
+	c.stopWatch = context.AfterFunc(conninfo.ConnectionLifetime(ctx), func() { r.CloseAndRemove(c) })
 
 	return c
 }

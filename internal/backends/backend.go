@@ -231,8 +231,9 @@ type DropDatabaseParams struct {
 	Name string
 	// CloseIterators, when set, is called once the database can no longer be
 	// opened and before its store closes. It must close every iterator still
-	// reading the database, such as those held by open cursors.
-	CloseIterators func(dbName string)
+	// reading the database, such as those held by open cursors; dropped says
+	// why, for their clients.
+	CloseIterators func(dropped *DatabaseDroppedError)
 }
 
 // DropDatabase drops existing database for given parameters (including valid name).

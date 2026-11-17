@@ -108,15 +108,25 @@ func (h *Handler) MsgDropDatabase(connCtx context.Context, msg *wire.OpMsg) (*wi
 	)
 }
 
-// droppedCursorReason is mongod's QueryPlanKilled message for a getMore whose
-// collection was dropped.
-const droppedCursorReason = "collection dropped"
+// collectionDroppedReason is mongod's QueryPlanKilled reason for a getMore on
+// dbName.collName once the collection is dropped, naming its UUID.
+func (h *Handler) collectionDroppedReason(ctx context.Context, dbName, collName string) string {
+	dropped := &backends.DatabaseDroppedError{Database: dbName}
+	if db, err := h.b.Database(dbName); err == nil {
+		res, err := db.ListCollections(ctx, &backends.ListCollectionsParams{Name: collName})
+		if err == nil && len(res.Collections) == 1 {
+			dropped.CollectionUUIDs = map[string]string{collName: res.Collections[0].UUID}
+		}
+	}
+	return dropped.CollectionDroppedReason(collName)
+}
 
-// closeDatabaseCursors kills every cursor reading dbName, on any branch.
-func (h *Handler) closeDatabaseCursors(dbName string) {
+// closeDatabaseCursors kills every cursor reading the dropped database, on any
+// branch, with mongod's QueryPlanKilled reason for its getMore.
+func (h *Handler) closeDatabaseCursors(dropped *backends.DatabaseDroppedError) {
 	for _, c := range h.cursors.All() {
-		if base, _ := backends.SplitEncodedDBName(c.DB); base == dbName {
-			h.cursors.Kill(c, droppedCursorReason)
+		if base, _ := backends.SplitEncodedDBName(c.DB); base == dropped.Database {
+			h.cursors.Kill(c, dropped.CollectionDroppedReason(c.Collection))
 		}
 	}
 }

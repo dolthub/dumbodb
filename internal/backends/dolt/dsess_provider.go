@@ -221,7 +221,7 @@ func (p *dumbodbProvider) buildSqleDatabaseNoSession(baseName string) (sqle.Data
 	if !ok {
 		return sqle.Database{}, false, nil
 	}
-	if db, ok := p.dbCache[key]; ok {
+	if db, ok := p.cachedDatabase(key, state); ok {
 		return db, true, nil
 	}
 
@@ -264,7 +264,7 @@ func (p *dumbodbProvider) getOrBuildSqleDatabase(ctx *sql.Context, baseName stri
 	if !ok {
 		return sqle.Database{}, false, nil
 	}
-	if db, ok := p.dbCache[key]; ok {
+	if db, ok := p.cachedDatabase(key, state); ok {
 		return db, true, nil
 	}
 
@@ -280,6 +280,23 @@ func (p *dumbodbProvider) getOrBuildSqleDatabase(ctx *sql.Context, baseName stri
 	}
 	p.dbCache[key] = db
 	return db, true, nil
+}
+
+// cachedDatabase returns the cached sqle.Database for key when it reads
+// state's store. One cached for an earlier database of the same name, which a
+// command still holding that database can add while it is dropped, is closed
+// and forgotten instead. The caller holds dbCacheMu.
+func (p *dumbodbProvider) cachedDatabase(key string, state *dbState) (sqle.Database, bool) {
+	db, ok := p.dbCache[key]
+	if !ok {
+		return sqle.Database{}, false
+	}
+	if db.DbData().Ddb == state.doltDB {
+		return db, true
+	}
+	db.Close()
+	delete(p.dbCache, key)
+	return sqle.Database{}, false
 }
 
 // forgetDatabase closes and drops the cached sqle.Database for name. The

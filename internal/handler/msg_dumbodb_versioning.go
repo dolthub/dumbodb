@@ -31,6 +31,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
@@ -3097,10 +3098,26 @@ func (h *Handler) MsgDumboDBGC(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		)
 	}
 
-	res, err := vb.DumboDBGC(connCtx, &backends.GCParams{
+	v, _ := document.Get("maxTimeMS")
+	if v == nil {
+		v = int64(0)
+	}
+	maxTimeMS, err := handlerparams.FindMaxTimeMS(v, "dumboGC")
+	if err != nil {
+		return nil, err
+	}
+	// GC waits at its safepoint for every other session's running command;
+	// maxTimeMS bounds that wait, and a GC that runs out deletes nothing.
+	ctx, cancel := withMaxTimeMS(connCtx, maxTimeMS)
+	defer cancel()
+
+	res, err := vb.DumboDBGC(ctx, &backends.GCParams{
 		DBName: dbName,
 		Mode:   mode,
 	})
+	if maxTimeMS != 0 && (errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)) {
+		return nil, handleMaxTimeMSError(err, maxTimeMS, "dumboGC")
+	}
 	if err != nil {
 		return nil, versioningError(connCtx, err)
 	}

@@ -28,8 +28,10 @@ import (
 )
 
 // A client holding a command open on its own database, here a write parked
-// behind its own open transaction, must not hold up drops of other databases,
-// nor a drop of its own beyond the write being interrupted.
+// behind its own open transaction, must not hold up drops of other databases.
+// A drop of its own database interrupts the parked write and, like mongod's,
+// waits for the open transaction: within maxTimeMS it fails, and once the
+// transaction ends it succeeds.
 func TestDropDatabaseIsNotHeldByCommandsElsewhere(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
@@ -78,10 +80,10 @@ func TestDropDatabaseIsNotHeldByCommandsElsewhere(t *testing.T) {
 	require.NoError(t, err)
 	require.Less(t, time.Since(start), time.Second, "a drop waited for a command on another database")
 
-	start = time.Now()
-	err = admin.Database(attackerDB.Name()).RunCommand(ctx, bson.D{{Key: "dropDatabase", Value: 1}, {Key: "maxTimeMS", Value: 5000}}).Err()
-	require.NoError(t, err)
-	require.Less(t, time.Since(start), 5*time.Second, "a drop waited for a write parked on its own database")
+	err = admin.Database(attackerDB.Name()).RunCommand(ctx, bson.D{{Key: "dropDatabase", Value: 1}, {Key: "maxTimeMS", Value: 1000}}).Err()
+	var ce mongo.CommandError
+	require.ErrorAs(t, err, &ce, "a drop must wait for the open transaction on its database")
+	require.EqualValues(t, 50, ce.Code, "want MaxTimeMSExpired, got %v", err)
 
 	select {
 	case err := <-parkedDone:
@@ -89,4 +91,8 @@ func TestDropDatabaseIsNotHeldByCommandsElsewhere(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("the parked write was not interrupted by the drop")
 	}
+
+	require.NoError(t, sess.AbortTransaction(ctx))
+	err = admin.Database(attackerDB.Name()).RunCommand(ctx, bson.D{{Key: "dropDatabase", Value: 1}, {Key: "maxTimeMS", Value: 5000}}).Err()
+	require.NoError(t, err, "the drop succeeds once the transaction has ended")
 }

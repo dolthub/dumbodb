@@ -575,6 +575,9 @@ func (c *conn) route(connCtx context.Context, reqHeader *wire.MsgHeader, reqBody
 		if err == nil && !endsTxn && ci.InTransaction() && ci.TxnAborted() {
 			err = abortedTransactionError(typedDoc)
 		}
+		if err == nil && ci.InTransaction() && !ci.TxnStarting() && c.sessionTransactionAborted(connCtx) {
+			err = abortedTransactionError(typedDoc)
+		}
 
 		if err == nil {
 			// do not store typed nil in interface, it makes it non-nil
@@ -758,6 +761,18 @@ func sleepBeforeReplay(attempt int) {
 	time.Sleep(time.Duration(rand.Int64N(int64(window) + 1)))
 }
 
+// sessionTransactionAborted reports whether the server aborted the client
+// transaction of the connection's session on its own, as the transaction
+// lifetime limit does.
+func (c *conn) sessionTransactionAborted(connCtx context.Context) bool {
+	reg := c.h.SessionRegistry()
+	if reg == nil {
+		return false
+	}
+	shadow, ok := reg.Get(conninfo.Get(connCtx).Owner())
+	return ok && shadow != nil && shadow.TransactionAborted()
+}
+
 // abortPendingTransaction aborts the connection's transaction from outside any
 // command. The rollback changes the session, so it runs inside the session's
 // command bracket, where a GC safepoint waits for it instead of visiting the
@@ -789,6 +804,20 @@ func (c *conn) dispatchThroughSession(connCtx context.Context, msg *wire.OpMsg, 
 	ci := conninfo.Get(connCtx)
 	ci.EnsureLSID()
 	sessKey := ci.Owner()
+
+	// The command runs on a context of its own, which a drop of a database it
+	// uses cancels (see queryPlanKilledByDrop), as does the connection closing
+	// while it runs. It is never cancelled when the command ends: cursors and
+	// their iterators outlive the command, so they stay tied to the connection
+	// (see conninfo.ConnectionLifetime). Detached from the connection's
+	// context, it is not left registered there once the command is over.
+	lifetime := conninfo.ConnectionLifetime(connCtx)
+	commandCtx, cancelCommand := context.WithCancelCause(context.WithoutCancel(connCtx))
+	stopFollowingConnection := context.AfterFunc(lifetime, func() { cancelCommand(context.Cause(lifetime)) })
+	defer stopFollowingConnection()
+	connCtx = conninfo.WithConnectionLifetime(commandCtx, lifetime)
+	ci.SetCommandCancel(cancelCommand)
+	defer ci.SetCommandCancel(nil)
 
 	// An inactive shadow now means one thing only: the session was torn down
 	// by Sweep or End. Another connection arriving on this lsid no longer
@@ -842,6 +871,9 @@ func (c *conn) dispatchThroughSession(connCtx context.Context, msg *wire.OpMsg, 
 	var resMsg *wire.OpMsg
 	replaying := false
 	attemptWrite := func(sess *dsess.DoltSession) error {
+		if ci.TxnStarting() && !replaying {
+			shadow.BeginTransaction(time.Now())
+		}
 		if forked {
 			sqlCtx := sqlctx.Wrap(connCtx, sess)
 			// A replay must pin a new BASE, so drop the transaction the
@@ -935,7 +967,31 @@ func (c *conn) dispatchThroughSession(connCtx context.Context, msg *wire.OpMsg, 
 	if errors.Is(runErr, sqlctx.ErrShadowInvalidated) {
 		return nil, shadowGoneError(shadow)
 	}
+	var dropped *backends.DatabaseDroppedError
+	if runErr != nil && errors.As(context.Cause(connCtx), &dropped) {
+		return nil, queryPlanKilledByDrop(msg, name, dropped)
+	}
 	return resMsg, runErr
+}
+
+// queryPlanKilledByDrop is mongod's error for a command that a drop of its
+// database interrupted.
+func queryPlanKilledByDrop(msg *wire.OpMsg, command string, dropped *backends.DatabaseDroppedError) error {
+	var collection string
+	if section0 := msg.RawSection0(); section0 != nil {
+		if doc, err := bson.DecodeRawDocument(section0); err == nil {
+			v, _ := doc.Get(command)
+			collection, _ = v.(string)
+		}
+	}
+	reason := dropped.CollectionDroppedReason(collection)
+	switch command {
+	case "find":
+		reason = "Executor error during find command :: caused by :: " + reason
+	case "aggregate":
+		reason = "PlanExecutor error during aggregation :: caused by :: " + reason
+	}
+	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrQueryPlanKilled, reason, command)
 }
 
 // shadowGoneError maps an invalidated shadow to the appropriate wire

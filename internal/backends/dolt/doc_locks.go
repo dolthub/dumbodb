@@ -49,8 +49,6 @@ type DocLockManager struct {
 	// notify is closed and replaced on every Release, waking any ordinary write
 	// parked in WaitUntilFree so it can re-check whether its document is free.
 	notify chan struct{}
-	// interrupted fails every WaitUntilFree until resumeWaiters.
-	interrupted bool
 }
 
 func NewDocLockManager() *DocLockManager {
@@ -122,11 +120,6 @@ func (m *DocLockManager) WaitUntilFree(ctx context.Context, collection string, i
 	}
 	for {
 		m.mu.Lock()
-		if m.interrupted {
-			m.mu.Unlock()
-			return backends.NewError(backends.ErrorCodeDatabaseDropPending,
-				errors.New("the database is in the process of being dropped"))
-		}
 		if !m.anyHeld(collection, ids) {
 			m.mu.Unlock()
 			return nil
@@ -195,6 +188,9 @@ func (b *Backend) acquireTxnLocks(ctx context.Context, db, branch, collection st
 		// bounded by the command's maxTimeMS via ctx. Matches MongoDB, which
 		// blocks a plain write on a document locked by an open transaction. Only
 		// waitable (existing-document) locks are waited on; see WaitUntilFree.
+		// The write changes nothing while it waits, so a GC may visit its
+		// session rather than wait for it.
+		defer b.idleForGC(ctx)()
 		return b.docLockManager(db, branch).WaitUntilFree(ctx, collection, ids)
 	}
 	if err := b.docLockManager(db, branch).Acquire(owner, collection, ids, waitable); err != nil {
@@ -272,22 +268,4 @@ func (m *DocLockManager) Holds(owner string, collection string, id hash.Hash) bo
 	}
 	e, has := collLocks[id]
 	return has && e.owner == owner
-}
-
-// interruptWaiters fails every write parked in WaitUntilFree, and every later
-// one until resumeWaiters, as the manager's database is dropped. The locks
-// themselves are kept.
-func (m *DocLockManager) interruptWaiters() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.interrupted = true
-	close(m.notify)
-	m.notify = make(chan struct{})
-}
-
-// resumeWaiters undoes interruptWaiters when the drop does not go ahead.
-func (m *DocLockManager) resumeWaiters() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.interrupted = false
 }
