@@ -96,7 +96,11 @@ func StartDumboDB(tb testing.TB, extraArgs ...string) *Env {
 		// fails with ETXTBSY while another builder holds the target open for
 		// write. Rename is atomic and never leaves the final path writable.
 		tmp := fmt.Sprintf("%s.tmp.%d", binary, os.Getpid())
-		build := exec.Command("go", "build", "-o", tmp, "./cmd/dumbodb/")
+		buildArgs := []string{"build", "-o", tmp}
+		if raceBuild {
+			buildArgs = append(buildArgs, "-race")
+		}
+		build := exec.Command("go", append(buildArgs, "./cmd/dumbodb/")...)
 		build.Dir = RepoRoot()
 		if out, err := build.CombinedOutput(); err != nil {
 			os.Remove(tmp)
@@ -128,7 +132,11 @@ func StartDumboDB(tb testing.TB, extraArgs ...string) *Env {
 }
 
 func serverBinary() string {
-	return filepath.Join(RepoRoot(), ".runtime", "bin", "dolt")
+	name := "dolt"
+	if raceBuild {
+		name = "dolt-race"
+	}
+	return filepath.Join(RepoRoot(), ".runtime", "bin", name)
 }
 
 func freePort(tb testing.TB) int {
@@ -143,11 +151,24 @@ func freePort(tb testing.TB) int {
 type server struct {
 	cmd    *exec.Cmd
 	exited chan struct{}
+	// raceReports holds every data race the race detector printed. It is
+	// written only by the goroutine reading stderr, and read after exited
+	// closes.
+	raceReports []string
 }
 
 func (s *server) stop() {
 	s.cmd.Process.Kill() //nolint:errcheck
 	<-s.exited
+}
+
+// stopAndCheckRaces stops the server and fails tb if the race detector
+// reported a data race in it.
+func (s *server) stopAndCheckRaces(tb testing.TB) {
+	s.stop()
+	for _, report := range s.raceReports {
+		tb.Errorf("dumbodb server reported a data race:\n%s", report)
+	}
 }
 
 // startServer starts dumbodb on port and returns once that process itself
@@ -194,18 +215,30 @@ func launchServer(tb testing.TB, port int, dataDir string, extraArgs []string) (
 		scanner := bufio.NewScanner(stderr)
 		scanner.Buffer(make([]byte, 64<<10), 1<<20)
 		announced := false
+		var report []string
 		for scanner.Scan() {
 			line := scanner.Text()
 			if !announced && strings.Contains(line, "Listening on ") && strings.Contains(line, " "+addr+"...") {
 				announced = true
 				close(listening)
 			}
+			if strings.Contains(line, "WARNING: DATA RACE") {
+				report = []string{line}
+				continue
+			}
+			if report != nil {
+				report = append(report, line)
+				if strings.HasPrefix(line, "==================") {
+					s.raceReports = append(s.raceReports, strings.Join(report, "\n"))
+					report = nil
+				}
+			}
 		}
 		io.Copy(io.Discard, stderr) //nolint:errcheck
 		cmd.Wait()                  //nolint:errcheck
 		close(s.exited)
 	}()
-	tb.Cleanup(s.stop)
+	tb.Cleanup(func() { s.stopAndCheckRaces(tb) })
 	return s, listening
 }
 
