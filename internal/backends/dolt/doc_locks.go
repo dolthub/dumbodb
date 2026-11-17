@@ -195,6 +195,9 @@ func (b *Backend) acquireTxnLocks(ctx context.Context, db, branch, collection st
 		// bounded by the command's maxTimeMS via ctx. Matches MongoDB, which
 		// blocks a plain write on a document locked by an open transaction. Only
 		// waitable (existing-document) locks are waited on; see WaitUntilFree.
+		// The write changes nothing while it waits, so a GC may visit its
+		// session rather than wait for it.
+		defer b.idleForGC(ctx)()
 		return b.docLockManager(db, branch).WaitUntilFree(ctx, collection, ids)
 	}
 	if err := b.docLockManager(db, branch).Acquire(owner, collection, ids, waitable); err != nil {
