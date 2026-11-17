@@ -1355,15 +1355,15 @@ func (b *Backend) getOrOpenDBLocked(ctx context.Context, dbName string, create b
 	}
 
 	db = &dbState{
-		backend:   b,
-		name:      dbName,
-		dbDir:     dbDir,
-		cs:        cs,
-		ns:        ns,
-		vs:        vs,
-		doltDB:    doltDB,
-		datasDB:   datasDB,
-		branchWS:  make(map[string]*branchWS),
+		backend:  b,
+		name:     dbName,
+		dbDir:    dbDir,
+		cs:       cs,
+		ns:       ns,
+		vs:       vs,
+		doltDB:   doltDB,
+		datasDB:  datasDB,
+		branchWS: make(map[string]*branchWS),
 	}
 
 	// Write the shared DSCH chunk once; the empty secondary indexes are

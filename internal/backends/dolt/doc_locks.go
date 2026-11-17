@@ -269,4 +269,3 @@ func (m *DocLockManager) Holds(owner string, collection string, id hash.Hash) bo
 	e, has := collLocks[id]
 	return has && e.owner == owner
 }
-
