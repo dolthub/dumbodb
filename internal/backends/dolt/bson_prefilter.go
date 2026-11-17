@@ -228,7 +228,8 @@ func walkTopLevelEqualityIn(doc []byte, field []byte, target any, complete bool)
 }
 
 // walkEnd returns where a top-level walk of a docLen-byte document stops when
-// only have bytes of it are at hand.
+// only have bytes of it are at hand. Values may extend through the returned
+// index, so for a prefix it is the index of the last byte at hand.
 func walkEnd(docLen, have int, complete bool) (int, bool) {
 	switch {
 	case docLen <= have:
@@ -236,7 +237,7 @@ func walkEnd(docLen, have int, complete bool) (int, bool) {
 	case complete:
 		return 0, false
 	default:
-		return have, true
+		return have - 1, true
 	}
 }
 
