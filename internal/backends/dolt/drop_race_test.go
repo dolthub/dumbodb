@@ -335,8 +335,8 @@ func TestDropDatabaseClosesIteratorsBeforeTheStore(t *testing.T) {
 	require.NoError(t, dropperShadow.Use(time.Now(), func(*dsess.DoltSession) error {
 		return be.DropDatabase(dropperCtx, &backends.DropDatabaseParams{
 			Name: dbName,
-			CloseIterators: func(name string) {
-				require.Equal(t, dbName, name)
+			CloseIterators: func(dropped *backends.DatabaseDroppedError) {
+				require.Equal(t, dbName, dropped.Database)
 				_, err := state.cs.Get(readerCtx, root)
 				require.NoError(t, err, "iterators must be closed while the store is still open")
 				for _, c := range registry.All() {
@@ -448,7 +448,8 @@ func TestDropDatabaseDoesNotWaitForCommandsOnOtherDatabases(t *testing.T) {
 
 // A write parked on a document lock of the database being dropped is
 // interrupted rather than waited for, as mongod interrupts operations on a
-// database it drops.
+// database it drops. The connection layer gives each command a context the
+// drop can cancel; the parked command here gets one the same way.
 func TestDropDatabaseInterruptsParkedWrites(t *testing.T) {
 	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, 0, 0)
 	require.NoError(t, err)
@@ -456,6 +457,9 @@ func TestDropDatabaseInterruptsParkedWrites(t *testing.T) {
 
 	const dbName = "parked"
 	parkedCtx, parkedCI := ctxWithSessionAs(t, be, "drop-parked-writer", "")
+	parkedCtx, cancelParked := context.WithCancelCause(parkedCtx)
+	defer cancelParked(nil)
+	parkedCI.SetCommandCancel(cancelParked)
 	dropperCtx, dropperCI := ctxWithSessionAs(t, be, "drop-parked-dropper", "")
 	parkedShadow, _ := parkedCI.CachedShadow()
 	dropperShadow, _ := dropperCI.CachedShadow()
@@ -493,8 +497,10 @@ func TestDropDatabaseInterruptsParkedWrites(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("the drop waited for a write parked on a document lock")
 	}
-	err = <-parkedErr
-	require.True(t, backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseDropPending), "got %v", err)
+	require.ErrorIs(t, <-parkedErr, context.Canceled)
+	var dropped *backends.DatabaseDroppedError
+	require.ErrorAs(t, context.Cause(parkedCtx), &dropped, "the drop must be the parked write's cause")
+	require.Equal(t, dbName, dropped.Database)
 }
 
 // A command that has used a database and then drops it does not wait on

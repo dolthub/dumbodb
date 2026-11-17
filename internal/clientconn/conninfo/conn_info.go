@@ -64,6 +64,8 @@ type ConnInfo struct {
 
 	inTransaction bool // protected by rw
 	txnStarting   bool // protected by rw; the running command starts a transaction
+	// commandCancel stops the running command; protected by rw.
+	commandCancel context.CancelCauseFunc
 	writing       bool // protected by rw; a write command is executing right now
 	txnAborted    bool // protected by rw; set when server rejects a txn op, makes subsequent commitTransaction return NoSuchTransaction
 
@@ -369,6 +371,20 @@ func (connInfo *ConnInfo) SetInTransaction(v bool) {
 	}
 }
 
+// CommandCancel returns the function that stops the running command, or nil
+// between commands.
+func (connInfo *ConnInfo) CommandCancel() context.CancelCauseFunc {
+	connInfo.rw.RLock()
+	defer connInfo.rw.RUnlock()
+	return connInfo.commandCancel
+}
+
+func (connInfo *ConnInfo) SetCommandCancel(cancel context.CancelCauseFunc) {
+	connInfo.rw.Lock()
+	defer connInfo.rw.Unlock()
+	connInfo.commandCancel = cancel
+}
+
 // TxnStarting reports whether the running command starts a transaction.
 func (connInfo *ConnInfo) TxnStarting() bool {
 	connInfo.rw.RLock()
@@ -528,4 +544,23 @@ func (connInfo *ConnInfo) DrainAutoCommit() []AutoCommitTarget {
 	}
 	connInfo.pendingAutoCommit = nil
 	return out
+}
+
+type connectionLifetimeKey struct{}
+
+// WithConnectionLifetime returns ctx carrying lifetime, the context that ends
+// with the client connection. A command runs on a context of its own, which a
+// drop of a database it uses may cancel; whatever outlives the command, such
+// as a cursor, must be tied to the connection instead.
+func WithConnectionLifetime(ctx, lifetime context.Context) context.Context {
+	return context.WithValue(ctx, connectionLifetimeKey{}, lifetime)
+}
+
+// ConnectionLifetime returns the context that ends with ctx's client
+// connection, or ctx itself outside any command.
+func ConnectionLifetime(ctx context.Context) context.Context {
+	if lifetime, ok := ctx.Value(connectionLifetimeKey{}).(context.Context); ok {
+		return lifetime
+	}
+	return ctx
 }

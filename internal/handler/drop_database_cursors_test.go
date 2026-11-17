@@ -22,6 +22,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/clientconn/cursor"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
@@ -48,7 +49,7 @@ func TestCloseDatabaseCursorsMatchesEveryBranch(t *testing.T) {
 	open("victim@feature")
 	kept := open("victimized")
 
-	h.closeDatabaseCursors("victim")
+	h.closeDatabaseCursors(&backends.DatabaseDroppedError{Database: "victim"})
 
 	remaining := h.cursors.All()
 	require.Len(t, remaining, 1)

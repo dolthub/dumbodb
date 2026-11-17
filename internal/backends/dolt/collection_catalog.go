@@ -375,3 +375,28 @@ func listCatalog(ctx context.Context, state *dbState, am prolly.AddressMap) (map
 	}
 	return out, nil
 }
+
+// collectionUUIDs maps each collection on the default branch to its UUID, for
+// the reasons a drop gives the work it stops. It is best effort: a collection
+// whose catalog cannot be read is left out.
+func (state *dbState) collectionUUIDs(ctx context.Context) map[string]string {
+	ws, err := state.loadBranchWS(ctx, defaultBranch)
+	if err != nil {
+		return nil
+	}
+	am, err := amFromWorkingRoot(ctx, ws.WorkingRoot(), state.ns)
+	if err != nil {
+		return nil
+	}
+	catalog, err := listCatalog(ctx, state, am)
+	if err != nil {
+		return nil
+	}
+	uuids := make(map[string]string, len(catalog))
+	for name, meta := range catalog {
+		if meta != nil && meta.UUID != "" {
+			uuids[name] = meta.UUID
+		}
+	}
+	return uuids
+}

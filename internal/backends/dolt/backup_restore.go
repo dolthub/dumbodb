@@ -173,7 +173,7 @@ func stageRestore(ctx context.Context, backupDB *doltdb.DoltDB, stageDir, dataDi
 // first dropping an existing database of that name when force is set. No
 // request can create dbName in between: b.mu is held, except while the dropped
 // store closes, when dbName is marked as being dropped.
-func (b *Backend) installRestoredDatabase(ctx context.Context, stageDir, dbName string, force bool, closeIterators func(string)) error {
+func (b *Backend) installRestoredDatabase(ctx context.Context, stageDir, dbName string, force bool, closeIterators func(*backends.DatabaseDroppedError)) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 

@@ -805,6 +805,20 @@ func (c *conn) dispatchThroughSession(connCtx context.Context, msg *wire.OpMsg, 
 	ci.EnsureLSID()
 	sessKey := ci.Owner()
 
+	// The command runs on a context of its own, which a drop of a database it
+	// uses cancels (see queryPlanKilledByDrop), as does the connection closing
+	// while it runs. It is never cancelled when the command ends: cursors and
+	// their iterators outlive the command, so they stay tied to the connection
+	// (see conninfo.ConnectionLifetime). Detached from the connection's
+	// context, it is not left registered there once the command is over.
+	lifetime := conninfo.ConnectionLifetime(connCtx)
+	commandCtx, cancelCommand := context.WithCancelCause(context.WithoutCancel(connCtx))
+	stopFollowingConnection := context.AfterFunc(lifetime, func() { cancelCommand(context.Cause(lifetime)) })
+	defer stopFollowingConnection()
+	connCtx = conninfo.WithConnectionLifetime(commandCtx, lifetime)
+	ci.SetCommandCancel(cancelCommand)
+	defer ci.SetCommandCancel(nil)
+
 	// An inactive shadow now means one thing only: the session was torn down
 	// by Sweep or End. Another connection arriving on this lsid no longer
 	// evicts this one, so there is no supersede to distinguish.
@@ -953,7 +967,31 @@ func (c *conn) dispatchThroughSession(connCtx context.Context, msg *wire.OpMsg, 
 	if errors.Is(runErr, sqlctx.ErrShadowInvalidated) {
 		return nil, shadowGoneError(shadow)
 	}
+	var dropped *backends.DatabaseDroppedError
+	if runErr != nil && errors.As(context.Cause(connCtx), &dropped) {
+		return nil, queryPlanKilledByDrop(msg, name, dropped)
+	}
 	return resMsg, runErr
+}
+
+// queryPlanKilledByDrop is mongod's error for a command that a drop of its
+// database interrupted.
+func queryPlanKilledByDrop(msg *wire.OpMsg, command string, dropped *backends.DatabaseDroppedError) error {
+	var collection string
+	if section0 := msg.RawSection0(); section0 != nil {
+		if doc, err := bson.DecodeRawDocument(section0); err == nil {
+			v, _ := doc.Get(command)
+			collection, _ = v.(string)
+		}
+	}
+	reason := dropped.CollectionDroppedReason(collection)
+	switch command {
+	case "find":
+		reason = "Executor error during find command :: caused by :: " + reason
+	case "aggregate":
+		reason = "PlanExecutor error during aggregation :: caused by :: " + reason
+	}
+	return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrQueryPlanKilled, reason, command)
 }
 
 // shadowGoneError maps an invalidated shadow to the appropriate wire

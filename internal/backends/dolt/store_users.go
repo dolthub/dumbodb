@@ -18,7 +18,6 @@ import (
 	"context"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/dolthub/go-mysql-server/sql"
 
@@ -42,11 +41,27 @@ type commandScope struct {
 
 type commandScopeKey struct{}
 
-// commandUses is the databases one running command counts as a user of.
+// commandUses is the databases one running command, or one open
+// transaction, counts as a user of.
 type commandUses struct {
 	mu    sync.Mutex
 	dbs   []*dbState
 	ended bool
+	// cancel stops the command, for a drop of a database it uses; nil for a
+	// transaction's uses and for work outside any command.
+	cancel context.CancelCauseFunc
+}
+
+func (u *commandUses) commandCancel() context.CancelCauseFunc {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.cancel
+}
+
+func (u *commandUses) setCancel(cancel context.CancelCauseFunc) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.cancel = cancel
 }
 
 // usesOf returns the commandUses of the command ctx runs in, or nil outside
@@ -65,7 +80,11 @@ func usesOf(ctx context.Context) *commandUses {
 					return txn
 				}
 			}
-			return usesOfShadow(shadow)
+			uses := usesOfShadow(shadow)
+			if uses != nil {
+				uses.setCancel(ci.CommandCancel())
+			}
+			return uses
 		}
 	}
 	return nil
@@ -144,7 +163,7 @@ func (u *commandUses) release() {
 	u.dbs = nil
 	u.mu.Unlock()
 	for _, db := range dbs {
-		db.removeUser()
+		db.removeLease(u)
 	}
 }
 
@@ -153,7 +172,7 @@ func (u *commandUses) release() {
 // command, uses is nil and nothing is counted.
 func noteUser(uses *commandUses, db *dbState) bool {
 	if uses == nil {
-		return !db.detached.Load()
+		return !db.isDetached()
 	}
 	uses.mu.Lock()
 	defer uses.mu.Unlock()
@@ -164,52 +183,95 @@ func noteUser(uses *commandUses, db *dbState) bool {
 			return true
 		}
 	}
-	if db.detached.Load() {
-		return false
-	}
 	if uses.ended {
-		return true
+		return !db.isDetached()
 	}
-	// Count first, then check: the drop marks db detached first, then reads
-	// the count, so at least one of the two sees the other.
-	db.users.Add(1)
-	if db.detached.Load() {
-		db.removeUser()
+	if !db.addLease(uses) {
 		return false
 	}
 	uses.dbs = append(uses.dbs, db)
 	return true
 }
 
-func (s *dbState) removeUser() {
-	if s.users.Add(-1) == 0 && s.detached.Load() {
-		select {
-		case s.usersGone <- struct{}{}:
-		default:
-		}
+// addLease records uses as a user of the store, unless the database is being
+// dropped.
+func (s *dbState) addLease(uses *commandUses) bool {
+	s.leasesMu.Lock()
+	defer s.leasesMu.Unlock()
+	if s.detached {
+		return false
 	}
+	if s.leases == nil {
+		s.leases = map[*commandUses]struct{}{}
+	}
+	s.leases[uses] = struct{}{}
+	return true
+}
+
+func (s *dbState) removeLease(uses *commandUses) {
+	s.leasesMu.Lock()
+	defer s.leasesMu.Unlock()
+	delete(s.leases, uses)
+	if len(s.leases) == 0 && s.leasesGone != nil {
+		close(s.leasesGone)
+		s.leasesGone = nil
+	}
+}
+
+func (s *dbState) isDetached() bool {
+	s.leasesMu.Lock()
+	defer s.leasesMu.Unlock()
+	return s.detached
 }
 
 // detach marks the database as being dropped, so no new command counts as its
 // user; reattach undoes it. Both run under b.mu.
 func (s *dbState) detach() {
-	s.detached.Store(true)
+	s.leasesMu.Lock()
+	s.detached = true
+	s.leasesMu.Unlock()
 }
 
 func (s *dbState) reattach() {
-	s.detached.Store(false)
+	s.leasesMu.Lock()
+	s.detached = false
+	s.leasesMu.Unlock()
 }
 
-// waitForUsers returns once no command counts as a user of the detached
-// database, or ctx's error when ctx ends first.
+// cancelCommands cancels, with cause, every command using the store. Open
+// transactions are left alone: a drop waits for them, as mongod's does.
+func (s *dbState) cancelCommands(cause error) {
+	s.leasesMu.Lock()
+	var cancels []context.CancelCauseFunc
+	for uses := range s.leases {
+		if cancel := uses.commandCancel(); cancel != nil {
+			cancels = append(cancels, cancel)
+		}
+	}
+	s.leasesMu.Unlock()
+	for _, cancel := range cancels {
+		cancel(cause)
+	}
+}
+
+// waitForUsers returns once nothing uses the detached database, or ctx's error
+// when ctx ends first.
 func (s *dbState) waitForUsers(ctx context.Context) error {
-	for s.users.Load() > 0 {
+	for {
+		s.leasesMu.Lock()
+		if len(s.leases) == 0 {
+			s.leasesMu.Unlock()
+			return nil
+		}
+		if s.leasesGone == nil {
+			s.leasesGone = make(chan struct{})
+		}
+		gone := s.leasesGone
+		s.leasesMu.Unlock()
 		select {
-		case <-s.usersGone:
-		case <-time.After(10 * time.Millisecond):
+		case <-gone:
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 	}
-	return nil
 }

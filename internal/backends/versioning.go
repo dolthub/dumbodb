@@ -798,8 +798,9 @@ type BackupParams struct {
 	Force  bool   // replace an existing database (restore)
 	// CloseIterators, when set, is called once a database that restore replaces
 	// can no longer be opened and before its store closes. It must close every
-	// iterator still reading it, such as those held by open cursors.
-	CloseIterators func(dbName string)
+	// iterator still reading it, such as those held by open cursors; dropped
+	// says why, for their clients.
+	CloseIterators func(dropped *DatabaseDroppedError)
 }
 
 // BackupInfo describes a single configured backup.
