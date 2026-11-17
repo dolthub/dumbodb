@@ -10,7 +10,7 @@ require (
 	github.com/cockroachdb/apd/v3 v3.2.3
 	github.com/denisbrodbeck/machineid v1.0.1
 	github.com/dlclark/regexp2 v1.11.5
-	github.com/dolthub/dolt/go v0.40.5-0.20261117055817-999d40a3ce03
+	github.com/dolthub/dolt/go v0.40.5-0.20261117062024-27b691d192b1
 	github.com/dolthub/eventsapi_schema v0.0.0-20260715220557-d9b4a1c6b4d4
 	github.com/dolthub/flatbuffers/v23 v23.3.3-dh.2
 	github.com/dolthub/go-icu-collation v0.0.0-20260813204241-4b977bd17878
