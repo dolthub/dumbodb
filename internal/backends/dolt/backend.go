@@ -339,6 +339,7 @@ func (b *Backend) OnTransactionCommit(ctx context.Context, owner string) error {
 	if firstErr == nil {
 		// CommitWorkingSet (unlike CommitTransaction) doesn't reset ctx.Transaction.
 		sqlCtx.SetTransaction(nil)
+		b.endTransactionRecord(owner)
 	}
 
 	b.releaseLocksForOwner(owner)
@@ -348,6 +349,18 @@ func (b *Backend) OnTransactionCommit(ctx context.Context, owner string) error {
 func (b *Backend) OnTransactionAbort(owner string) {
 	b.rollbackOwnerTxn(owner)
 	b.releaseLocksForOwner(owner)
+	b.endTransactionRecord(owner)
+}
+
+// endTransactionRecord records on owner's session that its client transaction
+// is over, so the lifetime limit no longer applies to it.
+func (b *Backend) endTransactionRecord(owner string) {
+	if b.sessions == nil {
+		return
+	}
+	if shadow, ok := b.sessions.Get(owner); ok && shadow != nil {
+		shadow.EndTransaction()
+	}
 }
 
 func (b *Backend) rollbackOwnerTxn(owner string) {

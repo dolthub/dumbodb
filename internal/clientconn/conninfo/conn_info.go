@@ -63,6 +63,7 @@ type ConnInfo struct {
 	rw sync.RWMutex
 
 	inTransaction bool // protected by rw
+	txnStarting   bool // protected by rw; the running command starts a transaction
 	writing       bool // protected by rw; a write command is executing right now
 	txnAborted    bool // protected by rw; set when server rejects a txn op, makes subsequent commitTransaction return NoSuchTransaction
 
@@ -366,6 +367,19 @@ func (connInfo *ConnInfo) SetInTransaction(v bool) {
 	if !v {
 		connInfo.txnAborted = false
 	}
+}
+
+// TxnStarting reports whether the running command starts a transaction.
+func (connInfo *ConnInfo) TxnStarting() bool {
+	connInfo.rw.RLock()
+	defer connInfo.rw.RUnlock()
+	return connInfo.txnStarting
+}
+
+func (connInfo *ConnInfo) SetTxnStarting(v bool) {
+	connInfo.rw.Lock()
+	defer connInfo.rw.Unlock()
+	connInfo.txnStarting = v
 }
 
 func (connInfo *ConnInfo) TxnAborted() bool {

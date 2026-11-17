@@ -575,6 +575,9 @@ func (c *conn) route(connCtx context.Context, reqHeader *wire.MsgHeader, reqBody
 		if err == nil && !endsTxn && ci.InTransaction() && ci.TxnAborted() {
 			err = abortedTransactionError(typedDoc)
 		}
+		if err == nil && ci.InTransaction() && !ci.TxnStarting() && c.sessionTransactionAborted(connCtx) {
+			err = abortedTransactionError(typedDoc)
+		}
 
 		if err == nil {
 			// do not store typed nil in interface, it makes it non-nil
@@ -758,6 +761,18 @@ func sleepBeforeReplay(attempt int) {
 	time.Sleep(time.Duration(rand.Int64N(int64(window) + 1)))
 }
 
+// sessionTransactionAborted reports whether the server aborted the client
+// transaction of the connection's session on its own, as the transaction
+// lifetime limit does.
+func (c *conn) sessionTransactionAborted(connCtx context.Context) bool {
+	reg := c.h.SessionRegistry()
+	if reg == nil {
+		return false
+	}
+	shadow, ok := reg.Get(conninfo.Get(connCtx).Owner())
+	return ok && shadow != nil && shadow.TransactionAborted()
+}
+
 // abortPendingTransaction aborts the connection's transaction from outside any
 // command. The rollback changes the session, so it runs inside the session's
 // command bracket, where a GC safepoint waits for it instead of visiting the
@@ -842,6 +857,9 @@ func (c *conn) dispatchThroughSession(connCtx context.Context, msg *wire.OpMsg, 
 	var resMsg *wire.OpMsg
 	replaying := false
 	attemptWrite := func(sess *dsess.DoltSession) error {
+		if ci.TxnStarting() && !replaying {
+			shadow.BeginTransaction(time.Now())
+		}
 		if forked {
 			sqlCtx := sqlctx.Wrap(connCtx, sess)
 			// A replay must pin a new BASE, so drop the transaction the

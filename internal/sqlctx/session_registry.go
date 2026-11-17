@@ -244,6 +244,23 @@ func (r *SessionRegistry) Len() int {
 	return n
 }
 
+// TransactionsStartedBefore returns the live sessions, by lsid, whose client
+// transaction started before cutoff.
+func (r *SessionRegistry) TransactionsStartedBefore(cutoff time.Time) map[string]*Shadow {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := map[string]*Shadow{}
+	for lsid, entry := range r.sessions {
+		if entry.terminating {
+			continue
+		}
+		if shadow := entry.shadow.Load(); shadow.TransactionStartedBefore(cutoff) {
+			out[lsid] = shadow
+		}
+	}
+	return out
+}
+
 // SessionInfo describes one cached logical session for enumeration
 // (e.g. $listLocalSessions).
 type SessionInfo struct {

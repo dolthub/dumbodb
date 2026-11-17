@@ -43,6 +43,13 @@ type sessionState struct {
 	commandHook CommandHook
 	// commandData is the CommandHook's data for the running command.
 	commandData atomic.Pointer[any]
+	// txnStarted is when the session's client transaction started, in Unix
+	// nanoseconds, or 0 when it has none. txnAborted is set when the server
+	// aborted that transaction on its own, and lasts until the next one
+	// starts. A transaction belongs to its session, not to a connection, so
+	// both live here.
+	txnStarted atomic.Int64
+	txnAborted atomic.Bool
 }
 
 // Shadow is a connection's handle on a registry session. purged
@@ -69,6 +76,38 @@ func newShadow(state *sessionState) *Shadow {
 }
 
 func (s *Shadow) Session() *dsess.DoltSession { return s.state.sess }
+
+// BeginTransaction records that the session's client transaction started at
+// now.
+func (s *Shadow) BeginTransaction(now time.Time) {
+	s.state.txnAborted.Store(false)
+	s.state.txnStarted.Store(now.UnixNano())
+}
+
+// EndTransaction records that the session has no client transaction.
+func (s *Shadow) EndTransaction() {
+	s.state.txnStarted.Store(0)
+}
+
+// MarkTransactionAborted records that the server aborted the session's client
+// transaction, so its later statements are refused.
+func (s *Shadow) MarkTransactionAborted() {
+	s.state.txnStarted.Store(0)
+	s.state.txnAborted.Store(true)
+}
+
+// TransactionAborted reports whether the server aborted the session's
+// current client transaction.
+func (s *Shadow) TransactionAborted() bool {
+	return s.state.txnAborted.Load()
+}
+
+// TransactionStartedBefore reports whether the session has a client
+// transaction that started before cutoff.
+func (s *Shadow) TransactionStartedBefore(cutoff time.Time) bool {
+	started := s.state.txnStarted.Load()
+	return started != 0 && started < cutoff.UnixNano()
+}
 
 // CommandData returns the CommandHook's data for the session's running
 // command, or nil between commands.

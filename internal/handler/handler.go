@@ -86,6 +86,7 @@ type Handler struct {
 	logicalTimeKeyRefreshAfter time.Time
 
 	cappedCleanupStop chan struct{}
+	txnReaperStop     chan struct{}
 }
 
 func (h *Handler) BumpAuthGeneration() { h.authGen.Add(1) }
@@ -156,6 +157,7 @@ func New(opts *NewOpts) (*Handler, error) {
 		topologyChanged: make(chan struct{}),
 
 		cappedCleanupStop: make(chan struct{}),
+		txnReaperStop:     make(chan struct{}),
 	}
 	if h.ReplicationTopology != nil {
 		h.ReplicationTopology.SetChangeListener(h.BumpTopologyVersion)
@@ -174,6 +176,12 @@ func New(opts *NewOpts) (*Handler, error) {
 		defer h.wg.Done()
 
 		h.runCappedCleanup()
+	}()
+
+	h.wg.Add(1)
+	go func() {
+		defer h.wg.Done()
+		h.runTransactionReaper(h.txnReaperStop)
 	}()
 
 	return h, nil
@@ -403,6 +411,7 @@ func (h *Handler) AbortPendingTransaction(ctx context.Context) {
 func (h *Handler) Close() {
 	h.cursors.Close()
 	close(h.cappedCleanupStop)
+	close(h.txnReaperStop)
 	h.wg.Wait()
 }
 
