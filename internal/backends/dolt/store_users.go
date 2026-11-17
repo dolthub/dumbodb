@@ -16,6 +16,7 @@ package dolt
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
@@ -49,14 +50,51 @@ type commandUses struct {
 }
 
 // usesOf returns the commandUses of the command ctx runs in, or nil outside
-// any command.
+// any command. A command in a client transaction counts as a user on behalf
+// of the transaction, which keeps the databases it reached until it commits or
+// aborts: like mongod, a drop waits for the transaction rather than discarding
+// the writes it is about to commit.
 func usesOf(ctx context.Context) *commandUses {
 	if scope, ok := ctx.Value(commandScopeKey{}).(*commandScope); ok {
 		return &scope.uses
 	}
 	if ci := conninfo.GetIfPresent(ctx); ci != nil {
 		if shadow, _ := ci.CachedShadow(); shadow != nil {
+			if ci.InTransaction() {
+				if txn := transactionUsesOfShadow(shadow); txn != nil {
+					return txn
+				}
+			}
 			return usesOfShadow(shadow)
+		}
+	}
+	return nil
+}
+
+// transactionUsesOfShadow returns the commandUses the session's client
+// transaction holds, or nil for a session the registry did not build.
+func transactionUsesOfShadow(shadow *sqlctx.Shadow) *commandUses {
+	uses, _ := shadow.SessionData().(*commandUses)
+	return uses
+}
+
+// Release implements sqlctx.SessionData: a session that ends releases what
+// its transaction held.
+func (u *commandUses) Release() {
+	u.release()
+}
+
+// find returns the database named name, compared case-blind as dsess does,
+// that the command already counts as a user of, or nil.
+func (u *commandUses) find(name string) *dbState {
+	if u == nil {
+		return nil
+	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	for _, db := range u.dbs {
+		if strings.EqualFold(db.name, name) {
+			return db
 		}
 	}
 	return nil
@@ -114,21 +152,23 @@ func (u *commandUses) release() {
 // reports false, counting nothing, when db is being dropped. Outside any
 // command, uses is nil and nothing is counted.
 func noteUser(uses *commandUses, db *dbState) bool {
-	if db.detached.Load() {
-		return false
-	}
 	if uses == nil {
-		return true
+		return !db.detached.Load()
 	}
 	uses.mu.Lock()
 	defer uses.mu.Unlock()
-	if uses.ended {
-		return true
-	}
+	// A command that already counts keeps the database even while it is being
+	// dropped: the drop is waiting for it.
 	for _, used := range uses.dbs {
 		if used == db {
 			return true
 		}
+	}
+	if db.detached.Load() {
+		return false
+	}
+	if uses.ended {
+		return true
 	}
 	// Count first, then check: the drop marks db detached first, then reads
 	// the count, so at least one of the two sees the other.

@@ -50,6 +50,8 @@ type sessionState struct {
 	// both live here.
 	txnStarted atomic.Int64
 	txnAborted atomic.Bool
+	// data is the registry's SessionData for the session, or nil.
+	data SessionData
 }
 
 // Shadow is a connection's handle on a registry session. purged
@@ -76,6 +78,9 @@ func newShadow(state *sessionState) *Shadow {
 }
 
 func (s *Shadow) Session() *dsess.DoltSession { return s.state.sess }
+
+// SessionData returns the registry's SessionData for the session, or nil.
+func (s *Shadow) SessionData() SessionData { return s.state.data }
 
 // BeginTransaction records that the session's client transaction started at
 // now.

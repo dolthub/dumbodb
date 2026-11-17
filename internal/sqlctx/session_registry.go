@@ -45,6 +45,23 @@ type SessionRegistry struct {
 	factory     SessionFactory
 	nowFn       func() time.Time
 	commandHook CommandHook
+	sessionData SessionDataFactory
+}
+
+// SessionData is state that lives as long as a registry session. Release runs
+// once the session has ended.
+type SessionData interface {
+	Release()
+}
+
+// SessionDataFactory builds the SessionData of each new registry session.
+type SessionDataFactory func(sess *dsess.DoltSession) SessionData
+
+// SetSessionDataFactory installs factory for sessions created after the call.
+func (r *SessionRegistry) SetSessionDataFactory(factory SessionDataFactory) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.sessionData = factory
 }
 
 // CommandHook runs as each command on a registry session begins. The session's
@@ -101,6 +118,9 @@ func (r *SessionRegistry) Connect(lsid string) (*Shadow, error) {
 			}
 
 			state := &sessionState{sess: sess, commandHook: r.commandHook}
+			if r.sessionData != nil {
+				state.data = r.sessionData(sess)
+			}
 			state.lastUsed.Store(r.nowFn().UnixNano())
 			entry = &sessionEntry{state: state, done: make(chan struct{})}
 			entry.shadow.Store(newShadow(state))
@@ -157,6 +177,9 @@ func (r *SessionRegistry) teardown(lsid string, entry *sessionEntry) {
 	entry.state.cmdMu.Lock()
 	entry.shadow.Load().purge()
 	entry.state.sess.SessionEnd()
+	if entry.state.data != nil {
+		entry.state.data.Release()
+	}
 	entry.state.cmdMu.Unlock()
 
 	r.mu.Lock()

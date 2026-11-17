@@ -268,6 +268,7 @@ func (b *Backend) docLockManager(db, branch string) *DocLockManager {
 func (b *Backend) OnSessionEnd(owner string) {
 	b.releaseLocksForOwner(owner)
 	b.rollbackOwnerTxn(owner)
+	b.endTransaction(owner)
 	// End() only sets lastUsed=0; calling PurgeNow here would deadlock
 	// because OnSessionEnd runs inside the Shadow.Use holding this
 	// session's command latch, which PurgeNow's teardown waits on. The
@@ -313,8 +314,16 @@ func (b *Backend) OnTransactionCommit(ctx context.Context, owner string) error {
 	for _, branch := range sess.DirtyBranches() {
 		dirty[strings.ToLower(branch.DbName)] = struct{}{}
 	}
-	b.mu.RLock()
+	// A database the transaction already uses is found through it even while
+	// it is being dropped: the drop waits for this commit.
 	dbs := make([]*dbState, 0, len(dirty))
+	for name := range dirty {
+		if db := uses.find(name); db != nil {
+			dbs = append(dbs, db)
+			delete(dirty, name)
+		}
+	}
+	b.mu.RLock()
 	for name, db := range b.dbs {
 		if _, ok := dirty[strings.ToLower(name)]; ok && noteUser(uses, db) {
 			dbs = append(dbs, db)
@@ -339,7 +348,7 @@ func (b *Backend) OnTransactionCommit(ctx context.Context, owner string) error {
 	if firstErr == nil {
 		// CommitWorkingSet (unlike CommitTransaction) doesn't reset ctx.Transaction.
 		sqlCtx.SetTransaction(nil)
-		b.endTransactionRecord(owner)
+		b.endTransaction(owner)
 	}
 
 	b.releaseLocksForOwner(owner)
@@ -349,17 +358,19 @@ func (b *Backend) OnTransactionCommit(ctx context.Context, owner string) error {
 func (b *Backend) OnTransactionAbort(owner string) {
 	b.rollbackOwnerTxn(owner)
 	b.releaseLocksForOwner(owner)
-	b.endTransactionRecord(owner)
+	b.endTransaction(owner)
 }
 
-// endTransactionRecord records on owner's session that its client transaction
-// is over, so the lifetime limit no longer applies to it.
-func (b *Backend) endTransactionRecord(owner string) {
+// endTransaction records on owner's session that its client transaction is
+// over, so the lifetime limit no longer applies to it, and releases the
+// databases the transaction held.
+func (b *Backend) endTransaction(owner string) {
 	if b.sessions == nil {
 		return
 	}
 	if shadow, ok := b.sessions.Get(owner); ok && shadow != nil {
 		shadow.EndTransaction()
+		transactionUsesOfShadow(shadow).release()
 	}
 }
 
@@ -405,10 +416,13 @@ func (b *Backend) lookupDbStateForDsess(uses *commandUses, name string) (*dbStat
 			}
 		}
 	}
-	if ok && !noteUser(uses, state) {
-		return nil, false
+	if ok && noteUser(uses, state) {
+		return state, true
 	}
-	return state, ok
+	if held := uses.find(name); held != nil {
+		return held, true
+	}
+	return nil, false
 }
 
 func (b *Backend) openDbNames() []string {
@@ -530,6 +544,9 @@ func newBackend(dataDir string, l *slog.Logger, autoCommit bool, sessionTimeout,
 	b.sessions.SetCommandHook(func(*dsess.DoltSession) (any, func()) {
 		uses := &commandUses{}
 		return uses, uses.end
+	})
+	b.sessions.SetSessionDataFactory(func(*dsess.DoltSession) sqlctx.SessionData {
+		return &commandUses{}
 	})
 
 	// Initialize the admin database so it always exists on disk, matching
@@ -1114,6 +1131,11 @@ func (b *Backend) getOrOpenDBLocked(ctx context.Context, dbName string, create b
 	// Double-check after acquiring write lock.
 	if db, ok := b.dbs[dbName]; ok && noteUser(usesOf(ctx), db) {
 		return db, false, nil
+	}
+	// A command whose transaction already uses the database keeps reaching it
+	// while it is being dropped; the drop waits for the transaction.
+	if held := usesOf(ctx).find(dbName); held != nil {
+		return held, false, nil
 	}
 	// Refuse rather than wait: the drop waits for commands in flight, which
 	// may include this one.
