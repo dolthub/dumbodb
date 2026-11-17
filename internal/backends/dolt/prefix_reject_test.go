@@ -65,3 +65,26 @@ func TestPrefixRejectKeepsLargeDocumentMatches(t *testing.T) {
 	slices.Sort(ids)
 	require.Equal(t, []int32{2, 6, 10, 14, 18, 22, 26, 30, 34, 38}, ids)
 }
+
+func TestScanPredicatesOnEveryPrefixLength(t *testing.T) {
+	doc := must.NotFail(types.NewDocument(
+		"_id", int32(1), "grp", int32(3), "n", int64(7), "f", 2.5, "ok", true,
+		"payload", strings.Repeat("x", 100), "tag", "t",
+	))
+	stored := must.NotFail(docToBSON(doc))
+	filters := []*types.Document{
+		must.NotFail(types.NewDocument("tag", "u")),
+		must.NotFail(types.NewDocument("payload", "y")),
+		must.NotFail(types.NewDocument("ok", false)),
+		must.NotFail(types.NewDocument("zz", int32(1))),
+		must.NotFail(types.NewDocument("zz", must.NotFail(types.NewDocument("$lt", int32(5))))),
+		must.NotFail(types.NewDocument("tag", must.NotFail(types.NewDocument("$gt", int32(5))))),
+	}
+	for cut := 1; cut < len(stored); cut++ {
+		for _, filter := range filters {
+			reject := buildScanPrefixRejecter(filter)
+			require.NotNil(t, reject)
+			require.NotPanics(t, func() { reject(slices.Clip(stored[:cut])) }, "cut %d, filter %v", cut, filter)
+		}
+	}
+}
