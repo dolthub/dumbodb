@@ -563,7 +563,7 @@ func (c *conn) route(connCtx context.Context, reqHeader *wire.MsgHeader, reqBody
 		}
 
 		if err == nil && cmd != nil && cmd.BlockedInTxn && conninfo.Get(connCtx).InTransaction() {
-			c.h.AbortPendingTransaction(connCtx)
+			c.abortPendingTransaction(connCtx)
 			err = handlererrors.NewCommandError(
 				handlererrors.ErrOperationNotSupportedInTransaction,
 				fmt.Errorf("Cannot run '%s' in a multi-document transaction.", command),
@@ -591,7 +591,7 @@ func (c *conn) route(connCtx context.Context, reqHeader *wire.MsgHeader, reqBody
 			// nothing, and the transaction's writes survive to its commit.
 			if !endsTxn && ci.InTransaction() && !isUncommittedChangesRefusal(command, err) && !isExplainInTransactionRefusal(command, err) &&
 				(err != nil || writeErrorCommands[command] && replyHasWriteErrors(resMsg)) {
-				c.h.AbortPendingTransaction(connCtx)
+				c.abortPendingTransaction(connCtx)
 			}
 		}
 
@@ -756,6 +756,27 @@ func sleepBeforeReplay(attempt int) {
 		window = replayBackoffCap
 	}
 	time.Sleep(time.Duration(rand.Int64N(int64(window) + 1)))
+}
+
+// abortPendingTransaction aborts the connection's transaction from outside any
+// command. The rollback changes the session, so it runs inside the session's
+// command bracket, where a GC safepoint waits for it instead of visiting the
+// session's roots mid-rollback.
+func (c *conn) abortPendingTransaction(connCtx context.Context) {
+	if reg := c.h.SessionRegistry(); reg != nil {
+		if shadow, ok := reg.Get(conninfo.Get(connCtx).Owner()); ok && shadow != nil {
+			err := shadow.Use(time.Now(), func(*dsess.DoltSession) error {
+				c.h.AbortPendingTransaction(connCtx)
+				return nil
+			})
+			if err == nil {
+				return
+			}
+		}
+	}
+	// No live session holds the transaction, so there is nothing for a
+	// safepoint to visit; the abort still marks the connection's state.
+	c.h.AbortPendingTransaction(connCtx)
 }
 
 func (c *conn) dispatchThroughSession(connCtx context.Context, msg *wire.OpMsg, name string, cmd *handler.Command) (*wire.OpMsg, error) {
