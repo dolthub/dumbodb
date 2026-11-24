@@ -1726,15 +1726,16 @@ func (db *dbState) commitBranchOnce(ctx context.Context, branch string, params *
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBCommit: %w", err)
 	}
-	committedAt := time.Now()
-	authoredAt := params.Timestamp
-	if authoredAt.IsZero() {
-		authoredAt = committedAt
+	// As dolt commit --date does, a given date sets the committer date too.
+	commitDate := datas.CommitNow()
+	if params.Timestamp != nil {
+		commitDate = *params.Timestamp
 	}
-	if opts.Meta, err = commitMetaAC(params.Author, params.Committer, message, authoredAt); err != nil {
+	if opts.Meta, err = commitMetaAC(params.Author, params.Committer, message, commitDate); err != nil {
 		return nil, fmt.Errorf("DumboDBCommit: building commit meta for %q: %w", branch, err)
 	}
-	opts.Meta.Committer.Date = datas.CommitDateAt(committedAt)
+	opts.Meta.Author.Date = datas.CommitDateAt(commitDate)
+	opts.Meta.Committer.Date = datas.CommitDateAt(commitDate)
 
 	commitHash, err := db.commitOverTipWith(ctx, tip, tip.ws.WorkingRoot(), opts, func(ws *doltdb.WorkingSet) (*doltdb.WorkingSet, error) {
 		return ws, nil
@@ -1747,9 +1748,9 @@ func (db *dbState) commitBranchOnce(ctx context.Context, branch string, params *
 		Branch:             branch,
 		Message:            message,
 		Author:             params.Author,
-		Timestamp:          authoredAt.UnixMilli(),
+		Timestamp:          commitDate.UnixMilli(),
 		Committer:          committerOrAuthor(params.Author, params.Committer),
-		CommitterTimestamp: committedAt.UnixMilli(),
+		CommitterTimestamp: commitDate.UnixMilli(),
 	}, nil
 }
 

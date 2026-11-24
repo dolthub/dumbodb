@@ -121,9 +121,10 @@ func (p *Publisher) Complete(ctx context.Context, publicationID string) error {
 			return err
 		}
 		if commitID == "" {
+			lastAt := time.Unix(int64(last.Seconds), 0).UTC()
 			result, err := p.backend.DumboDBCommit(ctx, &backends.CommitParams{
 				DBName: database, Branch: "main", Message: message,
-				Author: replicationCommitAuthor, Timestamp: time.Unix(int64(last.Seconds), 0).UTC(), AllowEmpty: true,
+				Author: replicationCommitAuthor, Timestamp: &lastAt, AllowEmpty: true,
 			})
 			if err != nil {
 				return fmt.Errorf("committing replication publication %q for database %q: %w", publicationID, database, err)

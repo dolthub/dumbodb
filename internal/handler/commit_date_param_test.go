@@ -37,6 +37,8 @@ func TestCommitDateParam(t *testing.T) {
 	}{
 		{name: "missing"},
 		{name: "bson date", value: bsonDate, want: bsonDate},
+		{name: "bson date year 1", value: time.Time{}, want: time.Time{}},
+		{name: "string year 1", value: "0001-01-01", want: time.Time{}},
 		{name: "rfc3339 utc", value: "2024-01-02T15:04:05Z", want: time.Date(2024, 1, 2, 15, 4, 5, 0, time.UTC)},
 		{name: "rfc3339 fractional", value: "2024-01-02T15:04:05.123Z", want: time.Date(2024, 1, 2, 15, 4, 5, 123e6, time.UTC)},
 		{name: "rfc3339 offset", value: "2024-01-02T10:04:05-05:00", want: time.Date(2024, 1, 2, 15, 4, 5, 0, time.UTC)},
@@ -60,7 +62,12 @@ func TestCommitDateParam(t *testing.T) {
 			}
 
 			require.NoError(t, err)
-			require.True(t, tc.want.Equal(got), "want %v, got %v", tc.want, got)
+			if tc.value == nil {
+				require.Nil(t, got)
+				return
+			}
+			require.NotNil(t, got)
+			require.True(t, tc.want.Equal(*got), "want %v, got %v", tc.want, *got)
 		})
 	}
 }
