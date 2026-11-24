@@ -703,6 +703,30 @@ func versioningError(ctx context.Context, err error) error {
 	return handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 }
 
+// commitDateParam reads an optional commit date given as a BSON Date or an
+// ISO-8601 string: RFC 3339 (2024-01-02T15:04:05Z, with optional fractional
+// seconds and any UTC offset) or a bare date (2024-01-02, taken as UTC, as
+// JavaScript's Date does). A missing field yields the zero time.
+func commitDateParam(document *types.Document, key string) (time.Time, error) {
+	v, _ := document.Get(key)
+	s, ok := v.(string)
+	if !ok {
+		return common.GetOptionalParam[time.Time](document, key, time.Time{})
+	}
+
+	for _, layout := range []string{time.RFC3339Nano, time.DateOnly} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t, nil
+		}
+	}
+
+	return time.Time{}, handlererrors.NewCommandErrorMsgWithArgument(
+		handlererrors.ErrBadValue,
+		fmt.Sprintf("BSON field '%s' must be a date or an ISO-8601 date string, got %q", key, s),
+		key,
+	)
+}
+
 // MsgDumboDBCommit implements the `dumboDBCommit` command.
 //
 // It commits the current working set on the branch encoded in $db (format: "dbname@branch").
@@ -744,7 +768,7 @@ func (h *Handler) MsgDumboDBCommit(connCtx context.Context, msg *wire.OpMsg) (*w
 		author = "dumbodb <dumbodb@dumbodb>"
 	}
 
-	ts, err := common.GetOptionalParam[time.Time](document, "timestamp", time.Time{})
+	ts, err := commitDateParam(document, "timestamp")
 	if err != nil {
 		return nil, err
 	}

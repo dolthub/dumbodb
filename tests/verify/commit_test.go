@@ -421,6 +421,14 @@ func TestCommitVerify(t *testing.T) {
 		require.True(t, ok, "log timestamp must be a BSON datetime")
 		assert.Equal(t, fixedTime.UnixMilli(), int64(logTS),
 			"doltLog timestamp must match the provided fixed time")
+
+		// The timestamp is the author date; the committer date is when the commit was made.
+		echoedCommitterTS, ok := result["committerTimestamp"].(bson.DateTime)
+		require.True(t, ok, "committerTimestamp must be a BSON datetime")
+		assert.WithinDuration(t, time.Now(), echoedCommitterTS.Time(), time.Minute,
+			"committerTimestamp must be the time of the commit, not the given timestamp")
+		assert.Equal(t, echoedCommitterTS, entry["committerTimestamp"],
+			"doltLog committerTimestamp must match the one dumboCommit reported")
 	})
 
 	// -------------------------------------------------------------------------
@@ -483,5 +491,50 @@ func TestCommitVerify(t *testing.T) {
 		}).Decode(&reworded))
 		assert.Equal(t, "reworded", reworded["message"])
 		assert.Equal(t, parentBefore, headLog()[0].(bson.M)["parent1"])
+	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 9: timestamp given as an ISO-8601 string
+	// -------------------------------------------------------------------------
+	t.Run("Scenario9_TimestampAsISOString", func(t *testing.T) {
+		db := env.Client.Database(dbName)
+		commitAt := func(id int32, timestamp string) (bson.M, error) {
+			_, err := db.Collection("orders").InsertOne(ctx, bson.D{{Key: "_id", Value: id}})
+			require.NoError(t, err)
+			var result bson.M
+			err = db.RunCommand(ctx, bson.D{
+				{Key: "dumboCommit", Value: int32(1)},
+				{Key: "message", Value: "dated " + timestamp},
+				{Key: "timestamp", Value: timestamp},
+			}).Decode(&result)
+			return result, err
+		}
+		headTimestamp := func() bson.DateTime {
+			var logResult bson.M
+			require.NoError(t, db.RunCommand(ctx, bson.D{
+				{Key: "dumboLog", Value: int32(1)},
+				{Key: "limit", Value: int32(1)},
+			}).Decode(&logResult))
+			return logResult["commits"].(bson.A)[0].(bson.M)["timestamp"].(bson.DateTime)
+		}
+
+		for i, tc := range []struct {
+			timestamp string
+			want      time.Time
+		}{
+			{"2021-03-04T05:06:07Z", time.Date(2021, 3, 4, 5, 6, 7, 0, time.UTC)},
+			{"2021-03-04T05:06:07.250+02:00", time.Date(2021, 3, 4, 3, 6, 7, 250e6, time.UTC)},
+			{"2021-03-05", time.Date(2021, 3, 5, 0, 0, 0, 0, time.UTC)},
+		} {
+			result, err := commitAt(int32(190+i), tc.timestamp)
+			require.NoError(t, err, tc.timestamp)
+			assert.Equal(t, tc.want.UnixMilli(), int64(result["timestamp"].(bson.DateTime)), tc.timestamp)
+			assert.Equal(t, tc.want.UnixMilli(), int64(headTimestamp()), tc.timestamp)
+		}
+
+		_, err := commitAt(199, "last tuesday")
+		var ce mongo.CommandError
+		require.ErrorAs(t, err, &ce)
+		assert.EqualValues(t, 2, ce.Code, "an unparseable timestamp must be BadValue")
 	})
 }

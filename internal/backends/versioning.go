@@ -33,7 +33,7 @@ type CommitParams struct {
 	Message    string
 	Author     string    // required: name of the commit author
 	Committer  string    // optional: 'Name <email>' committer identity; empty means the committer equals Author
-	Timestamp  time.Time // optional: commit timestamp; zero value means use current time
+	Timestamp  time.Time // optional: author date; zero value means the time of the commit
 	AllowEmpty bool      // if true, create a commit even when the working set has no changes vs HEAD
 	Amend      bool      // if true, replace HEAD rather than add to it; an empty Message keeps HEAD's message
 }
