@@ -292,3 +292,21 @@ func (h *Handler) rejectClientIdentityFields(document *types.Document) error {
 
 	return nil
 }
+
+// rejectClientCommitDate rejects a client-supplied commit timestamp when --auth
+// is on, so an authenticated client cannot backdate the commit record. It
+// reports 40415 (IDLUnknownField), as rejectClientIdentityFields does.
+func (h *Handler) rejectClientCommitDate(document *types.Document) error {
+	if !h.EnableNewAuth || !document.Has("timestamp") {
+		return nil
+	}
+
+	return handlererrors.NewCommandErrorMsgWithArgument(
+		handlererrors.ErrIDLUnknownField,
+		fmt.Sprintf(
+			"BSON field '%s.timestamp' is not accepted: with access control enabled, the commit date is set by the server",
+			document.Command(),
+		),
+		document.Command(),
+	)
+}

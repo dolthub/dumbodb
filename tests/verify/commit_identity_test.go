@@ -16,7 +16,9 @@ package verify
 
 import (
 	"context"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -75,6 +77,17 @@ func TestCommitIdentityRejectsClientIdentity(t *testing.T) {
 			requireCode(t, err, codeUnknownField)
 			require.Contains(t, err.Error(), "set from the authenticated user",
 				"error should explain the field is disallowed by --auth, not merely unknown")
+		})
+	}
+
+	for _, timestamp := range []any{time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC), "2020-01-01"} {
+		t.Run(fmt.Sprintf("commit timestamp %T", timestamp), func(t *testing.T) {
+			err := dev.Database("repo@main").RunCommand(ctx, bson.D{
+				{Key: "dumboCommit", Value: 1}, {Key: "message", Value: "x"}, {Key: "timestamp", Value: timestamp},
+			}).Err()
+			requireCode(t, err, codeUnknownField)
+			require.Contains(t, err.Error(), "'dumboCommit.timestamp' is not accepted")
+			require.Contains(t, err.Error(), "the commit date is set by the server")
 		})
 	}
 }

@@ -1645,11 +1645,6 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 			fmt.Errorf("DumboDBCommit: database %q does not exist", params.DBName))
 	}
 
-	ts := params.Timestamp
-	if ts.IsZero() {
-		ts = time.Now()
-	}
-
 	branch := params.Branch
 	if branch == "" {
 		branch = defaultBranch
@@ -1689,7 +1684,7 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 	// branch as read here. A write published in between fails the swap with
 	// nothing committed, so the commit is simply made again from the new tip.
 	for attempt := 0; ; attempt++ {
-		res, err := db.commitBranchOnce(ctx, branch, params, ts)
+		res, err := db.commitBranchOnce(ctx, branch, params)
 		if !errors.Is(err, backends.ErrWriteRaced) || attempt >= maxCommitRetries {
 			return res, err
 		}
@@ -1701,7 +1696,7 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 // livelock brake, not a policy.
 const maxCommitRetries = 32
 
-func (db *dbState) commitBranchOnce(ctx context.Context, branch string, params *backends.CommitParams, ts time.Time) (*backends.CommitResult, error) {
+func (db *dbState) commitBranchOnce(ctx context.Context, branch string, params *backends.CommitParams) (*backends.CommitResult, error) {
 	tip, err := db.readBranchTip(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBCommit: %w", err)
@@ -1731,9 +1726,16 @@ func (db *dbState) commitBranchOnce(ctx context.Context, branch string, params *
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBCommit: %w", err)
 	}
-	if opts.Meta, err = commitMetaAC(params.Author, params.Committer, message, ts); err != nil {
+	// As dolt commit --date does, a given date sets the committer date too.
+	commitDate := datas.CommitNow()
+	if params.Timestamp != nil {
+		commitDate = *params.Timestamp
+	}
+	if opts.Meta, err = commitMetaAC(params.Author, params.Committer, message, commitDate); err != nil {
 		return nil, fmt.Errorf("DumboDBCommit: building commit meta for %q: %w", branch, err)
 	}
+	opts.Meta.Author.Date = datas.CommitDateAt(commitDate)
+	opts.Meta.Committer.Date = datas.CommitDateAt(commitDate)
 
 	commitHash, err := db.commitOverTipWith(ctx, tip, tip.ws.WorkingRoot(), opts, func(ws *doltdb.WorkingSet) (*doltdb.WorkingSet, error) {
 		return ws, nil
@@ -1746,9 +1748,9 @@ func (db *dbState) commitBranchOnce(ctx context.Context, branch string, params *
 		Branch:             branch,
 		Message:            message,
 		Author:             params.Author,
-		Timestamp:          ts.UnixMilli(),
+		Timestamp:          commitDate.UnixMilli(),
 		Committer:          committerOrAuthor(params.Author, params.Committer),
-		CommitterTimestamp: ts.UnixMilli(),
+		CommitterTimestamp: commitDate.UnixMilli(),
 	}, nil
 }
 

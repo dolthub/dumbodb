@@ -88,9 +88,9 @@ func (db *database) Stats(_ context.Context, _ *backends.DatabaseStatsParams) (*
 func (b *Backend) DumboDBCommit(_ context.Context, params *backends.CommitParams) (*backends.CommitResult, error) {
 	b.l.Info("stub: DumboDBCommit", slog.String("db", params.DBName), slog.String("branch", params.Branch))
 
-	ts := params.Timestamp
-	if ts.IsZero() {
-		ts = time.Now()
+	ts := time.Now()
+	if params.Timestamp != nil {
+		ts = *params.Timestamp
 	}
 
 	return &backends.CommitResult{

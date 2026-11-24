@@ -28,12 +28,13 @@ import (
 // timestamp so topological tie-breaks (equal height) are deterministic.
 func commitTS(t *testing.T, b *Backend, db, branch, msg string, ms int64) string {
 	t.Helper()
+	at := time.UnixMilli(ms)
 	res, err := b.DumboDBCommit(context.Background(), &backends.CommitParams{
 		DBName:    db,
 		Branch:    branch,
 		Message:   msg,
 		Author:    "t <t@t.io>",
-		Timestamp: time.UnixMilli(ms),
+		Timestamp: &at,
 	})
 	if err != nil {
 		t.Fatalf("commit %q: %v", msg, err)

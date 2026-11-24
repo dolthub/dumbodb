@@ -55,7 +55,7 @@ Command parameters that name a commit (`commit`, `onto`, `mergeIn`, `to`, `hash`
 
 Commands that create a commit (`dumboCommit`, `dumboMerge`, `dumboRevert`) or a tag (`dumboTag`) take an optional `author`. When it is omitted, the identity is `dumbodb <dumbodb@dumbodb>`. `dumboRebase` and `dumboCherryPick` take `committer` instead, because a replayed commit keeps the original author; passing `author` to either is rejected with `BadValue`.
 
-When the server runs with `--auth`, the identity comes from the authenticated user and a client cannot assert its own: passing `author` or `committer` is rejected with `IDLUnknownField (40415)`. Set a user's identity with `commitIdentity: { name, email }` on `createUser` or `updateUser`; a user without one falls back to `<user> <user@authDb>`.
+When the server runs with `--auth`, the identity comes from the authenticated user and a client cannot assert its own: passing `author` or `committer` is rejected with `IDLUnknownField (40415)`. For the same reason, `dumboCommit` rejects `timestamp`, so a client cannot backdate a commit. Set a user's identity with `commitIdentity: { name, email }` on `createUser` or `updateUser`; a user without one falls back to `<user> <user@authDb>`.
 
 ## Version control on a live branch
 
@@ -169,7 +169,7 @@ Commits the current working set on the branch encoded in the database name.
 |-----------|------|----------|---------|-------------|
 | `message` | string | no | `""` | Commit message |
 | `author` | string | no | `"dumbodb <dumbodb@dumbodb>"` | Commit author, e.g. `"alice <alice@example.com>"` |
-| `timestamp` | Date | no | current time | Commit timestamp (BSON Date) |
+| `timestamp` | Date or string | no | current time | Author and committer date: a BSON Date or an ISO-8601 string (`"2024-01-02T15:04:05Z"`, `"2024-01-02"`). Rejected under `--auth` |
 | `allowEmpty` | bool | no | `false` | Create a commit even when the working set has no changes vs HEAD |
 | `amend` | bool | no | `false` | Replace HEAD with a commit on HEAD's parents, as `dolt commit --amend`. Omitting `message` keeps HEAD's message. Implies `allowEmpty` |
 
@@ -181,9 +181,9 @@ Commits the current working set on the branch encoded in the database name.
 | `branch` | string | Branch name the commit was made on |
 | `message` | string | Commit message (echoed) |
 | `author` | string | Author (echoed) |
-| `timestamp` | Date | Commit timestamp |
+| `timestamp` | Date | Author date: the given `timestamp`, else the time of the commit |
 | `committer` | string | Committer identity (`"Name <email>"`). Equals `author` for regular commits; differs for cherry-pick and rebase. |
-| `committerTimestamp` | Date | Timestamp of when the commit was applied |
+| `committerTimestamp` | Date | Committer date: the same as `timestamp` |
 | `ok` | number | `1` on success |
 
 ### Example
@@ -220,7 +220,7 @@ db.runCommand({ dumboCommit: 1, message: "add order #1", author: "alice <alice@a
 
 - Inside a client transaction, `dumboCommit` commits the transaction first; see [Transactions](#transactions).
 - Committing an unchanged working set succeeds; the new commit hash is still distinct from the previous one.
-- `timestamp` accepts a BSON Date; pass `new Date("2024-01-01")` to pin the commit time.
+- `timestamp` sets both the author and the committer date, as `dolt commit --date` does, and `dumboLog` reports them as `timestamp` and `committerTimestamp`. It takes a BSON Date (`new Date("2024-01-01")`) or an ISO-8601 string: RFC 3339 with any UTC offset, or a bare date, taken as UTC. With `--auth`, the server sets the commit date and `timestamp` is rejected; see [Commit identity](#commit-identity).
 
 ---
 

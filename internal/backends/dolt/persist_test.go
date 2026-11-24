@@ -803,7 +803,7 @@ func TestDumboDBCommitAuthorAndTimestamp(t *testing.T) {
 		DBName:     "testdb",
 		Message:    "authored commit",
 		Author:     "alice",
-		Timestamp:  fixedTime,
+		Timestamp:  &fixedTime,
 		AllowEmpty: true,
 	})
 	if err != nil {
@@ -815,6 +815,9 @@ func TestDumboDBCommitAuthorAndTimestamp(t *testing.T) {
 	}
 	if res.Timestamp != fixedTime.UnixMilli() {
 		t.Errorf("CommitResult.Timestamp = %d, want %d", res.Timestamp, fixedTime.UnixMilli())
+	}
+	if res.CommitterTimestamp != fixedTime.UnixMilli() {
+		t.Errorf("CommitResult.CommitterTimestamp = %d, want %d", res.CommitterTimestamp, fixedTime.UnixMilli())
 	}
 
 	// Verify via dumboDBLog that author and timestamp were persisted.
@@ -832,6 +835,9 @@ func TestDumboDBCommitAuthorAndTimestamp(t *testing.T) {
 	}
 	if c.Timestamp != fixedTime.UnixMilli() {
 		t.Errorf("log commit Timestamp = %d, want %d", c.Timestamp, fixedTime.UnixMilli())
+	}
+	if c.CommitterTimestamp != fixedTime.UnixMilli() {
+		t.Errorf("log commit CommitterTimestamp = %d, want %d", c.CommitterTimestamp, fixedTime.UnixMilli())
 	}
 }
 
@@ -870,6 +876,9 @@ func TestDumboDBCommitTimestampDefaultsToNow(t *testing.T) {
 
 	if res.Timestamp < before || res.Timestamp > after {
 		t.Errorf("CommitResult.Timestamp %d not in [%d, %d]", res.Timestamp, before, after)
+	}
+	if res.CommitterTimestamp != res.Timestamp {
+		t.Errorf("CommitResult.CommitterTimestamp = %d, want the author date %d", res.CommitterTimestamp, res.Timestamp)
 	}
 }
 
